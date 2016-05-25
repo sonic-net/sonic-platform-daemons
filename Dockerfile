@@ -1,7 +1,7 @@
 FROM debian:jessie
 
 ## Set the apt source
-COPY files/apt/sources.list /etc/apt/sources.list
+COPY sources.list /etc/apt/sources.list
 RUN apt-get clean && apt-get update
 
 ## Pre-install the fundamental packages
@@ -10,7 +10,7 @@ RUN apt-get -y install                  \
     vim-tiny                            \
     python
 
-COPY files/rsyslog.conf /etc/rsyslog.conf
+COPY rsyslog.conf /etc/rsyslog.conf
 
 RUN apt-get -y purge                    \
     exim4                               \
