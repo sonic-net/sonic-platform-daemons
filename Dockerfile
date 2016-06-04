@@ -22,6 +22,7 @@ RUN apt-get clean && apt-get update
 RUN apt-get -y install                  \
     rsyslog                             \
     vim-tiny                            \
+    perl                                \
     python
 
 COPY rsyslog.conf /etc/rsyslog.conf
@@ -34,4 +35,6 @@ RUN apt-get -y purge                    \
 
 ## Clean up
 RUN apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y
-RUN rm -rf /var/lib/apt/lists/* /tmp/*
+## Note: NO removing /var/lib/apt/lists/*, shared by all derived images
+## TODO: if it is possible to squash derived images, remove it here
+RUN rm -rf /tmp/*
