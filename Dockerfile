@@ -23,8 +23,7 @@ RUN apt-get -y install                  \
     rsyslog                             \
     vim-tiny                            \
     perl                                \
-    python                              \
-    libjemalloc1
+    python
 
 COPY rsyslog.conf /etc/rsyslog.conf
 
