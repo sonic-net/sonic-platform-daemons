@@ -33,8 +33,9 @@ RUN apt-get -y purge                    \
     exim4-config                        \
     exim4-daemon-light
 
-## Clean up
-RUN apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y
-## Note: NO removing /var/lib/apt/lists/*, shared by all derived images
-## TODO: if it is possible to squash derived images, remove it here
-RUN rm -rf /tmp/*
+## Clean up apt
+## Remove /var/lib/apt/lists/*, could be obsoleted for derived images
+RUN apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y;      \
+    rm -rf /var/lib/apt/lists/*;                                        \
+    rm -rf /tmp/*;
+
