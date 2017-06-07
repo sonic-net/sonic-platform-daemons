@@ -1,0 +1,7 @@
+## Debian mirror on Microsoft Azure
+## Ref: http://debian-archive.trafficmanager.net/
+
+deb http://debian-archive.trafficmanager.net/debian/ jessie main contrib non-free
+deb-src http://debian-archive.trafficmanager.net/debian/ jessie main contrib non-free
+deb http://debian-archive.trafficmanager.net/debian-security/ jessie/updates main contrib non-free
+deb-src http://debian-archive.trafficmanager.net/debian-security/ jessie/updates main contrib non-free
