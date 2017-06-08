@@ -216,7 +216,7 @@ def main():
                 port_status_dict[key] = status
                 led_control.port_link_state_change(key, status)
 
-        time.sleep(0.25)
+        time.sleep(1)
         pass
 
 if __name__ == '__main__':
