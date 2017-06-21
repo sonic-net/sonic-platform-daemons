@@ -208,6 +208,11 @@ def main():
         # Get a list of all ports from the database
         port_table_keys = swss.keys(swss.APPL_DB, PORT_TABLE_PREFIX + '*');
 
+        # when db is not intialized and port_table_keys is None, sleep for 1 second and retry
+        if port_table_keys == None:
+            time.sleep(1)
+            continue
+
         # Create a dictionary of <sonic_port_name>:<link_status> containing all ports
         # Initially set all statuses to 'down'
         for key in port_table_keys:
@@ -230,7 +235,6 @@ def main():
                 led_control.port_link_state_change(key, status)
 
         time.sleep(1)
-        pass
 
 if __name__ == '__main__':
     main()
