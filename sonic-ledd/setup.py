@@ -10,7 +10,6 @@ setup(
     url='https://github.com/Azure/sonic-platform-daemons',
     maintainer='Joe LeVeque',
     maintainer_email='jolevequ@microsoft.com',
-    packages=['sonic_led'],
     scripts=[
         'scripts/ledd',
     ],
