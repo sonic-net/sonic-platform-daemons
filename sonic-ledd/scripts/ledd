@@ -204,7 +204,7 @@ def main():
 
     # Listen indefinitely for changes to the PORT table in the Application DB
     while True:
-        (state, c, fd) = sel.select()
+        (state, c) = sel.select()
         if state != swsscommon.Select.OBJECT:
             log_warning("sel.select() did not return swsscommon.Select.OBJECT")
             continue
