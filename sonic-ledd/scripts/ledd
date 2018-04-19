@@ -217,7 +217,7 @@ def main():
                 continue
 
             status = swss.get(swss.APPL_DB, PORT_TABLE_PREFIX + port_name, 'oper_status')
-            led_control.port_link_state_change(key, status)
+            led_control.port_link_state_change(port_name, status)
 
         time.sleep(1)
 
