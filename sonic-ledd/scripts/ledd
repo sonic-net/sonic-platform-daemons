@@ -50,6 +50,8 @@ REDIS_HOSTNAME = "localhost"
 REDIS_PORT = 6379
 REDIS_TIMEOUT_USECS = 0
 
+SELECT_TIMEOUT = 1000
+
 #========================== Syslog wrappers ==========================
 
 def log_info(msg):
@@ -204,9 +206,10 @@ def main():
 
     # Listen indefinitely for changes to the PORT table in the Application DB
     while True:
-        (state, c) = sel.select()
+        (state, c) = sel.select(SELECT_TIMEOUT)
         if state != swsscommon.Select.OBJECT:
-            log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+            if state != swsscommon.Select.TIMEOUT:
+                log_warning("sel.select() did not return swsscommon.Select.OBJECT")
             continue
 
         (key, op, fvp) = sst.pop()
