@@ -57,7 +57,7 @@ SFP_STATUS_PLUGOUT = '0'
 PHYSICAL_PORT_NOT_EXIST = -1
 SFP_EEPROM_NOT_READY = -2
 
-TEMPE_UNIT = 'C'
+TEMP_UNIT = 'C'
 VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
@@ -210,7 +210,7 @@ def strip_unit_and_beautify(value, unit):
 
 # Remove unnecessary unit from the raw data
 def beautify_dom_info_dict(dom_info_dict):
-    dom_info_dict['temperature'] = strip_unit_and_beautify(dom_info_dict['temperature'], TEMPE_UNIT)
+    dom_info_dict['temperature'] = strip_unit_and_beautify(dom_info_dict['temperature'], TEMP_UNIT)
     dom_info_dict['voltage'] = strip_unit_and_beautify(dom_info_dict['voltage'], VOLT_UNIT)
     dom_info_dict['rx1power'] = strip_unit_and_beautify(dom_info_dict['rx1power'], POWER_UNIT)
     dom_info_dict['rx2power'] = strip_unit_and_beautify(dom_info_dict['rx2power'], POWER_UNIT)
