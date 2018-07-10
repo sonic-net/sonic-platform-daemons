@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 """
     Xcvrd
@@ -23,8 +23,7 @@ except ImportError, e:
 
 VERSION = '1.0'
 
-SYSLOG_IDENTIFIER = "xcvrd"
-XCVRD_MODULE_NAME = "xcvrd"
+SYSLOG_IDENTIFIER = os.path.basename(__file__)
 
 PLATFORM_ROOT_PATH = '/usr/share/sonic/device'
 SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
@@ -46,10 +45,11 @@ PLATFORM_ROOT_DOCKER = "/usr/share/sonic/platform"
 
 REDIS_HOSTNAME = "localhost"
 REDIS_PORT = 6379
-REDIS_TIMEOUT_USECS = 0
-SELECT_TIMEOUT = 1000
+REDIS_TIMEOUT_MSECS = 0
+SELECT_TIMEOUT_MSECS = 1000
 
-DOM_INFO_UPDATE_PERIOD = 60
+DOM_INFO_UPDATE_PERIOD_SECS = 60
+TIME_FOR_SFP_READY_SECS = 1
 
 SFP_STATUS_PLUGIN = '1'
 SFP_STATUS_PLUGOUT = '0'
@@ -102,6 +102,7 @@ def signal_handler(sig, frame):
         sys.exit(128 + sig)
     else:
         log_warning("Caught unhandled signal '" + sig + "'")
+        return
 
 
 #============ Functions to load platform-specific classes ============
@@ -138,13 +139,11 @@ def load_platform_sfputil():
     (platform, hwsku) = get_platform_and_hwsku()
 
     # Load platform module from source
-    #platform_path = "/".join([PLATFORM_ROOT_PATH, platform])
     platform_path = PLATFORM_ROOT_DOCKER
     hwsku_path = "/".join([platform_path, hwsku])
 
     try:
         module_file = "/".join([platform_path, "plugins", PLATFORM_SPECIFIC_MODULE_NAME + ".py"])
-        #print module_file
         module = imp.load_source(PLATFORM_SPECIFIC_MODULE_NAME, module_file)
     except IOError, e:
         log_error("Failed to load platform module '%s': %s" % (PLATFORM_SPECIFIC_MODULE_NAME, str(e)), True)
@@ -165,7 +164,6 @@ def get_path_to_port_config_file():
     (platform, hwsku) = get_platform_and_hwsku()
 
     # Load platform module from source
-    #platform_path = "/".join([PLATFORM_ROOT_PATH, platform])
     platform_path = PLATFORM_ROOT_DOCKER
     hwsku_path = "/".join([platform_path, hwsku])
 
@@ -325,37 +323,8 @@ def periodically_post_dom_info_to_db(table):
         post_port_dom_info_to_db(logical_port_name, table)
 
     global timer
-    timer = threading.Timer(DOM_INFO_UPDATE_PERIOD, periodically_post_dom_info_to_db, [table])
+    timer = threading.Timer(DOM_INFO_UPDATE_PERIOD_SECS, periodically_post_dom_info_to_db, [table])
     timer.start()
-
-# thread for sfp change event handling
-def monitor_sfp_change_task(int_tbl, dom_tbl):
-    log_info('Xcvrd sub thread started....')
-    while True:
-        status, port_dict = platform_sfputil.get_transceiver_change_event()
-        if status:
-            for key, value in port_dict.iteritems():
-                logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
-                for logical_port in logical_port_list:
-                    if value == SFP_STATUS_PLUGIN:
-                        rc = post_port_sfp_info_to_db(logical_port, int_tbl)
-                        # if we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
-                        if rc == SFP_EEPROM_NOT_READY:
-                            time.sleep(1)
-                            post_port_sfp_info_to_db(logical_port, int_tbl)
-                        post_port_dom_info_to_db(logical_port, dom_tbl)
-
-                    elif value == SFP_STATUS_PLUGOUT:
-                        del_port_sfp_dom_info_to_db(logical_port, int_tbl, dom_tbl)
-
-class MonitoringThread (threading.Thread):
-    def __init__(self, int_tbl, dom_tbl):
-        threading.Thread.__init__(self)
-        self.int_table = int_tbl
-        self.dom_table = dom_tbl
-
-    def run(self):
-        monitor_sfp_change_task(self.int_table, self.dom_table)
 
 #=============================== Main ================================
 
@@ -377,16 +346,16 @@ def main():
     try:
         port_config_file_path = get_path_to_port_config_file()
         platform_sfputil.read_porttab_mappings(port_config_file_path)
-        #platform_sfputil.read_port_mappings()
+        # platform_sfputil.read_port_mappings()
     except Exception, e:
         log_error("Error reading port info (%s)" % str(e), True)
         sys.exit(2)
 
-    #connect to STATE_DB and create transceiver info/dom info table
+    # Connect to STATE_DB and create transceiver info/dom info table
     state_db = swsscommon.DBConnector(swsscommon.STATE_DB,
                                      REDIS_HOSTNAME,
                                      REDIS_PORT,
-                                     REDIS_TIMEOUT_USECS)
+                                     REDIS_TIMEOUT_MSECS)
     int_tbl = swsscommon.Table(state_db, "TRANSCEIVER_INFO")
     dom_tbl = swsscommon.Table(state_db, "TRANSCEIVER_DOM_SENSOR")
 
@@ -394,15 +363,15 @@ def main():
     appl_db = swsscommon.DBConnector(swsscommon.APPL_DB,
                                      REDIS_HOSTNAME,
                                      REDIS_PORT,
-                                     REDIS_TIMEOUT_USECS)
+                                     REDIS_TIMEOUT_MSECS)
 
     sel = swsscommon.Select()
     sst = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
     sel.addSelectable(sst)
 
-    #Make sure this daemon started after all port configured.
+    # Make sure this daemon started after all port configured.
     while True:
-        (state, c) = sel.select(SELECT_TIMEOUT)
+        (state, c) = sel.select(SELECT_TIMEOUT_MSECS)
         if state == swsscommon.Select.TIMEOUT:
             continue
         if state != swsscommon.Select.OBJECT:
@@ -413,18 +382,39 @@ def main():
         if key in ["PortConfigDone", "PortInitDone"]:
             break
 
-    #Post all the current interface SFP info to STATE_DB
+    # Post all the current interface SFP info to STATE_DB
     logical_port_list = platform_sfputil.logical
     for logical_port_name in logical_port_list:
         post_port_sfp_info_to_db(logical_port_name, int_tbl)
         post_port_dom_info_to_db(logical_port_name, dom_tbl)
 
-    #Start the timer to update dom sensor info
+    # Start the timer to update dom sensor info
     periodically_post_dom_info_to_db(dom_tbl)
 
-    #Spawn the task to handle the SFP plug in/out event
-    sfp_change_event_monitoring_thread = MonitoringThread(int_tbl, dom_tbl)
-    sfp_change_event_monitoring_thread.start()
+    # Start main loop to listen to the SFP change event.
+    log_info("Start main loop")
+    while True:
+        status, port_dict = platform_sfputil.get_transceiver_change_event()
+        if status:
+            for key, value in port_dict.iteritems():
+                logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
+                for logical_port in logical_port_list:
+                    if value == SFP_STATUS_PLUGIN:
+                        rc = post_port_sfp_info_to_db(logical_port, int_tbl)
+                        # if we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
+                        if rc == SFP_EEPROM_NOT_READY:
+                            time.sleep(TIME_FOR_SFP_READY_SECS)
+                            post_port_sfp_info_to_db(logical_port, int_tbl)
+                        post_port_dom_info_to_db(logical_port, dom_tbl)
+
+                    elif value == SFP_STATUS_PLUGOUT:
+                        del_port_sfp_dom_info_to_db(logical_port, int_tbl, dom_tbl)
+                    else:
+                        # TODO, SFP return error code, need handle accordingly.
+                        continue
+        else:
+            # TODO if 'get_transceiver_change_event' keep return error, need mitigation
+            pass
 
 if __name__ == '__main__':
     main()
