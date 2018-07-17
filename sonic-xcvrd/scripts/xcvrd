@@ -109,25 +109,21 @@ def signal_handler(sig, frame):
 
 # Returns platform and HW SKU
 def get_platform_and_hwsku():
-    try:
-        proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-H', '-v', PLATFORM_KEY],
-                stdout=subprocess.PIPE,
-                shell=False,
-                stderr=subprocess.STDOUT)
-        stdout = proc.communicate()[0]
-        proc.wait()
-        platform = stdout.rstrip('\n')
+    proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-H', '-v', PLATFORM_KEY],
+                            stdout=subprocess.PIPE,
+                            shell=False,
+                            stderr=subprocess.STDOUT)
+    stdout = proc.communicate()[0]
+    proc.wait()
+    platform = stdout.rstrip('\n')
 
-        proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-m', MINIGRAPH_PATH, '-v', HWSKU_KEY],
-                stdout=subprocess.PIPE,
-                shell=False,
-                stderr=subprocess.STDOUT)
-        stdout = proc.communicate()[0]
-        proc.wait()
-        hwsku = stdout.rstrip('\n')
-    except OSError, e:
-        log_error("Cannot detect platform")
-        raise OSError("Cannot detect platform")
+    proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-m', MINIGRAPH_PATH, '-v', HWSKU_KEY],
+                            stdout=subprocess.PIPE,
+                            shell=False,
+                            stderr=subprocess.STDOUT)
+    stdout = proc.communicate()[0]
+    proc.wait()
+    hwsku = stdout.rstrip('\n')
 
     return (platform, hwsku)
 
