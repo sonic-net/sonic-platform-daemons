@@ -62,9 +62,6 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
-thread_exit_flag = 0
-thread_exit_flag_lock = threading.Lock()
-
 #========================== Syslog wrappers ==========================
 
 def log_info(msg, also_print_to_console=False):
@@ -323,23 +320,29 @@ def del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl):
             log_error("This functionality is currently not implemented for this platform")
             sys.exit(3)
 
-# timer thread for dom info update
-def periodically_post_dom_info_to_db(table):
-    thread_exit_flag_lock.acquire()
-    global thread_exit_flag
-    if thread_exit_flag:
-        log_error("Error: thread_exit_flag is set and timer thread exit")
-        thread_exit_flag_lock.release()
-        return
-    thread_exit_flag_lock.release()
+# Timer thread wrapper class to update dom info to DB periodically
+class dom_info_update_task:
+    def __init__(self, timer, event, table):
+        self.task_running_event = event
+        self.task_running_event.set()
+        self.task_timer = timer
+        self.dom_table = table
 
-    logical_port_list = platform_sfputil.logical
-    for logical_port_name in logical_port_list:
-        post_port_dom_info_to_db(logical_port_name, table)
+    def task_run(self):
+        if not self.task_running_event.wait(1):
+            log_error("Error: dom info update thread received stop event, exiting...")
+            return
+        
+        logical_port_list = platform_sfputil.logical
+        for logical_port_name in logical_port_list:
+            post_port_dom_info_to_db(logical_port_name, self.dom_table)
+        
+        self.task_timer = threading.Timer(DOM_INFO_UPDATE_PERIOD_SECS, self.task_run)
+        self.task_timer.start()
 
-    global timer
-    timer = threading.Timer(DOM_INFO_UPDATE_PERIOD_SECS, periodically_post_dom_info_to_db, [table])
-    timer.start()
+    def task_stop(self):
+        self.task_running_event.clear()
+        self.task_timer.join()
 
 #=============================== Main ================================
 
@@ -403,8 +406,11 @@ def main():
         post_port_sfp_info_to_db(logical_port_name, int_tbl)
         post_port_dom_info_to_db(logical_port_name, dom_tbl)
 
-    # Start the timer to update dom sensor info
-    periodically_post_dom_info_to_db(dom_tbl)
+    # Start the dom sensor info update timer thread
+    dom_update_threade_event = threading.Event()
+    dom_update_thread_timer = None
+    dom_info_update = dom_info_update_task(dom_update_thread_timer, dom_update_threade_event, dom_tbl)
+    dom_info_update.task_run()
 
     # Start main loop to listen to the SFP change event.
     log_info("Start main loop")
@@ -430,22 +436,17 @@ def main():
         else:
             # If get_transceiver_change_event() return error, will clean up the DB and then exit
             # TODO: next step need to define more error types to handle accordingly.
-            thread_exit_flag_lock.acquire()
-            # Set the flag to notify timer thread exit
-            global thread_exit_flag
-            thread_exit_flag = 1
-            thread_exit_flag_lock.release()
+            break
 
-            # Wait for timer thread exit
-            global timer
-            timer.join()
+    # Stop the dom info update timer
+    dom_info_update.task_stop()
 
-            # Clean all the information from DB and then exit
-            logical_port_list = platform_sfputil.logical
-            for logical_port_name in logical_port_list:
-                del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl)
-            log_error("Error: got error from get_transceiver_change_event, exit")
-            return
+    # Clean all the information from DB and then exit
+    logical_port_list = platform_sfputil.logical
+    for logical_port_name in logical_port_list:
+        del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl)
+    log_error("Error: return error from get_transceiver_change_event(), exiting...")
+    return 1
 
 if __name__ == '__main__':
     main()
