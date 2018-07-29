@@ -322,26 +322,26 @@ def del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl):
 
 # Timer thread wrapper class to update dom info to DB periodically
 class dom_info_update_task:
-    def __init__(self, timer, event, table):
-        self.task_running_event = event
-        self.task_running_event.set()
-        self.task_timer = timer
+    def __init__(self, table):
+        self.task_stopping_event = threading.Event()
+        self.task_stopping_event.set()
+        self.task_timer = None
         self.dom_table = table
 
     def task_run(self):
-        if not self.task_running_event.wait(1):
+        if not self.task_stopping_event.wait(1):
             log_error("Error: dom info update thread received stop event, exiting...")
             return
-        
+
         logical_port_list = platform_sfputil.logical
         for logical_port_name in logical_port_list:
             post_port_dom_info_to_db(logical_port_name, self.dom_table)
-        
+
         self.task_timer = threading.Timer(DOM_INFO_UPDATE_PERIOD_SECS, self.task_run)
         self.task_timer.start()
 
     def task_stop(self):
-        self.task_running_event.clear()
+        self.task_stopping_event.clear()
         self.task_timer.join()
 
 #=============================== Main ================================
@@ -407,9 +407,7 @@ def main():
         post_port_dom_info_to_db(logical_port_name, dom_tbl)
 
     # Start the dom sensor info update timer thread
-    dom_update_threade_event = threading.Event()
-    dom_update_thread_timer = None
-    dom_info_update = dom_info_update_task(dom_update_thread_timer, dom_update_threade_event, dom_tbl)
+    dom_info_update = dom_info_update_task(dom_tbl)
     dom_info_update.task_run()
 
     # Start main loop to listen to the SFP change event.
