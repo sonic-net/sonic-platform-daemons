@@ -324,12 +324,11 @@ def del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl):
 class dom_info_update_task:
     def __init__(self, table):
         self.task_stopping_event = threading.Event()
-        self.task_stopping_event.set()
         self.task_timer = None
         self.dom_table = table
 
     def task_run(self):
-        if not self.task_stopping_event.wait(1):
+        if self.task_stopping_event.isSet():
             log_error("Error: dom info update thread received stop event, exiting...")
             return
 
@@ -341,7 +340,7 @@ class dom_info_update_task:
         self.task_timer.start()
 
     def task_stop(self):
-        self.task_stopping_event.clear()
+        self.task_stopping_event.set()
         self.task_timer.join()
 
 #=============================== Main ================================
