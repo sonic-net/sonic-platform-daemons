@@ -1,0 +1,43 @@
+#!/usr/bin/env python2
+
+'''
+    post-syseeprom
+    Syseeprom infomation gathering task for SONiC
+    This task will be started during the start phase of pmon container, gathering syseeprom info and write to state DB.
+    It's an one-shot task since syseeprom info are static.
+    With this task, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
+'''
+
+try:
+    from sonic_daemon_base.daemon_base import DaemonBase
+except ImportError, e:
+    raise ImportError (str(e) + " - required module not found")
+
+PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
+PLATFORM_SPECIFIC_CLASS_NAME = 'board'
+
+def main():
+    Daemon_Base = DaemonBase()
+    (platform_path, hwsku_path) = Daemon_Base.get_path_to_platform_and_hwsku()
+    
+    # Arista platform have their own implementation for eeprom tlv parsing, it's not inherited from eeprom base class.
+    # So for now this task can not support Arista platform, but this will not cause anny issue on them. 
+    # decode-syseeprom scripts will cover Arista case, it will still read from hw/cache instead from DB on Arista platform.  
+    if 'arista' in platform_path:
+        Daemon_Base.log_warning('Arista platform not support this yet')
+        return 1
+    
+    eeprom_util = Daemon_Base.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+
+    eeprom = eeprom_util.read_eeprom()
+    if eeprom is None :
+        Daemon_Base.log_error('Failed to read eeprom')
+        return 2
+
+    err = eeprom_util.update_eeprom_db(eeprom)
+    if err:
+        Daemon_Base.log_error('Failed to update eeprom to database')
+        return 3
+
+if __name__ == '__main__':
+    main()
