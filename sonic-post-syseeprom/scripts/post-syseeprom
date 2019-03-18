@@ -2,10 +2,10 @@
 
 '''
     post-syseeprom
-    Syseeprom infomation gathering task for SONiC
-    This task will be started during the start phase of pmon container, gathering syseeprom info and write to state DB.
+    Syseeprom information gathering tool for SONiC
+    This tool will be started during the start phase of pmon container, gathering syseeprom info and write to state DB.
     It's an one-shot task since syseeprom info are static.
-    With this task, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
+    With this tool, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
 '''
 
 try:
@@ -25,10 +25,10 @@ def main():
     (platform_path, hwsku_path) = Daemon_Base.get_path_to_platform_and_hwsku()
     
     # Arista platform have their own implementation for eeprom tlv parsing, it's not inherited from eeprom base class.
-    # So for now this task can not support Arista platform, but this will not cause anny issue on them. 
+    # So for now this tool can not support Arista platform, but this will not cause anny issue on them. 
     # decode-syseeprom scripts will cover Arista case, it will still read from hw/cache instead from DB on Arista platform.  
     if 'arista' in platform_path:
-        Daemon_Base.log_warning('Arista platform not support this yet')
+        Daemon_Base.log_warning('Arista platform does not support this yet')
         return ERR_ARISTA_PLATFORM
     
     eeprom_util = Daemon_Base.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
@@ -40,7 +40,7 @@ def main():
 
     err = eeprom_util.update_eeprom_db(eeprom)
     if err:
-        Daemon_Base.log_error('Failed to update eeprom to database')
+        Daemon_Base.log_error('Failed to update eeprom info to database')
         return ERR_FAILED_UPDATE_DB
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='sonic-post-syseeprom',
     version='1.0',
-    description='Syseeprom gathering task for SONiC',
+    description='Tool which posts syseeprom to DB in SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
