@@ -10,6 +10,9 @@ try:
     import sys
     import time
     import threading
+    import json
+    import string
+    import ast
     from swsscommon import swsscommon
     from sonic_daemon_base.daemon_base import DaemonBase
 except ImportError, e:
@@ -41,6 +44,8 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
+media_settings = ''
+
 class DaemonXcvrd(DaemonBase):
     def __init__(self):
         DaemonBase.__init__(self)
@@ -70,8 +75,25 @@ class DaemonXcvrd(DaemonBase):
         else:
             return [int(port_name)]
 
+
+    def load_media_settings(self):
+        global media_settings
+        global g_dict
+        (platform, hwsku_path) = self.get_path_to_platform_and_hwsku()
+
+        media_settings_file_path = "/".join([hwsku_path, "media_settings.json"])
+        if not os.path.isfile(media_settings_file_path):
+            self.log_info("xcvrd: No media file exists")
+            return {}
+
+        media_file = open(media_settings_file_path, "r")
+        media_settings = media_file.read()
+        g_dict = json.loads(media_settings)
+
+
     def run(self):
         global platform_sfputil
+        transceiver_dict = {}
 
         # Load platform-specific sfputil class
         platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
@@ -79,6 +101,7 @@ class DaemonXcvrd(DaemonBase):
             self.log_error("failed to load sfputil")
             sys.exit(1)
 
+        self.load_media_settings()
         # Load port info
         try:
             port_config_file_path = self.get_path_to_port_config_file()
@@ -92,6 +115,11 @@ class DaemonXcvrd(DaemonBase):
         state_db = self.db_connect(swsscommon.STATE_DB)
         int_tbl = swsscommon.Table(state_db, "TRANSCEIVER_INFO")
         dom_tbl = swsscommon.Table(state_db, "TRANSCEIVER_DOM_SENSOR")
+
+        # Connect to ASIC_DB to notify Media notifications
+        asic_db = self.db_connect(swsscommon.ASIC_DB)
+        media_notifier = swsscommon.NotificationProducer(asic_db,
+                                                         "MEDIANOTIFICATION")
 
         # Connect to APPL_DB abd subscribe to PORT table notifications
         appl_db = self.db_connect(swsscommon.APPL_DB)
@@ -116,8 +144,12 @@ class DaemonXcvrd(DaemonBase):
         # Post all the current interface SFP info to STATE_DB
         logical_port_list = platform_sfputil.logical
         for logical_port_name in logical_port_list:
-            post_port_sfp_info_to_db(logical_port_name, int_tbl)
+            post_port_sfp_info_to_db(logical_port_name, int_tbl,
+                                     transceiver_dict)
             post_port_dom_info_to_db(logical_port_name, dom_tbl)
+            notify_media_setting(logical_port_name, transceiver_dict,
+                                 media_notifier)
+            transceiver_dict.clear()
 
         # Start the dom sensor info update timer thread
         dom_info_update = dom_info_update_task(dom_tbl)
@@ -132,12 +164,17 @@ class DaemonXcvrd(DaemonBase):
                     logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
                     for logical_port in logical_port_list:
                         if value == SFP_STATUS_INSERTED:
-                            rc = post_port_sfp_info_to_db(logical_port, int_tbl)
+                            rc = post_port_sfp_info_to_db(logical_port, int_tbl,
+                                                          transceiver_dict)
                             # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                             if rc == SFP_EEPROM_NOT_READY:
                                 time.sleep(TIME_FOR_SFP_READY_SECS)
-                                post_port_sfp_info_to_db(logical_port, int_tbl)
+                                post_port_sfp_info_to_db(logical_port, int_tbl,
+                                                         transceiver_dict)
                             post_port_dom_info_to_db(logical_port, dom_tbl)
+                            notify_media_setting(logical_port, transceiver_dict,
+                                                 media_notifier)
+                            transceiver_dict.clear()
 
                         elif value == SFP_STATUS_REMOVED:
                             del_port_sfp_dom_info_to_db(logical_port, int_tbl, dom_tbl)
@@ -196,7 +233,7 @@ def beautify_dom_info_dict(dom_info_dict):
     dom_info_dict['tx4power'] = strip_unit_and_beautify(dom_info_dict['tx4power'], POWER_UNIT)
 
 # update all the sfp info to db
-def post_port_sfp_info_to_db(logical_port_name, table):
+def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict):
     ganged_port = False
     ganged_member_num = 1
 
@@ -218,6 +255,7 @@ def post_port_sfp_info_to_db(logical_port_name, table):
         try:
             port_info_dict = platform_sfputil.get_transceiver_info_dict(physical_port)
             if port_info_dict is not None:
+                transceiver_dict[physical_port]=port_info_dict
                 fvs = swsscommon.FieldValuePairs([('type', port_info_dict['type']),
                                                   ('hardwarerev', port_info_dict['hardwarerev']),
                                                   ('serialnum', port_info_dict['serialnum']),
@@ -312,6 +350,149 @@ def del_port_sfp_dom_info_to_db(logical_port_name, int_tbl, dom_tbl):
         except NotImplementedError:
             daemon_xcvrd.log_error("This functionality is currently not implemented for this platform")
             sys.exit(3)
+
+
+def check_port_in_range(range_str, port_name):
+    range_separator = '-'
+    prefix_str = 'Ethernet'
+    range_list = range_str.split(range_separator)
+    start_num = int(range_list[0].strip()[len(prefix_str):])
+    end_num = int(range_list[1].strip()[len(prefix_str):])
+    find_num = int(port_name.strip()[len(prefix_str):])
+    if start_num <= find_num <= end_num:
+        return True
+    return False
+
+
+def get_media_settings_value(port_name, key):
+    range_separator = '-'
+    comma_separator = ','
+    media_dict = {}
+
+    # Keys under global media settings can be a list or range or list of ranges
+    # Below are some examples
+    # Ethernet0-Ethernet120
+    # Ethernet0,Ethernet4,Ethernet8,Ethernet12,Ethernet16
+    # Ethernet0-Ethernet40,Ethernet80-Ethernet120
+
+    if "GLOBAL_MEDIA_SETTINGS" in g_dict:
+        for keys in g_dict["GLOBAL_MEDIA_SETTINGS"]:
+            if port_name in keys:
+                media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
+            elif comma_separator in keys:
+                port_list = keys.split(comma_separator)
+                for port in port_list:
+                    if range_separator in port:
+                        if check_port_in_range(port, port_name):
+                            media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
+                            break
+            elif range_separator in keys:
+                if check_port_in_range(keys, port_name):
+                    media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
+
+        # If there is a match in the global profile for a media type,
+        # fetch those values
+        if key[0] in media_dict:
+            return media_dict[key[0]]
+        elif key[1] in media_dict:
+            return media_dict[key[1]]
+
+    if "PORT_MEDIA_SETTINGS" in g_dict:
+        if port_name in g_dict["PORT_MEDIA_SETTINGS"]:
+            media_dict = g_dict["PORT_MEDIA_SETTINGS"][port_name]
+        else:
+            daemon_xcvrd.log_error("Error: No values for logical port '%s'"
+                                   % port_name)
+            return {}
+        if key[0] in media_dict:
+            return media_dict[key[0]]
+        elif key[1] in media_dict:
+            return media_dict[key[1]]
+        elif "Default" in media_dict:
+            return media_dict['Default']
+        else:
+            return {}
+
+
+def get_media_settings_key(physical_port, transceiver_dict):
+    sup_media_types = {'QSFP-DD','QSFP28','QSFP+','QSFP'}
+    sup_compliance_str = '10/40G Ethernet Compliance Code'
+    sup_len_str = 'Length Cable Assembly(m)'
+    vendor_name_str = transceiver_dict[physical_port]['manufacturename']
+    vendor_pn_str = transceiver_dict[physical_port]['modelname']
+    vendor_key = string.upper(vendor_name_str) + '-' + vendor_pn_str
+
+    media_len = ''
+    if transceiver_dict[physical_port]['cable_type'] == sup_len_str:
+        media_len = transceiver_dict[physical_port]['cable_length']
+
+    media_compliance_dict_str = transceiver_dict[physical_port]['specification_compliance']
+    media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
+    media_compliance_code = ''
+    media_type = ''
+
+    if sup_compliance_str in media_compliance_dict:
+        media_compliance_code = media_compliance_dict[sup_compliance_str]
+
+    media_type_str = transceiver_dict[physical_port]['type']
+
+    for sup_media_key in sup_media_types:
+        if sup_media_key in media_type_str:
+            media_type = sup_media_key
+            break
+    
+    media_key = ''
+    if len(media_type) != 0:
+        media_key += media_type
+    if len(media_compliance_code) != 0:
+        media_key += '-' + media_compliance_code
+    if len(media_len) != 0:
+        media_key += '-' + media_len + 'M'
+    return [vendor_key, media_key]
+
+
+def notify_media_setting(logical_port_name, transceiver_dict,
+                         media_notifier):
+    if len(media_settings) == 0:
+        return
+
+    ganged_port = False
+    ganged_member_num = 1
+
+    physical_port_list = daemon_xcvrd.logical_port_name_to_physical_port_list(logical_port_name)
+    if physical_port_list is None:
+        daemon_xcvrd.log_error("Error: No physical ports found for "
+                               "logical port '%s'" % logical_port_name)
+        return PHYSICAL_PORT_NOT_EXIST
+
+    if len(physical_port_list) > 1:
+        ganged_port = True
+
+    for physical_port in physical_port_list:
+        if not platform_sfputil.get_presence(physical_port):
+            daemon_xcvrd.log_error("Media presence not detected during notify")
+            continue
+
+        port_name = get_physical_port_name(logical_port_name,
+                                           ganged_member_num, ganged_port)
+        ganged_member_num += 1
+        key = get_media_settings_key(physical_port, transceiver_dict)
+        media_dict = get_media_settings_value(port_name, key)
+
+        if(len(media_dict) == 0):
+            daemon_xcvrd.log_error("Error in obtainning media setting")
+            return
+
+        fvs = swsscommon.FieldValuePairs(len(media_dict) + 1)
+        fvs[0] = ('port', port_name)
+
+        index = 1
+        for media_key in media_dict:
+            fvs[index] = (str(media_key), json.dumps(media_dict[media_key]))
+            index += 1
+
+        media_notifier.send("media_change", "", fvs)
+
 
 # Timer thread wrapper class to update dom info to DB periodically
 class dom_info_update_task:
