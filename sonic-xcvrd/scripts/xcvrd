@@ -260,19 +260,17 @@ def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
             logger.log_error("This functionality is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
-def check_port_in_range(range_str, port_name):
+def check_port_in_range(range_str, physical_port):
     range_separator = '-'
-    prefix_str = 'Ethernet'
     range_list = range_str.split(range_separator)
-    start_num = int(range_list[0].strip()[len(prefix_str):])
-    end_num = int(range_list[1].strip()[len(prefix_str):])
-    find_num = int(port_name.strip()[len(prefix_str):])
-    if start_num <= find_num <= end_num:
+    start_num = int(range_list[0].strip())
+    end_num = int(range_list[1].strip())
+    if start_num <= physical_port <= end_num:
         return True
     return False
 
 
-def get_media_settings_value(port_name, key):
+def get_media_settings_value(physical_port, key):
     range_separator = '-'
     comma_separator = ','
     media_dict = {}
@@ -285,17 +283,19 @@ def get_media_settings_value(port_name, key):
 
     if "GLOBAL_MEDIA_SETTINGS" in g_dict:
         for keys in g_dict["GLOBAL_MEDIA_SETTINGS"]:
-            if port_name in keys:
-                media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
-            elif comma_separator in keys:
+            if comma_separator in keys:
                 port_list = keys.split(comma_separator)
                 for port in port_list:
                     if range_separator in port:
-                        if check_port_in_range(port, port_name):
+                        if check_port_in_range(port, physical_port):
                             media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
                             break
+                    elif str(physical_port) == port:
+                        media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
+                        break
+
             elif range_separator in keys:
-                if check_port_in_range(keys, port_name):
+                if check_port_in_range(keys, physical_port):
                     media_dict = g_dict["GLOBAL_MEDIA_SETTINGS"][keys]
 
         # If there is a match in the global profile for a media type,
@@ -306,11 +306,13 @@ def get_media_settings_value(port_name, key):
             return media_dict[key[1]]
 
     if "PORT_MEDIA_SETTINGS" in g_dict:
-        if port_name in g_dict["PORT_MEDIA_SETTINGS"]:
-            media_dict = g_dict["PORT_MEDIA_SETTINGS"][port_name]
-        else:
-            logger.log_error("Error: No values for logical port '%s'"
-                                   % port_name)
+        for keys in g_dict["PORT_MEDIA_SETTINGS"]:
+            if int(keys) == physical_port:
+                media_dict = g_dict["PORT_MEDIA_SETTINGS"][keys]
+                break
+        if len(media_dict) == 0:
+            logger.log_error("Error: No values for physica port '%d'"
+                                   % physical_port)
             return {}
         if key[0] in media_dict:
             return media_dict[key[0]]
@@ -377,6 +379,9 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_port = True
 
     for physical_port in physical_port_list:
+        logical_port_list = platform_sfputil.get_physical_to_logical(physical_port)
+        num_logical_ports = len(logical_port_list)
+        logical_idx = logical_port_list.index(logical_port_name)
         if not platform_sfputil.get_presence(physical_port):
             logger.log_error("Media presence not detected during notify")
             continue
@@ -385,7 +390,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                            ganged_member_num, ganged_port)
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict)
-        media_dict = get_media_settings_value(port_name, key)
+        media_dict = get_media_settings_value(physical_port, key)
 
         if(len(media_dict) == 0):
             logger.log_error("Error in obtainning media setting")
@@ -395,8 +400,25 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         fvs[0] = ('port', port_name)
 
         index = 1
+        lane_str = "lane"
         for media_key in media_dict:
-            fvs[index] = (str(media_key), json.dumps(media_dict[media_key]))
+            logical_media_dict = {}
+            num_lanes_on_port = len(media_dict[media_key])
+
+            # The physical ports has more than one logical port meaning it is
+            # in breakout mode. So fetch the corresponding lanes from the file
+            if (num_logical_ports > 1) and (num_lanes_on_port > num_logical_ports):
+                num_lanes_per_logical_port = num_lanes_on_port/num_logical_ports
+                start_lane = logical_idx * num_lanes_per_logical_port
+                for lane_idx in range(start_lane, start_lane + \
+                                      num_lanes_per_logical_port):
+                    lane_idx_str = lane_str + str(lane_idx)
+                    logical_lane_idx_str = lane_str + str(lane_idx - start_lane)
+                    logical_media_dict[logical_lane_idx_str] = \
+                                       media_dict[media_key][lane_idx_str]
+                fvs[index] = (str(media_key), json.dumps(logical_media_dict))
+            else:
+                fvs[index] = (str(media_key), json.dumps(media_dict[media_key]))
             index += 1
 
         media_notifier.send("media_change", "", fvs)
@@ -553,9 +575,9 @@ class DaemonXcvrd(DaemonBase):
         global g_dict
         (platform, hwsku_path) = self.get_path_to_platform_and_hwsku()
 
-        media_settings_file_path = "/".join([hwsku_path, "media_settings.json"])
+        media_settings_file_path = "/".join([platform, "media_settings.json"])
         if not os.path.isfile(media_settings_file_path):
-            self.log_info("xcvrd: No media file exists")
+            logger.log_info("xcvrd: No media file exists")
             return {}
 
         media_file = open(media_settings_file_path, "r")
