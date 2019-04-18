@@ -213,7 +213,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # Update port dom/sfp info in db
-def post_port_sfp_dom_info_to_db(stop=threading.Event()):
+def post_port_sfp_dom_info_to_db(is_warm_start, stop=threading.Event()):
     # Connect to STATE_DB and create transceiver dom/sfp info tables
     transceiver_dict = {}
     state_db = daemon_base.db_connect(swsscommon.STATE_DB)
@@ -232,8 +232,10 @@ def post_port_sfp_dom_info_to_db(stop=threading.Event()):
 
         post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop)
         post_port_dom_info_to_db(logical_port_name, dom_tbl, stop)
-        notify_media_setting(logical_port_name, transceiver_dict, media_notifier)
-        transceiver_dict.clear()
+        ## Do not notify media settings during warm reboot to avoid dataplane traffic impact
+        if is_warm_start == False:
+            notify_media_setting(logical_port_name, transceiver_dict, media_notifier)
+            transceiver_dict.clear()
 
 # Delete port dom/sfp info from db
 def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
@@ -606,13 +608,18 @@ class DaemonXcvrd(DaemonBase):
             sys.exit(PORT_CONFIG_LOAD_ERROR)
 
         self.load_media_settings()
+        warmstart = swsscommon.WarmStart()
+        warmstart.initialize("xcvrd", "pmon")
+        warmstart.checkWarmStart("xcvrd", "pmon", False)
+        is_warm_start = warmstart.isWarmStart()
+
         # Make sure this daemon started after all port configured
         logger.log_info("Wait for port config is done")
         self.wait_for_port_config_done()
 
         # Post all the current interface dom/sfp info to STATE_DB
         logger.log_info("Post all port DOM/SFP info to DB")
-        post_port_sfp_dom_info_to_db(self.stop)
+        post_port_sfp_dom_info_to_db(is_warm_start, self.stop)
 
     # Deinitialize daemon
     def deinit(self):
