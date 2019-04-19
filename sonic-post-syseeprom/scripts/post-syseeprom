@@ -12,17 +12,65 @@ try:
     from sonic_daemon_base.daemon_base import DaemonBase
     import argparse
     from swsscommon import swsscommon
+    from sonic_daemon_base import daemon_base
+    from sonic_daemon_base.daemon_base import Logger
+    from sonic_daemon_base.daemon_base import DaemonBase
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
 PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
 PLATFORM_SPECIFIC_CLASS_NAME = 'board'
+EEPROM_TABLE_NAME = 'EEPROM_INFO'
 
 ERR_ARISTA_PLATFORM = 1
 ERR_FAILED_EEPROM = 2
 ERR_FAILED_UPDATE_DB = 3
 
-EEPROM_TABLE_NAME = 'EEPROM_INFO'
+SYSLOG_IDENTIFIER = "post-syseeprom"
+
+# Global logger class instance
+logger = Logger(SYSLOG_IDENTIFIER)
+
+class PostSyseeprom(DaemonBase):
+    def __init__(self):
+        DaemonBase.__init__(self)
+
+    def _is_arista_platform(self):
+        (platform_path, hwsku_path) = self.get_path_to_platform_and_hwsku()
+        
+        return 'arista' in platform_path
+
+    def write_info_to_db(self):
+        if self._is_arista_platform():
+            # Arista platform have their own implementation for eeprom tlv parsing, it's not inherited from eeprom base class.
+            # So for now this tool can not support Arista platform, but this will not cause any issue on them. 
+            # decode-syseeprom scripts will cover Arista case, it will still read from HW/cache instead from DB on Arista platform.  
+            logger.log_warning('Arista platform does not support this yet')
+            return ERR_ARISTA_PLATFORM
+
+        eeprom_util = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+        eeprom = eeprom_util.read_eeprom()
+        if eeprom is None :
+            logger.log_error('Failed to read eeprom')
+            return ERR_FAILED_EEPROM
+
+        err = eeprom_util.update_eeprom_db(eeprom)
+        if err:
+            logger.log_error('Failed to update eeprom info to database')
+            return ERR_FAILED_UPDATE_DB
+
+    def clear_db(self):
+        # Same case as in above write_info_to_db() function, Arista platform not supported here.
+        if self._is_arista_platform():
+            logger.log_warning('Arista platform does not support this yet')
+            return ERR_ARISTA_PLATFORM
+
+        state_db = daemon_base.db_connect(swsscommon.STATE_DB)
+        eeprom_tbl = swsscommon.Table(state_db, EEPROM_TABLE_NAME)
+        keys = eeprom_tbl.getKeys()
+        for key in keys:
+            eeprom_tbl._del(key)
+        
 
 def main():
     parser = argparse.ArgumentParser(description='post-syseeprom tool')
@@ -30,35 +78,13 @@ def main():
     parser.add_argument("-c", help="remove syseeprom info from state DB", action='store_true')
     args = parser.parse_args()
 
-    Daemon_Base = DaemonBase()
-    (platform_path, hwsku_path) = Daemon_Base.get_path_to_platform_and_hwsku()
-
-    # Arista platform have their own implementation for eeprom tlv parsing, it's not inherited from eeprom base class.
-    # So for now this tool can not support Arista platform, but this will not cause anny issue on them. 
-    # decode-syseeprom scripts will cover Arista case, it will still read from hw/cache instead from DB on Arista platform.  
-    if 'arista' in platform_path:
-        Daemon_Base.log_warning('Arista platform does not support this yet')
-        return ERR_ARISTA_PLATFORM
-
+    post_syseeprom = PostSyseeprom()
     if args.w:
-        eeprom_util = Daemon_Base.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
-        eeprom = eeprom_util.read_eeprom()
-        if eeprom is None :
-            Daemon_Base.log_error('Failed to read eeprom')
-            return ERR_FAILED_EEPROM
-
-        err = eeprom_util.update_eeprom_db(eeprom)
-        if err:
-            Daemon_Base.log_error('Failed to update eeprom info to database')
-            return ERR_FAILED_UPDATE_DB
+        post_syseeprom.write_info_to_db()
     elif args.c:
-        state_db = Daemon_Base.db_connect(swsscommon.STATE_DB)
-        eeprom_tbl = swsscommon.Table(state_db, EEPROM_TABLE_NAME)
-        keys = eeprom_tbl.getKeys()
-        for key in keys:
-            eeprom_tbl._del(key)
+        post_syseeprom.clear_db()
     else:
-        Daemon_Base.log_error("Invalid parameter")
+        logger.log_error("Invalid parameter")
 
 if __name__ == '__main__':
     main()
