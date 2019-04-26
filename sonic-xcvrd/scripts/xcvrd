@@ -220,9 +220,9 @@ def post_port_sfp_dom_info_to_db(is_warm_start, stop=threading.Event()):
     int_tbl = swsscommon.Table(state_db, TRANSCEIVER_INFO_TABLE)
     dom_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
 
-    asic_db = daemon_base.db_connect(swsscommon.ASIC_DB)
-    media_notifier = swsscommon.NotificationProducer(asic_db,
-                                                     "MEDIANOTIFICATION")
+    appl_db = daemon_base.db_connect(swsscommon.APPL_DB)
+    app_port_tbl = swsscommon.ProducerStateTable(appl_db,
+                                                 swsscommon.APP_PORT_TABLE_NAME)
 
     # Post all the current interface dom/sfp info to STATE_DB
     logical_port_list = platform_sfputil.logical
@@ -234,7 +234,7 @@ def post_port_sfp_dom_info_to_db(is_warm_start, stop=threading.Event()):
         post_port_dom_info_to_db(logical_port_name, dom_tbl, stop)
         ## Do not notify media settings during warm reboot to avoid dataplane traffic impact
         if is_warm_start == False:
-            notify_media_setting(logical_port_name, transceiver_dict, media_notifier)
+            notify_media_setting(logical_port_name, transceiver_dict, app_port_tbl)
             transceiver_dict.clear()
 
 # Delete port dom/sfp info from db
@@ -278,10 +278,10 @@ def get_media_settings_value(physical_port, key):
     media_dict = {}
 
     # Keys under global media settings can be a list or range or list of ranges
-    # Below are some examples
-    # Ethernet0-Ethernet120
-    # Ethernet0,Ethernet4,Ethernet8,Ethernet12,Ethernet16
-    # Ethernet0-Ethernet40,Ethernet80-Ethernet120
+    # of physical port numbers. Below are some examples
+    # 1-32
+    # 1,2,3,4,5
+    # 1-4,9-12
 
     if "GLOBAL_MEDIA_SETTINGS" in g_dict:
         for keys in g_dict["GLOBAL_MEDIA_SETTINGS"]:
@@ -364,7 +364,7 @@ def get_media_settings_key(physical_port, transceiver_dict):
 
 
 def notify_media_setting(logical_port_name, transceiver_dict,
-                         media_notifier):
+                         app_port_tbl):
     if len(media_settings) == 0:
         return
 
@@ -398,10 +398,9 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             logger.log_error("Error in obtainning media setting")
             return
 
-        fvs = swsscommon.FieldValuePairs(len(media_dict) + 1)
-        fvs[0] = ('port', port_name)
+        fvs = swsscommon.FieldValuePairs(len(media_dict))
 
-        index = 1
+        index = 0
         lane_str = "lane"
         for media_key in media_dict:
             logical_media_dict = {}
@@ -423,7 +422,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                 fvs[index] = (str(media_key), json.dumps(media_dict[media_key]))
             index += 1
 
-        media_notifier.send("media_change", "", fvs)
+        app_port_tbl.set(port_name, fvs)
 
 
 #
@@ -477,10 +476,10 @@ class sfp_state_update_task:
         int_tbl = swsscommon.Table(state_db, TRANSCEIVER_INFO_TABLE)
         dom_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
 
-        # Connect to ASIC_DB to notify Media notifications
-        asic_db = daemon_base.db_connect(swsscommon.ASIC_DB)
-        media_notifier = swsscommon.NotificationProducer(asic_db,
-                                                         "MEDIANOTIFICATION")
+        # Connect to APPL_DB to notify Media notifications
+        appl_db = daemon_base.db_connect(swsscommon.APPL_DB)
+        app_port_tbl = swsscommon.ProducerStateTable(appl_db,
+                                                     swsscommon.APP_PORT_TABLE_NAME)
 
         # Start loop to listen to the sfp change event
         while not stopping_event.is_set():
@@ -498,7 +497,7 @@ class sfp_state_update_task:
                                 time.sleep(TIME_FOR_SFP_READY_SECS)
                                 post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
                             post_port_dom_info_to_db(logical_port, dom_tbl)
-                            notify_media_setting(logical_port, transceiver_dict, media_notifier)
+                            notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
                             transceiver_dict.clear()
                         elif value == SFP_STATUS_REMOVED:
                             logger.log_info("Got SFP removed event")
