@@ -362,6 +362,45 @@ def get_media_settings_key(physical_port, transceiver_dict):
         media_key += '-' + media_len + 'M'
     return [vendor_key, media_key]
 
+def get_media_val_str_from_dict(media_dict):
+    media_str = ''
+    lane_str = 'lane'
+    lane_separator = ','
+    tmp_dict={}
+
+    for keys in media_dict:
+        lane_num = int(keys.strip()[len(lane_str):])
+        tmp_dict[lane_num] = media_dict[keys]
+
+    for key in range(0, len(tmp_dict)):
+        media_str += tmp_dict[key]
+        if key != tmp_dict.keys()[-1]:
+            media_str += lane_separator
+    return media_str
+
+def get_media_val_str(num_logical_ports, lane_dict):
+    lane_str = "lane"
+    logical_media_dict = {}
+    num_lanes_on_port = len(lane_dict)
+
+    # The physical ports has more than one logical port meaning it is
+    # in breakout mode. So fetch the corresponding lanes from the file
+    media_val_str = ''
+    if (num_logical_ports > 1) and \
+       (num_lanes_on_port > num_logical_ports):
+        num_lanes_per_logical_port = num_lanes_on_port/num_logical_ports
+        start_lane = logical_idx * num_lanes_per_logical_port
+
+        for lane_idx in range(start_lane, start_lane + \
+                              num_lanes_per_logical_port):
+             lane_idx_str = lane_str + str(lane_idx)
+             logical_lane_idx_str = lane_str + str(lane_idx - start_lane)
+             logical_media_dict[logical_lane_idx_str] = lane_dict[lane_idx_str]
+
+        media_val_str = get_media_val_str_from_dict(logical_media_dict)
+    else:
+        media_val_str = get_media_val_str_from_dict(lane_dict)
+    return media_val_str
 
 def notify_media_setting(logical_port_name, transceiver_dict,
                          app_port_tbl):
@@ -401,25 +440,13 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
         index = 0
-        lane_str = "lane"
         for media_key in media_dict:
-            logical_media_dict = {}
-            num_lanes_on_port = len(media_dict[media_key])
-
-            # The physical ports has more than one logical port meaning it is
-            # in breakout mode. So fetch the corresponding lanes from the file
-            if (num_logical_ports > 1) and (num_lanes_on_port > num_logical_ports):
-                num_lanes_per_logical_port = num_lanes_on_port/num_logical_ports
-                start_lane = logical_idx * num_lanes_per_logical_port
-                for lane_idx in range(start_lane, start_lane + \
-                                      num_lanes_per_logical_port):
-                    lane_idx_str = lane_str + str(lane_idx)
-                    logical_lane_idx_str = lane_str + str(lane_idx - start_lane)
-                    logical_media_dict[logical_lane_idx_str] = \
-                                       media_dict[media_key][lane_idx_str]
-                fvs[index] = (str(media_key), json.dumps(logical_media_dict))
+            if type(media_dict[media_key]) is dict:
+                media_val_str = get_media_val_str(num_logical_ports, \
+                                                  media_dict[media_key])
             else:
-                fvs[index] = (str(media_key), json.dumps(media_dict[media_key]))
+                media_val_str = media_dict[media_key]
+            fvs[index] = (str(media_key), str(media_val_str))
             index += 1
 
         app_port_tbl.set(port_name, fvs)
