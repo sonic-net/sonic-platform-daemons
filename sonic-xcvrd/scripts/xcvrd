@@ -327,7 +327,6 @@ def get_media_settings_value(physical_port, key):
 
 
 def get_media_settings_key(physical_port, transceiver_dict):
-    sup_media_types = {'QSFP-DD','QSFP28','QSFP+','QSFP'}
     sup_compliance_str = '10/40G Ethernet Compliance Code'
     sup_len_str = 'Length Cable Assembly(m)'
     vendor_name_str = transceiver_dict[physical_port]['manufacturename']
@@ -346,20 +345,17 @@ def get_media_settings_key(physical_port, transceiver_dict):
     if sup_compliance_str in media_compliance_dict:
         media_compliance_code = media_compliance_dict[sup_compliance_str]
 
-    media_type_str = transceiver_dict[physical_port]['type']
+    media_type = transceiver_dict[physical_port]['short_type']
 
-    for sup_media_key in sup_media_types:
-        if sup_media_key in media_type_str:
-            media_type = sup_media_key
-            break
-    
     media_key = ''
+
     if len(media_type) != 0:
         media_key += media_type
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
-    if len(media_len) != 0:
-        media_key += '-' + media_len + 'M'
+        if len(media_len) != 0:
+            media_key += '-' + media_len + 'M'
+
     return [vendor_key, media_key]
 
 def get_media_val_str_from_dict(media_dict):
