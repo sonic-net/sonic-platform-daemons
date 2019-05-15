@@ -20,7 +20,7 @@ except ImportError, e:
 PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
 PLATFORM_SPECIFIC_CLASS_NAME = 'board'
 
-ERR_ARISTA_PLATFORM = 1
+ERR_PLATFORM_NOT_SUPPORT = 1
 ERR_FAILED_EEPROM = 2
 ERR_FAILED_UPDATE_DB = 3
 
@@ -32,8 +32,8 @@ logger = Logger(SYSLOG_IDENTIFIER)
 
 def main():
     parser = argparse.ArgumentParser(description='post-syseeprom tool')
-    parser.add_argument("-w", help="write syseeprom info into state DB", action='store_true')
-    parser.add_argument("-c", help="remove syseeprom info from state DB", action='store_true')
+    parser.add_argument("-w", "--write", help="write syseeprom info into state DB", action='store_true')
+    parser.add_argument("-c", "--clear", help="remove syseeprom info from state DB", action='store_true')
     args = parser.parse_args()
 
     Daemon_Base = DaemonBase()
@@ -44,9 +44,9 @@ def main():
     # decode-syseeprom scripts will cover Arista case, it will still read from HW/cache instead from DB on Arista platform.  
     if 'arista' in platform_path:
         logger.log_warning("Arista platform does not support this yet")
-        return ERR_ARISTA_PLATFORM
+        return ERR_PLATFORM_NOT_SUPPORT
 
-    if args.w:
+    if args.write:
         eeprom_util = Daemon_Base.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
         eeprom = eeprom_util.read_eeprom()
         if eeprom is None :
@@ -57,7 +57,7 @@ def main():
         if err:
             logger.log_error("Failed to update eeprom info to database")
             return ERR_FAILED_UPDATE_DB
-    elif args.c:
+    elif args.clear:
         state_db = daemon_base.db_connect(swsscommon.STATE_DB)
         eeprom_tbl = swsscommon.Table(state_db, EEPROM_TABLE_NAME)
         keys = eeprom_tbl.getKeys()
