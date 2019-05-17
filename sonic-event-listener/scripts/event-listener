@@ -1,0 +1,49 @@
+#!/usr/bin/env python2
+
+'''
+    event-listener
+    Supervisord event listener for SONiC pmon container
+    This event listener will monitor the 'SUPERVISOR_STATE_CHANGE_STOPPING' event of supervisord when it is shutting down.
+    On this event, event listener will call command 'post-syseeprom -c' to clear the state DB.
+'''
+
+try:
+    import sys
+    import subprocess
+    from supervisor.childutils import listener
+except ImportError, e:
+    raise ImportError (str(e) + " - required module not found")
+
+EVENT_TO_LISTEN = 'SUPERVISOR_STATE_CHANGE_STOPPING'
+COMMAND_ON_EVENT = 'post-syseeprom -c'
+
+def write_log(s):
+    sys.stderr.write(s)
+    sys.stderr.flush()
+
+class EventListener:
+    def __init__(self, event, command_string):
+        self.event = event
+        self.command = (command_string.strip()).split()
+
+    def run(self):
+        write_log("Event-listener start up...\n")
+
+        while True:
+            headers, body = listener.wait()
+            if headers["eventname"] == self.event:
+                subprocess.call(self.command)
+                write_log("Event-listener process docker stopping... \n")
+                listener.ok(sys.stdout)
+                break
+
+            listener.ok(sys.stdout)
+
+        write_log("Event-listener shutting down...\n")
+
+def main():
+    event_listener = EventListener(EVENT_TO_LISTEN, COMMAND_ON_EVENT)
+    event_listener.run()
+
+if __name__ == '__main__':
+    main()
