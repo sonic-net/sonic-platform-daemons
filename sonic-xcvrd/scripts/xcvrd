@@ -420,7 +420,12 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         num_logical_ports = len(logical_port_list)
         logical_idx = logical_port_list.index(logical_port_name)
         if not platform_sfputil.get_presence(physical_port):
-            logger.log_error("Media presence not detected during notify")
+            logger.log_info("Media %d presence not detected during notify"
+                             % physical_port)
+            continue
+        if physical_port not in transceiver_dict:
+            logger.log_error("Media %d eeprom not populated in "
+                             "transceiver dict" % physical_port)
             continue
 
         port_name = get_physical_port_name(logical_port_name,
