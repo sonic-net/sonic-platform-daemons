@@ -20,6 +20,7 @@ except ImportError, e:
 PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
 PLATFORM_SPECIFIC_CLASS_NAME = 'board'
 
+POST_EEPROM_SUCCESS = 0
 ERR_PLATFORM_NOT_SUPPORT = 1
 ERR_FAILED_EEPROM = 2
 ERR_FAILED_UPDATE_DB = 3
@@ -67,6 +68,8 @@ def main():
     else:
         logger.log_error("Invalid parameter")
         return ERR_INVALID_PARAMETER
+
+    return POST_EEPROM_SUCCESS
 
 if __name__ == '__main__':
     main()
