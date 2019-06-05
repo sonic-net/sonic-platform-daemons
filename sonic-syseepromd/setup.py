@@ -1,9 +1,9 @@
 from setuptools import setup
 
 setup(
-    name='sonic-post-syseeprom',
+    name='sonic-syseepromd',
     version='1.0',
-    description='Tool which posts syseeprom to DB in SONiC',
+    description='Syseeprom gathering daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
@@ -11,7 +11,7 @@ setup(
     maintainer='Kebo Liu',
     maintainer_email='kebol@mellanox.com',
     scripts=[
-        'scripts/post-syseeprom',
+        'scripts/syseepromd',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -25,5 +25,5 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC SYSEEPROM syseeprom POST-SYSEEPROM post-syseeprom',
+    keywords='sonic SONiC SYSEEPROM syseeprom SYSEEPROMD syseepromd',
 )
