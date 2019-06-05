@@ -357,7 +357,7 @@ def get_media_settings_key(physical_port, transceiver_dict):
     if sup_compliance_str in media_compliance_dict:
         media_compliance_code = media_compliance_dict[sup_compliance_str]
 
-    media_type = transceiver_dict[physical_port]['short_type']
+    media_type = transceiver_dict[physical_port]['type_abbrv_name']
 
     media_key = ''
 
