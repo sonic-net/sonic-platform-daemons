@@ -4,7 +4,7 @@
     syseepromd
     Syseeprom information gathering daemon for SONiC
     This daemon will be started during the start phase of pmon container, gathering syseeprom info and write to state DB.
-    It will continue monitoring the state DB for the syseeprom table, it table deleted, will write again.
+    It will continue monitoring the state DB for the syseeprom table, if table been deleted, it will write again.
     With this daemon, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
 '''
 
