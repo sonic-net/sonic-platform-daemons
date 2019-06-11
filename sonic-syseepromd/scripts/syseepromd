@@ -4,7 +4,7 @@
     syseepromd
     Syseeprom information gathering daemon for SONiC
     This daemon will be started during the start phase of pmon container, gathering syseeprom info and write to state DB.
-    It will continue monitoring the state DB for the syseeprom table, if table been deleted, it will write again.
+    It will continue monitoring the state DB for the syseeprom table, if table was deleted, it will write again.
     With this daemon, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
 '''
 
@@ -40,7 +40,7 @@ class DaemonSyseeprom(DaemonBase):
     def __init__(self):
         DaemonBase.__init__(self)
 
-        self.stop = threading.Event()
+        self.stop_event = threading.Event()
         self.eeprom_util = None
         
         state_db = daemon_base.db_connect(swsscommon.STATE_DB)
@@ -92,10 +92,10 @@ class DaemonSyseeprom(DaemonBase):
             logger.log_info("Caught SIGHUP - ignoring...")
         elif sig == signal.SIGINT:
             logger.log_info("Caught SIGINT - exiting...")
-            self.stop.set()
+            self.stop_event.set()
         elif sig == signal.SIGTERM:
             logger.log_info("Caught SIGTERM - exiting...")
-            self.stop.set()
+            self.stop_event.set()
         else:
             logger.log_warning("Caught unhandled signal '" + sig + "'")
 
@@ -114,14 +114,14 @@ class DaemonSyseeprom(DaemonBase):
         # Start main loop
         logger.log_info("Start daemon main loop")
 
-        while not self.stop.wait(EEPROM_INFO_UPDATE_PERIOD_SECS):
+        while not self.stop_event.wait(EEPROM_INFO_UPDATE_PERIOD_SECS):
             rc = self.detect_eeprom_table_integrity()
             if not rc:
                 logger.log_info("sys eeprom table was changed, need update")
                 self.clear_db()
                 rcs = self.post_eeprom_to_db()
                 if rcs != POST_EEPROM_SUCCESS:
-                    self.stop.set()
+                    self.stop_event.set()
 
         logger.log_info("Stop daemon main loop")
 
