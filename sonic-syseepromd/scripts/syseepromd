@@ -28,7 +28,7 @@ ERR_PLATFORM_NOT_SUPPORT = 1
 ERR_FAILED_EEPROM = 2
 ERR_FAILED_UPDATE_DB = 3
 ERR_INVALID_PARAMETER = 4
-ERR_PSUUTIL_LOAD = 4
+ERR_EEPROMUTIL_LOAD = 5 
 
 EEPROM_TABLE_NAME = 'EEPROM_INFO'
 SYSLOG_IDENTIFIER = 'syseepromd'
@@ -51,8 +51,8 @@ class DaemonSyseeprom(DaemonBase):
         try:
             self.eeprom_util = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
         except Exception as e:
-            logger.log_error("Failed to load psuutil: %s" % (str(e)), True)
-            sys.exit(ERR_PSUUTIL_LOAD)
+            logger.log_error("Failed to load eeprom utility: %s" % (str(e)), True)
+            sys.exit(ERR_EEPROMUTIL_LOAD)
 
     def post_eeprom_to_db(self):
         eeprom = self.eeprom_util.read_eeprom()
