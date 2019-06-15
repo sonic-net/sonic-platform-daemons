@@ -118,6 +118,11 @@ def beautify_dom_threshold_info_dict(dom_info_dict):
     dom_info_dict['vcclowalarm'] = strip_unit_and_beautify(dom_info_dict['vcclowalarm'], VOLT_UNIT)
     dom_info_dict['vcclowwarning'] = strip_unit_and_beautify(dom_info_dict['vcclowwarning'], VOLT_UNIT)
 
+    dom_info_dict['txpowerhighalarm'] = strip_unit_and_beautify(dom_info_dict['txpowerhighalarm'], POWER_UNIT)
+    dom_info_dict['txpowerlowalarm'] = strip_unit_and_beautify(dom_info_dict['txpowerlowalarm'], POWER_UNIT)
+    dom_info_dict['txpowerhighwarning'] = strip_unit_and_beautify(dom_info_dict['txpowerhighwarning'], POWER_UNIT)
+    dom_info_dict['txpowerlowwarning'] = strip_unit_and_beautify(dom_info_dict['txpowerlowwarning'], POWER_UNIT)
+
     dom_info_dict['rxpowerhighalarm'] = strip_unit_and_beautify(dom_info_dict['rxpowerhighalarm'], POWER_UNIT)
     dom_info_dict['rxpowerlowalarm'] = strip_unit_and_beautify(dom_info_dict['rxpowerlowalarm'], POWER_UNIT)
     dom_info_dict['rxpowerhighwarning'] = strip_unit_and_beautify(dom_info_dict['rxpowerhighwarning'], POWER_UNIT)
@@ -169,6 +174,66 @@ def post_port_sfp_info_to_db(logical_port_name, table, stop=threading.Event()):
                                                   ('cable_length',port_info_dict['cable_length']),
                                                   ('specification_compliance',port_info_dict['specification_compliance']),
                                                   ('nominal_bit_rate',port_info_dict['nominal_bit_rate'])])
+                table.set(port_name, fvs)
+            else:
+                return SFP_EEPROM_NOT_READY
+
+        except NotImplementedError:
+            logger.log_error("This functionality is currently not implemented for this platform")
+            sys.exit(NOT_IMPLEMENTED_ERROR)
+
+# Update port dom threshold info in db
+def post_port_dom_threshold_info_to_db(logical_port_name, table,
+                                       stop=threading.Event()):
+    ganged_port = False
+    ganged_member_num = 1
+
+    physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+    if physical_port_list is None:
+        logger.log_error("No physical ports found for logical port '%s'"
+                                                           % logical_port_name)
+        return PHYSICAL_PORT_NOT_EXIST
+
+    if len(physical_port_list) > 1:
+        ganged_port = True
+
+    for physical_port in physical_port_list:
+        if stop.is_set():
+            break
+
+        if not platform_sfputil.get_presence(physical_port):
+            continue
+
+        port_name = get_physical_port_name(logical_port_name,
+                                           ganged_member_num, ganged_port)
+        ganged_member_num += 1
+
+        try:
+            dom_info_dict = platform_sfputil.get_transceiver_dom_info_dict(physical_port)
+            if dom_info_dict is not None:
+                beautify_dom_threshold_info_dict(dom_info_dict)
+                fvs = swsscommon.FieldValuePairs(
+                        [('temphighalarm', dom_info_dict['temphighalarm']),
+                         ('temphighwarning', dom_info_dict['temphighwarning']),
+                         ('templowalarm', dom_info_dict['templowalarm']),
+                         ('templowwarning', dom_info_dict['templowwarning']),
+                         ('vcchighalarm', dom_info_dict['vcchighalarm']),
+                         ('vcchighwarning', dom_info_dict['vcchighwarning']),
+                         ('vcclowalarm', dom_info_dict['vcclowalarm']),
+                         ('vcclowwarning', dom_info_dict['vcclowwarning']),
+                         ('txpowerhighalarm', dom_info_dict['txpowerhighalarm']),
+                         ('txpowerlowalarm', dom_info_dict['txpowerlowalarm']),
+                         ('txpowerhighwarning', dom_info_dict['txpowerhighwarning']),
+                         ('txpowerlowwarning', dom_info_dict['txpowerlowwarning']),
+                         ('rxpowerhighalarm', dom_info_dict['rxpowerhighalarm']),
+                         ('rxpowerlowalarm', dom_info_dict['rxpowerlowalarm']),
+                         ('rxpowerhighwarning', dom_info_dict['rxpowerhighwarning']),
+                         ('rxpowerlowwarning', dom_info_dict['rxpowerlowwarning']),
+                         ('txbiashighalarm', dom_info_dict['txbiashighalarm']),
+                         ('txbiaslowalarm', dom_info_dict['txbiaslowalarm']),
+                         ('txbiashighwarning', dom_info_dict['txbiashighwarning']),
+                         ('txbiaslowwarning', dom_info_dict['txbiaslowwarning'])
+                        ])
                 table.set(port_name, fvs)
             else:
                 return SFP_EEPROM_NOT_READY
@@ -262,6 +327,7 @@ def post_port_sfp_dom_info_to_db(stop=threading.Event()):
 
         post_port_sfp_info_to_db(logical_port_name, int_tbl, stop)
         post_port_dom_info_to_db(logical_port_name, dom_tbl, stop)
+        post_port_dom_threshold_info_to_db(logical_port_name, dom_tbl, stop)
 
 # Delete port dom/sfp info from db
 def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
@@ -354,6 +420,7 @@ class sfp_state_update_task:
                                 time.sleep(TIME_FOR_SFP_READY_SECS)
                                 post_port_sfp_info_to_db(logical_port, int_tbl)
                             post_port_dom_info_to_db(logical_port, dom_tbl)
+                            post_port_dom_threshold_info_to_db(logical_port, dom_tbl)
                         elif value == SFP_STATUS_REMOVED:
                             logger.log_info("Got SFP removed event")
                             del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
