@@ -38,6 +38,7 @@ SELECT_TIMEOUT_MSECS = 1000
 
 DOM_INFO_UPDATE_PERIOD_SECS = 60
 TIME_FOR_SFP_READY_SECS = 1
+XCVRD_MAIN_THREAD_SLEEP_SECS = 60
 
 SFP_STATUS_INSERTED = '1'
 SFP_STATUS_REMOVED = '0'
@@ -261,6 +262,19 @@ def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
         except NotImplementedError:
             logger.log_error("This functionality is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
+
+# recover missing sfp table entries if any
+def recover_missing_sfp_table_entries(sfp_util, int_tbl, stop=threading.Event()):
+    transceiver_dict = {}
+    
+    keys = int_tbl.getKeys()
+    logical_port_list = sfp_util.logical
+    for logical_port_name in logical_port_list:
+        if stop.is_set():
+            break
+        if logical_port_name not in keys:
+            post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop)
+    
 
 def check_port_in_range(range_str, physical_port):
     range_separator = '-'
@@ -573,7 +587,7 @@ class DaemonXcvrd(DaemonBase):
     def __init__(self):
         DaemonBase.__init__(self)
 
-        self.timeout = 1
+        self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
         self.stop = threading.Event()
 
     # Signal handler
@@ -646,6 +660,11 @@ class DaemonXcvrd(DaemonBase):
             logger.log_error("Failed to read port info: %s" % (str(e)), True)
             sys.exit(PORT_CONFIG_LOAD_ERROR)
 
+        # Connect to STATE_DB and create transceiver dom/sfp info tables
+        state_db = daemon_base.db_connect(swsscommon.STATE_DB)
+        self.int_tbl = swsscommon.Table(state_db, TRANSCEIVER_INFO_TABLE)
+        self.dom_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
+
         self.load_media_settings()
         warmstart = swsscommon.WarmStart()
         warmstart.initialize("xcvrd", "pmon")
@@ -664,15 +683,10 @@ class DaemonXcvrd(DaemonBase):
     def deinit(self):
         logger.log_info("Start daemon deinit...")
 
-        # Connect to STATE_DB and create transceiver dom/sfp info tables
-        state_db = daemon_base.db_connect(swsscommon.STATE_DB)
-        int_tbl = swsscommon.Table(state_db, TRANSCEIVER_INFO_TABLE)
-        dom_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
-
         # Delete all the information from DB and then exit
         logical_port_list = platform_sfputil.logical
         for logical_port_name in logical_port_list:
-            del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl)
+            del_port_sfp_dom_info_from_db(logical_port_name, self.int_tbl, self.dom_tbl)
 
     # Run daemon
     def run(self):
@@ -693,7 +707,8 @@ class DaemonXcvrd(DaemonBase):
         logger.log_info("Start daemon main loop")
 
         while not self.stop.wait(self.timeout):
-            pass
+            # Check the integrity of the sfp info table and recover the missing entries if any
+            recover_missing_sfp_table_entries(platform_sfputil, self.int_tbl, self.stop)
 
         logger.log_info("Stop daemon main loop")
 
