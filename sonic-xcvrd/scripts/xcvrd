@@ -291,23 +291,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
                          ('tx1power', dom_info_dict['tx1power']),
                          ('tx2power', dom_info_dict['tx2power']),
                          ('tx3power', dom_info_dict['tx3power']),
-                         ('tx4power', dom_info_dict['tx4power']),
-                         ('temphighalarm', dom_info_dict['temphighalarm']),
-                         ('temphighwarning', dom_info_dict['temphighwarning']),
-                         ('templowalarm', dom_info_dict['templowalarm']),
-                         ('templowwarning', dom_info_dict['templowwarning']),
-                         ('vcchighalarm', dom_info_dict['vcchighalarm']),
-                         ('vcchighwarning', dom_info_dict['vcchighwarning']),
-                         ('vcclowalarm', dom_info_dict['vcclowalarm']),
-                         ('vcclowwarning', dom_info_dict['vcclowwarning']),
-                         ('rxpowerhighalarm', dom_info_dict['rxpowerhighalarm']),
-                         ('rxpowerlowalarm', dom_info_dict['rxpowerlowalarm']),
-                         ('rxpowerhighwarning', dom_info_dict['rxpowerhighwarning']),
-                         ('rxpowerlowwarning', dom_info_dict['rxpowerlowwarning']),
-                         ('txbiashighalarm', dom_info_dict['txbiashighalarm']),
-                         ('txbiaslowalarm', dom_info_dict['txbiaslowalarm']),
-                         ('txbiashighwarning', dom_info_dict['txbiashighwarning']),
-                         ('txbiaslowwarning', dom_info_dict['txbiaslowwarning'])
+                         ('tx4power', dom_info_dict['tx4power'])
                         ])
 
                 table.set(port_name, fvs)
