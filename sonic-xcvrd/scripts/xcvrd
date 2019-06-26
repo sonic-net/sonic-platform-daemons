@@ -264,7 +264,7 @@ def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # recover missing sfp table entries if any
-def recover_missing_sfp_table_entries(sfp_util, int_tbl, stop=threading.Event()):
+def recover_missing_sfp_table_entries(sfp_util, int_tbl, stop):
     transceiver_dict = {}
     
     keys = int_tbl.getKeys()
