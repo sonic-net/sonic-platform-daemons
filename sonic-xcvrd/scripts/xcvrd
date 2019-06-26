@@ -216,7 +216,7 @@ def post_port_dom_threshold_info_to_db(logical_port_name, table,
         ganged_member_num += 1
 
         try:
-            dom_info_dict = platform_sfputil.get_transceiver_dom_info_dict(physical_port)
+            dom_info_dict = platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
             if dom_info_dict is not None:
                 beautify_dom_threshold_info_dict(dom_info_dict)
                 fvs = swsscommon.FieldValuePairs(
@@ -276,7 +276,6 @@ def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
             dom_info_dict = platform_sfputil.get_transceiver_dom_info_dict(physical_port)
             if dom_info_dict is not None:
                 beautify_dom_info_dict(dom_info_dict)
-                beautify_dom_threshold_info_dict(dom_info_dict)
                 fvs = swsscommon.FieldValuePairs(
                         [('temperature', dom_info_dict['temperature']),
                          ('voltage', dom_info_dict['voltage']),
