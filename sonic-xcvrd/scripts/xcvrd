@@ -115,7 +115,7 @@ def beautify_dom_info_dict(dom_info_dict):
 
 # Update port sfp info in db
 def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict, 
-                             stop=threading.Event()):
+                             stop_event=threading.Event()):
     ganged_port = False
     ganged_member_num = 1
 
@@ -128,7 +128,7 @@ def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict,
         ganged_port = True
 
     for physical_port in physical_port_list:
-        if stop.is_set():
+        if stop_event.is_set():
             break
 
         if not platform_sfputil.get_presence(physical_port):
@@ -165,7 +165,7 @@ def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict,
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # Update port dom sensor info in db
-def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
+def post_port_dom_info_to_db(logical_port_name, table, stop_event=threading.Event()):
     ganged_port = False
     ganged_member_num = 1
 
@@ -178,7 +178,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
         ganged_port = True
 
     for physical_port in physical_port_list:
-        if stop.is_set():
+        if stop_event.is_set():
             break
 
         if not platform_sfputil.get_presence(physical_port):
@@ -214,7 +214,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop=threading.Event()):
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # Update port dom/sfp info in db
-def post_port_sfp_dom_info_to_db(is_warm_start, stop=threading.Event()):
+def post_port_sfp_dom_info_to_db(is_warm_start, stop_event=threading.Event()):
     # Connect to STATE_DB and create transceiver dom/sfp info tables
     transceiver_dict = {}
     state_db = daemon_base.db_connect(swsscommon.STATE_DB)
@@ -228,11 +228,11 @@ def post_port_sfp_dom_info_to_db(is_warm_start, stop=threading.Event()):
     # Post all the current interface dom/sfp info to STATE_DB
     logical_port_list = platform_sfputil.logical
     for logical_port_name in logical_port_list:
-        if stop.is_set():
+        if stop_event.is_set():
             break
 
-        post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop)
-        post_port_dom_info_to_db(logical_port_name, dom_tbl, stop)
+        post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop_event)
+        post_port_dom_info_to_db(logical_port_name, dom_tbl, stop_event)
         ## Do not notify media settings during warm reboot to avoid dataplane traffic impact
         if is_warm_start == False:
             notify_media_setting(logical_port_name, transceiver_dict, app_port_tbl)
@@ -264,16 +264,16 @@ def del_port_sfp_dom_info_from_db(logical_port_name, int_tbl, dom_tbl):
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # recover missing sfp table entries if any
-def recover_missing_sfp_table_entries(sfp_util, int_tbl, stop):
+def recover_missing_sfp_table_entries(sfp_util, int_tbl, stop_event):
     transceiver_dict = {}
     
     keys = int_tbl.getKeys()
     logical_port_list = sfp_util.logical
     for logical_port_name in logical_port_list:
-        if stop.is_set():
+        if stop_event.is_set():
             break
         if logical_port_name not in keys:
-            post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop)
+            post_port_sfp_info_to_db(logical_port_name, int_tbl, transceiver_dict, stop_event)
     
 
 def check_port_in_range(range_str, physical_port):
@@ -588,7 +588,7 @@ class DaemonXcvrd(DaemonBase):
         DaemonBase.__init__(self)
 
         self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
-        self.stop = threading.Event()
+        self.stop_event = threading.Event()
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -596,10 +596,10 @@ class DaemonXcvrd(DaemonBase):
             logger.log_info("Caught SIGHUP - ignoring...")
         elif sig == signal.SIGINT:
             logger.log_info("Caught SIGINT - exiting...")
-            self.stop.set()
+            self.stop_event.set()
         elif sig == signal.SIGTERM:
             logger.log_info("Caught SIGTERM - exiting...")
-            self.stop.set()
+            self.stop_event.set()
         else:
             logger.log_warning("Caught unhandled signal '" + sig + "'")
 
@@ -613,7 +613,7 @@ class DaemonXcvrd(DaemonBase):
         sel.addSelectable(sst)
 
         # Make sure this daemon started after all port configured
-        while not self.stop.is_set():
+        while not self.stop_event.is_set():
             (state, c) = sel.select(SELECT_TIMEOUT_MSECS)
             if state == swsscommon.Select.TIMEOUT:
                 continue
@@ -677,7 +677,7 @@ class DaemonXcvrd(DaemonBase):
 
         # Post all the current interface dom/sfp info to STATE_DB
         logger.log_info("Post all port DOM/SFP info to DB")
-        post_port_sfp_dom_info_to_db(is_warm_start, self.stop)
+        post_port_sfp_dom_info_to_db(is_warm_start, self.stop_event)
 
     # Deinitialize daemon
     def deinit(self):
@@ -706,9 +706,9 @@ class DaemonXcvrd(DaemonBase):
         # Start main loop
         logger.log_info("Start daemon main loop")
 
-        while not self.stop.wait(self.timeout):
+        while not self.stop_event.wait(self.timeout):
             # Check the integrity of the sfp info table and recover the missing entries if any
-            recover_missing_sfp_table_entries(platform_sfputil, self.int_tbl, self.stop)
+            recover_missing_sfp_table_entries(platform_sfputil, self.int_tbl, self.stop_event)
 
         logger.log_info("Stop daemon main loop")
 
