@@ -38,6 +38,7 @@ SELECT_TIMEOUT_MSECS = 1000
 
 DOM_INFO_UPDATE_PERIOD_SECS = 60
 TIME_FOR_SFP_READY_SECS = 1
+TIME_FOR_SFP_POLL_SECS = 1
 XCVRD_MAIN_THREAD_SLEEP_SECS = 60
 
 SFP_STATUS_INSERTED = '1'
@@ -478,6 +479,18 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
         app_port_tbl.set(port_name, fvs)
 
+def do_sfp_insertion(logical_port, int_tbl, dom_tbl, transceiver_dict):
+    rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
+    if rc == SFP_EEPROM_NOT_READY:
+        logger.log_warning(logical_port + ": SFP EEPROM is not ready")
+    elif rc is None:
+        post_port_dom_info_to_db(logical_port, dom_tbl)
+        logger.log_info(logical_port + ": SFP is inserted")
+    return rc
+
+def do_sfp_removal(logical_port, int_tbl, dom_tbl):
+    del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
+    logger.log_info(logical_port + ": SFP is removed")
 
 #
 # Helper classes ===============================================================
@@ -535,36 +548,62 @@ class sfp_state_update_task:
         app_port_tbl = swsscommon.ProducerStateTable(appl_db,
                                                      swsscommon.APP_PORT_TABLE_NAME)
 
+        # Initialize SFP module presence table
+        mod_tbl = {}
+        for key in range(platform_sfputil.port_start, platform_sfputil.port_end + 1):
+            mod_tbl[key] = False
+
         # Start loop to listen to the sfp change event
         while not stopping_event.is_set():
-            status, port_dict = platform_sfputil.get_transceiver_change_event()
-            if status:
-                for key, value in port_dict.iteritems():
+            try:
+                status, port_dict = platform_sfputil.get_transceiver_change_event()
+            except NotImplementedError:
+                for key in range(platform_sfputil.port_start, platform_sfputil.port_end + 1):
                     logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
-                    for logical_port in logical_port_list:
-                        if value == SFP_STATUS_INSERTED:
-                            logger.log_info("Got SFP inserted event")
-                            rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
-                            if rc == SFP_EEPROM_NOT_READY:
-                                logger.log_warning("SFP EEPROM is not ready. One more try...")
-                                time.sleep(TIME_FOR_SFP_READY_SECS)
-                                post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            post_port_dom_info_to_db(logical_port, dom_tbl)
-                            notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
-                            transceiver_dict.clear()
-                        elif value == SFP_STATUS_REMOVED:
-                            logger.log_info("Got SFP removed event")
-                            del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
-                        else:
-                            # TODO, SFP return error code, need handle accordingly.
-                            continue
+                    if logical_port_list is None:
+                        continue
+
+                    if platform_sfputil.get_presence(key):
+                        if mod_tbl[key] != True:
+                            for logical_port in logical_port_list:
+                                rc = do_sfp_insertion(logical_port, int_tbl, dom_tbl, transceiver_dict)
+                                if rc is not None:
+                                    break
+                                notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
+                                transceiver_dict.clear()
+                                mod_tbl[key] = True
+                    else:
+                        if mod_tbl[key] == True:
+                            for logical_port in logical_port_list:
+                                do_sfp_removal(logical_port, int_tbl, dom_tbl)
+                            mod_tbl[key] = False
+                time.sleep(TIME_FOR_SFP_POLL_SECS)
+                continue
+
             else:
-                # If get_transceiver_change_event() return error, will clean up the DB and then exit
-                # TODO: next step need to define more error types to handle accordingly.
-                logger.log_error("Failed to get transceiver change event. Exiting...")
-                os.kill(os.getppid(), signal.SIGTERM)
-                break
+                if status:
+                    for key, value in port_dict.iteritems():
+                        logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
+                        for logical_port in logical_port_list:
+                            if value == SFP_STATUS_INSERTED:
+                                rc = do_sfp_insertion(logical_port, int_tbl, dom_tbl, transceiver_dict)
+                                # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
+                                if rc == SFP_EEPROM_NOT_READY:
+                                    time.sleep(TIME_FOR_SFP_READY_SECS)
+                                    do_sfp_insertion(logical_port, int_tbl, dom_tbl, transceiver_dict)
+                                notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
+                                transceiver_dict.clear()
+                            elif value == SFP_STATUS_REMOVED:
+                                do_sfp_removal(logical_port, int_tbl, dom_tbl)
+                            else:
+                                # TODO, SFP return error code, need handle accordingly.
+                                continue
+                else:
+                    # If get_transceiver_change_event() return error, will clean up the DB and then exit
+                    # TODO: next step need to define more error types to handle accordingly.
+                    logger.log_error("Failed to get transceiver change event. Exiting...")
+                    os.kill(os.getppid(), signal.SIGTERM)
+                    break
 
         logger.log_info("Stop SFP monitoring loop")
 
