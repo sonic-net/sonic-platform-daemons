@@ -59,7 +59,7 @@ class DaemonSyseeprom(DaemonBase):
     def load_platform_api(self):
         try:
             self.eeprom = DaemonBase.load_chassis(self).get_eeprom()
-            return self.eeprom is None
+            return self.eeprom is not None
         except Exception as e:
             logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
             return False
