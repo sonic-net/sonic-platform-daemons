@@ -58,7 +58,9 @@ class DaemonSyseeprom(DaemonBase):
 
     def load_platform_api(self):
         try:
-            self.eeprom = DaemonBase.load_chassis(self).get_eeprom()
+            import sonic_platform.platform
+            self.chassis = sonic_platform.platform.Platform().get_chassis()
+            self.eeprom = self.chassis.get_eeprom()
             return self.eeprom is not None
         except Exception as e:
             logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
