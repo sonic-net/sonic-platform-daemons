@@ -678,13 +678,13 @@ class sfp_state_update_task:
                 # Receive event on single SFP
                 for key, value in port_dict.iteritems():
                     if key == EVENT_ON_ALL_SFP:
-                        logger.log_error("Receive event with unexpected content, key: {}, value: {}".format(key, value))
+                        logger.log_error("Got event with unexpected content, key: {}, value: {}".format(key, value))
                         os.kill(os.getppid(), signal.SIGTERM)
                         break
                     logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
                     for logical_port in logical_port_list:
                         if value == SFP_STATUS_INSERTED:
-                            logger.log_info("Receive SFP inserted event")
+                            logger.log_info("Got SFP inserted event")
                             rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
                             # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                             if rc == SFP_EEPROM_NOT_READY:
@@ -696,7 +696,7 @@ class sfp_state_update_task:
                             notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
                             transceiver_dict.clear()
                         elif value == SFP_STATUS_REMOVED:
-                            logger.log_info("Receive SFP removed event")
+                            logger.log_info("Got SFP removed event")
                             del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
                         else:
                             # TODO, SFP return error code, need handle accordingly.
@@ -708,25 +708,25 @@ class sfp_state_update_task:
                         if key == EVENT_ON_ALL_SFP:
                             if value == SYSTEM_NOT_READY:
                                 # system not ready, wait and retry
-                                 if self._retry_for_system_ready():
+                                if self._retry_for_system_ready():
                                     continue
-                                 else:
+                                else:
                                     logger.log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
                                     os.kill(os.getppid(), signal.SIGTERM)
                                     break
                             elif value == SYSTEM_FAIL:
-                                logger.log_error("Receive system fail event. Exiting...")
+                                logger.log_error("Got system fail event. Exiting...")
                                 os.kill(os.getppid(), signal.SIGTERM)
                                 break
                             elif value == SYSTEM_READY:
-                                logger.log_info("Receive system ready event. Continue...")
+                                logger.log_info("Got system ready event. Continue...")
                                 continue
                             else:
-                                logger.log_error("Receive unknown event, key: {}, value: {}. Exiting...".format(key, value))
+                                logger.log_error("Got unknown event, key: {}, value: {}. Exiting...".format(key, value))
                                 os.kill(os.getppid(), signal.SIGTERM)
                                 break
                         else:
-                            logger.log_error("Receive unknown error, key: {}, value: {}. Exiting...".format(key, value))
+                            logger.log_error("Got unknown error, key: {}, value: {}. Exiting...".format(key, value))
                 else:
                     # Receive event with error dict, consider as system fail
                     logger.log_error("Failed to get transceiver change event. Exiting...")
