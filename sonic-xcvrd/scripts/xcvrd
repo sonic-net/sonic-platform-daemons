@@ -621,42 +621,6 @@ class sfp_state_update_task:
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
 
-    def _retry_for_system_ready(self):
-        retry = 0
-        while retry < RETRY_TIMES_FOR_SYSTEM_READY:
-            #time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_SECS)
-            time_start  = time.time()
-            rc, event_dict = platform_sfputil.get_transceiver_change_event(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS)
-            if not rc and bool(event_dict) and EVENT_ON_ALL_SFP in event_dict:
-                value = event_dict[EVENT_ON_ALL_SFP]
-                if value == SYSTEM_NOT_READY:
-                    retry = retry + 1
-                    # get_transceiver_change_event may return immediately, 
-                    # we want the retry expired in expected time period, 
-                    # So need to calc the time diff, 
-                    # if time diff less that the pre-defined waiting time, 
-                    # use sleep() to complete the time.
-                    time_now = time.time()
-                    time_diff = time_now - time_start
-                    if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
-                        time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
-
-                    logger.log_info("receive system not ready event, retried for {} times".format(retry))
-                    continue
-                elif value == SYSTEM_FAIL:
-                    logger.log_info("receive system fail event, stop retry.")
-                    return False
-                elif value == SYSTEM_READY:
-                    logger.log_info("receive system ready event, stop retry.")
-                    return True
-                else:
-                    logger.log_error("receive unknown error event: {}, stop retry.".format(value))
-                    return False
-            else:
-                logger.log_error("error in received event, rc: {}, dict: {}".format(rc, event_dict))
-                return False
-        return False
-
     def task_worker(self, stopping_event):
         logger.log_info("Start SFP monitoring loop")
 
@@ -672,8 +636,20 @@ class sfp_state_update_task:
                                                      swsscommon.APP_PORT_TABLE_NAME)
 
         # Start loop to listen to the sfp change event
+        # The state migrating sequence:
+        # 1. When the system starts, it is in "SYSTEM_NOT_READY" state, calling get_transceiver_change_event
+        #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for as many as RETRY_TIMES_FOR_SYSTEM_READY
+        #    times
+        # 2. Once 'system_become_ready' returned, the system enters "SYSTEM_READY" state and starts to monitor
+        #    the insertion/removal event of all the SFP modules.
+        #    In this state, receiving any system level event will be treated as an unrecoverable error and cause
+        #    the daemon exit
+        retry = 0
+        timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
+        state = SYSTEM_NOT_READY
         while not stopping_event.is_set():
-            status, port_dict = platform_sfputil.get_transceiver_change_event()
+            time_start = time.time()
+            status, port_dict = platform_sfputil.get_transceiver_change_event(timeout)
             if status:
                 # Receive event on single SFP
                 for key, value in port_dict.iteritems():
@@ -707,18 +683,34 @@ class sfp_state_update_task:
                     for key, value in port_dict.iteritems():
                         if key == EVENT_ON_ALL_SFP:
                             if value == SYSTEM_NOT_READY:
+                                # receiving this event under SYSTEM_READY state should treated as an error
+                                if state != SYSTEM_NOT_READY:
+                                    logger.log_error("Got system become ready event in {} state. Exiting...".format(state))
+                                    os.kill(os.getppid(), signal.SIGTERM)
+                                    break
                                 # system not ready, wait and retry
-                                if self._retry_for_system_ready():
-                                    continue
-                                else:
+                                if retry >= RETRY_TIMES_FOR_SYSTEM_READY:
                                     logger.log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
                                     os.kill(os.getppid(), signal.SIGTERM)
                                     break
+                                retry = retry + 1
+
+                                # get_transceiver_change_event may return immediately, 
+                                # we want the retry expired in expected time period, 
+                                # So need to calc the time diff, 
+                                # if time diff less that the pre-defined waiting time, 
+                                # use sleep() to complete the time.
+                                time_now = time.time()
+                                time_diff = time_now - time_start
+                                if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
+                                    time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
                             elif value == SYSTEM_FAIL:
                                 logger.log_error("Got system fail event. Exiting...")
                                 os.kill(os.getppid(), signal.SIGTERM)
                                 break
                             elif value == SYSTEM_READY:
+                                timeout = 0
+                                state = SYSTEM_READY
                                 logger.log_info("Got system ready event. Continue...")
                                 continue
                             else:
