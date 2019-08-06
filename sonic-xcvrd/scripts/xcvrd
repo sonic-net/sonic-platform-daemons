@@ -654,6 +654,7 @@ class sfp_state_update_task:
                 # Receive event on single SFP
                 # 1. Transit to SYSTEM_READY state, since some vendors don't implement system level events
                 if state == SYSTEM_NOT_READY:
+                    timeout = 0
                     state = SYSTEM_READY
                 # 2. Handle the event
                 for key, value in port_dict.iteritems():
