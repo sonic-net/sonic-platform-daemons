@@ -44,9 +44,15 @@ SFP_STATUS_INSERTED = '1'
 SFP_STATUS_REMOVED = '0'
 
 EVENT_ON_ALL_SFP = '-1'
+# events definition
 SYSTEM_NOT_READY = 'system_not_ready'
-SYSTEM_READY = 'system_become_ready'
+SYSTEM_BECOME_READY = 'system_become_ready'
 SYSTEM_FAIL = 'system_fail'
+NORMAL_EVENT = 'normal'
+# states definition
+STATE_INIT = 'INIT STATE'
+STATE_NORMAL = 'NORMAL STATE'
+STATE_EXIT = 'EXIT STATE'
 
 PHYSICAL_PORT_NOT_EXIST = -1
 SFP_EEPROM_NOT_READY = -2
@@ -621,41 +627,29 @@ class sfp_state_update_task:
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
 
-    def _retry_for_system_ready(self):
-        retry = 0
-        while retry < RETRY_TIMES_FOR_SYSTEM_READY:
-            #time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_SECS)
-            time_start  = time.time()
-            rc, event_dict = platform_sfputil.get_transceiver_change_event(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS)
-            if not rc and bool(event_dict) and EVENT_ON_ALL_SFP in event_dict:
-                value = event_dict[EVENT_ON_ALL_SFP]
-                if value == SYSTEM_NOT_READY:
-                    retry = retry + 1
-                    # get_transceiver_change_event may return immediately, 
-                    # we want the retry expired in expected time period, 
-                    # So need to calc the time diff, 
-                    # if time diff less that the pre-defined waiting time, 
-                    # use sleep() to complete the time.
-                    time_now = time.time()
-                    time_diff = time_now - time_start
-                    if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
-                        time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
-
-                    logger.log_info("receive system not ready event, retried for {} times".format(retry))
-                    continue
-                elif value == SYSTEM_FAIL:
-                    logger.log_info("receive system fail event, stop retry.")
-                    return False
-                elif value == SYSTEM_READY:
-                    logger.log_info("receive system ready event, stop retry.")
-                    return True
-                else:
-                    logger.log_error("receive unknown error event: {}, stop retry.".format(value))
-                    return False
+    def _mapping_event_from_change_event(self, status, port_dict):
+        """
+        mapping from what get_transceiver_change_event returns to event defined in the state machine
+        the logic is pretty straightforword
+        """
+        if status:
+            if bool(port_dict):
+                event = NORMAL_EVENT
             else:
-                logger.log_error("error in received event, rc: {}, dict: {}".format(rc, event_dict))
-                return False
-        return False
+                event = SYSTEM_BECOME_READY
+                # here, a simple timeout event whose port_dict is empty is mapped
+                # into a SYSTEM_BECOME_READY event so that it can be handled
+                port_dict[EVENT_ON_ALL_SFP] = SYSTEM_BECOME_READY
+        else:
+            if EVENT_ON_ALL_SFP in port_dict.keys():
+                event = port_dict[EVENT_ON_ALL_SFP]
+            else:
+                # this should not happen. just for protection
+                event = SYSTEM_FAIL
+                port_dict[EVENT_ON_ALL_SFP] = SYSTEM_FAIL
+
+        logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
+        return event
 
     def task_worker(self, stopping_event):
         logger.log_info("Start SFP monitoring loop")
@@ -672,66 +666,163 @@ class sfp_state_update_task:
                                                      swsscommon.APP_PORT_TABLE_NAME)
 
         # Start loop to listen to the sfp change event
+        # The state migrating sequence:
+        # 1. When the system starts, it is in "INIT" state, calling get_transceiver_change_event
+        #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for as many as RETRY_TIMES_FOR_SYSTEM_READY
+        #    times
+        # 2. Once 'system_become_ready' returned, the system enters "SYSTEM_READY" state and starts to monitor
+        #    the insertion/removal event of all the SFP modules.
+        #    In this state, receiving any system level event will be treated as an unrecoverable error and cause
+        #    the daemon exit
+
+        # states definition
+        # - Initial state: INIT, before received system ready or a normal event
+        # - Final state: EXIT
+        # - other state: NORMAL, after has received system-ready or a normal event
+        
+        # events definition
+        # - SYSTEM_NOT_READY
+        # - SYSTEM_BECOME_READY
+        #   - 
+        # - NORMAL_EVENT
+        #   - sfp insertion/removal
+        #   - timeout returned by sfputil.get_change_event with status = true
+        # - SYSTEM_FAIL
+        
+        # State transmit:
+        # 1. SYSTEM_NOT_READY
+        #     - INIT
+        #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
+        #             retry ++
+        #       - else
+        #             max retry reached, treat as fatal, exit
+        #     - NORMAL
+        #         Treat as a fatal error, exit
+        # 2. SYSTEM_BECOME_READY
+        #     - INIT
+        #         transmit to NORMAL
+        #     - NORMAL
+        #         log the event
+        #         nop
+        # 3. NORMAL_EVENT
+        #     - INIT (for the vendors who don't implement SYSTEM_BECOME_READY)
+        #         transmit to NORMAL
+        #         handle the event normally
+        #     - NORMAL
+        #         handle the event normally
+        # 4. SYSTEM_FAIL
+        #     treat as a fatal error
+        
+        # State           event               next state
+        # INIT            SYSTEM NOT READY    INIT / EXIT
+        # INIT            SYSTEM BECOME READY NORMAL
+        # NORMAL          SYSTEM BECOME READY NORMAL
+        # INIT/NORMAL     SYSTEM FAIL         EXIT
+        # INIT/NORMAL     NORMAL EVENT        NORMAL
+        # NORMAL          SYSTEM NOT READY    EXIT
+        # EXIT            -
+
+        retry = 0
+        timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
+        state = STATE_INIT
+        unexpected_state = False
         while not stopping_event.is_set():
-            status, port_dict = platform_sfputil.get_transceiver_change_event()
-            if status:
-                # Receive event on single SFP
-                for key, value in port_dict.iteritems():
-                    if key == EVENT_ON_ALL_SFP:
-                        logger.log_error("Got event with unexpected content, key: {}, value: {}".format(key, value))
-                        os.kill(os.getppid(), signal.SIGTERM)
+            next_state = None
+            time_start = time.time()
+            status, port_dict = platform_sfputil.get_transceiver_change_event(timeout)
+            logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
+            event = self._mapping_event_from_change_event(status, port_dict)
+            for key, value in port_dict.iteritems():
+                if event == SYSTEM_NOT_READY:
+                    if state == STATE_INIT:
+                        # system not ready, wait and retry
+                        if retry >= RETRY_TIMES_FOR_SYSTEM_READY:
+                            logger.log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
+                            next_state = STATE_EXIT
+                            break
+                        retry = retry + 1
+
+                        # get_transceiver_change_event may return immediately, 
+                        # we want the retry expired in expected time period, 
+                        # So need to calc the time diff, 
+                        # if time diff less that the pre-defined waiting time, 
+                        # use sleep() to complete the time.
+                        time_now = time.time()
+                        time_diff = time_now - time_start
+                        if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
+                            time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
+                    elif state == STATE_NORMAL:
+                        logger.log_error("Got system_not_ready in normal state, treat as fatal. Exiting...")
+                        next_state = STATE_EXIT
                         break
-                    logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
-                    for logical_port in logical_port_list:
-                        if value == SFP_STATUS_INSERTED:
-                            logger.log_info("Got SFP inserted event")
-                            rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
-                            if rc == SFP_EEPROM_NOT_READY:
-                                logger.log_warning("SFP EEPROM is not ready. One more try...")
-                                time.sleep(TIME_FOR_SFP_READY_SECS)
-                                post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            post_port_dom_info_to_db(logical_port, dom_tbl)
-                            post_port_dom_threshold_info_to_db(logical_port, dom_tbl)
-                            notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
-                            transceiver_dict.clear()
-                        elif value == SFP_STATUS_REMOVED:
-                            logger.log_info("Got SFP removed event")
-                            del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
-                        else:
-                            # TODO, SFP return error code, need handle accordingly.
-                            continue
-            else:
-                # Receive system level error/event
-                if bool(port_dict):
-                    for key, value in port_dict.iteritems():
-                        if key == EVENT_ON_ALL_SFP:
-                            if value == SYSTEM_NOT_READY:
-                                # system not ready, wait and retry
-                                if self._retry_for_system_ready():
-                                    continue
-                                else:
-                                    logger.log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
-                                    os.kill(os.getppid(), signal.SIGTERM)
-                                    break
-                            elif value == SYSTEM_FAIL:
-                                logger.log_error("Got system fail event. Exiting...")
-                                os.kill(os.getppid(), signal.SIGTERM)
-                                break
-                            elif value == SYSTEM_READY:
-                                logger.log_info("Got system ready event. Continue...")
-                                continue
+                    else:
+                        unexpected_state = True
+                        next_state = STATE_EXIT
+                        break
+                elif event == SYSTEM_BECOME_READY:
+                    if state == STATE_INIT:
+                        next_state = STATE_NORMAL
+                        logger.log_info("Got system_become_ready in init state, transmit to normal state")
+                    elif state == STATE_NORMAL:
+                        logger.log_info("Got system_become_ready in normal state, ignored")
+                    else:
+                        unexpected_state = True
+                        next_state = STATE_EXIT
+                        break
+                elif event == NORMAL_EVENT:
+                    if state == STATE_NORMAL or state == STATE_INIT:
+                        if state == STATE_INIT:
+                            next_state = STATE_NORMAL
+                        # this is the originally logic that handled the transceiver change event
+                        # this can be reached in two cases:
+                        #   1. the state has been normal before got the event
+                        #   2. the state was init and is transmitted to normal after got the event.
+                        #      this is for the vendors who don't implement "system_not_ready/system_becom_ready" logic
+                        logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
+                        for logical_port in logical_port_list:
+                            if value == SFP_STATUS_INSERTED:
+                                logger.log_info("Got SFP inserted event")
+                                rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
+                                # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
+                                if rc == SFP_EEPROM_NOT_READY:
+                                    logger.log_warning("SFP EEPROM is not ready. One more try...")
+                                    time.sleep(TIME_FOR_SFP_READY_SECS)
+                                    post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
+                                post_port_dom_info_to_db(logical_port, dom_tbl)
+                                post_port_dom_threshold_info_to_db(logical_port, dom_tbl)
+                                notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
+                                transceiver_dict.clear()
+                            elif value == SFP_STATUS_REMOVED:
+                                logger.log_info("Got SFP removed event")
+                                del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
                             else:
-                                logger.log_error("Got unknown event, key: {}, value: {}. Exiting...".format(key, value))
-                                os.kill(os.getppid(), signal.SIGTERM)
-                                break
-                        else:
-                            logger.log_error("Got unknown error, key: {}, value: {}. Exiting...".format(key, value))
+                                # TODO, SFP return error code, need handle accordingly.
+                                logger.log_warning("Got unknown event {}, ignored".format(value))
+                                continue
+                    else:
+                        unexpected_state = True
+                        next_state = STATE_EXIT
+                        break
+                elif event == SYSTEM_FAIL:
+                    # no matter which state current it is, it's fatal
+                    next_state = STATE_EXIT
+                    logger.log_error("Got system_fail event on state {}, exiting".format(state))
                 else:
-                    # Receive event with error dict, consider as system fail
-                    logger.log_error("Failed to get transceiver change event. Exiting...")
-                    os.kill(os.getppid(), signal.SIGTERM)
-                    break
+                    logger.log_warning("Got unknown event {} on state {}.".format(event, state))
+
+            if unexpected_state:
+                next_state = STATE_EXIT
+                logger.log_error("Facing unexpected state {}, exiting...".format(state))
+
+            if next_state is not None:
+                logger.log_debug("State transmitted from {} to {}".format(state, next_state))
+                state = next_state
+
+            if next_state == STATE_EXIT:
+                os.kill(os.getppid(), signal.SIGTERM)
+                break
+            elif next_state == STATE_NORMAL:
+                timeout = 0
 
         logger.log_info("Stop SFP monitoring loop")
 
