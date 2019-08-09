@@ -144,15 +144,15 @@ def _wrapper_get_transceiver_dom_threshold_info(physical_port):
 
     return platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
 
-def _wrapper_get_transceiver_change_event():
+def _wrapper_get_transceiver_change_event(timeout):
     if platform_chassis is not None:
         try:
-            status, events =  platform_chassis.get_change_event()
+            status, events =  platform_chassis.get_change_event(timeout)
             sfp_events = events['sfp']
             return status, sfp_events
         except NotImplementedError:
             pass
-    return platform_sfputil.get_transceiver_change_event()
+    return platform_sfputil.get_transceiver_change_event(timeout)
 
 # Remove unnecessary unit from the raw data
 def beautify_dom_info_dict(dom_info_dict):
@@ -772,7 +772,7 @@ class sfp_state_update_task:
         while not stopping_event.is_set():
             next_state = state
             time_start = time.time()
-            status, port_dict = platform_sfputil.get_transceiver_change_event(timeout)
+            status, port_dict = _wrapper_get_transceiver_change_event(timeout)
             logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
             event = self._mapping_event_from_change_event(status, port_dict)
             if event == SYSTEM_NOT_READY:
