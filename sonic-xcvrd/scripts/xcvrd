@@ -846,7 +846,7 @@ class sfp_state_update_task:
             else:
                 logger.log_warning("Got unknown event {} on state {}.".format(event, state))
 
-            if not next_state == state:
+            if next_state != state:
                 logger.log_debug("State transmitted from {} to {}".format(state, next_state))
                 state = next_state
 
