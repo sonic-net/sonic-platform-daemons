@@ -533,6 +533,7 @@ def main():
     state = STATE_INIT
     while XCVRD_MAIN_TASK_RUNNING_FLAG:
         next_state = state
+        time_start = time.time()
         status, port_dict = platform_sfputil.get_transceiver_change_event(timeout)
         event = mapping_event_from_change_event(status, port_dict)
         
