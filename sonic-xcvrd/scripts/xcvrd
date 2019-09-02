@@ -472,12 +472,14 @@ def main():
     # Start main loop to listen to the SFP change event.
     # The state migrating sequence:
     # 1. When the system starts, it is in "INIT" state, calling get_transceiver_change_event
-    #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for as many as RETRY_TIMES_FOR_SYSTEM_READY
-    #    times
+    #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for before reach RETRY_TIMES_FOR_SYSTEM_READY
+    #    times, otherwise it will transmit to "EXIT" state
     # 2. Once 'system_become_ready' returned, the system enters "SYSTEM_READY" state and starts to monitor
     #    the insertion/removal event of all the SFP modules.
-    #    In this state, receiving any system level event will be treated as an unrecoverable error and cause
-    #    the daemon exit
+    #    In this state, receiving any system level event will be treated as an error and cause transmit to
+    #    "INIT" state
+    # 3. When system back to "INIT" state, it will continue to handle system fail event, and retry until reach
+    #    RETRY_TIMES_FOR_SYSTEM_READY times, otherwise it will transmit to "EXIT" state
 
     # states definition
     # - Initial state: INIT, before received system ready or a normal event
@@ -499,9 +501,9 @@ def main():
     #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
     #             retry ++
     #       - else
-    #             max retry reached, treat as fatal, exit
+    #             max retry reached, treat as fatal, transmit to EXIT
     #     - NORMAL
-    #         Treat as a fatal error, exit
+    #         Treat as an error, transmit to INIT
     # 2. SYSTEM_BECOME_READY
     #     - INIT
     #         transmit to NORMAL
@@ -515,15 +517,23 @@ def main():
     #     - NORMAL
     #         handle the event normally
     # 4. SYSTEM_FAIL
-    #     treat as a fatal error
-    
+    #     - INIT
+    #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
+    #             retry ++
+    #       - else
+    #             max retry reached, treat as fatal, transmit to EXIT
+    #     - NORMAL
+    #         Treat as an error, transmit to INIT
+
+
     # State           event               next state
     # INIT            SYSTEM NOT READY    INIT / EXIT
+    # INIT            SYSTEM FAIL         INIT / EXIT
     # INIT            SYSTEM BECOME READY NORMAL
     # NORMAL          SYSTEM BECOME READY NORMAL
-    # INIT/NORMAL     SYSTEM FAIL         EXIT
+    # NORMAL          SYSTEM FAIL         INIT
     # INIT/NORMAL     NORMAL EVENT        NORMAL
-    # NORMAL          SYSTEM NOT READY    EXIT
+    # NORMAL          SYSTEM NOT READY    INIT
     # EXIT            -
 
     log_info("Start main loop")
@@ -541,7 +551,7 @@ def main():
             if state == STATE_INIT:
                 # system not ready, wait and retry
                 if retry >= RETRY_TIMES_FOR_SYSTEM_READY:
-                    log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
+                    log_error("System failed to get ready in {} secs. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
                     next_state = STATE_EXIT
                 else:
                     retry = retry + 1
@@ -556,8 +566,10 @@ def main():
                     if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
                         time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
             elif state == STATE_NORMAL:
-                log_error("Got system_not_ready in normal state, treat as fatal. Exiting...")
-                next_state = STATE_EXIT
+                log_error("Got system_not_ready in normal state, treat as error, transmit to INIT...")
+                next_state = STATE_INIT
+                timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
+                retry = 0
             else:
                 next_state = STATE_EXIT
         elif event == SYSTEM_BECOME_READY:
@@ -610,10 +622,32 @@ def main():
                             continue
             else:
                 next_state = STATE_EXIT
+
         elif event == SYSTEM_FAIL:
-                # no matter which state current it is, it's fatal
+            if state == STATE_INIT:
+                # Treat as system not ready, wait and retry
+                if retry >= RETRY_TIMES_FOR_SYSTEM_READY:
+                    log_error("System failed to recover in {} secs. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
+                    next_state = STATE_EXIT
+                else:
+                    retry = retry + 1
+
+                    # get_transceiver_change_event may return immediately,
+                    # we want the retry expired in expected time period,
+                    # So need to calc the time diff,
+                    # if time diff less that the pre-defined waiting time,
+                    # use sleep() to complete the time.
+                    time_now = time.time()
+                    time_diff = time_now - time_start
+                    if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
+                        time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
+            elif state == STATE_NORMAL:
+                log_error("Got system_fail in normal state, treat as error, transmit to INIT...")
+                next_state = STATE_INIT
+                timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
+                retry = 0
+            else:
                 next_state = STATE_EXIT
-                log_error("Got system_fail event on state {}, exiting".format(state))
         else:
             log_warning("Got unknown event {} on state {}.".format(event, state))
         
