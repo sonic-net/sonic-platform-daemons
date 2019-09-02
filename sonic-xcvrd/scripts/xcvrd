@@ -43,12 +43,26 @@ XCVRD_MAIN_THREAD_SLEEP_SECS = 60
 SFP_STATUS_INSERTED = '1'
 SFP_STATUS_REMOVED = '0'
 
+EVENT_ON_ALL_SFP = '-1'
+# events definition
+SYSTEM_NOT_READY = 'system_not_ready'
+SYSTEM_BECOME_READY = 'system_become_ready'
+SYSTEM_FAIL = 'system_fail'
+NORMAL_EVENT = 'normal'
+# states definition
+STATE_INIT = 0
+STATE_NORMAL = 1
+STATE_EXIT = 2
+
 PHYSICAL_PORT_NOT_EXIST = -1
 SFP_EEPROM_NOT_READY = -2
 
 SFPUTIL_LOAD_ERROR = 1
 PORT_CONFIG_LOAD_ERROR = 2
 NOT_IMPLEMENTED_ERROR = 3
+
+RETRY_TIMES_FOR_SYSTEM_READY = 24
+RETRY_PERIOD_FOR_SYSTEM_READY_MSECS = 5000
 
 TEMP_UNIT = 'C'
 VOLT_UNIT = 'Volts'
@@ -59,6 +73,8 @@ media_settings = ''
 g_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
+# Global chassis object based on new platform api
+platform_chassis = None
 
 # Global logger class instance
 logger = Logger(SYSLOG_IDENTIFIER)
@@ -90,11 +106,53 @@ def get_physical_port_name(logical_port, physical_port, ganged):
 # Strip units and beautify
 def strip_unit_and_beautify(value, unit):
     # Strip unit from raw data
-    width = len(unit)
-    if value[-width:] == unit:
-        value = value[:-width]
+    if type(value) is str:
+        width = len(unit)
+        if value[-width:] == unit:
+            value = value[:-width]
+        return value
+    else:
+        return str(value)
 
-    return value
+def _wrapper_get_presence(physical_port):
+    if platform_chassis is not None:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_presence()
+        except NotImplementedError:
+            pass
+    return platform_sfputil.get_presence(physical_port)
+
+def _wrapper_get_transceiver_info(physical_port):
+    if platform_chassis is not None:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
+        except NotImplementedError:
+            pass
+    return platform_sfputil.get_transceiver_info_dict(physical_port)
+
+def _wrapper_get_transceiver_dom_info(physical_port):
+    if platform_chassis is not None:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_transceiver_bulk_status()
+        except NotImplementedError:
+            pass
+    return platform_sfputil.get_transceiver_dom_info_dict(physical_port)
+
+def _wrapper_get_transceiver_dom_threshold_info(physical_port):
+    if platform_chassis is not None:
+        return None
+
+    return platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
+
+def _wrapper_get_transceiver_change_event(timeout):
+    if platform_chassis is not None:
+        try:
+            status, events =  platform_chassis.get_change_event(timeout)
+            sfp_events = events['sfp']
+            return status, sfp_events
+        except NotImplementedError:
+            pass
+    return platform_sfputil.get_transceiver_change_event(timeout)
 
 # Remove unnecessary unit from the raw data
 def beautify_dom_info_dict(dom_info_dict):
@@ -157,14 +215,14 @@ def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict,
         if stop_event.is_set():
             break
 
-        if not platform_sfputil.get_presence(physical_port):
+        if not _wrapper_get_presence(physical_port):
             continue
 
         port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
         ganged_member_num += 1
 
         try:
-            port_info_dict = platform_sfputil.get_transceiver_info_dict(physical_port)
+            port_info_dict = _wrapper_get_transceiver_info(physical_port)
             if port_info_dict is not None:
                 transceiver_dict[physical_port]=port_info_dict
                 fvs = swsscommon.FieldValuePairs([('type', port_info_dict['type']),
@@ -209,7 +267,7 @@ def post_port_dom_threshold_info_to_db(logical_port_name, table,
         if stop.is_set():
             break
 
-        if not platform_sfputil.get_presence(physical_port):
+        if not _wrapper_get_presence(physical_port):
             continue
 
         port_name = get_physical_port_name(logical_port_name,
@@ -217,7 +275,7 @@ def post_port_dom_threshold_info_to_db(logical_port_name, table,
         ganged_member_num += 1
 
         try:
-            dom_info_dict = platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
+            dom_info_dict = _wrapper_get_transceiver_dom_threshold_info(physical_port)
             if dom_info_dict is not None:
                 beautify_dom_threshold_info_dict(dom_info_dict)
                 fvs = swsscommon.FieldValuePairs(
@@ -267,14 +325,14 @@ def post_port_dom_info_to_db(logical_port_name, table, stop_event=threading.Even
         if stop_event.is_set():
             break
 
-        if not platform_sfputil.get_presence(physical_port):
+        if not _wrapper_get_presence(physical_port):
             continue
 
         port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
         ganged_member_num += 1
 
         try:
-            dom_info_dict = platform_sfputil.get_transceiver_dom_info_dict(physical_port)
+            dom_info_dict = _wrapper_get_transceiver_dom_info(physical_port)
             if dom_info_dict is not None:
                 beautify_dom_info_dict(dom_info_dict)
                 fvs = swsscommon.FieldValuePairs(
@@ -492,7 +550,7 @@ def get_media_val_str_from_dict(media_dict):
             media_str += lane_separator
     return media_str
 
-def get_media_val_str(num_logical_ports, lane_dict):
+def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
     lane_str = "lane"
     logical_media_dict = {}
     num_lanes_on_port = len(lane_dict)
@@ -501,7 +559,7 @@ def get_media_val_str(num_logical_ports, lane_dict):
     # in breakout mode. So fetch the corresponding lanes from the file
     media_val_str = ''
     if (num_logical_ports > 1) and \
-       (num_lanes_on_port > num_logical_ports):
+       (num_lanes_on_port >= num_logical_ports):
         num_lanes_per_logical_port = num_lanes_on_port/num_logical_ports
         start_lane = logical_idx * num_lanes_per_logical_port
 
@@ -537,7 +595,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         logical_port_list = platform_sfputil.get_physical_to_logical(physical_port)
         num_logical_ports = len(logical_port_list)
         logical_idx = logical_port_list.index(logical_port_name)
-        if not platform_sfputil.get_presence(physical_port):
+        if not _wrapper_get_presence(physical_port):
             logger.log_info("Media %d presence not detected during notify"
                              % physical_port)
             continue
@@ -553,7 +611,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         media_dict = get_media_settings_value(physical_port, key)
 
         if(len(media_dict) == 0):
-            logger.log_error("Error in obtainning media setting")
+            logger.log_error("Error in obtaining media setting")
             return
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
@@ -562,7 +620,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
                 media_val_str = get_media_val_str(num_logical_ports, \
-                                                  media_dict[media_key])
+                                                  media_dict[media_key],
+                                                  logical_idx)
             else:
                 media_val_str = media_dict[media_key]
             fvs[index] = (str(media_key), str(media_val_str))
@@ -613,6 +672,30 @@ class sfp_state_update_task:
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
 
+    def _mapping_event_from_change_event(self, status, port_dict):
+        """
+        mapping from what get_transceiver_change_event returns to event defined in the state machine
+        the logic is pretty straightforword
+        """
+        if status:
+            if bool(port_dict):
+                event = NORMAL_EVENT
+            else:
+                event = SYSTEM_BECOME_READY
+                # here, a simple timeout event whose port_dict is empty is mapped
+                # into a SYSTEM_BECOME_READY event so that it can be handled
+                port_dict[EVENT_ON_ALL_SFP] = SYSTEM_BECOME_READY
+        else:
+            if EVENT_ON_ALL_SFP in port_dict.keys():
+                event = port_dict[EVENT_ON_ALL_SFP]
+            else:
+                # this should not happen. just for protection
+                event = SYSTEM_FAIL
+                port_dict[EVENT_ON_ALL_SFP] = SYSTEM_FAIL
+
+        logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
+        return event
+
     def task_worker(self, stopping_event):
         logger.log_info("Start SFP monitoring loop")
 
@@ -628,36 +711,151 @@ class sfp_state_update_task:
                                                      swsscommon.APP_PORT_TABLE_NAME)
 
         # Start loop to listen to the sfp change event
+        # The state migrating sequence:
+        # 1. When the system starts, it is in "INIT" state, calling get_transceiver_change_event
+        #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for as many as RETRY_TIMES_FOR_SYSTEM_READY
+        #    times
+        # 2. Once 'system_become_ready' returned, the system enters "SYSTEM_READY" state and starts to monitor
+        #    the insertion/removal event of all the SFP modules.
+        #    In this state, receiving any system level event will be treated as an unrecoverable error and cause
+        #    the daemon exit
+
+        # states definition
+        # - Initial state: INIT, before received system ready or a normal event
+        # - Final state: EXIT
+        # - other state: NORMAL, after has received system-ready or a normal event
+        
+        # events definition
+        # - SYSTEM_NOT_READY
+        # - SYSTEM_BECOME_READY
+        #   - 
+        # - NORMAL_EVENT
+        #   - sfp insertion/removal
+        #   - timeout returned by sfputil.get_change_event with status = true
+        # - SYSTEM_FAIL
+        
+        # State transmit:
+        # 1. SYSTEM_NOT_READY
+        #     - INIT
+        #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
+        #             retry ++
+        #       - else
+        #             max retry reached, treat as fatal, exit
+        #     - NORMAL
+        #         Treat as a fatal error, exit
+        # 2. SYSTEM_BECOME_READY
+        #     - INIT
+        #         transmit to NORMAL
+        #     - NORMAL
+        #         log the event
+        #         nop
+        # 3. NORMAL_EVENT
+        #     - INIT (for the vendors who don't implement SYSTEM_BECOME_READY)
+        #         transmit to NORMAL
+        #         handle the event normally
+        #     - NORMAL
+        #         handle the event normally
+        # 4. SYSTEM_FAIL
+        #     treat as a fatal error
+        
+        # State           event               next state
+        # INIT            SYSTEM NOT READY    INIT / EXIT
+        # INIT            SYSTEM BECOME READY NORMAL
+        # NORMAL          SYSTEM BECOME READY NORMAL
+        # INIT/NORMAL     SYSTEM FAIL         EXIT
+        # INIT/NORMAL     NORMAL EVENT        NORMAL
+        # NORMAL          SYSTEM NOT READY    EXIT
+        # EXIT            -
+
+        retry = 0
+        timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
+        state = STATE_INIT
         while not stopping_event.is_set():
-            status, port_dict = platform_sfputil.get_transceiver_change_event()
-            if status:
-                for key, value in port_dict.iteritems():
-                    logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
-                    for logical_port in logical_port_list:
-                        if value == SFP_STATUS_INSERTED:
-                            logger.log_info("Got SFP inserted event")
-                            rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
-                            if rc == SFP_EEPROM_NOT_READY:
-                                logger.log_warning("SFP EEPROM is not ready. One more try...")
-                                time.sleep(TIME_FOR_SFP_READY_SECS)
-                                post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
-                            post_port_dom_info_to_db(logical_port, dom_tbl)
-                            post_port_dom_threshold_info_to_db(logical_port, dom_tbl)
-                            notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
-                            transceiver_dict.clear()
-                        elif value == SFP_STATUS_REMOVED:
-                            logger.log_info("Got SFP removed event")
-                            del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
-                        else:
-                            # TODO, SFP return error code, need handle accordingly.
-                            continue
+            next_state = state
+            time_start = time.time()
+            status, port_dict = _wrapper_get_transceiver_change_event(timeout)
+            logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
+            event = self._mapping_event_from_change_event(status, port_dict)
+            if event == SYSTEM_NOT_READY:
+                if state == STATE_INIT:
+                    # system not ready, wait and retry
+                    if retry >= RETRY_TIMES_FOR_SYSTEM_READY:
+                        logger.log_error("System failed to get ready in {} secs or received system error. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_READY))
+                        next_state = STATE_EXIT
+                    else:
+                        retry = retry + 1
+
+                        # get_transceiver_change_event may return immediately, 
+                        # we want the retry expired in expected time period, 
+                        # So need to calc the time diff, 
+                        # if time diff less that the pre-defined waiting time, 
+                        # use sleep() to complete the time.
+                        time_now = time.time()
+                        time_diff = time_now - time_start
+                        if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
+                            time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
+                elif state == STATE_NORMAL:
+                    logger.log_error("Got system_not_ready in normal state, treat as fatal. Exiting...")
+                    next_state = STATE_EXIT
+                else:
+                    next_state = STATE_EXIT
+            elif event == SYSTEM_BECOME_READY:
+                if state == STATE_INIT:
+                    next_state = STATE_NORMAL
+                    logger.log_info("Got system_become_ready in init state, transmit to normal state")
+                elif state == STATE_NORMAL:
+                    logger.log_info("Got system_become_ready in normal state, ignored")
+                else:
+                    next_state = STATE_EXIT
+            elif event == NORMAL_EVENT:
+                if state == STATE_NORMAL or state == STATE_INIT:
+                    if state == STATE_INIT:
+                        next_state = STATE_NORMAL
+                    # this is the originally logic that handled the transceiver change event
+                    # this can be reached in two cases:
+                    #   1. the state has been normal before got the event
+                    #   2. the state was init and is transmitted to normal after got the event.
+                    #      this is for the vendors who don't implement "system_not_ready/system_becom_ready" logic
+                    for key, value in port_dict.iteritems():
+                        logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
+                        for logical_port in logical_port_list:
+                            if value == SFP_STATUS_INSERTED:
+                                logger.log_info("Got SFP inserted event")
+                                rc = post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
+                                # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
+                                if rc == SFP_EEPROM_NOT_READY:
+                                    logger.log_warning("SFP EEPROM is not ready. One more try...")
+                                    time.sleep(TIME_FOR_SFP_READY_SECS)
+                                    post_port_sfp_info_to_db(logical_port, int_tbl, transceiver_dict)
+                                post_port_dom_info_to_db(logical_port, dom_tbl)
+                                post_port_dom_threshold_info_to_db(logical_port, dom_tbl)
+                                notify_media_setting(logical_port, transceiver_dict, app_port_tbl)
+                                transceiver_dict.clear()
+                            elif value == SFP_STATUS_REMOVED:
+                                logger.log_info("Got SFP removed event")
+                                del_port_sfp_dom_info_from_db(logical_port, int_tbl, dom_tbl)
+                            else:
+                                # TODO, SFP return error code, need handle accordingly.
+                                logger.log_warning("Got unknown event {}, ignored".format(value))
+                                continue
+                else:
+                    next_state = STATE_EXIT
+            elif event == SYSTEM_FAIL:
+                # no matter which state current it is, it's fatal
+                next_state = STATE_EXIT
+                logger.log_error("Got system_fail event on state {}, exiting".format(state))
             else:
-                # If get_transceiver_change_event() return error, will clean up the DB and then exit
-                # TODO: next step need to define more error types to handle accordingly.
-                logger.log_error("Failed to get transceiver change event. Exiting...")
+                logger.log_warning("Got unknown event {} on state {}.".format(event, state))
+
+            if next_state != state:
+                logger.log_debug("State transmitted from {} to {}".format(state, next_state))
+                state = next_state
+
+            if next_state == STATE_EXIT:
                 os.kill(os.getppid(), signal.SIGTERM)
                 break
+            elif next_state == STATE_NORMAL:
+                timeout = 0
 
         logger.log_info("Stop SFP monitoring loop")
 
@@ -735,15 +933,32 @@ class DaemonXcvrd(DaemonBase):
     # Initialize daemon
     def init(self):
         global platform_sfputil
+        global platform_chassis
 
         logger.log_info("Start daemon init...")
 
-        # Load platform specific sfputil class
+        # Load new platform api class
         try:
-            platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+            import sonic_platform.platform
+            import sonic_platform_base.sonic_sfp.sfputilhelper
+            platform_chassis = sonic_platform.platform.Platform().get_chassis()
+            logger.log_info("chassis loaded {}".format(platform_chassis))
+            # we have to make use of sfputil for some features 
+            # even though when new platform api is used for all vendors.
+            # in this sense, we treat it as a part of new platform api.
+            # we have already moved sfputil to sonic_platform_base
+            # which is the root of new platform api.
+            platform_sfputil = sonic_platform_base.sonic_sfp.sfputilhelper.SfpUtilHelper()
         except Exception as e:
-            logger.log_error("Failed to load sfputil: %s" % (str(e)), True)
-            sys.exit(SFPUTIL_LOAD_ERROR)
+            logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
+
+        # Load platform specific sfputil class
+        if platform_chassis is None or platform_sfputil is None:
+            try:
+                platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+            except Exception as e:
+                logger.log_error("Failed to load sfputil: %s" % (str(e)), True)
+                sys.exit(SFPUTIL_LOAD_ERROR)
 
         # Load port info
         try:
