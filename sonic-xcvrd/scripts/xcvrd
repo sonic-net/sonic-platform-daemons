@@ -723,13 +723,13 @@ class sfp_state_update_task:
         # The state migrating sequence:
         # 1. When the system starts, it is in "INIT" state, calling get_transceiver_change_event
         #    with RETRY_PERIOD_FOR_SYSTEM_READY_MSECS as timeout for before reach RETRY_TIMES_FOR_SYSTEM_READY
-        #    times, otherwise it will transmit to "EXIT" state
+        #    times, otherwise it will transition to "EXIT" state
         # 2. Once 'system_become_ready' returned, the system enters "SYSTEM_READY" state and starts to monitor
         #    the insertion/removal event of all the SFP modules.
-        #    In this state, receiving any system level event will be treated as an error and cause transmit to
+        #    In this state, receiving any system level event will be treated as an error and cause transition to
         #    "INIT" state
         # 3. When system back to "INIT" state, it will continue to handle system fail event, and retry until reach
-        #    RETRY_TIMES_FOR_SYSTEM_READY times, otherwise it will transmit to "EXIT" state
+        #    RETRY_TIMES_FOR_SYSTEM_READY times, otherwise it will transition to "EXIT" state
 
         # states definition
         # - Initial state: INIT, before received system ready or a normal event
@@ -745,24 +745,24 @@ class sfp_state_update_task:
         #   - timeout returned by sfputil.get_change_event with status = true
         # - SYSTEM_FAIL
         
-        # State transmit:
+        # State transition:
         # 1. SYSTEM_NOT_READY
         #     - INIT
         #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
         #             retry ++
         #       - else
-        #             max retry reached, treat as fatal, transmit to EXIT
+        #             max retry reached, treat as fatal, transition to EXIT
         #     - NORMAL
-        #         Treat as an error, transmit to INIT
+        #         Treat as an error, transition to INIT
         # 2. SYSTEM_BECOME_READY
         #     - INIT
-        #         transmit to NORMAL
+        #         transition to NORMAL
         #     - NORMAL
         #         log the event
         #         nop
         # 3. NORMAL_EVENT
         #     - INIT (for the vendors who don't implement SYSTEM_BECOME_READY)
-        #         transmit to NORMAL
+        #         transition to NORMAL
         #         handle the event normally
         #     - NORMAL
         #         handle the event normally
@@ -771,9 +771,9 @@ class sfp_state_update_task:
         #       - retry < RETRY_TIMES_FOR_SYSTEM_READY
         #             retry ++
         #       - else
-        #             max retry reached, treat as fatal, transmit to EXIT
+        #             max retry reached, treat as fatal, transition to EXIT
         #     - NORMAL
-        #         Treat as an error, transmit to INIT
+        #         Treat as an error, transition to INIT
 
 
         # State           event               next state
@@ -821,7 +821,7 @@ class sfp_state_update_task:
             elif event == SYSTEM_BECOME_READY:
                 if state == STATE_INIT:
                     next_state = STATE_NORMAL
-                    logger.log_info("Got system_become_ready in init state, transmit to normal state")
+                    logger.log_info("Got system_become_ready in init state, transition to normal state")
                 elif state == STATE_NORMAL:
                     logger.log_info("Got system_become_ready in normal state, ignored")
                 else:
@@ -833,7 +833,7 @@ class sfp_state_update_task:
                     # this is the originally logic that handled the transceiver change event
                     # this can be reached in two cases:
                     #   1. the state has been normal before got the event
-                    #   2. the state was init and is transmitted to normal after got the event.
+                    #   2. the state was init and transition to normal after got the event.
                     #      this is for the vendors who don't implement "system_not_ready/system_becom_ready" logic
                     for key, value in port_dict.iteritems():
                         logical_port_list = platform_sfputil.get_physical_to_logical(int(key))
@@ -872,7 +872,7 @@ class sfp_state_update_task:
                         retry = retry + 1                   
                         waiting_time_compensation_with_sleep(time_start, RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS/1000)
                 elif state == STATE_NORMAL:
-                    logger.log_error("Got system_fail in normal state, treat as error, transmit to INIT...")
+                    logger.log_error("Got system_fail in normal state, treat as error, transition to INIT...")
                     next_state = STATE_INIT
                     timeout = RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS
                     retry = 0
@@ -882,7 +882,7 @@ class sfp_state_update_task:
                 logger.log_warning("Got unknown event {} on state {}.".format(event, state))
 
             if next_state != state:
-                logger.log_debug("State transmitted from {} to {}".format(state, next_state))
+                logger.log_debug("State transition from {} to {}".format(state, next_state))
                 state = next_state
 
             if next_state == STATE_EXIT:
