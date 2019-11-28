@@ -1,0 +1,293 @@
+#!/usr/bin/env python2
+
+"""
+    thermalctld
+    Thermal control daemon for SONiC
+"""
+
+try:
+    import os
+    import sys
+    import time
+    import signal
+    import multiprocessing
+    import threading
+    from datetime import datetime
+    from swsscommon import swsscommon
+    from sonic_daemon_base import daemon_base
+    from sonic_daemon_base.daemon_base import Logger
+    from sonic_daemon_base.daemon_base import DaemonBase
+except ImportError, e:
+    raise ImportError (str(e) + " - required module not found")
+
+
+SYSLOG_IDENTIFIER = 'thermalctld'
+NOT_AVAILIABLE = 'N/A'
+logger = Logger(SYSLOG_IDENTIFIER)
+
+
+# utility functions
+
+# try get information from platform API and return a default value if caught NotImplementedError
+def try_get(callback, default=NOT_AVAILIABLE):
+    try:
+        ret = callback()
+    except NotImplementedError:
+        ret = None
+
+    return default if ret is None else ret
+
+
+#
+# TaskBase =====================================================================
+#
+class ProcessTaskBase(object): # TODO: put this class to swss-platform-common
+    def __init__(self):
+        self.task_process = None
+        self.task_stopping_event = multiprocessing.Event()
+
+    def task_worker(self):
+        pass
+
+    def task_run(self):
+        if self.task_stopping_event.is_set():
+            return
+
+        self.task_process = multiprocessing.Process(target=self.task_worker)
+        self.task_process.start()
+
+    def task_stop(self):
+        self.task_stopping_event.set()
+        os.kill(self.task_process.pid, signal.SIGKILL)
+
+
+#
+# TaskBase =====================================================================
+#
+class ThreadTaskBase(object): # TODO: put this class to swss-platform-common;
+    def __init__(self):
+        self.task_thread = None
+        self.task_stopping_event = threading.Event()
+
+    def task_worker(self):
+        pass
+
+    def task_run(self):
+        if self.task_stopping_event.is_set():
+            return
+
+        self.task_thread = threading.Thread(target=self.task_worker)
+        self.task_thread.start()
+
+    def task_stop(self):
+        self.task_stopping_event.set()
+        self.task_thread.join()
+
+
+#
+# FanUpdater ===================================================================
+#
+class FanUpdater(object):
+    FAN_INFO_TABLE_NAME = 'FAN_INFO'
+
+    # Fan bitmap defines (python 2 does not support Enum, we should use Enum to refactor this if we turn to python 3)
+    FAN_OK = 0
+    FAN_NOT_PRESENCE = 1
+    FAN_UNEXPECT_SPEED = 2
+    FAN_INVALID_DIRECTION = 4
+
+    def __init__(self, chassis):
+        self.chassis = chassis
+        self.prensences = {}
+        state_db = daemon_base.db_connect(swsscommon.STATE_DB)
+        self.table = swsscommon.Table(state_db, FanUpdater.FAN_INFO_TABLE_NAME)
+
+    def update(self):
+        logger.log_info("Start fan updating")
+        for index, fan in enumerate(self.chassis.get_all_fans()):
+            self._refresh_fan_status(fan, index)
+
+        for psu_index, psu in enumerate(self.chassis.get_all_psus()):
+            for fan_index, fan in psu.get_all_fans():
+                self._refresh_fan_status(fan, fan_index, 'PSU {} FAN'.format(psu_index))
+
+        self.table.flush()
+        logger.log_info("Stop fan updating")
+
+    def _refresh_fan_status(self, fan, index, name_prefix='FAN'):
+        # What if there is duplicate fan name?
+        fan_name = try_get(fan.get_name, '{} {}'.format(name_prefix, index + 1))
+        presence = try_get(fan.get_presence, False)
+        speed = try_get(fan.get_speed)
+        speed_tolerance = try_get(fan.get_speed_tolerance)
+        speed_target = try_get(fan.get_target_speed)
+
+        if fan_name not in self.prensences:
+            self.prensences[fan_name] = True
+
+        if presence != self.prensences[fan_name]:
+            self._report_presense(fan_name, presence)
+            self.prensences[fan_name] = presence
+
+        fan_bitmap = FanUpdater.FAN_OK
+        if not presence:
+            fan_bitmap |= FanUpdater.FAN_NOT_PRESENCE
+        else:
+            fan_bitmap |= self._get_fan_bitmap(speed, speed_target, speed_tolerance)
+
+
+        fvs = swsscommon.FieldValuePairs(
+                [('presence', str(presence)),
+                ('model', str(try_get(fan.get_model))), 
+                ('serial', str(try_get(fan.get_serial))), 
+                ('status', str(try_get(fan.get_status, False))),
+                ('direction', str(try_get(fan.get_direction))),
+                ('speed', str(speed)),
+                ('speed_tolerance', str(speed_tolerance)),
+                ('speed_target', str(speed_target)),
+                ('led_status', str(try_get(fan.get_status_led))),
+                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S'))
+                ])
+        
+        self.table.set(fan_name, fvs)
+
+    def _report_presense(self, fan_name, presence):
+        if presence:
+            logger.log_warning('Fan removed warning cleared: {} was inserted.'.format(fan_name))
+        else:
+            logger.log_warning('Fan removed warning: {} was removed from the system, potential overheat hazard!'.format(fan_name))
+
+    def _get_fan_bitmap(self, speed, speed_target, speed_tolerance):
+        if speed != NOT_AVAILIABLE and speed_target != NOT_AVAILIABLE and speed_tolerance != NOT_AVAILIABLE:
+            return FanUpdater.FAN_UNEXPECT_SPEED if abs(speed - speed_target) > speed_tolerance else FanUpdater.FAN_OK
+        else:
+            return FanUpdater.FAN_OK
+
+        
+#
+# TemperUpdater ======================================================================
+#
+class TemperUpdater(object):
+    TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
+
+    def __init__(self, chassis):
+        self.chassis = chassis
+        self.temper_warnings = [(False, False)] * chassis.get_num_thermals()
+        state_db = daemon_base.db_connect(swsscommon.STATE_DB)
+        self.table = swsscommon.Table(state_db, TemperUpdater.TEMPER_INFO_TABLE_NAME)
+
+    def update(self):
+        logger.log_info("Start temperature updating")
+        for index, thermal in enumerate(self.chassis.get_all_thermals()):
+            self._refresh_temper_status(thermal, index)
+
+        self.table.flush()
+        logger.log_info("Stop temperature updating")
+
+    def _refresh_temper_status(self, thermal, index):
+        name = try_get(thermal.get_name, 'Thermal {}'.format(index + 1))
+        temperature = try_get(thermal.get_temperature)
+        high_threshold = try_get(thermal.get_high_threshold)
+        low_threshold = try_get(thermal.get_low_threshold)
+
+        warning = None
+        if temperature != NOT_AVAILIABLE:
+            if high_threshold != NOT_AVAILIABLE:
+                warning = temperature > high_threshold
+                if warning != self.temper_warnings[index][0]:
+                    self._report_temperature(name, temperature, 'High', high_threshold, warning)
+                    self.temper_warnings[index][0] = warning
+
+            if low_threshold != NOT_AVAILIABLE:
+                warning = temperature < low_threshold
+                if warning != self.temper_warnings[index][1]:
+                    self._report_temperature(name, temperature, 'Low', low_threshold, warning)
+                    self.temper_warnings[index][1] = warning
+
+        fvs = swsscommon.FieldValuePairs(
+                [('temperature', str(temperature)),
+                ('high_threshold', str(high_threshold)), 
+                ('low_threshold', str(low_threshold)), 
+                ('warning_status', str(warning)),
+                ('critical_high_threshold', NOT_AVAILIABLE),
+                ('critical_low_threshold', NOT_AVAILIABLE),
+                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S'))
+                ])
+
+        self.table.set(name, fvs)
+
+    def _report_temperature(self, name, temperature, category, threshold, warning):
+        if warning:
+            logger.log_warning('{} temperature warning: {} current temperature {}C, {} threshold {}C'.format(category, name, temperature, category.lower(), threshold))
+        else:
+            logger.log_warning('{} temperature warning cleared: {} temperature restore to {}C, {} threshold {}C.'.format(category, name, temperature, category.lower(), threshold))
+        
+
+class ThermalMonitor(ProcessTaskBase):
+    UPDATE_INTERVAL = 60
+
+    def __init__(self, chassis):
+        ProcessTaskBase.__init__(self)
+        self.chassis = chassis
+        self.fan_monitor = FanUpdater(chassis)
+        self.temper_monitor = TemperUpdater(chassis)
+
+    def task_worker(self):
+        logger.log_info("Start thermal monitoring loop")
+
+        # Start loop to update temperature info in DB periodically
+        while not self.task_stopping_event.wait(ThermalMonitor.UPDATE_INTERVAL):
+            self.fan_monitor.update()
+            self.temper_monitor.update()
+        
+        logger.log_info("Stop thermal monitoring loop")
+
+
+#
+# Daemon =======================================================================
+#
+class ThermalControlDaemon(DaemonBase):
+    def __init__(self):
+        DaemonBase.__init__(self)
+        self.stop_event = threading.Event()
+
+    # Signal handler
+    def signal_handler(self, sig, frame):
+        if sig == signal.SIGHUP:
+            logger.log_info("Caught SIGHUP - ignoring...")
+        elif sig == signal.SIGINT:
+            logger.log_info("Caught SIGINT - exiting...")
+            self.stop_event.set()
+        elif sig == signal.SIGTERM:
+            logger.log_info("Caught SIGTERM - exiting...")
+            self.stop_event.set()
+        else:
+            logger.log_warning("Caught unhandled signal '" + sig + "'")
+
+    def run(self):
+        logger.log_info("Starting up...")
+
+        import sonic_platform.platform
+        chassis = sonic_platform.platform.Platform().get_chassis()
+
+        thermal_monitor = ThermalMonitor(chassis)
+        thermal_monitor.task_run()
+
+        while not self.stop_event.wait(60): # TODO: remove hard coded time interval value
+            pass # No main thread job for now
+
+        thermal_monitor.task_stop()
+
+        logger.log_info("Shutdown...")
+
+
+#
+# Main =========================================================================
+#
+def main():
+    thermal_control = ThermalControlDaemon()
+    thermal_control.run()
+
+
+if __name__ == '__main__':
+    main()
