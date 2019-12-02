@@ -108,8 +108,9 @@ class FanUpdater(object):
             self._refresh_fan_status(fan, index)
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
+            psu_name = try_get(psu.get_name, 'PSU {}'.format(psu_index))
             for fan_index, fan in psu.get_all_fans():
-                self._refresh_fan_status(fan, fan_index, 'PSU {} FAN'.format(psu_index))
+                self._refresh_fan_status(fan, fan_index, '{} FAN'.format(psu_name))
 
         self.table.flush()
         logger.log_info("Stop fan updating")
@@ -134,7 +135,6 @@ class FanUpdater(object):
             fan_bitmap |= FanUpdater.FAN_NOT_PRESENCE
         else:
             fan_bitmap |= self._get_fan_bitmap(speed, speed_target, speed_tolerance)
-
 
         fvs = swsscommon.FieldValuePairs(
                 [('presence', str(presence)),
