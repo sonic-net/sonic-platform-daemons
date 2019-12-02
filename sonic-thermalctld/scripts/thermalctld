@@ -136,6 +136,8 @@ class FanUpdater(object):
         else:
             fan_bitmap |= self._get_fan_bitmap(speed, speed_target, speed_tolerance)
 
+        self._set_fan_led(fan_bitmap)
+
         fvs = swsscommon.FieldValuePairs(
                 [('presence', str(presence)),
                 ('model', str(try_get(fan.get_model))), 
@@ -162,6 +164,12 @@ class FanUpdater(object):
             return FanUpdater.FAN_UNEXPECT_SPEED if abs(speed - speed_target) > speed_tolerance else FanUpdater.FAN_OK
         else:
             return FanUpdater.FAN_OK
+
+    def _set_fan_led(self, fan, fan_bitmap):
+        if fan_bitmap == FanUpdater.FAN_OK:
+            fan.set_status_led(FanBase.STATUS_LED_COLOR_GREEN)
+        else:
+            fan.set_status_led(FanBase.STATUS_LED_COLOR_RED)
 
         
 #
