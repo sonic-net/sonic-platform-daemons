@@ -55,7 +55,7 @@ def log_on_status_changed(normal_status, normal_log, abnormal_log):
     if normal_status:
         logger.log_notice(normal_log)
     else:
-        logger.log_notice(abnormal_log)
+        logger.log_warning(abnormal_log)
 
 
 class FanStatus(object):
