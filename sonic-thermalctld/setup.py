@@ -10,6 +10,9 @@ setup(
     url='https://github.com/Azure/sonic-platform-daemons',
     maintainer='Junchao Chen',
     maintainer_email='junchao@mellanox.com',
+    packages=[
+        'thermal_policy',
+    ],
     scripts=[
         'scripts/thermalctld',
     ],

@@ -515,8 +515,17 @@ class ThermalControlDaemon(DaemonBase):
         thermal_monitor = ThermalMonitor(chassis)
         thermal_monitor.task_run()
 
+        from thermal_policy import *  # trigger actions, conditions and info registration
+        thermal_manager = chassis.get_thermal_manager()
+        thermal_manager.initialize()
+        thermal_manager.load('/etc/sonic/thermal-control/policy.json')
+        thermal_manager.start_thermal_control_algorithm()
+
         while not self.stop_event.wait(ThermalControlDaemon.INTERVAL):
-            pass  # No main thread job for now
+            thermal_manager.run_policy()
+
+        thermal_manager.stop_thermal_control_algorithm()  # should we stop thermal control algorithm when daemon exit?
+        thermal_manager.destroy()
 
         thermal_monitor.task_stop()
 
