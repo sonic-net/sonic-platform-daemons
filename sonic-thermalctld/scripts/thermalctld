@@ -17,7 +17,6 @@ try:
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
     from sonic_daemon_base.task_base import ProcessTaskBase
-    from sonic_platform_common.fan_base import FanBase
 except ImportError, e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -44,6 +43,20 @@ def try_get(callback, default=NOT_AVAILABLE):
     return default if ret is None else ret
 
 
+def log_on_status_changed(normal_status, normal_log, abnormal_log):
+    """
+    Log when any status changed
+    :param normal_status: Expected status.
+    :param normal_log: Log string for expected status.
+    :param abnormal_log: Log string for unexpected status
+    :return:
+    """
+    if normal_status:
+        logger.log_notice(normal_log)
+    else:
+        logger.log_warning(abnormal_log)
+
+
 class FanStatus(object):
     def __init__(self):
         """
@@ -66,6 +79,13 @@ class FanStatus(object):
         self.presence = presence
         return True
 
+    def _check_speed_value_available(self, speed, target_speed, tolerance, current_status):
+        if speed == NOT_AVAILABLE or target_speed == NOT_AVAILABLE or tolerance == NOT_AVAILABLE:
+            if current_status is True:
+                logger.log_warning('Fan speed or target_speed or tolerance become unavailable.')
+            return False
+        return True
+
     def set_under_speed(self, speed, target_speed, tolerance):
         """
         Set and cache Fan under speed status
@@ -74,11 +94,9 @@ class FanStatus(object):
         :param tolerance: Threshold between Fan speed and target speed
         :return: True if status changed else False
         """
-        if speed == NOT_AVAILABLE or target_speed == NOT_AVAILABLE or tolerance == NOT_AVAILABLE:
+        if not self._check_speed_value_available(speed, target_speed, tolerance, self.under_speed):
             old_status = self.under_speed
             self.under_speed = False
-            if old_status != self.under_speed:
-                logger.log_warning('Fan speed or target_speed or tolerance become unavailable.')
             return old_status != self.under_speed
 
         status = (target_speed - speed > tolerance)
@@ -96,11 +114,9 @@ class FanStatus(object):
         :param tolerance: Threshold between Fan speed and target speed
         :return: True if status changed else False
         """
-        if speed == NOT_AVAILABLE or target_speed == NOT_AVAILABLE or tolerance == NOT_AVAILABLE:
+        if not self._check_speed_value_available(speed, target_speed, tolerance, self.over_speed):
             old_status = self.over_speed
             self.over_speed = False
-            if old_status != self.under_speed:
-                logger.log_warning('Fan speed or target_speed or tolerance become unavailable.')
             return old_status != self.over_speed
 
         status = (speed - target_speed > tolerance)
@@ -154,10 +170,10 @@ class FanUpdater(object):
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
             psu_name = try_get(psu.get_name, 'PSU {}'.format(psu_index))
-            for fan_index, fan in psu.get_all_fans():
+            for fan_index, fan in enumerate(psu.get_all_fans()):
                 self._refresh_fan_status(fan, fan_index, '{} FAN'.format(psu_name))
 
-        logger.log_info("Stop fan updating")
+        logger.log_info("End fan updating")
 
     def _refresh_fan_status(self, fan, index, name_prefix='FAN'):
         """
@@ -181,15 +197,27 @@ class FanUpdater(object):
         set_led = False
         if fan_status.set_presence(presence):
             set_led = True
-            self._on_presense_status_changed(fan_name, fan_status)
+            log_on_status_changed(fan_status.presence,
+                                  'Fan removed warning cleared: {} was inserted.'.format(fan_name),
+                                  'Fan removed warning: {} was removed from '
+                                  'the system, potential overheat hazard'.format(fan_name)
+                                  )
 
         if fan_status.set_under_speed(speed, speed_target, speed_tolerance):
             set_led = True
-            self._on_under_speed_status_changed(fan_name, fan_status)
+            log_on_status_changed(not fan_status.under_speed,
+                                  'Fan under speed warning cleared: {} speed back to normal.'.format(fan_name),
+                                  'Fan under speed warning: {} current speed {} - target speed {} >  tolerance {}.'.
+                                  format(fan_name, speed, speed_target, speed_tolerance)
+                                  )
 
         if fan_status.set_over_speed(speed, speed_target, speed_tolerance):
             set_led = True
-            self._on_over_speed_status_changed(fan_name, fan_status)
+            log_on_status_changed(not fan_status.over_speed,
+                                  'Fan over speed warning cleared: {} speed back to normal.'.format(fan_name),
+                                  'Fan over speed warning: {} target speed {} - current speed {} > tolerance {}.'.
+                                  format(fan_name, speed_target, speed, speed_tolerance)
+                                  )
 
         # TODO: handle invalid fan direction
 
@@ -211,43 +239,6 @@ class FanUpdater(object):
 
         self.table.set(fan_name, fvs)
 
-    def _on_presense_status_changed(self, fan_name, fan_status):
-        """
-        Called when fan presence status changed
-        :param fan_name: Name of the Fan object in case any vendor not implement Fan.get_name
-        :param fan_status: Object representing the FanStatus
-        :return:
-        """
-        if fan_status.presence:
-            logger.log_notice('Fan removed warning cleared: {} was inserted.'.format(fan_name))
-        else:
-            logger.log_warning(
-                'Fan removed warning: {} was removed from the system, potential overheat hazard!'.format(fan_name))
-
-    def _on_under_speed_status_changed(self, fan_name, fan_status):
-        """
-        Called when fan under speed status changed
-        :param fan_name: Name of the Fan object in case any vendor not implement Fan.get_name
-        :param fan_status: Object representing the FanStatus
-        :return:
-        """
-        if not fan_status.under_speed:
-            logger.log_warning('Fan under speed warning cleared: {} speed back to normal.'.format(fan_name))
-        else:
-            logger.log_notice('Fan under speed warning: {} speed over tolerance.'.format(fan_name))
-
-    def _on_over_speed_status_changed(self, fan_name, fan_status):
-        """
-        Called when fan over speed status changed
-        :param fan_name: Name of the Fan object in case any vendor not implement Fan.get_name
-        :param fan_status: Object representing the FanStatus
-        :return:
-        """
-        if not fan_status.over_speed:
-            logger.log_warning('Fan over speed warning cleared: {} speed back to normal.'.format(fan_name))
-        else:
-            logger.log_notice('Fan over speed warning: {} speed over tolerance.'.format(fan_name))
-
     def _set_fan_led(self, fan, fan_name, fan_status):
         """
         Set fan led according to current status
@@ -256,18 +247,28 @@ class FanUpdater(object):
         :param fan_status: Object representing the FanStatus
         :return:
         """
-        if fan_status.is_ok():
-            fan.set_status_led(FanBase.STATUS_LED_COLOR_GREEN)
-        else:
-            # TODO: wait for Kebo to define the mapping of fan status to led color,
-            # just set it to red so far
-            fan.set_status_led(FanBase.STATUS_LED_COLOR_RED)
+        try:
+            if fan_status.is_ok():
+                fan.set_status_led(fan.STATUS_LED_COLOR_GREEN)
+            else:
+                # TODO: wait for Kebo to define the mapping of fan status to led color,
+                # just set it to red so far
+                fan.set_status_led(fan.STATUS_LED_COLOR_RED)
+        except NotImplementedError as e:
+            logger.log_warning('Failed to set led to fan, set_status_led not implemented')
 
 
 class TemperStatus(object):
     def __init__(self):
         self.over_temper = False
-        self.under_temper = True
+        self.under_temper = False
+
+    def _check_temper_value_available(self, temper, threshold, current_status):
+        if temper == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
+            if current_status is True:
+                logger.log_warning('Fan temperature or threshold become unavailable.')
+            return False
+        return True
 
     def set_over_temper(self, temper, threshold):
         """
@@ -276,12 +277,10 @@ class TemperStatus(object):
         :param threshold: High threshold
         :return: True if over temperature status changed else False
         """
-        if temper == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
+        if not self._check_temper_value_available(temper, threshold, self.over_temper):
             old_status = self.over_temper
             self.over_temper = False
-            if old_status != self.over_temper:
-                logger.log_warning('Fan temperature or high threshold become unavailable.')
-            return self.over_temper == old_status
+            return old_status != self.over_temper
 
         status = temper > threshold
         if status == self.over_temper:
@@ -297,12 +296,10 @@ class TemperStatus(object):
         :param threshold: Low threshold
         :return: True if under temperature status changed else False
         """
-        if temper == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
+        if not self._check_temper_value_available(temper, threshold, self.under_temper):
             old_status = self.under_temper
             self.under_temper = False
-            if old_status != self.under_temper:
-                logger.log_warning('Fan temperature or low threshold become unavailable.')
-            return self.under_temper == old_status
+            return old_status != self.under_temper
 
         status = temper < threshold
         if status == self.under_temper:
@@ -346,7 +343,7 @@ class TemperUpdater(object):
         for index, thermal in enumerate(self.chassis.get_all_thermals()):
             self._refresh_temper_status(thermal, index)
 
-        logger.log_info("Stop temperature updating")
+        logger.log_info("End temperature updating")
 
     def _refresh_temper_status(self, thermal, index):
         """
@@ -357,7 +354,7 @@ class TemperUpdater(object):
         """
         name = try_get(thermal.get_name, 'Thermal {}'.format(index + 1))
         if name not in self.temper_status_dict:
-            self.temper_status_dict = TemperStatus()
+            self.temper_status_dict[name] = TemperStatus()
 
         temper_status = self.temper_status_dict[name]
 
@@ -367,11 +364,21 @@ class TemperUpdater(object):
 
         warning = False
         if temper_status.set_over_temper(temperature, high_threshold):
-            self._on_over_temper_status_changed(name, temperature, high_threshold, temper_status)
+            log_on_status_changed(not temper_status.over_temper,
+                                  'High temperature warning: {} current temperature {}C, high threshold {}C'.
+                                  format(name, temperature, high_threshold),
+                                  'High temperature warning cleared: {} temperature restore to {}C, high threshold {}C.'.
+                                  format(name, temperature, high_threshold)
+                                  )
             warning = True
 
         if temper_status.set_under_temper(temperature, low_threshold):
-            self._on_under_temper_status_changed(name, temperature, high_threshold, temper_status)
+            log_on_status_changed(not temper_status.under_temper,
+                                  'Low temperature warning: {} current temperature {}C, low threshold {}C'.
+                                  format(name, temperature, low_threshold),
+                                  'Low temperature warning cleared: {} temperature restore to {}C, low threshold {}C.'.
+                                  format(name, temperature, low_threshold)
+                                  )
             warning = True
 
         fvs = swsscommon.FieldValuePairs(
@@ -385,42 +392,6 @@ class TemperUpdater(object):
              ])
 
         self.table.set(name, fvs)
-
-    def _on_over_temper_status_changed(self, name, temperature, high_threshold, temper_status):
-        """
-        Called when over temperature status changed
-        :param name: Name of thermal zone
-        :param temperature: Temperature of thermal zone
-        :param high_threshold: High threshold of thermal zone
-        :param temper_status: Temperature status
-        :return:
-        """
-        if temper_status.over_temper:
-            logger.log_warning(
-                'High temperature warning: {} current temperature {}C, high threshold {}C'.
-                    format(name, temperature, high_threshold))
-        else:
-            logger.log_notice(
-                'High temperature warning cleared: {} temperature restore to {}C, high threshold {}C.'.
-                    format(name, temperature, high_threshold))
-
-    def _on_under_temper_status_changed(self, name, temperature, low_threshold, temper_status):
-        """
-        Called when under temperature status changed
-        :param name: Name of thermal zone
-        :param temperature: Temperature of thermal zone
-        :param low_threshold: Low threshold of thermal zone
-        :param temper_status: Temperature status
-        :return:
-        """
-        if temper_status.over_temper:
-            logger.log_warning(
-                'Low temperature warning: {} current temperature {}C, low threshold {}C'.
-                    format(name, temperature, low_threshold))
-        else:
-            logger.log_notice(
-                'Low temperature warning cleared: {} temperature restore to {}C, low threshold {}C.'.
-                    format(name, temperature, low_threshold))
 
 
 class ThermalMonitor(ProcessTaskBase):
