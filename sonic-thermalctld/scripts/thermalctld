@@ -446,6 +446,7 @@ class ThermalMonitor(ProcessTaskBase):
 class ThermalControlDaemon(DaemonBase):
     # Interval to run thermal control logical
     INTERVAL = 60
+    POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
     def __init__(self):
         """
@@ -486,14 +487,13 @@ class ThermalControlDaemon(DaemonBase):
         thermal_monitor = ThermalMonitor(chassis)
         thermal_monitor.task_run()
 
-        from thermal_policy import *  # trigger actions, conditions and info registration
         thermal_manager = chassis.get_thermal_manager()
         thermal_manager.initialize()
-        thermal_manager.load('/etc/sonic/thermal-control/policy.json')
+        thermal_manager.load(ThermalControlDaemon.POLICY_FILE)
         thermal_manager.start_thermal_control_algorithm()
 
         while not self.stop_event.wait(ThermalControlDaemon.INTERVAL):
-            thermal_manager.run_policy()
+            thermal_manager.run_policy(chassis)
 
         thermal_manager.stop_thermal_control_algorithm()  # should we stop thermal control algorithm when daemon exit?
         thermal_manager.destroy()
