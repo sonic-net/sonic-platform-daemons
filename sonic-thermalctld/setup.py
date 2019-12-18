@@ -10,8 +10,18 @@ setup(
     url='https://github.com/Azure/sonic-platform-daemons',
     maintainer='Junchao Chen',
     maintainer_email='junchao@mellanox.com',
+    packages=[
+        'tests'
+    ],
     scripts=[
         'scripts/thermalctld',
+    ],
+    setup_requires= [
+        'pytest-runner'
+    ],
+    tests_require = [
+        'pytest',
+        'mock>=2.0.0'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -25,5 +35,6 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC THERMALCONTROL thermalcontrol THERMALCTL thermalctl thermalctld'
+    keywords='sonic SONiC THERMALCONTROL thermalcontrol THERMALCTL thermalctl thermalctld',
+    test_suite='setup.get_test_suite'
 )

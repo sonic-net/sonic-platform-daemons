@@ -12,13 +12,19 @@ try:
     import signal
     import threading
     from datetime import datetime
-    from swsscommon import swsscommon
+    #from swsscommon import swsscommon
     from sonic_daemon_base import daemon_base
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
     from sonic_daemon_base.task_base import ProcessTaskBase
 except ImportError, e:
     raise ImportError(str(e) + " - required module not found")
+
+try:
+    from swsscommon import swsscommon
+except ImportError as e:
+    from tests import mock_swsscommon as swsscommon
+
 
 SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
@@ -370,7 +376,7 @@ class TemperUpdater(object):
                                   'High temperature warning cleared: {} temperature restore to {}C, high threshold {}C.'.
                                   format(name, temperature, high_threshold)
                                   )
-            warning = True
+            warning = warning | temper_status.over_temper
 
         if temper_status.set_under_temper(temperature, low_threshold):
             log_on_status_changed(not temper_status.under_temper,
@@ -379,7 +385,7 @@ class TemperUpdater(object):
                                   'Low temperature warning cleared: {} temperature restore to {}C, low threshold {}C.'.
                                   format(name, temperature, low_threshold)
                                   )
-            warning = True
+            warning = warning | temper_status.under_temper
 
         fvs = swsscommon.FieldValuePairs(
             [('temperature', str(temperature)),
