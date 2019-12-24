@@ -217,7 +217,7 @@ class FanUpdater(object):
             set_led = True
             log_on_status_changed(not fan_status.under_speed,
                                   'Fan under speed warning cleared: {} speed back to normal.'.format(fan_name),
-                                  'Fan under speed warning: {} current speed {} - target speed {} >  tolerance {}.'.
+                                  'Fan under speed warning: {} current speed={}, target speed={}, tolerance={}.'.
                                   format(fan_name, speed, speed_target, speed_tolerance)
                                   )
 
@@ -225,7 +225,7 @@ class FanUpdater(object):
             set_led = True
             log_on_status_changed(not fan_status.over_speed,
                                   'Fan over speed warning cleared: {} speed back to normal.'.format(fan_name),
-                                  'Fan over speed warning: {} target speed {} - current speed {} > tolerance {}.'.
+                                  'Fan over speed warning: {} target speed={}, current speed={}, tolerance={}.'.
                                   format(fan_name, speed_target, speed, speed_tolerance)
                                   )
 
@@ -498,6 +498,7 @@ class ThermalControlDaemon(DaemonBase):
         thermal_monitor = ThermalMonitor(chassis)
         thermal_monitor.task_run()
 
+        thermal_manager = None
         try:
             thermal_manager = chassis.get_thermal_manager()
             if thermal_manager:
