@@ -174,7 +174,7 @@ class FanUpdater(object):
         Update all Fan information to database
         :return:
         """
-        logger.log_info("Start fan updating")
+        logger.log_debug("Start fan updating")
         for index, fan in enumerate(self.chassis.get_all_fans()):
             self._refresh_fan_status(fan, index)
 
@@ -183,7 +183,7 @@ class FanUpdater(object):
             for fan_index, fan in enumerate(psu.get_all_fans()):
                 self._refresh_fan_status(fan, fan_index, '{} FAN'.format(psu_name))
 
-        logger.log_info("End fan updating")
+        logger.log_debug("End fan updating")
 
     def _refresh_fan_status(self, fan, index, name_prefix='FAN'):
         """
@@ -350,11 +350,11 @@ class TemperatureUpdater(object):
         Update all temperature information to database
         :return:
         """
-        logger.log_info("Start temperature updating")
+        logger.log_debug("Start temperature updating")
         for index, thermal in enumerate(self.chassis.get_all_thermals()):
             self._refresh_temperature_status(thermal, index)
 
-        logger.log_info("End temperature updating")
+        logger.log_debug("End temperature updating")
 
     def _refresh_temperature_status(self, thermal, index):
         """
