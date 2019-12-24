@@ -52,12 +52,12 @@ def test_fanstatus_set_under_speed():
     ret = fan_status.set_under_speed(0, 0, 0)
     assert not ret
 
-    ret = fan_status.set_under_speed(100, 120, 19)
+    ret = fan_status.set_under_speed(80, 100, 19)
     assert ret
     assert fan_status.under_speed
     assert not fan_status.is_ok()
 
-    ret = fan_status.set_under_speed(100, 120, 21)
+    ret = fan_status.set_under_speed(81, 100, 19)
     assert ret
     assert not fan_status.under_speed
     assert fan_status.is_ok()
@@ -133,68 +133,68 @@ def test_fanupdater_fan_over_speed():
     logger.log_notice.assert_called_once()
 
 
-def test_temperstatus_set_over_temper():
-    temper_status = TemperStatus()
-    ret = temper_status.set_over_temper(NOT_AVAILABLE, NOT_AVAILABLE)
+def test_temperature_status_set_over_temper():
+    temperatue_status = TemperatureStatus()
+    ret = temperatue_status.set_over_temperature(NOT_AVAILABLE, NOT_AVAILABLE)
     assert not ret
 
-    ret = temper_status.set_over_temper(NOT_AVAILABLE, 0)
+    ret = temperatue_status.set_over_temperature(NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = temper_status.set_over_temper(0, NOT_AVAILABLE)
+    ret = temperatue_status.set_over_temperature(0, NOT_AVAILABLE)
     assert not ret
 
-    ret = temper_status.set_over_temper(2, 1)
+    ret = temperatue_status.set_over_temperature(2, 1)
     assert ret
-    assert temper_status.over_temper
+    assert temperatue_status.over_temperature
 
-    ret = temper_status.set_over_temper(1, 2)
+    ret = temperatue_status.set_over_temperature(1, 2)
     assert ret
-    assert not temper_status.over_temper
+    assert not temperatue_status.over_temperature
 
 
 def test_temperstatus_set_under_temper():
-    temper_status = TemperStatus()
-    ret = temper_status.set_under_temper(NOT_AVAILABLE, NOT_AVAILABLE)
+    temperature_status = TemperatureStatus()
+    ret = temperature_status.set_under_temperature(NOT_AVAILABLE, NOT_AVAILABLE)
     assert not ret
 
-    ret = temper_status.set_under_temper(NOT_AVAILABLE, 0)
+    ret = temperature_status.set_under_temperature(NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = temper_status.set_under_temper(0, NOT_AVAILABLE)
+    ret = temperature_status.set_under_temperature(0, NOT_AVAILABLE)
     assert not ret
 
-    ret = temper_status.set_under_temper(1, 2)
+    ret = temperature_status.set_under_temperature(1, 2)
     assert ret
-    assert temper_status.under_temper
+    assert temperature_status.under_temperature
 
-    ret = temper_status.set_under_temper(2, 1)
+    ret = temperature_status.set_under_temperature(2, 1)
     assert ret
-    assert not temper_status.under_temper
+    assert not temperature_status.under_temperature
 
 
 def test_temperupdater_over_temper():
     chassis = MockChassis()
     chassis.make_over_temper_thermal()
-    temper_updater = TemperUpdater(chassis)
-    temper_updater.update()
+    temperature_updater = TemperatureUpdater(chassis)
+    temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     logger.log_warning.assert_called_once()
 
     thermal_list[0].make_normal_temper()
-    temper_updater.update()
+    temperature_updater.update()
     logger.log_notice.assert_called_once()
 
 
 def test_temperupdater_under_temper():
     chassis = MockChassis()
     chassis.make_under_temper_thermal()
-    temper_updater = TemperUpdater(chassis)
-    temper_updater.update()
+    temperature_updater = TemperatureUpdater(chassis)
+    temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     logger.log_warning.assert_called_once()
 
     thermal_list[0].make_normal_temper()
-    temper_updater.update()
+    temperature_updater.update()
     logger.log_notice.assert_called_once()
 
