@@ -82,6 +82,8 @@ class MockThermal:
         self.temperature = 2
         self.high_threshold = 3
         self.low_threshold = 1
+        self.high_critical_threshold = 4
+        self.low_critical_threshold = 0
     
     def get_name(self):
         return self.name
@@ -94,6 +96,12 @@ class MockThermal:
 
     def get_low_threshold(self):
         return self.low_threshold
+
+    def get_high_critical_threshold(self):
+        return self.high_critical_threshold
+
+    def get_low_critical_threshold(self):
+        return self.low_critical_threshold
 
     def make_over_temper(self):
         self.high_threshold = 2
