@@ -397,8 +397,8 @@ class TemperatureUpdater(object):
              ('high_threshold', str(high_threshold)),
              ('low_threshold', str(low_threshold)),
              ('warning_status', str(warning)),
-             ('critical_high_threshold', try_get(thermal.get_high_critical_threshold)),
-             ('critical_low_threshold', try_get(thermal.get_low_critical_threshold)),
+             ('critical_high_threshold', str(try_get(thermal.get_high_critical_threshold))),
+             ('critical_low_threshold', str(try_get(thermal.get_low_critical_threshold))),
              ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S'))
              ])
 
