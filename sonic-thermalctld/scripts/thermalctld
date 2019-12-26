@@ -504,7 +504,7 @@ class ThermalControlDaemon(DaemonBase):
             if thermal_manager:
                 thermal_manager.initialize()
                 thermal_manager.load(ThermalControlDaemon.POLICY_FILE)
-                thermal_manager.start_thermal_control_algorithm()
+                thermal_manager.init_thermal_algorithm(chassis)
         except Exception as e:
             logger.log_error('Caught exception while initializing thermal manager - {}'.format(e))
 
@@ -517,7 +517,6 @@ class ThermalControlDaemon(DaemonBase):
 
         try:
             if thermal_manager:
-                thermal_manager.stop_thermal_control_algorithm()  # should we stop thermal control algorithm when daemon exit?
                 thermal_manager.deinitialize()
         except Exception as e:
             logger.log_error('Caught exception while destroy thermal manager - {}'.format(e))

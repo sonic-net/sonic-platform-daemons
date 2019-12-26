@@ -159,4 +159,3 @@ class MockChassis:
         thermal.make_under_temper()
         self.thermal_list.append(thermal)
 
-
