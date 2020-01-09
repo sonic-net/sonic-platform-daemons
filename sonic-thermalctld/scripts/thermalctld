@@ -175,13 +175,16 @@ class FanUpdater(object):
         :return:
         """
         logger.log_debug("Start fan updating")
-        for index, fan in enumerate(self.chassis.get_all_fans()):
-            self._refresh_fan_status(fan, index)
+        try:
+            for index, fan in enumerate(self.chassis.get_all_fans()):
+                self._refresh_fan_status(fan, index)
 
-        for psu_index, psu in enumerate(self.chassis.get_all_psus()):
-            psu_name = try_get(psu.get_name, 'PSU {}'.format(psu_index))
-            for fan_index, fan in enumerate(psu.get_all_fans()):
-                self._refresh_fan_status(fan, fan_index, '{} FAN'.format(psu_name))
+            for psu_index, psu in enumerate(self.chassis.get_all_psus()):
+                psu_name = try_get(psu.get_name, 'PSU {}'.format(psu_index))
+                for fan_index, fan in enumerate(psu.get_all_fans()):
+                    self._refresh_fan_status(fan, fan_index, '{} FAN'.format(psu_name))
+        except Exception as e:
+            logger.log_warning('Failed to update FAN status - {}'.format(e))
 
         logger.log_debug("End fan updating")
 
@@ -351,8 +354,11 @@ class TemperatureUpdater(object):
         :return:
         """
         logger.log_debug("Start temperature updating")
-        for index, thermal in enumerate(self.chassis.get_all_thermals()):
-            self._refresh_temperature_status(thermal, index)
+        try:
+            for index, thermal in enumerate(self.chassis.get_all_thermals()):
+                self._refresh_temperature_status(thermal, index)
+        except Exception as e:
+            logger.log_warning('Failed to update thermal status - {}'.format(e))
 
         logger.log_debug("End temperature updating")
 
