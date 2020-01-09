@@ -24,7 +24,6 @@ try:
 except ImportError as e:
     from tests import mock_swsscommon as swsscommon
 
-
 SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
 logger = Logger(SYSLOG_IDENTIFIER)
@@ -89,7 +88,7 @@ class FanStatus(object):
             if tolerance > 100 or tolerance < 0:
                 logger.log_warning('Invalid tolerance value: {}'.format(tolerance))
                 return False
-                
+
             if current_status is True:
                 logger.log_warning('Fan speed or target_speed or tolerance become unavailable, '
                                    'speed={}, target_speed={}, tolerance={}'.format(speed, target_speed, tolerance))
@@ -272,14 +271,40 @@ class FanUpdater(object):
 
 
 class TemperatureStatus(object):
+    TEMPERATURE_DIFF_THRESHOLD = 10
+
     def __init__(self):
+        self.temperature = None
         self.over_temperature = False
         self.under_temperature = False
+
+    def set_temperature(self, name, temperature):
+        """
+        Record temperature changes, if it changed too fast, raise a warning.
+        :param name: Name of the thermal.
+        :param temperature: New temperature value.
+        :return:
+        """
+        if temperature == NOT_AVAILABLE:
+            if self.temperature is not None:
+                logger.log_warning('Temperature of {} become unavailable'.format(name))
+                self.temperature = None
+            return
+
+        if self.temperature is None:
+            self.temperature = temperature
+        else:
+            diff = abs(temperature - self.temperature)
+            if diff > TemperatureStatus.TEMPERATURE_DIFF_THRESHOLD:
+                logger.log_warning(
+                    'Temperature of {} changed too fast, from {} to {}, please check your hardware'.format(
+                        name, self.temperature, temperature))
+            self.temperature = temperature
 
     def _check_temperature_value_available(self, temperature, threshold, current_status):
         if temperature == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
             if current_status is True:
-                logger.log_warning('Fan temperature or threshold become unavailable, '
+                logger.log_warning('Thermal temperature or threshold become unavailable, '
                                    'temperature={}, threshold={}'.format(temperature, threshold))
             return False
         return True
@@ -376,6 +401,7 @@ class TemperatureUpdater(object):
         temperature_status = self.temperature_status_dict[name]
 
         temperature = try_get(thermal.get_temperature)
+        temperature_status.set_temperature(name, temperature)
         high_threshold = try_get(thermal.get_high_threshold)
         low_threshold = try_get(thermal.get_low_threshold)
 
