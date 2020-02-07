@@ -42,7 +42,7 @@ def try_get(callback, default=NOT_AVAILABLE):
     try:
         ret = callback()
     except NotImplementedError:
-        ret = None
+        ret = default
 
     return default if ret is None else ret
 
