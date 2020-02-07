@@ -349,7 +349,7 @@ class TemperatureStatus(object):
 
 
 #
-# TemperUpdater ======================================================================
+# TemperatureUpdater  ======================================================================
 #
 class TemperatureUpdater(object):
     # Temperature information table name in database
@@ -357,7 +357,7 @@ class TemperatureUpdater(object):
 
     def __init__(self, chassis):
         """
-        Constructor of TemperUpdater
+        Constructor of TemperatureUpdater 
         :param chassis: Object representing a platform chassis
         """
         self.chassis = chassis
@@ -367,7 +367,7 @@ class TemperatureUpdater(object):
 
     def deinit(self):
         """
-        Destructor of TemperUpdater
+        Destructor of TemperatureUpdater 
         :return:
         """
         for name in self.temperature_status_dict.keys():
