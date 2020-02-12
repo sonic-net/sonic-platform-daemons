@@ -44,7 +44,7 @@ def try_get(callback, default=NOT_AVAILABLE):
     except NotImplementedError:
         ret = default
 
-    return default if ret is None else ret
+    return ret
 
 
 def log_on_status_changed(normal_status, normal_log, abnormal_log):
