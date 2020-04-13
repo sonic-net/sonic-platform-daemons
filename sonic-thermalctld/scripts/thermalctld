@@ -252,6 +252,7 @@ class FanUpdater(object):
         :param name_prefix: name prefix of Fan object if Fan.get_name not presented
         :return:
         """
+        drawer_name = NOT_AVAILABLE if is_psu_fan else str(try_get(fan_drawer.get_name))
         fan_name = try_get(fan.get_name, '{} {}'.format(name_prefix, index + 1))
         if fan_name not in self.fan_status_dict:
             self.fan_status_dict[fan_name] = FanStatus(fan, is_psu_fan)
@@ -311,7 +312,7 @@ class FanUpdater(object):
 
         fvs = swsscommon.FieldValuePairs(
             [('presence', str(presence)),
-             ('drawer_name', str(try_get(fan_drawer.get_name))),
+             ('drawer_name', drawer_name),
              ('model', str(try_get(fan.get_model))),
              ('serial', str(try_get(fan.get_serial))),
              ('status', str(fan_fault_status)),
