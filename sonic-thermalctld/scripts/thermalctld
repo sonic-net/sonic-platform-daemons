@@ -85,7 +85,7 @@ class FanStatus(object):
         return cls.absence_fan_count + cls.fault_fan_count
 
     @classmethod
-    def reset_bad_fan_count(cls):
+    def reset_fan_counter(cls):
         cls.absence_fan_count = 0
         cls.fault_fan_count = 0
 
@@ -176,7 +176,11 @@ class FanStatus(object):
         Indicate the Fan works as expect
         :return: True if Fan works normal else False
         """
-        return self.presence and self.status and not self.under_speed and not self.over_speed and not self.invalid_direction
+        return self.presence and \ 
+               self.status and \ 
+               not self.under_speed and \ 
+               not self.over_speed and \
+               not self.invalid_direction \
 
 
 #
@@ -211,7 +215,7 @@ class FanUpdater(object):
         """
         logger.log_debug("Start fan updating")
         old_bad_fan_count = FanStatus.get_bad_fan_count()
-        FanStatus.reset_bad_fan_count()
+        FanStatus.reset_fan_counter()
 
         fan_index = 0
         for drawer in self.chassis.get_all_fan_drawers():
@@ -226,8 +230,7 @@ class FanUpdater(object):
             psu_name = try_get(psu.get_name, 'PSU {}'.format(psu_index))
             for fan_index, fan in enumerate(psu.get_all_fans()):
                 try:
-                    # PSU can be treated as a fan drawer
-                    self._refresh_fan_status(psu, fan, fan_index, '{} FAN'.format(psu_name), True)
+                    self._refresh_fan_status(None, fan, fan_index, '{} FAN'.format(psu_name), True)
                 except Exception as e:
                     logger.log_warning('Failed to update PSU FAN status - {}'.format(e))
 
@@ -246,7 +249,7 @@ class FanUpdater(object):
     def _refresh_fan_status(self, fan_drawer, fan, index, name_prefix='FAN', is_psu_fan=False):
         """
         Get Fan status by platform API and write to database for a given Fan
-        :param fan_drawer: Object representing a platform Fan drawer or PSU
+        :param fan_drawer: Object representing a platform Fan drawer
         :param fan: Object representing a platform Fan
         :param index: Index of the Fan object in the platform
         :param name_prefix: name prefix of Fan object if Fan.get_name not presented
@@ -306,7 +309,8 @@ class FanUpdater(object):
 
         # TODO: handle invalid fan direction
 
-        if set_led:
+        # We don't set PSU led here, PSU led will be handled in psud
+        if set_led and not is_psu_fan:
             self._set_fan_led(fan_drawer, fan, fan_name, fan_status)
             FanStatus.update_led_color = True
 
