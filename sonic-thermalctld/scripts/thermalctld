@@ -176,11 +176,11 @@ class FanStatus(object):
         Indicate the Fan works as expect
         :return: True if Fan works normal else False
         """
-        return self.presence and \ 
-               self.status and \ 
-               not self.under_speed and \ 
+        return self.presence and \
+               self.status and \
+               not self.under_speed and \
                not self.over_speed and \
-               not self.invalid_direction \
+               not self.invalid_direction
 
 
 #
