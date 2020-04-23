@@ -174,8 +174,9 @@ class PsuStatus(object):
         if not temperature or not high_threshold:
             if self.temperature_good is not True:
                 logger.log_warning('PSU temperature or high_threshold become unavailable, '
-                                   'temperature={}, high_threshold={}'.format(temperature, high_threshold, low_threshold))
+                                   'temperature={}, high_threshold={}'.format(temperature, high_threshold))
                 self.temperature_good = True
+            return False
 
         temperature_good = (temperature < high_threshold)
         if temperature_good == self.temperature_good:
