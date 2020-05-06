@@ -168,9 +168,9 @@ def test_insufficient_fan_number():
     fan_list = chassis.get_all_fans()
     fan_list[0].presence = True
     fan_updater.update()
-    logger.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fans are not working.')
     assert logger.log_notice.call_count == 1
-
+    logger.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fans are not working.')
+    
     fan_list[1].status = True
     fan_updater.update()
     assert logger.log_notice.call_count == 3
