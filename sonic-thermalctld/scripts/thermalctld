@@ -310,8 +310,9 @@ class FanUpdater(object):
         # TODO: handle invalid fan direction
 
         # We don't set PSU led here, PSU led will be handled in psud
-        if set_led and not is_psu_fan:
-            self._set_fan_led(fan_drawer, fan, fan_name, fan_status)
+        if set_led:
+            if not is_psu_fan:
+                self._set_fan_led(fan_drawer, fan, fan_name, fan_status)
             FanStatus.update_led_color = True
 
         fvs = swsscommon.FieldValuePairs(
