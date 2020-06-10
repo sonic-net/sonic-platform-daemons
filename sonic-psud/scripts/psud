@@ -334,11 +334,11 @@ class DaemonPsud(DaemonBase):
             self._set_psu_led(psu, psu_status)
 
         fvs = swsscommon.FieldValuePairs(
-            [(PSU_INFO_TEMP_FIELD, temperature),
-             (PSU_INFO_TEMP_TH_FIELD, temperature_threshold),
-             (PSU_INFO_VOLTAGE_FIELD, voltage),
-             (PSU_INFO_VOLTAGE_MIN_TH_FIELD, voltage_low_threshold),
-             (PSU_INFO_VOLTAGE_MAX_TH_FIELD, voltage_high_threshold),
+            [(PSU_INFO_TEMP_FIELD, str(temperature)),
+             (PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)),
+             (PSU_INFO_VOLTAGE_FIELD, str(voltage)),
+             (PSU_INFO_VOLTAGE_MIN_TH_FIELD, str(voltage_low_threshold)),
+             (PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)),
             ])
         psu_tbl.set(PSU_INFO_KEY_TEMPLATE.format(index), fvs)
         
