@@ -1,0 +1,146 @@
+#!/usr/bin/env python2
+
+"""
+    pcied
+    PCIe device monitoring daemon for SONiC
+"""
+
+try:
+    import os
+    import sys
+    import time
+    import signal
+    import threading
+    import string
+    import ast
+    from sonic_daemon_base import daemon_base
+    from sonic_daemon_base.daemon_base import Logger
+    from sonic_daemon_base.daemon_base import DaemonBase
+    from enum import Enum
+except ImportError, e:
+    raise ImportError (str(e) + " - required module not found")
+
+#
+# Constants ====================================================================
+#
+
+SYSLOG_IDENTIFIER = "pcied"
+
+PLATFORM_SPECIFIC_MODULE_NAME = "pcieutil"
+PLATFORM_SPECIFIC_CLASS_NAME = "PcieUtil"
+
+PCIED_MAIN_THREAD_SLEEP_SECS = 60
+
+PCIEUTIL_LOAD_ERROR = 1
+
+# Global platform specific pcieutil class instance
+platform_pcieutil = None
+# Global chassis object based on new platform api
+platform_chassis = None
+
+# Global logger class instance
+logger = Logger(SYSLOG_IDENTIFIER)
+
+#
+# Helper functions =============================================================
+#
+def check_pcie_devices():
+    resultInfo = platform_pcieutil.get_pcie_check()
+    for item in resultInfo:
+        if item["result"] == "Passed":
+        else:
+            logger.log_warning("PCIe Device: " +  item["name"] + " Not Found")
+            err+=1
+    if err:
+        logger.log_error("PCIe Device Checking All Test ----------->>> FAILED")
+
+
+#
+# Daemon =======================================================================
+#
+
+class DaemonPcied(DaemonBase):
+    def __init__(self):
+        DaemonBase.__init__(self)
+
+        self.timeout = PCIED_MAIN_THREAD_SLEEP_SECS
+        self.stop_event = threading.Event()
+
+    # Signal handler
+    def signal_handler(self, sig, frame):
+        if sig == signal.SIGHUP:
+            logger.log_info("Caught SIGHUP - ignoring...")
+        elif sig == signal.SIGINT:
+            logger.log_info("Caught SIGINT - exiting...")
+            self.stop_event.set()
+        elif sig == signal.SIGTERM:
+            logger.log_info("Caught SIGTERM - exiting...")
+            self.stop_event.set()
+        else:
+            logger.log_warning("Caught unhandled signal '" + sig + "'")
+
+    # Initialize daemon
+    def init(self):
+        global platform_pcieutil
+        global platform_chassis
+
+        logger.log_info("Start daemon init...")
+
+        # Load new platform api class
+        try:
+            import sonic_platform.platform
+            import sonic_platform_base.sonic_pcie.pcieutil
+            platform_chassis = sonic_platform.platform.Platform().get_chassis()
+            logger.log_info("chassis loaded {}".format(platform_chassis))
+            # we have to make use of pcieutil for some features 
+            # even though when new platform api is used for all vendors.
+            # in this sense, we treat it as a part of new platform api.
+            # we have already moved pcieutil to sonic_platform_base
+            # which is the root of new platform api.
+            platform_pcieutil = sonic_platform_base.sonic_pcie.pcieutil.PcieUtil()
+        except Exception as e:
+            logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
+
+        # Load platform specific pcieutil class
+        if platform_chassis is None or platform_pcieutil is None:
+            try:
+                platform_pcieutil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+            except Exception as e:
+                logger.log_error("Failed to load pcieutil: %s" % (str(e)), True)
+                sys.exit(PCIEUTIL_LOAD_ERROR)
+
+    # Deinitialize daemon
+    def deinit(self):
+        logger.log_info("Start daemon deinit...")
+
+    # Run daemon
+    def run(self):
+        logger.log_info("Starting up...")
+
+        # Start daemon initialization sequence
+        self.init()
+
+        # Start main loop
+        logger.log_info("Start daemon main loop")
+
+        while not self.stop_event.wait(self.timeout):
+            # Check the Pcie device status
+            check_pcie_devices(platform_pcieutil)
+
+        logger.log_info("Stop daemon main loop")
+
+        # Start daemon deinitialization sequence
+        self.deinit()
+
+        logger.log_info("Shutting down...")
+
+#
+# Main =========================================================================
+#
+
+def main():
+    pcied = DaemonPcied()
+    pcied.run()
+
+if __name__ == '__main__':
+    main()
