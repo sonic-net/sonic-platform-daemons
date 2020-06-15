@@ -6,17 +6,11 @@
 """
 
 try:
-    import os
     import sys
-    import time
     import signal
     import threading
-    import string
-    import ast
-    from sonic_daemon_base import daemon_base
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
-    from enum import Enum
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
@@ -124,7 +118,7 @@ class DaemonPcied(DaemonBase):
 
         while not self.stop_event.wait(self.timeout):
             # Check the Pcie device status
-            check_pcie_devices(platform_pcieutil)
+            check_pcie_devices()
 
         logger.log_info("Stop daemon main loop")
 
