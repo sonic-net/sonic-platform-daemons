@@ -47,8 +47,7 @@ logger = Logger(SYSLOG_IDENTIFIER)
 def check_pcie_devices():
     resultInfo = platform_pcieutil.get_pcie_check()
     for item in resultInfo:
-        if item["result"] == "Passed":
-        else:
+        if item["result"] != "Passed":
             logger.log_warning("PCIe Device: " +  item["name"] + " Not Found")
             err+=1
     if err:
