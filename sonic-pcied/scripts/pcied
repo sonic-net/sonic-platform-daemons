@@ -6,9 +6,11 @@
 """
 
 try:
+    import os
     import sys
     import signal
     import threading
+    import subprocess
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
 except ImportError, e:
@@ -20,17 +22,7 @@ except ImportError, e:
 
 SYSLOG_IDENTIFIER = "pcied"
 
-PLATFORM_SPECIFIC_MODULE_NAME = "pcieutil"
-PLATFORM_SPECIFIC_CLASS_NAME = "PcieUtil"
-
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
-
-PCIEUTIL_LOAD_ERROR = 1
-
-# Global platform specific pcieutil class instance
-platform_pcieutil = None
-# Global chassis object based on new platform api
-platform_chassis = None
 
 # Global logger class instance
 logger = Logger(SYSLOG_IDENTIFIER)
@@ -39,14 +31,19 @@ logger = Logger(SYSLOG_IDENTIFIER)
 # Helper functions =============================================================
 #
 def check_pcie_devices():
-    resultInfo = platform_pcieutil.get_pcie_check()
-    for item in resultInfo:
-        if item["result"] != "Passed":
-            logger.log_warning("PCIe Device: " +  item["name"] + " Not Found")
-            err+=1
-    if err:
-        logger.log_error("PCIe Device Checking All Test ----------->>> FAILED")
-
+    cmd = [ 'sudo', 'pcieutil', 'pcie-check' ]
+    tmp_pcie_status_f="/tmp/pcie_status_f"
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE)
+    resultInfo, err = p.communicate()
+    if not err:
+        os.system('redis-cli -n 6 GET "PCIE_STATE|system" > %s'%tmp_pcie_status_f)
+        f=open(tmp_pcie_status_f, "r")
+        pcie_status = f.readline()
+        if "1" in pcie_status:
+            logger.log_info("PCIe device status check : PASSED")
+        else:
+            logger.log_info("PCIe device status check : FAILED")
 
 #
 # Daemon =======================================================================
@@ -74,33 +71,7 @@ class DaemonPcied(DaemonBase):
 
     # Initialize daemon
     def init(self):
-        global platform_pcieutil
-        global platform_chassis
-
         logger.log_info("Start daemon init...")
-
-        # Load new platform api class
-        try:
-            import sonic_platform.platform
-            import sonic_platform_base.sonic_pcie.pcieutil
-            platform_chassis = sonic_platform.platform.Platform().get_chassis()
-            logger.log_info("chassis loaded {}".format(platform_chassis))
-            # we have to make use of pcieutil for some features 
-            # even though when new platform api is used for all vendors.
-            # in this sense, we treat it as a part of new platform api.
-            # we have already moved pcieutil to sonic_platform_base
-            # which is the root of new platform api.
-            platform_pcieutil = sonic_platform_base.sonic_pcie.pcieutil.PcieUtil()
-        except Exception as e:
-            logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
-
-        # Load platform specific pcieutil class
-        if platform_chassis is None or platform_pcieutil is None:
-            try:
-                platform_pcieutil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
-            except Exception as e:
-                logger.log_error("Failed to load pcieutil: %s" % (str(e)), True)
-                sys.exit(PCIEUTIL_LOAD_ERROR)
 
     # Deinitialize daemon
     def deinit(self):
