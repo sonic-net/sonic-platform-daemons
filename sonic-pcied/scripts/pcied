@@ -12,37 +12,22 @@ try:
     import subprocess
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
+    import swsssdk
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
 #
 # Constants ====================================================================
 #
-
+PCIE_RESULT_REGIX = "PCIe Device Checking All Test"
+PCIE_TABLE_NAME = "PCIE_STATUS"
 SYSLOG_IDENTIFIER = "pcied"
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
+REDIS_HOSTIP = "127.0.0.1"
 
 # Global logger class instance
 logger = Logger(SYSLOG_IDENTIFIER)
-
-#
-# Helper functions =============================================================
-#
-def check_pcie_devices():
-    cmd = [ 'sudo', 'pcieutil', 'pcie-check' ]
-    tmp_pcie_status_f="/tmp/pcie_status_f"
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE)
-    resultInfo, err = p.communicate()
-    if not err:
-        os.system('redis-cli -n 6 GET "PCIE_STATE|system" > %s'%tmp_pcie_status_f)
-        f=open(tmp_pcie_status_f, "r")
-        pcie_status = f.readline()
-        if "1" in pcie_status:
-            logger.log_info("PCIe device status check : PASSED")
-        else:
-            logger.log_info("PCIe device status check : FAILED")
 
 #
 # Daemon =======================================================================
@@ -54,6 +39,27 @@ class DaemonPcied(DaemonBase):
 
         self.timeout = PCIED_MAIN_THREAD_SLEEP_SECS
         self.stop_event = threading.Event()
+
+        self.state_db = swsssdk.SonicV2Connector(host=REDIS_HOSTIP)
+        self.state_db.connect("STATE_DB")
+
+
+    def check_pcie_devices():
+        tmp_pcie_status_f="/tmp/pcie_status_f"
+        os.system('sudo pcieutil pcie-check | grep "%s" > %s'%(PCIE_RESULT_REGIX, tmp_pcie_status_f))
+        f=open(tmp_pcie_status_f, "r")
+        pcie_status = f.readline()
+        if "PASSED" in pcie_status:
+            self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "PASSED")
+            logger.log_info("PCIe device status check : PASSED")
+        else:
+            self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "FAILED")
+            logger.log_info("PCIe device status check : FAILED")
+
+
+    def update_state_db(self, key1, key2, value):
+        self.state_db.set('STATE_DB', key1, key2, value)
+
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -88,7 +94,7 @@ class DaemonPcied(DaemonBase):
 
         while not self.stop_event.wait(self.timeout):
             # Check the Pcie device status
-            check_pcie_devices()
+            self.check_pcie_devices()
 
         logger.log_info("Stop daemon main loop")
 
