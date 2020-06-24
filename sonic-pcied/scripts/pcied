@@ -7,6 +7,7 @@
 
 try:
     import os
+    import sys
     import signal
     import threading
     import subprocess
@@ -19,15 +20,48 @@ except ImportError, e:
 #
 # Constants ====================================================================
 #
+SYSLOG_IDENTIFIER = "pcied"
+
 PCIE_RESULT_REGIX = "PCIe Device Checking All Test"
 PCIE_TABLE_NAME = "PCIE_STATUS"
-SYSLOG_IDENTIFIER = "pcied"
+
+PLATFORM_ROOT_PATH = '/usr/share/sonic/device'
+PCIE_CONF_FILE = 'pcie.yaml'
+SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
+HWSKU_KEY = 'DEVICE_METADATA.localhost.hwsku'
+PLATFORM_KEY = 'DEVICE_METADATA.localhost.platform'
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
 REDIS_HOSTIP = "127.0.0.1"
 
 # Global logger class instance
 logger = Logger(SYSLOG_IDENTIFIER)
+
+#
+# Helper Function ==============================================================
+#
+
+def get_platform_and_hwsku():
+    try:
+        proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-H', '-v', PLATFORM_KEY],
+                                stdout=subprocess.PIPE,
+                                shell=False,
+                                stderr=subprocess.STDOUT)
+        stdout = proc.communicate()[0]
+        proc.wait()
+        platform = stdout.rstrip('\n')
+
+        proc = subprocess.Popen([SONIC_CFGGEN_PATH, '-d', '-v', HWSKU_KEY],
+                                stdout=subprocess.PIPE,
+                                shell=False,
+                                stderr=subprocess.STDOUT)
+        stdout = proc.communicate()[0]
+        proc.wait()
+        hwsku = stdout.rstrip('\n')
+    except OSError, e:
+        raise OSError("Cannot detect platform")
+
+    return (platform, hwsku)
 
 #
 # Daemon =======================================================================
@@ -44,7 +78,14 @@ class DaemonPcied(DaemonBase):
         self.state_db.connect("STATE_DB")
 
 
-    def check_pcie_devices():
+    def check_pcie_devices(self):
+        platform, hwsku = get_platform_and_hwsku()
+        pciefilePath = "/".join([PLATFORM_ROOT_PATH, platform, "plugins", PCIE_CONF_FILE])
+        sys.path.append(os.path.abspath(pciefilePath))
+        if not os.path.exists(pciefilePath):
+            logger.log_error("Platform pcie configuration file doesn't exist! exit pcied")
+            sys.exit("Platform PCIe Configuration file doesn't exist!")
+
         tmp_pcie_status_f="/tmp/pcie_status_f"
         os.system('sudo pcieutil pcie-check | grep "%s" > %s'%(PCIE_RESULT_REGIX, tmp_pcie_status_f))
         f=open(tmp_pcie_status_f, "r")
