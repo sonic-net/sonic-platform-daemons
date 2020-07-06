@@ -39,10 +39,10 @@ PSU_INFO_KEY_TEMPLATE = 'PSU {}'
 PSU_INFO_PRESENCE_FIELD = 'presence'
 PSU_INFO_STATUS_FIELD = 'status'
 PSU_INFO_TEMP_FIELD = 'temp'
-PSU_INFO_TEMP_TH_FIELD = 'temp_th'
+PSU_INFO_TEMP_TH_FIELD = 'temp_threshold'
 PSU_INFO_VOLTAGE_FIELD = 'voltage'
-PSU_INFO_VOLTAGE_MAX_TH_FIELD = 'voltage_max_th'
-PSU_INFO_VOLTAGE_MIN_TH_FIELD = 'voltage_min_th'
+PSU_INFO_VOLTAGE_MAX_TH_FIELD = 'voltage_max_threshold'
+PSU_INFO_VOLTAGE_MIN_TH_FIELD = 'voltage_min_threshold'
 
 PSU_INFO_UPDATE_PERIOD_SECS = 3
 
