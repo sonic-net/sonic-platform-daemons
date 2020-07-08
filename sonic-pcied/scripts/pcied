@@ -15,7 +15,7 @@ try:
     from sonic_daemon_base.daemon_base import DaemonBase
     import swsssdk
 except ImportError, e:
-    raise ImportError (str(e) + " - required module not found")
+    raise ImportError(str(e) + " - required module not found")
 
 #
 # Constants ====================================================================
@@ -40,6 +40,7 @@ logger = Logger(SYSLOG_IDENTIFIER)
 #
 # Helper Function ==============================================================
 #
+
 
 def get_platform_and_hwsku():
     try:
@@ -67,6 +68,7 @@ def get_platform_and_hwsku():
 # Daemon =======================================================================
 #
 
+
 class DaemonPcied(DaemonBase):
     def __init__(self):
         DaemonBase.__init__(self)
@@ -77,7 +79,6 @@ class DaemonPcied(DaemonBase):
         self.state_db = swsssdk.SonicV2Connector(host=REDIS_HOSTIP)
         self.state_db.connect("STATE_DB")
 
-
     def check_pcie_devices(self):
         platform, hwsku = get_platform_and_hwsku()
         pciefilePath = "/".join([PLATFORM_ROOT_PATH, platform, "plugins", PCIE_CONF_FILE])
@@ -86,9 +87,9 @@ class DaemonPcied(DaemonBase):
             logger.log_error("Platform pcie configuration file doesn't exist! exit pcied")
             sys.exit("Platform PCIe Configuration file doesn't exist!")
 
-        tmp_pcie_status_f="/tmp/pcie_status_f"
-        os.system('sudo pcieutil pcie-check | grep "%s" > %s'%(PCIE_RESULT_REGIX, tmp_pcie_status_f))
-        f=open(tmp_pcie_status_f, "r")
+        tmp_pcie_status_f = "/tmp/pcie_status_f"
+        os.system('sudo pcieutil pcie-check | grep "%s" > %s' % (PCIE_RESULT_REGIX, tmp_pcie_status_f))
+        f = open(tmp_pcie_status_f, "r")
         pcie_status = f.readline()
         if "PASSED" in pcie_status:
             self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "PASSED")
@@ -97,10 +98,8 @@ class DaemonPcied(DaemonBase):
             self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "FAILED")
             logger.log_info("PCIe device status check : FAILED")
 
-
     def update_state_db(self, key1, key2, value):
         self.state_db.set('STATE_DB', key1, key2, value)
-
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -147,6 +146,7 @@ class DaemonPcied(DaemonBase):
 #
 # Main =========================================================================
 #
+
 
 def main():
     pcied = DaemonPcied()
