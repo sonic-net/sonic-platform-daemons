@@ -1162,7 +1162,6 @@ class DaemonXcvrd(DaemonBase):
         logger.log_info("Shutting down...")
 
         if self.sfp_error_event.is_set():
-            logger.log_error("SFP error event occured in SFP monitoring loop")
             sys.exit(SFP_SYSTEM_ERROR)
 
 #
