@@ -624,8 +624,8 @@ class ThermalControlDaemon(DaemonBase):
         """
         logger.log_info("Starting up...")
 
-        import sonic_platform.platform
-        chassis = sonic_platform.platform.Platform().get_chassis()
+        import sonic_platform_base.platform_base
+        chassis = sonic_platform_base.platform_base.PlatformBase().get_chassis()
 
         thermal_monitor = ThermalMonitor(chassis)
         thermal_monitor.task_run()
