@@ -10,7 +10,6 @@ try:
     import sys
     import signal
     import threading
-    import subprocess
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
     import swsssdk
