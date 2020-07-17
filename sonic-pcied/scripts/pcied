@@ -10,6 +10,7 @@ try:
     import sys
     import signal
     import threading
+    import subprocess
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
     import swsssdk
@@ -59,17 +60,19 @@ class DaemonPcied(DaemonBase):
         self.state_db.connect("STATE_DB")
 
     def check_pcie_devices(self):
-        tmp_pcie_status_f = "/tmp/pcie_status_f"
-        os.system('sudo pcieutil pcie-check | grep "%s" > %s' % (PCIE_RESULT_REGEX, tmp_pcie_status_f))
-        f = open(tmp_pcie_status_f, "r")
-        pcie_status = f.readline()
+        cmd = [ 'sudo', 'pcieutil', 'pcie-check' ]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        resultInfo, err = p.communicate()
         pcie_db_state = self.read_state_db("PCIE_STATUS|", "PCIE_DEVICES")
-        if "PASSED" in pcie_status and pcie_db_state is not "PASSED":
-            self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "PASSED")
-            logger.log_info("PCIe device status check : PASSED")
-        elif "FAILED" in pcie_status and pcie_db_state is "PASSED":
-            self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "FAILED")
-            logger.log_info("PCIe device status check : FAILED")
+
+        for line in resultInfo.splitlines():
+            if PCIE_RESULT_REGEX in line:
+                if "PASSED" in line and "PASSED" not in pcie_db_state:
+                    self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "PASSED")
+                    logger.log_info("PCIe device status check : PASSED")
+                elif "FAILED" in line and "PASSED" in pcie_db_state:
+                    self.update_state_db("PCIE_STATUS|", "PCIE_DEVICES", "FAILED")
+                    logger.log_info("PCIe device status check : FAILED")
 
     def read_state_db(self, key1, key2):
         return self.state_db.get('STATE_DB', key1, key2)
