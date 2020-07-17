@@ -7,13 +7,14 @@
 
 try:
     import os
-    import sys
     import signal
-    import threading
     import subprocess
+    import sys
+    import threading
+
+    import swsssdk
     from sonic_daemon_base.daemon_base import Logger
     from sonic_daemon_base.daemon_base import DaemonBase
-    import swsssdk
 except ImportError, e:
     raise ImportError(str(e) + " - required module not found")
 
