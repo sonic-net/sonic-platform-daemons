@@ -1003,7 +1003,7 @@ class DaemonXcvrd(DaemonBase):
 
         self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
         self.stop_event = threading.Event()
-        self.sfp_error_event = threading.Event()
+        self.sfp_error_event = multiprocessing.Event()
 
     # Signal handler
     def signal_handler(self, sig, frame):
