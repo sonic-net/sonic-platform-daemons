@@ -21,7 +21,7 @@ except ImportError, e:
 #
 SYSLOG_IDENTIFIER = "pcied"
 
-PCIE_RESULT_REGIX = "PCIe Device Checking All Test"
+PCIE_RESULT_REGEX = "PCIe Device Checking All Test"
 PCIE_TABLE_NAME = "PCIE_STATUS"
 
 PLATFORM_ROOT_PATH = '/usr/share/sonic/device'
