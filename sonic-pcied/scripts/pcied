@@ -60,7 +60,7 @@ class DaemonPcied(DaemonBase):
 
     def check_pcie_devices(self):
         tmp_pcie_status_f = "/tmp/pcie_status_f"
-        os.system('sudo pcieutil pcie-check | grep "%s" > %s' % (PCIE_RESULT_REGIX, tmp_pcie_status_f))
+        os.system('sudo pcieutil pcie-check | grep "%s" > %s' % (PCIE_RESULT_REGEX, tmp_pcie_status_f))
         f = open(tmp_pcie_status_f, "r")
         pcie_status = f.readline()
         pcie_db_state = self.read_state_db("PCIE_STATUS|", "PCIE_DEVICES")
