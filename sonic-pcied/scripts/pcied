@@ -13,8 +13,7 @@ try:
     import threading
 
     import swsssdk
-    from sonic_daemon_base.daemon_base import Logger
-    from sonic_daemon_base.daemon_base import DaemonBase
+    from sonic_py_common.daemon_base import DaemonBase, Logger
 except ImportError, e:
     raise ImportError(str(e) + " - required module not found")
 

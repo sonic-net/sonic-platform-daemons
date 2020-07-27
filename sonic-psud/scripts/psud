@@ -10,13 +10,13 @@
 """
 
 try:
-    import sys
     import signal
+    import sys
     import threading
+
+    from sonic_py_common import daemon_base
+    from sonic_py_common.daemon_base import DaemonBase, Logger
     from swsscommon import swsscommon
-    from sonic_daemon_base import daemon_base
-    from sonic_daemon_base.daemon_base import Logger
-    from sonic_daemon_base.daemon_base import DaemonBase
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 

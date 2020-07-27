@@ -6,20 +6,20 @@
 """
 
 try:
-    import os
-    import sys
-    import time
-    import signal
-    import threading
-    import json
-    import string
     import ast
+    import json
     import multiprocessing
-    from swsscommon import swsscommon
-    from sonic_daemon_base import daemon_base
-    from sonic_daemon_base.daemon_base import Logger
-    from sonic_daemon_base.daemon_base import DaemonBase
+    import os
+    import signal
+    import string
+    import sys
+    import threading
+    import time
+
     from enum import Enum
+    from sonic_py_common import daemon_base
+    from sonic_py_common.daemon_base import DaemonBase, Logger
+    from swsscommon import swsscommon
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
