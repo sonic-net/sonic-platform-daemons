@@ -13,9 +13,6 @@ setup(
     scripts=[
         'scripts/xcvrd',
     ],
-    install_requires=[
-        'sonic-py-common'
-    ],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: No Input/Output (Daemon)',

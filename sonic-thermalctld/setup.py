@@ -19,9 +19,6 @@ setup(
     setup_requires= [
         'pytest-runner'
     ],
-    install_requires=[
-        'sonic-py-common'
-    ],
     tests_require = [
         'pytest',
         'mock>=2.0.0'
