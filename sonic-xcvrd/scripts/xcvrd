@@ -257,7 +257,7 @@ def post_port_sfp_info_to_db(logical_port_name, table, transceiver_dict,
                                                   ('cable_length',port_info_dict['cable_length']),
                                                   ('specification_compliance',port_info_dict['specification_compliance']),
                                                   ('nominal_bit_rate',port_info_dict['nominal_bit_rate']),
-                                                  ('application_advertisement',port_info_dict['application_advertisement'])])
+                                                  ('application_advertisement',port_info_dict['application_advertisement'] if 'application_advertisement' in port_info_dict else 'N/A')])
                 table.set(port_name, fvs)
             else:
                 return SFP_EEPROM_NOT_READY
@@ -353,7 +353,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop_event=threading.Even
             dom_info_dict = _wrapper_get_transceiver_dom_info(physical_port)
             if dom_info_dict is not None:
                 beautify_dom_info_dict(dom_info_dict)
-                if platform_chassis.get_sfp(physical_port).sfp_type == 'QSFP_DD':
+                if hasattr(platform_chassis.get_sfp(physical_port), 'sfp_type') and platform_chassis.get_sfp(physical_port).sfp_type == 'QSFP_DD':
                     fvs = swsscommon.FieldValuePairs(
                         [('temperature', dom_info_dict['temperature']),
                          ('voltage', dom_info_dict['voltage']),
