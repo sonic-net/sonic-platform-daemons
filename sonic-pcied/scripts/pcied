@@ -44,7 +44,7 @@ class DaemonPcied(DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonPcied, self).__init__(log_identifier)
 
-        platform, hwsku = device_info.get_platform_and_hwsku(self)
+        platform, hwsku = get_platform_and_hwsku()
         pciefilePath = "/".join([PLATFORM_ROOT_PATH, platform, "plugins", PCIE_CONF_FILE])
         sys.path.append(os.path.abspath(pciefilePath))
         if not os.path.exists(pciefilePath):
