@@ -1035,8 +1035,8 @@ class sfp_state_update_task:
 #
 
 class DaemonXcvrd(DaemonBase):
-    def __init__(self):
-        DaemonBase.__init__(self)
+    def __init__(self, log_identifier):
+        super(DaemonXcvrd, self).__init__(log_identifier)
 
         self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
         self.stop_event = threading.Event()

@@ -40,8 +40,8 @@ REDIS_HOSTIP = "127.0.0.1"
 
 
 class DaemonPcied(DaemonBase):
-    def __init__(self):
-        DaemonBase.__init__(self)
+    def __init__(self, log_identifier):
+        super(DaemonPcied, self).__init__(log_identifier)
 
         platform, hwsku = DaemonBase.get_platform_and_hwsku(self)
         pciefilePath = "/".join([PLATFORM_ROOT_PATH, platform, "plugins", PCIE_CONF_FILE])

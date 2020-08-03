@@ -588,11 +588,11 @@ class ThermalControlDaemon(DaemonBase):
     INTERVAL = 60
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
-    def __init__(self):
+    def __init__(self, log_identifier):
         """
         Constructor of ThermalControlDaemon
         """
-        DaemonBase.__init__(self)
+        super(ThermalControlDaemon, self).__init__(log_identifier)
         self.stop_event = threading.Event()
 
     # Signal handler
