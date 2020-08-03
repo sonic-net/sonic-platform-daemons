@@ -17,9 +17,7 @@ try:
     import time
 
     from enum import Enum
-    from sonic_py_common import daemon_base
-    from sonic_py_common.daemon_base import DaemonBase
-    from sonic_py_common import device_info
+    from sonic_py_common import daemon_base, device_info
     from swsscommon import swsscommon
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
@@ -1035,7 +1033,7 @@ class sfp_state_update_task:
 # Daemon =======================================================================
 #
 
-class DaemonXcvrd(DaemonBase):
+class DaemonXcvrd(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonXcvrd, self).__init__(log_identifier)
 

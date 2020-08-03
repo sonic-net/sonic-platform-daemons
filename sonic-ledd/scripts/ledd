@@ -10,7 +10,6 @@ try:
     import sys
 
     from sonic_py_common import daemon_base
-    from sonic_py_common.daemon_base import DaemonBase
     from swsscommon import swsscommon
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
@@ -36,7 +35,7 @@ SELECT_TIMEOUT = 1000
 
 LEDUTIL_LOAD_ERROR = 1
 
-class DaemonLedd(DaemonBase):
+class DaemonLedd(daemon_base.DaemonBase):
 
     # Run daemon
     def run(self):

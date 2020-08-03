@@ -14,7 +14,6 @@ try:
     import threading
 
     from sonic_py_common import daemon_base
-    from sonic_py_common.daemon_base import DaemonBase
     from swsscommon import swsscommon
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
@@ -35,7 +34,7 @@ EEPROM_TABLE_NAME = 'EEPROM_INFO'
 SYSLOG_IDENTIFIER = 'syseepromd'
 
 
-class DaemonSyseeprom(DaemonBase):
+class DaemonSyseeprom(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonSyseeprom, self).__init__(log_identifier)
 

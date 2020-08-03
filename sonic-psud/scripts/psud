@@ -15,7 +15,6 @@ try:
     import threading
 
     from sonic_py_common import daemon_base
-    from sonic_py_common.daemon_base import DaemonBase
     from swsscommon import swsscommon
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
@@ -194,7 +193,7 @@ class PsuStatus(object):
 # Daemon =======================================================================
 #
 
-class DaemonPsud(DaemonBase):
+class DaemonPsud(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonPsud, self).__init__(log_identifier)
 

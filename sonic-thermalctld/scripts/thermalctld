@@ -12,7 +12,6 @@ try:
     from datetime import datetime
 
     from sonic_py_common import daemon_base
-    from sonic_py_common.daemon_base import DaemonBase
     from sonic_py_common.task_base import ProcessTaskBase
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -583,7 +582,7 @@ class ThermalMonitor(ProcessTaskBase):
 #
 # Daemon =======================================================================
 #
-class ThermalControlDaemon(DaemonBase):
+class ThermalControlDaemon(daemon_base.DaemonBase):
     # Interval to run thermal control logic
     INTERVAL = 60
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
