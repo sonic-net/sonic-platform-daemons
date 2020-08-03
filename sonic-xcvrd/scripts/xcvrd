@@ -1079,7 +1079,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def load_media_settings(self):
         global media_settings
         global g_dict
-        (platform_path, hwsku_path) = device_info.get_paths_to_platform_and_hwsku()
+        (platform_path, hwsku_path) = device_info.get_paths_to_platform_and_hwsku_dirs()
 
         media_settings_file_path = os.path.join(platform_path, "media_settings.json")
         if not os.path.isfile(media_settings_file_path):
