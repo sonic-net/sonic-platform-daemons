@@ -649,15 +649,15 @@ class ThermalControlDaemon(DaemonBase):
                     thermal_manager.run_policy(chassis)
             except Exception as e:
                 logger.log_error('Caught exception while running thermal policy - {}'.format(e))
-            elapse = time.time() - begin
-            if elapse < ThermalControlDaemon.INTERVAL:
-                wait_time = ThermalControlDaemon.INTERVAL - elapse
+            elapsed = time.time() - begin
+            if elapsed < ThermalControlDaemon.INTERVAL:
+                wait_time = ThermalControlDaemon.INTERVAL - elapsed
             else:
                 wait_time = ThermalControlDaemon.FAST_START_INTERVAL
 
-            if elapse > ThermalControlDaemon.RUN_POLICY_ELAPSE_THRESHOLD:
-                logger.log_warning('Run thermal policy takes {} seconds, '
-                                   'there might be performance risk'.format(elapse))
+            if elapsed > ThermalControlDaemon.RUN_POLICY_ELAPSE_THRESHOLD:
+                logger.log_warning('Thermal policy execution takes {} seconds, '
+                                   'there might be performance risk'.format(elapsed))
 
         try:
             if thermal_manager:
