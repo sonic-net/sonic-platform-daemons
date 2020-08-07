@@ -26,7 +26,7 @@ SYSLOG_IDENTIFIER = "pcied"
 PCIE_RESULT_REGEX = "PCIe Device Checking All Test"
 PCIE_TABLE_NAME = "PCIE_STATUS"
 
-PLATFORM_ROOT_PATH = '/usr/share/sonic/device'
+PLATFORM_ROOT_PATH = '/usr/share/sonic/platform'
 PCIE_CONF_FILE = 'pcie.yaml'
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
@@ -41,8 +41,7 @@ class DaemonPcied(DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonPcied, self).__init__(log_identifier)
 
-        platform = get_platform()
-        pciefilePath = os.path.join(PLATFORM_ROOT_PATH, platform, "plugins", PCIE_CONF_FILE)
+        pciefilePath = os.path.join(PLATFORM_ROOT_PATH, "plugins", PCIE_CONF_FILE)
         sys.path.append(os.path.abspath(pciefilePath))
         if not os.path.exists(pciefilePath):
             self.log_error("Platform pcie configuration file doesn't exist! Exiting ...")
