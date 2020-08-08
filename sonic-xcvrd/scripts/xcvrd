@@ -1041,7 +1041,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonXcvrd, self).__init__(log_identifier)
 
-        self.log_identifier = log_identifier
         self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
         self.stop_event = threading.Event()
         self.sfp_error_event = multiprocessing.Event()
@@ -1175,11 +1174,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.init()
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.log_identifier)
+        dom_info_update = DomInfoUpdateTask()
         dom_info_update.task_run()
 
         # Start the sfp state info update process
-        sfp_state_update = SfpStateUpdateTask(self.log_identifier)
+        sfp_state_update = SfpStateUpdateTask()
         sfp_state_update.task_run(self.sfp_error_event)
 
         # Start main loop
