@@ -10,14 +10,12 @@
 """
 
 try:
-    import sys
-    import time
     import signal
+    import sys
     import threading
+
+    from sonic_py_common import daemon_base
     from swsscommon import swsscommon
-    from sonic_daemon_base import daemon_base
-    from sonic_daemon_base.daemon_base import Logger
-    from sonic_daemon_base.daemon_base import DaemonBase
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
@@ -42,8 +40,6 @@ PSU_INFO_STATUS_FIELD = 'status'
 PSU_INFO_UPDATE_PERIOD_SECS = 3
 
 PSUUTIL_LOAD_ERROR = 1
-
-logger = Logger(SYSLOG_IDENTIFIER)
 
 platform_psuutil = None
 platform_chassis = None
@@ -89,45 +85,45 @@ def psu_db_update(psu_tbl, psu_num):
 # Daemon =======================================================================
 #
 
-class DaemonPsud(DaemonBase):
-    def __init__(self):
-        DaemonBase.__init__(self)
+class DaemonPsud(daemon_base.DaemonBase):
+    def __init__(self, log_identifier):
+        super(DaemonPsud, self).__init__(log_identifier)
 
         self.stop = threading.Event()
 
     # Signal handler
     def signal_handler(self, sig, frame):
         if sig == signal.SIGHUP:
-            logger.log_info("Caught SIGHUP - ignoring...")
+            self.log_info("Caught SIGHUP - ignoring...")
         elif sig == signal.SIGINT:
-            logger.log_info("Caught SIGINT - exiting...")
+            self.log_info("Caught SIGINT - exiting...")
             self.stop.set()
         elif sig == signal.SIGTERM:
-            logger.log_info("Caught SIGTERM - exiting...")
+            self.log_info("Caught SIGTERM - exiting...")
             self.stop.set()
         else:
-            logger.log_warning("Caught unhandled signal '" + sig + "'")
+            self.log_warning("Caught unhandled signal '" + sig + "'")
 
     # Run daemon
     def run(self):
         global platform_psuutil
         global platform_chassis
 
-        logger.log_info("Starting up...")
+        self.log_info("Starting up...")
 
         # Load new platform api class
         try:
             import sonic_platform.platform
             platform_chassis = sonic_platform.platform.Platform().get_chassis()
         except Exception as e:
-            logger.log_warning("Failed to load chassis due to {}".format(repr(e)))
+            self.log_warning("Failed to load chassis due to {}".format(repr(e)))
 
         # Load platform-specific psuutil class
         if platform_chassis is None:
             try:
                 platform_psuutil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
-                logger.log_error("Failed to load psuutil: %s" % (str(e)), True)
+                self.log_error("Failed to load psuutil: %s" % (str(e)), True)
                 sys.exit(PSUUTIL_LOAD_ERROR)
 
         # Connect to STATE_DB and create psu/chassis info tables
@@ -141,12 +137,12 @@ class DaemonPsud(DaemonBase):
         chassis_tbl.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
 
         # Start main loop
-        logger.log_info("Start daemon main loop")
+        self.log_info("Start daemon main loop")
 
         while not self.stop.wait(PSU_INFO_UPDATE_PERIOD_SECS):
             psu_db_update(psu_tbl, psu_num)
 
-        logger.log_info("Stop daemon main loop")
+        self.log_info("Stop daemon main loop")
 
         # Delete all the information from DB and then exit
         for psu_index in range(1, psu_num + 1):
@@ -154,14 +150,14 @@ class DaemonPsud(DaemonBase):
 
         chassis_tbl._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
-        logger.log_info("Shutting down...")
+        self.log_info("Shutting down...")
 
 #
 # Main =========================================================================
 #
 
 def main():
-    psud = DaemonPsud()
+    psud = DaemonPsud(SYSLOG_IDENTIFIER)
     psud.run()
 
 if __name__ == '__main__':
