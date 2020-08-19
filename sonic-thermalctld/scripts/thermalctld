@@ -607,7 +607,7 @@ class ThermalMonitor(ProcessTaskBase):
 class ThermalControlDaemon(daemon_base.DaemonBase):
     # Interval to run thermal control logic
     INTERVAL = 60
-    RUN_POLICY_ELAPSE_THRESHOLD = 30
+    RUN_POLICY_WARN_THRESHOLD_SECS = 30
     FAST_START_INTERVAL = 15
 
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
@@ -675,7 +675,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             else:
                 wait_time = ThermalControlDaemon.FAST_START_INTERVAL
 
-            if elapsed > ThermalControlDaemon.RUN_POLICY_ELAPSE_THRESHOLD:
+            if elapsed > ThermalControlDaemon.RUN_POLICY_WARN_THRESHOLD_SECS:
                 self.log_warning('Thermal policy execution takes {} seconds, '
                                  'there might be performance risk'.format(elapsed))
 
