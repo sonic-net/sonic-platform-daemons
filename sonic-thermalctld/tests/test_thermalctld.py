@@ -179,7 +179,7 @@ def test_insufficient_fan_number():
     chassis.make_fault_fan()
     fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
     fan_updater.update()
-    assert fan_updater.log_warning.call_count == 3
+    assert fan_updater.log_warning.call_count == 3 
     fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 2 fans are not working.')
 
     fan_list = chassis.get_all_fans()

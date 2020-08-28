@@ -24,6 +24,7 @@ except ImportError as e:
 SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
 CHASSIS_INFO_KEY = 'chassis 1'
+PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 
 # utility functions
 
@@ -342,7 +343,7 @@ class FanUpdater(logger.Logger):
         # We don't set PSU led here, PSU led will be handled in psud
         if set_led:
             if not is_psu_fan:
-                self._set_fan_led(fan_drawer, fan, fan_name, fan_status)
+                self._set_fan_led(parent, fan, fan_name, fan_status)
 
         fvs = swsscommon.FieldValuePairs(
             [('presence', str(presence)),
@@ -398,7 +399,7 @@ class FanUpdater(logger.Logger):
             drawer_name = try_get(drawer.get_name)
             if drawer_name == NOT_AVAILABLE:
                 continue
-             try:
+            try:
                 fvs = swsscommon.FieldValuePairs([
                     ('led_status', str(try_get(drawer.get_status_led)))
                 ])
