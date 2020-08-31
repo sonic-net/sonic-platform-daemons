@@ -282,7 +282,7 @@ class FanUpdater(logger.Logger):
         """
         drawer_name = NOT_AVAILABLE if is_psu_fan else str(try_get(parent.get_name))
         if is_psu_fan:
-            parent_name = 'PSU {}'.format(parent_index)
+            parent_name = 'PSU {}'.format(parent_index + 1)
         else:
             parent_name = drawer_name if drawer_name != NOT_AVAILABLE else CHASSIS_INFO_KEY
         fan_name = try_get(fan.get_name, '{} FAN {}'.format(parent_name, fan_index + 1))
