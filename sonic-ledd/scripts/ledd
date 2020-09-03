@@ -91,7 +91,7 @@ class DaemonLedd(daemon_base.DaemonBase):
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-            (state, selectableObj) = sel.select(SELECT_TIMEOUT_MS)
+            (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
             if state == swsscommon.Select.TIMEOUT:
                 # Do not flood log when select times out
