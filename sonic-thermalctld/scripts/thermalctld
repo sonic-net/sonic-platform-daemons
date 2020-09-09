@@ -572,10 +572,11 @@ class TemperatureUpdater(logger.Logger):
         """
         name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
 
-        # Only save entity info for thermals that belong to chassis
-        # for PSU and SFP thermal, they don't need save entity info because snmp can deduce the relation from PSU_INFO
-        # and TRANSCEIVER_DOM_SENSOR
-        if parent_name == CHASSIS_INFO_KEY:
+        # Only save entity info for thermals that belong to chassis and PSU
+        # for SFP thermal, they don't need save entity info because snmp can deduce the relation from TRANSCEIVER_DOM_SENSOR
+        # and as we save logical port in TRANSCEIVER_INFO table, for split cable, a SFP thermal might have multiple parent
+        # logical port
+        if 'SFP' not in parent_name:
             update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
 
         if name not in self.temperature_status_dict:
