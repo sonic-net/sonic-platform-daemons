@@ -1,0 +1,232 @@
+#!/usr/bin/env python2
+
+"""
+    chassisd
+    Linecard information update daemon for SONiC
+    This daemon will loop to collect Linecard related information and then write the information to state DB.
+    The loop interval is CHASSIS_INFO_UPDATE_PERIOD_SECS in seconds.
+"""
+
+try:
+    import sys
+    import time
+    import signal
+    import threading
+    import os
+    from swsscommon import swsscommon
+    from sonic_py_common import daemon_base, logger
+    from sonic_platform_base.card_base import CardBase
+except ImportError, e:
+    raise ImportError (str(e) + " - required module not found")
+
+#
+# Constants ====================================================================
+#
+
+SYSLOG_IDENTIFIER = "chassisd"
+
+CHASSIS_INFO_TABLE = 'CHASSIS_TABLE'
+CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
+CHASSIS_INFO_CARD_NUM_FIELD = 'card_num'
+
+CHASSIS_MODULE_INFO_TABLE = 'CHASSIS_MODULE_TABLE'
+CHASSIS_MODULE_INFO_KEY_TEMPLATE = 'CHASSIS_MODULE {}'
+CHASSIS_MODULE_INFO_INSTANCE_FIELD = 'instance'
+CHASSIS_MODULE_INFO_TYPE_FIELD = 'type'
+CHASSIS_MODULE_INFO_NAME_FIELD = 'name'
+CHASSIS_MODULE_INFO_STATUS_FIELD = 'status'
+
+CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
+
+CHASSIS_LOAD_ERROR = 1
+CHASSIS_NOT_AVAIL = 2
+
+platform_chassis = None
+
+SELECT_TIMEOUT = 1000
+#
+# Helper functions =============================================================
+#
+info_dict_keys = [CHASSIS_MODULE_INFO_INSTANCE_FIELD,
+                  CHASSIS_MODULE_INFO_TYPE_FIELD,
+                  CHASSIS_MODULE_INFO_NAME_FIELD,
+                  CHASSIS_MODULE_INFO_STATUS_FIELD]
+
+def get_card_info(card_index):
+    """
+    Retrieves card info of this card
+    """
+    card_info_dict = {}
+    card_info_dict = dict.fromkeys(info_dict_keys, 'N/A')
+    card_info_dict[CHASSIS_MODULE_INFO_INSTANCE_FIELD] = str(platform_chassis.get_card(card_index - 1).get_instance())
+    card_info_dict[CHASSIS_MODULE_INFO_TYPE_FIELD] = str(platform_chassis.get_card(card_index - 1).get_type_name())
+    card_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = str(platform_chassis.get_card(card_index - 1).get_name())
+    card_info_dict[CHASSIS_MODULE_INFO_STATUS_FIELD] = str(platform_chassis.get_card(card_index - 1).get_status())
+    return card_info_dict
+
+def card_db_update(card_tbl, num_cards):
+    for card_index in range(1, num_cards + 1):
+        card_info_dict = get_card_info(card_index)
+        if card_info_dict is not None:
+            fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_INSTANCE_FIELD, card_info_dict[CHASSIS_MODULE_INFO_INSTANCE_FIELD]),
+                                              (CHASSIS_MODULE_INFO_TYPE_FIELD, card_info_dict[CHASSIS_MODULE_INFO_TYPE_FIELD]),
+                                              (CHASSIS_MODULE_INFO_STATUS_FIELD, card_info_dict[CHASSIS_MODULE_INFO_STATUS_FIELD]),
+                                              (CHASSIS_MODULE_INFO_NAME_FIELD, card_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD])])
+            card_tbl.set(CHASSIS_MODULE_INFO_KEY_TEMPLATE.format(card_index), fvs)
+
+#
+# Config Handling task ========================================================
+#
+class config_handling_task:
+    def __init__(self):
+        self.task_thread = None
+        self.config_list = {}
+        self.task_stopping_event = threading.Event()
+
+        self.logger = logger.Logger(SYSLOG_IDENTIFIER)
+
+    def task_worker(self):
+        config_db = daemon_base.db_connect("CONFIG_DB")
+
+        #Subscribe to CHASSIS_MODULE table notifications in the Config DB
+        sel = swsscommon.Select()
+        sst = swsscommon.SubscriberStateTable(config_db, 'CHASSIS_MODULE')
+        sel.addSelectable(sst)
+
+        # Listen indefinitely for changes to the CFG_CHASSIS_MODULE_TABLE table in the Config DB
+        while True:
+            # Use timeout to prevent ignoring the signals we want to handle
+            # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+            (state, c) = sel.select(SELECT_TIMEOUT)
+
+            if state == swsscommon.Select.TIMEOUT:
+                # Do not flood log when select times out
+                continue
+            if state != swsscommon.Select.OBJECT:
+                self.logger.log_warning("sel.select() did not  return swsscommon.Select.OBJECT")
+                continue
+
+            (key, op, fvp) = sst.pop()
+
+            fvp_dict = dict(fvp)
+
+            if op == "SET":
+                if (fvp_dict['module_type'] == 'LINE-CARD'):
+                    card_index = platform_chassis.get_card_index(fvp_dict['instance'], CardBase.MODULE_TYPE_LINE)
+                elif (fvp_dict['module_type'] == 'FABRIC-CARD'):
+                    card_index = platform_chassis.get_card_index(fvp_dict['instance'], CardBase.MODULE_TYPE_FABRIC)
+                else:
+                    continue
+
+                #Continue if the index is invalid
+                if card_index < 0:
+                    continue
+
+                config_fvs = {}
+                config_fvs['index'] = card_index
+                config_fvs['module_type'] = fvp_dict['module_type']
+                config_fvs['instance'] = fvp_dict['instance']
+                self.config_list[key] = config_fvs
+
+                #Setting the card to administratively down state
+                platform_chassis.get_card(card_index).set_admin_state(0)
+            elif op == "DEL":
+                config_fvs = self.config_list[key]
+                card_index = config_fvs['index']
+
+                #Setting the card to administratively up state
+                platform_chassis.get_card(card_index).set_admin_state(1)
+
+        return 1
+
+    def task_run(self):
+        if self.task_stopping_event.is_set():
+            return
+
+        self.task_thread = threading.Thread(target=self.task_worker)
+        self.task_thread.start()
+
+    def task_stop(self):
+        self.task_stopping_event.set()
+        self.task_thread.join()
+#
+# Daemon =======================================================================
+#
+
+class ChassisdDaemon(daemon_base.DaemonBase):
+    def __init__(self, log_identifier):
+        super(ChassisdDaemon, self).__init__(log_identifier)
+
+        self.stop = threading.Event()
+
+    # Signal handler
+    def signal_handler(self, sig, frame):
+        if sig == signal.SIGHUP:
+            self.log_info("Caught SIGHUP - ignoring...")
+        elif sig == signal.SIGINT:
+            self.log_info("Caught SIGINT - exiting...")
+            self.stop.set()
+        elif sig == signal.SIGTERM:
+            self.log_info("Caught SIGTERM - exiting...")
+            self.stop.set()
+        else:
+            self.log_warning("Caught unhandled signal '" + sig + "'")
+
+    # Run daemon
+    def run(self):
+        global platform_chassis
+
+        self.log_info("Starting up...")
+
+        # Load new platform api class
+        try:
+            import sonic_platform.platform
+            platform_chassis = sonic_platform.platform.Platform().get_chassis()
+        except Exception as e:
+            self.log_error("Failed to load chassis due to {}".format(repr(e)))
+            sys.exit(CHASSIS_LOAD_ERROR)
+
+        # Connect to STATE_DB and create chassis card/chassis info tables
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        card_tbl = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
+
+        # Post number-of-cards info to STATE_DB
+        num_cards = platform_chassis.get_num_cards()
+        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_cards))])
+        chassis_tbl.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
+
+        if num_cards == 0:
+            self.log_error("Chassisd has no cards available")
+
+        #Start configuration handling task on control card
+        if platform_chassis.get_controlcard_instance() == platform_chassis.get_my_instance():
+            config_update = config_handling_task()
+            config_update.task_run()
+
+        # Start main loop
+        self.log_info("Start daemon main loop")
+
+        while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
+            card_db_update(card_tbl, num_cards)
+
+        self.log_info("Stop daemon main loop")
+
+        # Delete all the information from DB and then exit
+        for card_index in range(1, num_cards + 1):
+            card_tbl._del(CHASSIS_MODULE_INFO_KEY_TEMPLATE.format(card_index))
+
+        chassis_tbl._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+
+        self.log_info("Shutting down...")
+
+#
+# Main =========================================================================
+#
+
+def main():
+    chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    chassisd.run()
+
+if __name__ == '__main__':
+    main()
