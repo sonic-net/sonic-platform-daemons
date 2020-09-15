@@ -250,11 +250,14 @@ class FanUpdater(logger.Logger):
         if set_led:
             self._set_fan_led(fan, fan_name, fan_status)
 
+        if fan_fault_status != NOT_AVAILABLE:
+            fan_fault_status = fan_status.is_ok()
+
         fvs = swsscommon.FieldValuePairs(
             [('presence', str(presence)),
              ('model', str(try_get(fan.get_model))),
              ('serial', str(try_get(fan.get_serial))),
-             ('status', str(fan_fault_status and not(fan_status.under_speed or fan_status.over_speed))),
+             ('status', str(fan_fault_status)),
              ('direction', str(fan_direction)),
              ('speed', str(speed)),
              ('speed_tolerance', str(speed_tolerance)),
