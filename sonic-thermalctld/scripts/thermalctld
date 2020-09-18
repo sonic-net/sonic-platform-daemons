@@ -632,7 +632,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_info("Caught SIGHUP - ignoring...")
         elif sig == signal.SIGINT or sig == signal.SIGTERM:
             self.log_info("Caught signal {} - exiting...".format(sig))
-            self.exit_code = sig
+            self.exit_code = sig + 128
             self.stop_event.set()
         else:
             self.log_warning("Caught unhandled signal '" + sig + "'")
