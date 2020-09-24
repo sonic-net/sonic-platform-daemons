@@ -251,7 +251,7 @@ class FanUpdater(logger.Logger):
             self._set_fan_led(fan, fan_name, fan_status)
 
         if fan_fault_status != NOT_AVAILABLE:
-            fan_fault_status = fan_status.is_ok()
+            fan_fault_status = fan_fault_status and fan_status.is_ok()
 
         fvs = swsscommon.FieldValuePairs(
             [('presence', str(presence)),
