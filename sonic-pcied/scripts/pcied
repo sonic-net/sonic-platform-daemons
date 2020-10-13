@@ -8,10 +8,10 @@
 try:
     import os
     import signal
-    import subprocess
     import sys
     import threading
 
+    import redis
     import swsssdk
     from sonic_py_common.daemon_base import DaemonBase
     from sonic_py_common import device_info
@@ -30,6 +30,7 @@ PCIE_CONF_FILE = 'pcie.yaml'
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
 REDIS_HOSTIP = "127.0.0.1"
+STATE_DB_INDEX = 6
 
 #
 # Daemon =======================================================================
@@ -52,6 +53,49 @@ class DaemonPcied(DaemonBase):
 
         self.state_db = swsssdk.SonicV2Connector(host=REDIS_HOSTIP)
         self.state_db.connect("STATE_DB")
+
+    # Load AER-fields into STATEDB
+    def update_aer_to_statedb(self, device, device_name, pcie_hash_name):
+
+        aer_fields = {}
+        client = redis.Redis(db=STATE_DB_INDEX)
+
+        # construct AER sysfs filepath
+        correctable_path = os.path.join(device, "aer_dev_correctable")
+        fatal_path = os.path.join(device, "aer_dev_fatal")
+        non_fatal_path = os.path.join(device, "aer_dev_nonfatal")
+
+        # update AER-correctable fields
+        if os.path.isfile(correctable_path):
+            with open(correctable_path, 'r') as fh:
+                lines = fh.readlines()
+            for line in lines:
+                correctable_field, value = line.split()
+                correctable_field = "correctable|" + correctable_field
+                aer_fields[correctable_field] = value
+
+        # update AER-Fatal fields
+        if os.path.isfile(fatal_path):
+            with open(fatal_path, 'r') as fh:
+                lines = fh.readlines()
+            for line in lines:
+                fatal_field, value = line.split()
+                fatal_field = "fatal|" + fatal_field
+                aer_fields[fatal_field] = value
+
+        # update AER-Fatal fields
+        if os.path.isfile(non_fatal_path):
+            with open(non_fatal_path, 'r') as fh:
+                lines = fh.readlines()
+            for line in lines:
+                non_fatal_field, value = line.split()
+                non_fatal_field = "non_fatal|" + non_fatal_field
+                aer_fields[non_fatal_field] = value
+
+        if aer_fields:
+            client.hmset(pcie_hash_name, aer_fields)
+        else:
+            self.log_debug("PCIe device {} has no AER attriutes".format(device_name))
 
     # Check the PCIe devices
     def check_pcie_devices(self):
@@ -83,6 +127,27 @@ class DaemonPcied(DaemonBase):
         else:
             self.update_state_db("PCIE_DEVICES", "status", "PASSED")
             self.log_info("PCIe device status check : PASSED")
+
+        # update AER-attributes to DB
+        for item in resultInfo:
+            if item["result"] == "Failed":
+                continue
+
+            Bus = item["bus"]
+            Dev = item["dev"]
+            Fn = item["fn"]
+            Id = item["id"]
+
+            # construct sysfs device path
+            device_path = "/sys/bus/pci/devices/0000:%s:%s.%s" % (Bus, Dev, Fn)
+            device = os.path.join(device_path, "device")
+
+            if not os.path.isfile(device):
+                continue
+
+            device_name = "0x%s|%s:%s.%s" % (Id, Bus, Dev, Fn)
+            pcie_dev_key = "PCIE_DEVICE|" + device_name
+            self.update_aer_to_statedb(device_path, device_name, pcie_dev_key)
 
     def read_state_db(self, key1, key2):
         return self.state_db.get('STATE_DB', key1, key2)
