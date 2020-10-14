@@ -110,7 +110,7 @@ class config_handling_task(ProcessTaskBase):
             (key, op, fvp) = sst.pop()
 
             if not key.startswith(ModuleBase.MODULE_TYPE_CONTROL) and not key.startswith(ModuleBase.MODULE_TYPE_LINE) and not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
-                self.logger.log_warning("Incorrect module-name {}. Should start with {} or {} or {}".format(ModuleBase.MODULE_TYPE_CONTROL, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC))
+                self.logger.log_warning("Incorrect module-name {}. Should start with {} or {} or {}".format(key, ModuleBase.MODULE_TYPE_CONTROL, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC))
                 continue
 
             fvp_dict = dict(fvp)
