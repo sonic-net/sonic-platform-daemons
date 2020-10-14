@@ -1,5 +1,5 @@
 STATE_DB = ''
-
+GLOBAL_STATE_DB = ''
 
 class Table:
     def __init__(self, db, table_name):

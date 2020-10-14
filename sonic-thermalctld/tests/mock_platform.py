@@ -104,6 +104,8 @@ class MockThermal:
     def __init__(self):
         self.name = None
         self.temperature = 2
+        self.minimum_temperature = 1
+        self.maximum_temperature = 5
         self.high_threshold = 3
         self.low_threshold = 1
         self.high_critical_threshold = 4
@@ -114,6 +116,12 @@ class MockThermal:
 
     def get_temperature(self):
         return self.temperature
+
+    def get_minimum_recorded(self):
+        return self.minimum_temperature
+
+    def get_maximum_recorded(self):
+        return self.maximum_temperature
 
     def get_high_threshold(self):
         return self.high_threshold
@@ -154,6 +162,9 @@ class MockChassis:
         self.psu_list = []
         self.thermal_list = []
         self.fan_drawer_list = []
+
+    def is_modular_chassis(self):
+        return False
 
     def get_all_fans(self):
         return self.fan_list
