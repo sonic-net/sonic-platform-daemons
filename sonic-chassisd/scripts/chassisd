@@ -2,8 +2,8 @@
 
 """
     chassisd
-    Linecard information update daemon for SONiC
-    This daemon will loop to collect Linecard related information and then write the information to state DB.
+    Module information update daemon for SONiC
+    This daemon will loop to collect all modules related information and then write the information to state DB.
     The loop interval is CHASSIS_INFO_UPDATE_PERIOD_SECS in seconds.
 """
 
@@ -15,7 +15,8 @@ try:
     import os
     from swsscommon import swsscommon
     from sonic_py_common import daemon_base, logger
-    from sonic_platform_base.card_base import CardBase
+    from sonic_platform_base.module_base import ModuleBase
+    from sonic_py_common.task_base import ProcessTaskBase
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
@@ -25,16 +26,18 @@ except ImportError, e:
 
 SYSLOG_IDENTIFIER = "chassisd"
 
+CHASSIS_CFG_TABLE = 'CHASSIS_MODULE'
+
 CHASSIS_INFO_TABLE = 'CHASSIS_TABLE'
 CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
-CHASSIS_INFO_CARD_NUM_FIELD = 'card_num'
+CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
 
 CHASSIS_MODULE_INFO_TABLE = 'CHASSIS_MODULE_TABLE'
 CHASSIS_MODULE_INFO_KEY_TEMPLATE = 'CHASSIS_MODULE {}'
-CHASSIS_MODULE_INFO_INSTANCE_FIELD = 'instance'
-CHASSIS_MODULE_INFO_TYPE_FIELD = 'type'
 CHASSIS_MODULE_INFO_NAME_FIELD = 'name'
-CHASSIS_MODULE_INFO_STATUS_FIELD = 'status'
+CHASSIS_MODULE_INFO_DESC_FIELD = 'desc'
+CHASSIS_MODULE_INFO_SLOT_FIELD = 'slot'
+CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = 'oper_status'
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
 
@@ -47,42 +50,40 @@ SELECT_TIMEOUT = 1000
 #
 # Helper functions =============================================================
 #
-info_dict_keys = [CHASSIS_MODULE_INFO_INSTANCE_FIELD,
-                  CHASSIS_MODULE_INFO_TYPE_FIELD,
-                  CHASSIS_MODULE_INFO_NAME_FIELD,
-                  CHASSIS_MODULE_INFO_STATUS_FIELD]
+info_dict_keys = [CHASSIS_MODULE_INFO_NAME_FIELD,
+                  CHASSIS_MODULE_INFO_DESC_FIELD,
+                  CHASSIS_MODULE_INFO_SLOT_FIELD,
+                  CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
-def get_card_info(card_index):
+def get_module_info(module_index):
     """
-    Retrieves card info of this card
+    Retrieves module info of this module
     """
-    card_info_dict = {}
-    card_info_dict = dict.fromkeys(info_dict_keys, 'N/A')
-    card_info_dict[CHASSIS_MODULE_INFO_INSTANCE_FIELD] = str(platform_chassis.get_card(card_index - 1).get_instance())
-    card_info_dict[CHASSIS_MODULE_INFO_TYPE_FIELD] = str(platform_chassis.get_card(card_index - 1).get_type_name())
-    card_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = str(platform_chassis.get_card(card_index - 1).get_name())
-    card_info_dict[CHASSIS_MODULE_INFO_STATUS_FIELD] = str(platform_chassis.get_card(card_index - 1).get_status())
-    return card_info_dict
+    module_info_dict = {}
+    module_info_dict = dict.fromkeys(info_dict_keys, 'N/A')
+    module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = str(platform_chassis.get_module(module_index - 1).get_name())
+    module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(platform_chassis.get_module(module_index - 1).get_description())
+    module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = str(platform_chassis.get_module(module_index - 1).get_slot())
+    module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(platform_chassis.get_module(module_index - 1).get_status())
+    return module_info_dict
 
-def card_db_update(card_tbl, num_cards):
-    for card_index in range(1, num_cards + 1):
-        card_info_dict = get_card_info(card_index)
-        if card_info_dict is not None:
-            fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_INSTANCE_FIELD, card_info_dict[CHASSIS_MODULE_INFO_INSTANCE_FIELD]),
-                                              (CHASSIS_MODULE_INFO_TYPE_FIELD, card_info_dict[CHASSIS_MODULE_INFO_TYPE_FIELD]),
-                                              (CHASSIS_MODULE_INFO_STATUS_FIELD, card_info_dict[CHASSIS_MODULE_INFO_STATUS_FIELD]),
-                                              (CHASSIS_MODULE_INFO_NAME_FIELD, card_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD])])
-            card_tbl.set(CHASSIS_MODULE_INFO_KEY_TEMPLATE.format(card_index), fvs)
+def module_db_update(config_tbl, module_tbl, num_modules):
+    for module_index in range(1, num_modules + 1):
+        module_info_dict = get_module_info(module_index)
+        if module_info_dict is not None:
+            fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
+                                              (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
+                                              (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD])])
+            module_tbl.set(module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD], fvs)
 
 #
 # Config Handling task ========================================================
 #
-class config_handling_task:
+class config_handling_task(ProcessTaskBase):
     def __init__(self):
-        self.task_thread = None
-        self.config_list = {}
-        self.task_stopping_event = threading.Event()
+        ProcessTaskBase.__init__(self)
 
+        # TODO: Refactor to eliminate the need for this Logger instance
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
 
     def task_worker(self):
@@ -90,7 +91,7 @@ class config_handling_task:
 
         #Subscribe to CHASSIS_MODULE table notifications in the Config DB
         sel = swsscommon.Select()
-        sst = swsscommon.SubscriberStateTable(config_db, 'CHASSIS_MODULE')
+        sst = swsscommon.SubscriberStateTable(config_db, CHASSIS_CFG_TABLE)
         sel.addSelectable(sst)
 
         # Listen indefinitely for changes to the CFG_CHASSIS_MODULE_TABLE table in the Config DB
@@ -108,47 +109,30 @@ class config_handling_task:
 
             (key, op, fvp) = sst.pop()
 
+            if not key.startswith(ModuleBase.MODULE_TYPE_CONTROL) and not key.startswith(ModuleBase.MODULE_TYPE_LINE) and not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
+                self.logger.log_warning("Incorrect module-name {}. Should start with {} or {} or {}".format(ModuleBase.MODULE_TYPE_CONTROL, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC))
+                continue
+
             fvp_dict = dict(fvp)
 
+            module_index = platform_chassis.get_module_index(key)
+
+            #Continue if the index is invalid
+            if module_index < 0:
+                self.logger.log_error("Unable to get module-index for key {} during op {}". format(key, op))
+                continue
+
             if op == "SET":
-                if (fvp_dict['module_type'] == 'LINE-CARD'):
-                    card_index = platform_chassis.get_card_index(fvp_dict['instance'], CardBase.MODULE_TYPE_LINE)
-                elif (fvp_dict['module_type'] == 'FABRIC-CARD'):
-                    card_index = platform_chassis.get_card_index(fvp_dict['instance'], CardBase.MODULE_TYPE_FABRIC)
-                else:
-                    continue
-
-                #Continue if the index is invalid
-                if card_index < 0:
-                    continue
-
-                config_fvs = {}
-                config_fvs['index'] = card_index
-                config_fvs['module_type'] = fvp_dict['module_type']
-                config_fvs['instance'] = fvp_dict['instance']
-                self.config_list[key] = config_fvs
-
-                #Setting the card to administratively down state
-                platform_chassis.get_card(card_index).set_admin_state(0)
+                #Setting the module to administratively down state
+                self.logger.log_info("Changing module {} to admin DOWN state".format(key))
+                platform_chassis.get_module(module_index).set_admin_state(0)
             elif op == "DEL":
-                config_fvs = self.config_list[key]
-                card_index = config_fvs['index']
-
-                #Setting the card to administratively up state
-                platform_chassis.get_card(card_index).set_admin_state(1)
+                #Setting the module to administratively up state
+                self.logger.log_info("Changing module {} to admin UP state".format(key))
+                platform_chassis.get_module(module_index).set_admin_state(1)
 
         return 1
 
-    def task_run(self):
-        if self.task_stopping_event.is_set():
-            return
-
-        self.task_thread = threading.Thread(target=self.task_worker)
-        self.task_thread.start()
-
-    def task_stop(self):
-        self.task_stopping_event.set()
-        self.task_thread.join()
 #
 # Daemon =======================================================================
 #
@@ -157,6 +141,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(ChassisdDaemon, self).__init__(log_identifier)
 
+        self.logger = logger.Logger(SYSLOG_IDENTIFIER)
         self.stop = threading.Event()
 
     # Signal handler
@@ -186,21 +171,25 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_error("Failed to load chassis due to {}".format(repr(e)))
             sys.exit(CHASSIS_LOAD_ERROR)
 
-        # Connect to STATE_DB and create chassis card/chassis info tables
+        # Connect to STATE_DB and create chassis module/chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
         chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        card_tbl = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
+        module_tbl = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
 
-        # Post number-of-cards info to STATE_DB
-        num_cards = platform_chassis.get_num_cards()
-        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_cards))])
+        # Connect to CONFIG_DB and check with chassis cfg table
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        config_tbl = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
+
+        # Post number-of-modules info to STATE_DB
+        num_modules = platform_chassis.get_num_modules()
+        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_modules))])
         chassis_tbl.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
 
-        if num_cards == 0:
-            self.log_error("Chassisd has no cards available")
+        if num_modules == 0:
+            self.log_error("Chassisd has no modules available")
 
-        #Start configuration handling task on control card
-        if platform_chassis.get_controlcard_instance() == platform_chassis.get_my_instance():
+        #Start configuration handling task on control module
+        if platform_chassis.get_controlcard_slot() == platform_chassis.get_my_slot():
             config_update = config_handling_task()
             config_update.task_run()
 
@@ -208,13 +197,16 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.log_info("Start daemon main loop")
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
-            card_db_update(card_tbl, num_cards)
+            module_db_update(config_tbl, module_tbl, num_modules)
 
         self.log_info("Stop daemon main loop")
 
+        if config_update is not None:
+            config_update.task_stop()
+
         # Delete all the information from DB and then exit
-        for card_index in range(1, num_cards + 1):
-            card_tbl._del(CHASSIS_MODULE_INFO_KEY_TEMPLATE.format(card_index))
+        for module_index in range(1, num_modules + 1):
+            module_tbl._del(CHASSIS_MODULE_INFO_KEY_TEMPLATE.format(module_index))
 
         chassis_tbl._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
