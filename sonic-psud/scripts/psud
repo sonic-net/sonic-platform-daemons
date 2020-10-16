@@ -14,7 +14,7 @@ try:
     import sys
     import threading
 
-    from sonic_py_common import daemon_base, logger
+    from sonic_py_common import daemon_base
     from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError (str(e) + " - required module not found")
