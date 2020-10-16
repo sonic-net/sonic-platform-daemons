@@ -149,15 +149,15 @@ def log_on_status_changed(logger, normal_status, normal_log, abnormal_log):
 #
 # PSU status ===================================================================
 #
+class PsuStatus(object):
+    def __init__(self, logger, psu):
 
-class PsuStatus(logger.Logger):
-    def __init__(self, psu, log_identifier):
-        super(PsuStatus, self).__init__(log_identifier)
         self.psu = psu
         self.presence = True
         self.power_good = True
         self.voltage_good = True
         self.temperature_good = True
+        self.logger = logger
 
     def set_presence(self, presence):
         """
@@ -186,7 +186,7 @@ class PsuStatus(logger.Logger):
     def set_voltage(self, voltage, high_threshold, low_threshold):
         if not voltage or not high_threshold or not low_threshold:
             if self.voltage_good is not True:
-                self.log_warning('PSU voltage or high_threshold or low_threshold become unavailable, '
+                self.logger.log_warning('PSU voltage or high_threshold or low_threshold become unavailable, '
                                    'voltage={}, high_threshold={}, low_threshold={}'.format(voltage, high_threshold, low_threshold))
                 self.voltage_good = True
             return False
@@ -201,7 +201,7 @@ class PsuStatus(logger.Logger):
     def set_temperature(self, temperature, high_threshold):
         if not temperature or not high_threshold:
             if self.temperature_good is not True:
-                self.log_warning('PSU temperature or high_threshold become unavailable, '
+                self.logger.log_warning('PSU temperature or high_threshold become unavailable, '
                                    'temperature={}, high_threshold={}'.format(temperature, high_threshold))
                 self.temperature_good = True
             return False
@@ -328,7 +328,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             power = try_get(psu.get_power)
 
         if index not in self.psu_status_dict:
-            self.psu_status_dict[index] = PsuStatus(psu, SYSLOG_IDENTIFIER)
+            self.psu_status_dict[index] = PsuStatus(self, psu)
 
         psu_status = self.psu_status_dict[index]
         set_led = False
