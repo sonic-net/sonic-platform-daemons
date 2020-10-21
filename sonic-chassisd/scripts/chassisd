@@ -183,10 +183,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
         module_tbl = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
 
-        # Connect to CONFIG_DB and check with chassis cfg table
-        config_db = daemon_base.db_connect("CONFIG_DB")
-        config_tbl = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
-
         # Post number-of-modules info to STATE_DB
         num_modules = platform_chassis.get_num_modules()
         fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_modules))])
