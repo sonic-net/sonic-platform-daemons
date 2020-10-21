@@ -9,10 +9,8 @@
 
 try:
     import sys
-    import time
     import signal
     import threading
-    import os
     from swsscommon import swsscommon
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.device_base import DeviceBase
@@ -114,7 +112,7 @@ class config_handling_task(ProcessTaskBase):
                 # Do not flood log when select times out
                 continue
             if state != swsscommon.Select.OBJECT:
-                self.logger.log_warning("sel.select() did not  return swsscommon.Select.OBJECT")
+                self.logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
                 continue
 
             (key, op, fvp) = sst.pop()
@@ -125,8 +123,6 @@ class config_handling_task(ProcessTaskBase):
                 (self.logger.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(\
                  ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC)))
                 continue
-
-            fvp_dict = dict(fvp)
 
             module_index = platform_chassis.get_module_index(key)
 
@@ -143,8 +139,6 @@ class config_handling_task(ProcessTaskBase):
                 #Setting the module to administratively up state
                 self.logger.log_info("Changing module {} to admin UP state".format(key))
                 platform_chassis.get_module(module_index).set_admin_state(1)
-
-        return 1
 
 #
 # Daemon =======================================================================
