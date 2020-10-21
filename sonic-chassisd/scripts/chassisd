@@ -15,6 +15,7 @@ try:
     import os
     from swsscommon import swsscommon
     from sonic_py_common import daemon_base, logger
+    from sonic_platform_base.device_base import DeviceBase
     from sonic_platform_base.module_base import ModuleBase
     from sonic_py_common.task_base import ProcessTaskBase
 except ImportError, e:
@@ -42,7 +43,7 @@ CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = 'oper_status'
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
 
 CHASSIS_LOAD_ERROR = 1
-CHASSIS_NOT_AVAIL = 2
+CHASSIS_NOT_SUPPORTED = 2
 
 platform_chassis = None
 
@@ -61,20 +62,29 @@ def get_module_info(module_index):
     """
     module_info_dict = {}
     module_info_dict = dict.fromkeys(info_dict_keys, 'N/A')
-    module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = str(platform_chassis.get_module(module_index - 1).get_name())
-    module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(platform_chassis.get_module(module_index - 1).get_description())
-    module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = str(platform_chassis.get_module(module_index - 1).get_slot())
-    module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(platform_chassis.get_module(module_index - 1).get_status())
+    module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = str(platform_chassis.get_module(module_index).get_name())
+    module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(platform_chassis.get_module(module_index).get_description())
+    module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = str(platform_chassis.get_module(module_index).get_slot())
+    module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(platform_chassis.get_module(module_index).get_status())
     return module_info_dict
 
-def module_db_update(config_tbl, module_tbl, num_modules):
-    for module_index in range(1, num_modules + 1):
+def module_db_update(logger, module_tbl, num_modules):
+    for module_index in range(0, num_modules):
         module_info_dict = get_module_info(module_index)
         if module_info_dict is not None:
+            key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
+
+            if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
+               not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
+               not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
+                (logger.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(\
+                 ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC)))
+                continue
+
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
                                               (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                               (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD])])
-            module_tbl.set(module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD], fvs)
+            module_tbl.set(key, fvs)
 
 #
 # Config Handling task ========================================================
@@ -109,8 +119,11 @@ class config_handling_task(ProcessTaskBase):
 
             (key, op, fvp) = sst.pop()
 
-            if not key.startswith(ModuleBase.MODULE_TYPE_CONTROL) and not key.startswith(ModuleBase.MODULE_TYPE_LINE) and not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
-                self.logger.log_warning("Incorrect module-name {}. Should start with {} or {} or {}".format(key, ModuleBase.MODULE_TYPE_CONTROL, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC))
+            if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
+               not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
+               not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
+                (self.logger.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(\
+                 ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC)))
                 continue
 
             fvp_dict = dict(fvp)
@@ -188,6 +201,10 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         if num_modules == 0:
             self.log_error("Chassisd has no modules available")
 
+        if platform_chassis.get_my_slot == DeviceBase.NotImplementedInt:
+            self.log_error("Chassisd not supported for this platform")
+            sys.exit(CHASSIS_NOT_SUPPORTED)
+
         #Start configuration handling task on control module
         if platform_chassis.get_controlcard_slot() == platform_chassis.get_my_slot():
             config_update = config_handling_task()
@@ -197,7 +214,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.log_info("Start daemon main loop")
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
-            module_db_update(config_tbl, module_tbl, num_modules)
+            module_db_update(self, module_tbl, num_modules)
 
         self.log_info("Stop daemon main loop")
 
