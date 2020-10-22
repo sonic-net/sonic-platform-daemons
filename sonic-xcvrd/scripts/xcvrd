@@ -1278,8 +1278,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update.task_run(self.sfp_error_event)
 
         # Start the Y-cable state info update process if Y cable presence established
+        y_cable_state_update = None
         if self.y_cable_presence:
-            y_cable_state_update = YCableTableUpdateTask()
+            y_cable_state_update = xcvrd_utilities.YCableTableUpdateTask()
             y_cable_state_update.task_run()
 
         # Start main loop
