@@ -7,13 +7,9 @@
 
 
 try:
-    import string
-    import sys
     import threading
-    import time
 
-    from enum import Enum
-    from sonic_py_common import daemon_base, device_info, logger
+    from sonic_py_common import daemon_base, logger
     from swsscommon import swsscommon
     from sonic_py_common import multi_asic
     from sonic_y_cable import y_cable
@@ -62,7 +58,7 @@ def update_tor_active_side(read_side, status, logical_port_name):
         #Now that mux has been toggled check to see if 
         #mux has indeed been toggled
         # might not be neccessary
-        active_side = y_cable.check_active_linked_tor_side(physical_port)
+        #active_side = y_cable.check_active_linked_tor_side(physical_port)
 
     else:
         '''
@@ -204,7 +200,7 @@ class YCableTableUpdateTask(object):
         # Get the namespaces in the platform
         sel = swsscommon.Select()
 
-        logical_port_list = platform_sfputil.logical
+        #logical_port_list = platform_sfputil.logical
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
@@ -238,6 +234,8 @@ class YCableTableUpdateTask(object):
 
             (port, op, fvp) = status_tbl[asic_id].pop()
             if fvp:
+                #Might need to check the presence of this Port
+                #in logical_port_list as well for coherency
                 if port not in y_cable_table_keys[asic_id]:
                     continue
 
@@ -264,7 +262,6 @@ class YCableTableUpdateTask(object):
                     else:
                         logger.log_warning("Got a change event on _MUX_TABLE that does not update the current status".format(logical_port_name))
 
-        return 1
 
     def task_stop(self):
         self.task_thread.join()
