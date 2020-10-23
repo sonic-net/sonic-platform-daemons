@@ -10,8 +10,19 @@ setup(
     url='https://github.com/Azure/sonic-platform-daemons',
     maintainer='Manju Prabhu',
     maintainer_email='manjunath.prabhu@nokia.com',
+    packages=[
+        'tests'
+    ],
     scripts=[
         'scripts/chassisd',
+    ],
+    setup_requires= [
+        'pytest-runner',
+        'wheel'
+    ],
+    tests_require = [
+        'pytest',
+        'mock>=2.0.0'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -26,4 +37,5 @@ setup(
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC chassis Chassis daemon chassisd',
+    test_suite='setup.get_test_suite'
 )
