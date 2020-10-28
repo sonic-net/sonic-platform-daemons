@@ -162,9 +162,7 @@ class MockChassis:
         self.psu_list = []
         self.thermal_list = []
         self.fan_drawer_list = []
-
-    def is_modular_chassis(self):
-        return False
+        self.is_chassis_system = False
 
     def get_all_fans(self):
         return self.fan_list
@@ -177,6 +175,9 @@ class MockChassis:
 
     def get_all_fan_drawers(self):
         return self.fan_drawer_list
+
+    def get_num_thermals(self):
+        return len(self.thermal_list)
 
     def make_absence_fan(self):
         fan = MockFan()
@@ -231,3 +232,14 @@ class MockChassis:
         thermal = MockErrorThermal()
         self.thermal_list.append(thermal)
 
+    def is_modular_chassis(self):
+        return self.is_chassis_system
+
+    def set_modular_chassis(self, is_true):
+        self.is_chassis_system = is_true
+
+    def set_my_slot(self, my_slot):
+        self.my_slot = my_slot
+
+    def get_my_slot(self):
+        return self.my_slot
