@@ -22,7 +22,8 @@ setup(
     ],
     tests_require = [
         'pytest',
-        'mock>=2.0.0'
+        'mock>=2.0.0',
+        'pytest-cov'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',

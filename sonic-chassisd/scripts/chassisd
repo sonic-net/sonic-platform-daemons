@@ -139,7 +139,9 @@ class ModuleUpdater(logger.Logger):
 
        self.chassis = chassis
        self.num_modules = chassis.get_num_modules()
+       # Connect to STATE_DB and create chassis info tables
        state_db = daemon_base.db_connect("STATE_DB")
+       self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
        self.module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
        self.info_dict_keys = [CHASSIS_MODULE_INFO_NAME_FIELD,
                               CHASSIS_MODULE_INFO_DESC_FIELD,
@@ -155,6 +157,20 @@ class ModuleUpdater(logger.Logger):
         for module_index in range(0, self.num_modules):
             name = try_get(self.chassis.get_module(module_index).get_name)
             self.module_table._del(name)
+
+        if self.chassis_table is not None:
+            self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+
+    def modules_num_update(self):
+        #Check if module list is populated
+        num_modules = self.chassis.get_num_modules()
+        if num_modules == 0:
+            self.log_error("Chassisd has no modules available")
+            return
+
+        # Post number-of-modules info to STATE_DB
+        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_modules))])
+        self.chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
 
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
@@ -272,18 +288,9 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_error("Failed to load chassis due to {}".format(repr(e)))
             sys.exit(CHASSIS_LOAD_ERROR)
 
-        # Connect to STATE_DB and create chassis info tables
-        state_db = daemon_base.db_connect("STATE_DB")
-        chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-
         #Check if module list is populated
-        num_modules = platform_chassis.get_num_modules()
-        if num_modules == 0:
-            self.log_error("Chassisd has no modules available")
-
-        # Post number-of-modules info to STATE_DB
-        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_CARD_NUM_FIELD, str(num_modules))])
-        chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
+        self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis)
+        self.module_updater.modules_num_update()
 
         #Check for valid slot numbers
         my_slot = try_get(platform_chassis.get_my_slot, default=INVALID_SLOT)
@@ -300,7 +307,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         # Start main loop
         self.log_info("Start daemon main loop")
 
-        self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis)
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
            self.module_updater.module_db_update()
 
@@ -311,7 +317,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Delete all the information from DB and then exit
         self.module_updater.deinit()
-        chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
         self.log_info("Shutting down...")
 

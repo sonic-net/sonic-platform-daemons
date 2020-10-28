@@ -27,6 +27,9 @@ CHASSIS_MODULE_INFO_DESC_FIELD = 'desc'
 CHASSIS_MODULE_INFO_SLOT_FIELD = 'slot'
 CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = 'oper_status'
 
+CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
+CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
+
 def setup_function():
     ModuleUpdater.log_notice = MagicMock()
     ModuleUpdater.log_warning = MagicMock()
@@ -127,6 +130,7 @@ def test_moduleupdater_check_deinit():
     chassis.module_list.append(module)
 
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.modules_num_update()
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
@@ -200,3 +204,28 @@ def test_configupdater_check_admin_state():
     admin_state = 1
     config_updater.module_config_update(name, admin_state)
     assert module.get_admin_state() == admin_state
+
+def test_configupdater_check_num_modules():
+    chassis = MockChassis()
+    index = 0
+    name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    slot = 1
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, name, desc, module_type, slot)
+
+    #No modules
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.modules_num_update()
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    assert fvs == None
+
+    #Add a module
+    chassis.module_list.append(module)
+    module_updater.modules_num_update()
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    assert chassis.get_num_modules() == int(fvs[CHASSIS_INFO_CARD_NUM_FIELD])
+
+    module_updater.deinit()
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    assert fvs == None
