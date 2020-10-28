@@ -26,7 +26,7 @@ except ImportError as e:
 
 try:
     from sonic_platform_base.device_base import DeviceBase
-except ImportError, e:
+except ImportError as e:
     from tests.mock_device_base import DeviceBase
 
 #
@@ -192,7 +192,7 @@ class PsuChassisInfo(logger.Logger):
                 continue
 
             name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
-            supplied_power = try_get(psu.get_maximum_supplied_power)
+            supplied_power = try_get(psu.get_maximum_supplied_power, 0.0)
             total_supplied_power = total_supplied_power + supplied_power
             fvs[dict_index] = (CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name), str(supplied_power))
             dict_index += 1
@@ -203,7 +203,7 @@ class PsuChassisInfo(logger.Logger):
                 continue
 
             name = try_get(power_consumer.get_name, 'FAN-DRAWER {}'.format(index))
-            fan_drawer_power = try_get(power_consumer.get_maximum_consumed_power, 0)
+            fan_drawer_power = try_get(power_consumer.get_maximum_consumed_power, 0.0)
             total_fan_consumed_power = total_fan_consumed_power + fan_drawer_power
             fvs[dict_index] = (CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name), str(fan_drawer_power))
             dict_index += 1
@@ -214,7 +214,7 @@ class PsuChassisInfo(logger.Logger):
                 continue
 
             name = try_get(power_consumer.get_name, 'MODULE {}'.format(index))
-            module_power = try_get(power_consumer.get_maximum_consumed_power, 0)
+            module_power = try_get(power_consumer.get_maximum_consumed_power, 0.0)
             total_module_consumed_power = total_module_consumed_power + module_power
             fvs[dict_index] = (CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name), str(module_power))
             dict_index += 1
@@ -246,7 +246,7 @@ class PsuChassisInfo(logger.Logger):
         try:
             try:
                 from sonic_platform.psu import Psu
-            except ImportError, e:
+            except ImportError as e:
                 from tests.mock_platform import MockPsu as Psu
 
             color = DeviceBase.STATUS_LED_COLOR_GREEN if master_status else DeviceBase.STATUS_LED_COLOR_RED

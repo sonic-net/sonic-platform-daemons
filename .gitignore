@@ -10,3 +10,4 @@
 
 # Compiled code which doesn't end in '.pyc'
 sonic-thermalctld/scripts/thermalctldc
+sonic-psud/scripts/psudc
