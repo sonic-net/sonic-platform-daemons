@@ -93,7 +93,7 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
     # Connect to CONFIG_DB and create port status table inside state_db
     config_db, state_db, port_tbl , y_cable_tbl= {}, {}, {}, {}
     port_table_keys = {}
-    state_db_created = False
+    state_db_y_cable_tbl_created = False
     platform_sfputil = platform_sfp
 
     # Get the namespaces in the platform
@@ -102,7 +102,7 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
-        port_table_keys[asic_id] = config_db[asic_id].get_keys("PORT")
+        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = platform_sfputil.logical
@@ -124,9 +124,9 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
 
             else:
                 # Convert list of tuples to a dictionary
-                mux_table_dict = dict(fvp)
+                mux_table_dict = dict(fvs)
                 if "mux_cable" in mux_table_dict:
-                    if state_db_created:
+                    if state_db_y_cable_created:
                         #fill in the newly found entry
                         update_port_mux_status_table(logical_port_name,y_cable_tbl[asic_index])
 
@@ -162,7 +162,7 @@ def delete_ports_status_for_y_cable():
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
         y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        y_cable_tbl_keys[asic_id] = state_db[asic_id].get_keys(swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = platform_sfputil.logical
