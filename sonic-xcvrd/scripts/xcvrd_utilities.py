@@ -1,5 +1,3 @@
-#!/usr/bin/env python2
-
 """
     xcvrd_utilities.py
     helper utlities configuring y_cable for xcvrd daemon
@@ -16,9 +14,6 @@ try:
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
-
-Y_CABLE_STATUS_TABLE = 'Y_CABLE'
-MUX_STATUS_TABLE = '_MUX_TABLE'
 
 platform_sfputil = None
 
@@ -84,8 +79,8 @@ def update_port_mux_status_table(logical_port_name, mux_config_tbl):
             status = 'STANDBY'
 
         fvs = swsscommon.FieldValuePairs([('status', status),
-                                          ('read_side', read_side),
-                                          ('active_side',active_side)])
+                                          ('read_side', str(read_side)),
+                                          ('active_side',str(active_side))])
         mux_config_tbl.set(logical_port_name, fvs)
     else:
         '''
@@ -143,7 +138,7 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
                         for namespace in namespaces:
                             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
                             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-                            y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_STATUS_TABLE)
+                            y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
                         # fill the newly found entry    
                         update_port_mux_status_table(logical_port_name,y_cable_tbl[asic_index])
                 else:
@@ -167,8 +162,8 @@ def delete_ports_status_for_y_cable():
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_STATUS_TABLE)
-        y_cable_tbl_keys[asic_id] = state_db[asic_id].get_keys(MUX_STATUS_TABLE)
+        y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        y_cable_tbl_keys[asic_id] = state_db[asic_id].get_keys(swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = platform_sfputil.logical
@@ -206,13 +201,13 @@ class YCableTableUpdateTask(object):
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             app_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            status_tbl[asic_id] = swsscommon.SubscriberStateTable(appl_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            status_tbl[asic_id] = swsscommon.SubscriberStateTable(appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_STATUS_TABLE)
+            y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
             sel.addSelectable(status_tbl[asic_id])
 
 
-        # Listen indefinitely for changes to the _MUX_TABLE table in the Application DB's
+        # Listen indefinitely for changes to the APP_MUX_CABLE_TABLE in the Application DB's
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
@@ -230,12 +225,12 @@ class YCableTableUpdateTask(object):
             # Get the corresponding namespace from redisselect db connector object
             namespace = redisSelectObj.getDbConnector().getNamespace()
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
-            y_cable_tbl_keys[asic_id] = state_db[asic_index].get_keys(MUX_STATUS_TABLE)
+            y_cable_tbl_keys[asic_id] = state_db[asic_index].get_keys(swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
             (port, op, fvp) = status_tbl[asic_id].pop()
             if fvp:
                 #Might need to check the presence of this Port
-                #in logical_port_list as well for coherency
+                #in logical_port_list but keep for now for coherency
                 if port not in y_cable_table_keys[asic_id]:
                     continue
 
