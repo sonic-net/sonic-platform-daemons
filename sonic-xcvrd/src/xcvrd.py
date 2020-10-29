@@ -1247,7 +1247,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         init_port_sfp_status_tbl(self.stop_event)
 
         # Init port y_cable status table
-        self.log_info("Init port sfp status table")
         self.y_cable_presence = y_cable_helper.init_port_status_for_y_cable(self.stop_event)
 
     # Deinitialize daemon
