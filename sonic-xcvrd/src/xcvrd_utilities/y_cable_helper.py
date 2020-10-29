@@ -133,7 +133,6 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
                     else:
                         #first create the db and then fill in the entry
                         state_db_y_cable_tbl_created = True
-                        state_db_created = True
                         namespaces = multi_asic.get_front_end_namespaces()
                         for namespace in namespaces:
                             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
