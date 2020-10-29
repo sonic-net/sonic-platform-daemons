@@ -20,6 +20,7 @@ try:
     from sonic_py_common import daemon_base, device_info, logger
     from swsscommon import swsscommon
     from sonic_py_common import multi_asic
+    from . import xcvrd_utilities
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
@@ -1108,6 +1109,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.num_asics = multi_asic.get_num_asics()
         self.stop_event = threading.Event()
         self.sfp_error_event = multiprocessing.Event()
+        self.y_cable_presence = False
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -1236,6 +1238,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Init port sfp status table")
         init_port_sfp_status_tbl(self.stop_event)
 
+        # Init port y_cable status table
+        self.log_info("Init port sfp status table")
+        self.y_cable_presence = xcvrd_utilities.init_port_status_for_y_cable(self.stop_event)
+
     # Deinitialize daemon
     def deinit(self):
         self.log_info("Start daemon deinit...")
@@ -1252,6 +1258,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             del_port_sfp_dom_info_from_db(logical_port_name, self.int_tbl[asic_index], self.dom_tbl[asic_index])
             delete_port_from_status_table(logical_port_name, self.status_tbl[asic_index])
 
+        if self.y_cable_presence:
+            xcvrd_utilities.delete_ports_status_for_y_cable()
+
+
     # Run daemon
     def run(self):
         self.log_info("Starting up...")
@@ -1267,6 +1277,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update = SfpStateUpdateTask()
         sfp_state_update.task_run(self.sfp_error_event)
 
+        # Start the Y-cable state info update process if Y cable presence established
+        y_cable_state_update = None
+        if self.y_cable_presence:
+            y_cable_state_update = xcvrd_utilities.YCableTableUpdateTask()
+            y_cable_state_update.task_run()
+
         # Start main loop
         self.log_info("Start daemon main loop")
 
@@ -1281,6 +1297,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Stop the sfp state info update process
         sfp_state_update.task_stop()
+
+        # Stop the Y-cable state info update process
+        if self.y_cable_presence:
+            y_cable_state_update.task_stop()
 
         # Start daemon deinitialization sequence
         self.deinit()
