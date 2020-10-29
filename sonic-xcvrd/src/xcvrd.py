@@ -18,8 +18,9 @@ try:
 
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
-    from . import xcvrd_utilities
     from swsscommon import swsscommon
+
+    from .xcvrd_utilities import y_cable_helper
 except ImportError, e:
     raise ImportError (str(e) + " - required module not found")
 
@@ -1247,7 +1248,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Init port y_cable status table
         self.log_info("Init port sfp status table")
-        self.y_cable_presence = xcvrd_utilities.init_port_status_for_y_cable(self.stop_event)
+        self.y_cable_presence = y_cable_helper.init_port_status_for_y_cable(self.stop_event)
 
     # Deinitialize daemon
     def deinit(self):
@@ -1266,7 +1267,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             delete_port_from_status_table(logical_port_name, self.status_tbl[asic_index])
 
         if self.y_cable_presence:
-            xcvrd_utilities.delete_ports_status_for_y_cable()
+            y_cable_helper.delete_ports_status_for_y_cable()
 
 
     # Run daemon
@@ -1287,7 +1288,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the Y-cable state info update process if Y cable presence established
         y_cable_state_update = None
         if self.y_cable_presence:
-            y_cable_state_update = xcvrd_utilities.YCableTableUpdateTask()
+            y_cable_state_update = y_cable_helper.YCableTableUpdateTask()
             y_cable_state_update.task_run()
 
         # Start main loop
@@ -1321,6 +1322,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 
+#This is our main entry point for xcvrd script
 def main():
     xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
     xcvrd.run()

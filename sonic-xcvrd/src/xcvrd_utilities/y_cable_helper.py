@@ -1,8 +1,7 @@
 """
-    xcvrd_utilities.py
+    y_cable_helper.py
     helper utlities configuring y_cable for xcvrd daemon
 """
-
 
 try:
     import threading
