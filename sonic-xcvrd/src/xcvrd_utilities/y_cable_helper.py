@@ -126,12 +126,13 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
                 # Convert list of tuples to a dictionary
                 mux_table_dict = dict(fvs)
                 if "mux_cable" in mux_table_dict:
-                    if state_db_y_cable_created:
+                    if state_db_y_cable_tbl_created is True:
                         #fill in the newly found entry
                         update_port_mux_status_table(logical_port_name,y_cable_tbl[asic_index])
 
                     else:
                         #first create the db and then fill in the entry
+                        state_db_y_cable_tbl_created = True
                         state_db_created = True
                         namespaces = multi_asic.get_front_end_namespaces()
                         for namespace in namespaces:
@@ -140,8 +141,6 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
                             y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
                         # fill the newly found entry    
                         update_port_mux_status_table(logical_port_name,y_cable_tbl[asic_index])
-                else:
-                    logger.log_info("Port is not connected on a Y cable")
 
         else:
             ''' This port does not exist in Port table of config but is present inside
@@ -150,7 +149,7 @@ def init_ports_status_for_y_cable(platform_sfp, stop_event=threading.Event()):
             '''
             logger.log_warning("Could not retreive port inside config_db PORT table ".format(logical_port_name))
 
-    return state_db_created                
+    return state_db_y_cable_tbl_created
 
 
 def delete_ports_status_for_y_cable():
