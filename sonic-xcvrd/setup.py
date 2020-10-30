@@ -10,7 +10,7 @@ setup(
     url = 'https://github.com/Azure/sonic-platform-daemons',
     maintainer = 'Kebo Liu',
     maintainer_email = 'kebol@mellanox.com',
-    entry_points={
+    entry_points = {
         'console_scripts': [
             'xcvrd = src.xcvrd:main',
         ]
