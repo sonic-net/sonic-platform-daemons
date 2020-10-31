@@ -1117,7 +1117,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.num_asics = multi_asic.get_num_asics()
         self.stop_event = threading.Event()
         self.sfp_error_event = multiprocessing.Event()
-        self.y_cable_presence = False
+        self.y_cable_presence = [False]
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -1247,7 +1247,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         init_port_sfp_status_tbl(self.stop_event)
 
         # Init port y_cable status table
-        self.y_cable_presence = y_cable_helper.init_port_status_for_y_cable(self.stop_event)
+        y_cable_helper.init_ports_status_for_y_cable(platform_sfputil, platform_chassis, self.y_cable_presence, self.stop_event)
 
     # Deinitialize daemon
     def deinit(self):
@@ -1265,7 +1265,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             del_port_sfp_dom_info_from_db(logical_port_name, self.int_tbl[asic_index], self.dom_tbl[asic_index])
             delete_port_from_status_table(logical_port_name, self.status_tbl[asic_index])
 
-        if self.y_cable_presence:
+        if self.y_cable_presence[0] is True:
             y_cable_helper.delete_ports_status_for_y_cable()
 
 
@@ -1286,7 +1286,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start the Y-cable state info update process if Y cable presence established
         y_cable_state_update = None
-        if self.y_cable_presence:
+        if self.y_cable_presence[0] is True:
             y_cable_state_update = y_cable_helper.YCableTableUpdateTask()
             y_cable_state_update.task_run()
 
@@ -1306,7 +1306,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update.task_stop()
 
         # Stop the Y-cable state info update process
-        if self.y_cable_presence:
+        if self.y_cable_presence[0] is True:
             y_cable_state_update.task_stop()
 
         # Start daemon deinitialization sequence
