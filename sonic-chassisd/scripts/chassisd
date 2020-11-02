@@ -108,8 +108,9 @@ class ModuleConfigUpdater(logger.Logger):
         if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
            not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
            not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
-            (self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,\
-             ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC)))
+            self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
+                           ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE,
+                           ModuleBase.MODULE_TYPE_FABRIC))
             return
 
         module_index = try_get(self.chassis.get_module_index, key, default=INVALID_MODULE_INDEX)
@@ -121,8 +122,8 @@ class ModuleConfigUpdater(logger.Logger):
 
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             #Setting the module to administratively up/down state
-            (self.log_info("Changing module {} to admin {} state".format(key,
-             'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP')))
+            self.log_info("Changing module {} to admin {} state".format(key,
+                          'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
             try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
 
 #
@@ -181,8 +182,9 @@ class ModuleUpdater(logger.Logger):
                 if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
                    not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
                    not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
-                    (self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
-                     ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE, ModuleBase.MODULE_TYPE_FABRIC)))
+                    self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
+                                   ModuleBase.MODULE_TYPE_SUPERVISOR, ModuleBase.MODULE_TYPE_LINE,
+                                   ModuleBase.MODULE_TYPE_FABRIC))
                     continue
 
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
