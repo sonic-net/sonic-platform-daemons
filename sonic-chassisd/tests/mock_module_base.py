@@ -1,4 +1,7 @@
 class ModuleBase():
+    # Invalid slot for modular chassis
+    MODULE_INVALID_SLOT = -1
+
     # Possible card types
     MODULE_TYPE_SUPERVISOR = "SUPERVISOR"
     MODULE_TYPE_LINE    = "LINE-CARD"

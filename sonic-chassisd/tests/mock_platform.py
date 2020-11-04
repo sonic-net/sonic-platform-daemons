@@ -40,10 +40,10 @@ class MockModule(MockDevice):
     def get_slot(self):
         return self.hw_slot
 
-    def get_status(self):
+    def get_oper_status(self):
         return self.module_status
 
-    def set_status(self, status):
+    def set_oper_status(self, status):
         self.module_status = status
 
     def set_admin_state(self, up):

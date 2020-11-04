@@ -8,8 +8,8 @@
 """
 
 try:
-    import sys
     import signal
+    import sys
     import threading
 
     from sonic_py_common import daemon_base, logger
@@ -201,7 +201,7 @@ class ModuleUpdater(logger.Logger):
         name = try_get(self.chassis.get_module(module_index).get_name)
         desc = try_get(self.chassis.get_module(module_index).get_description)
         slot = try_get(self.chassis.get_module(module_index).get_slot, default=INVALID_SLOT)
-        status = try_get(self.chassis.get_module(module_index).get_status, default=ModuleBase.MODULE_STATUS_OFFLINE)
+        status = try_get(self.chassis.get_module(module_index).get_oper_status, default=ModuleBase.MODULE_STATUS_OFFLINE)
 
         module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = name
         module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(desc)

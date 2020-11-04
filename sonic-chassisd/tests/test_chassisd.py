@@ -51,7 +51,7 @@ def test_moduleupdater_check_valid_fields():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
 
     chassis.module_list.append(module)
 
@@ -73,7 +73,7 @@ def test_moduleupdater_check_invalid_name():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_PRESENT
-    module.set_status(status)
+    module.set_oper_status(status)
 
     chassis.module_list.append(module)
 
@@ -93,7 +93,7 @@ def test_moduleupdater_check_status_update():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     chassis.module_list.append(module)
 
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis)
@@ -104,7 +104,7 @@ def test_moduleupdater_check_status_update():
 
     #Update status
     status = ModuleBase.MODULE_STATUS_OFFLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     fvs = module_updater.module_table.get(name)
     print('Not updated DB-entry {}'.format(fvs))
     assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
@@ -126,7 +126,7 @@ def test_moduleupdater_check_deinit():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     chassis.module_list.append(module)
 
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis)
@@ -151,7 +151,7 @@ def test_configupdater_check_valid_names():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     chassis.module_list.append(module)
 
     config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
@@ -172,7 +172,7 @@ def test_configupdater_check_valid_index():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     chassis.module_list.append(module)
 
     config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
@@ -193,7 +193,7 @@ def test_configupdater_check_admin_state():
 
     #Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_status(status)
+    module.set_oper_status(status)
     chassis.module_list.append(module)
 
     config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
