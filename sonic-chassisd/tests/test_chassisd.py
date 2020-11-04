@@ -49,7 +49,7 @@ def test_moduleupdater_check_valid_fields():
     module_type = ModuleBase.MODULE_TYPE_FABRIC
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
 
@@ -71,7 +71,7 @@ def test_moduleupdater_check_invalid_name():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_PRESENT
     module.set_oper_status(status)
 
@@ -91,7 +91,7 @@ def test_moduleupdater_check_status_update():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -102,14 +102,14 @@ def test_moduleupdater_check_status_update():
     print('Initial DB-entry {}'.format(fvs))
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
-    #Update status
+    # Update status
     status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
     fvs = module_updater.module_table.get(name)
     print('Not updated DB-entry {}'.format(fvs))
     assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
-    #Update status and db
+    # Update status and db
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     print('Updated DB-entry {}'.format(fvs))
@@ -124,7 +124,7 @@ def test_moduleupdater_check_deinit():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -149,7 +149,7 @@ def test_configupdater_check_valid_names():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -158,7 +158,7 @@ def test_configupdater_check_valid_names():
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
-    #No change since invalid key
+    # No change since invalid key
     assert module.get_admin_state() != admin_state
 
 def test_configupdater_check_valid_index():
@@ -170,7 +170,7 @@ def test_configupdater_check_valid_index():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -179,7 +179,7 @@ def test_configupdater_check_valid_index():
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
-    #No change since invalid index
+    # No change since invalid index
     assert module.get_admin_state() != admin_state
 
 def test_configupdater_check_admin_state():
@@ -191,7 +191,7 @@ def test_configupdater_check_admin_state():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #Set initial state
+    # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -214,13 +214,13 @@ def test_configupdater_check_num_modules():
     module_type = ModuleBase.MODULE_TYPE_LINE
     module = MockModule(index, name, desc, module_type, slot)
 
-    #No modules
+    # No modules
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.modules_num_update()
     fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     assert fvs == None
 
-    #Add a module
+    # Add a module
     chassis.module_list.append(module)
     module_updater.modules_num_update()
     fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
