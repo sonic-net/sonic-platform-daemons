@@ -23,9 +23,28 @@ SYSLOG_IDENTIFIER = "y_cable_helper"
 
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
+
+# SFP status definition, shall be aligned with the definition in get_change_event() of ChassisBase
+SFP_STATUS_REMOVED = '0'
+SFP_STATUS_INSERTED = '1'
+
+# SFP error codes, stored as strings. Can add more as needed.
+SFP_STATUS_ERR_I2C_STUCK = '2'
+SFP_STATUS_ERR_BAD_EEPROM = '3'
+SFP_STATUS_ERR_UNSUPPORTED_CABLE = '4'
+SFP_STATUS_ERR_HIGH_TEMP = '5'
+SFP_STATUS_ERR_BAD_CABLE = '6'
+
+# Store the error codes in a set for convenience
+errors_block_eeprom_reading = {
+    SFP_STATUS_ERR_I2C_STUCK,
+    SFP_STATUS_ERR_BAD_EEPROM,
+    SFP_STATUS_ERR_UNSUPPORTED_CABLE,
+    SFP_STATUS_ERR_HIGH_TEMP,
+    SFP_STATUS_ERR_BAD_CABLE
+}
+
 # Find out the underneath physical port list by logical name
-
-
 def logical_port_name_to_physical_port_list(port_name):
     if port_name.startswith("Ethernet"):
         if y_cable_platform_sfputil.is_logical_port(port_name):
@@ -133,7 +152,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
         if "mux_cable" in mux_table_dict:
-            if y_cable_presence[0] is True:
+            y_cable_asic_table = y_cable_tbl.get("asic_index", None)
+            if y_cable_presence[0] is True and y_cable_asic_table is not None:
                 # fill in the newly found entry
                 update_port_mux_status_table(
                     logical_port_name, y_cable_tbl[asic_index])
@@ -155,6 +175,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
 
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
+
+    y_cable_tbl = {}
 
     # if there is No Y cable do not do anything here
     if y_cable_presence[0] is False:
@@ -180,10 +202,10 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "STATE_DB", namespace)
                     y_cable_tbl[asic_id] = swsscommon.Table(
                         state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                delete_change_event[:] = [True]
                 # fill the newly found entry
                 delete_port_from_y_cable_table(
-                    physical_port, y_cable_tbl[asic_index])
+                    logical_port_name, y_cable_tbl[asic_index])
+                delete_change_event[:] = [True]
 
 
 def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event()):
@@ -267,7 +289,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                         state_db, port_tbl, y_cable_tbl, asic_index, logical_port_name, y_cable_presence)
                 elif value == SFP_STATUS_REMOVED or value in errors_block_eeprom_reading:
                     check_identifier_presence_and_delete_mux_table_entry(
-                        state_db, port_tbl, y_cable_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                        state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
 
                 else:
                     # SFP return unkown event, just ignore for now.
@@ -283,7 +305,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                 namespace)
             y_cable_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            y_cable_table_size = len(y_cable_tbl[asic_id].get_Keys())
+            y_cable_table_size = len(y_cable_tbl[asic_id].getKeys())
             if y_cable_table_size > 0:
                 y_cable_presence[:] = [True]
                 break
@@ -314,7 +336,7 @@ def delete_ports_status_for_y_cable():
 
         if logical_port_name in y_cable_tbl_keys[asic_index]:
             delete_port_from_y_cable_table(
-                physical_port, y_cable_tbl[asic_index])
+                logical_port_name, y_cable_tbl[asic_index])
 
 
 # Thread wrapper class to update y_cable status periodically

@@ -869,7 +869,7 @@ class SfpStateUpdateTask(object):
         helper_logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
         return event
 
-    def task_worker(self, stopping_event, sfp_error_event):
+    def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
         helper_logger.log_info("Start SFP monitoring loop")
 
         transceiver_dict = {}
@@ -1057,6 +1057,9 @@ class SfpStateUpdateTask(object):
                                 # SFP return unkown event, just ignore for now.
                                 helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                                 continue
+
+                    #Since ports could be connected to a mux cable, if there is a change event process the change      
+                    y_cable_helper.change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, stopping_event)      
                 else:
                     next_state = STATE_EXIT
             elif event == SYSTEM_FAIL:
@@ -1094,11 +1097,11 @@ class SfpStateUpdateTask(object):
 
         helper_logger.log_info("Stop SFP monitoring loop")
 
-    def task_run(self, sfp_error_event):
+    def task_run(self, sfp_error_event, y_cable_presence):
         if self.task_stopping_event.is_set():
             return
 
-        self.task_process = multiprocessing.Process(target=self.task_worker,args=(self.task_stopping_event, sfp_error_event))
+        self.task_process = multiprocessing.Process(target=self.task_worker,args=(self.task_stopping_event, sfp_error_event, y_cable_presence))
         self.task_process.start()
 
     def task_stop(self):
@@ -1282,7 +1285,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start the sfp state info update process
         sfp_state_update = SfpStateUpdateTask()
-        sfp_state_update.task_run(self.sfp_error_event)
+        sfp_state_update.task_run(self.sfp_error_event, self.y_cable_presence)
 
         # Start the Y-cable state info update process if Y cable presence established
         y_cable_state_update = None
