@@ -16,6 +16,7 @@ try:
     import threading
     import time
 
+    from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
@@ -47,21 +48,13 @@ XCVRD_MAIN_THREAD_SLEEP_SECS = 60
 SFP_STATUS_REMOVED = '0'
 SFP_STATUS_INSERTED = '1'
 
-# SFP error codes, stored as strings. Can add more as needed.
-SFP_STATUS_ERR_I2C_STUCK = '2'
-SFP_STATUS_ERR_BAD_EEPROM = '3'
-SFP_STATUS_ERR_UNSUPPORTED_CABLE = '4'
-SFP_STATUS_ERR_HIGH_TEMP = '5'
-SFP_STATUS_ERR_BAD_CABLE = '6'
+# SFP error code enum, new elements can be added to the enum if new errors need to be supported.
+SFP_STATUS_ERR_ENUM = Enum('SFP_STATUS_ERR_ENUM', ['SFP_STATUS_ERR_I2C_STUCK', 'SFP_STATUS_ERR_BAD_EEPROM', 
+                                                  'SFP_STATUS_ERR_UNSUPPORTED_CABLE', 'SFP_STATUS_ERR_HIGH_TEMP',
+                                                  'SFP_STATUS_ERR_BAD_CABLE'], start=2)
 
-# Store the error codes in a set for convenience
-errors_block_eeprom_reading = {
-    SFP_STATUS_ERR_I2C_STUCK,
-    SFP_STATUS_ERR_BAD_EEPROM,
-    SFP_STATUS_ERR_UNSUPPORTED_CABLE,
-    SFP_STATUS_ERR_HIGH_TEMP,
-    SFP_STATUS_ERR_BAD_CABLE
-}
+# Convert the error code to string and store them in a set for convenience
+errors_block_eeprom_reading = set(str(error_code.value) for error_code in SFP_STATUS_ERR_ENUM)
 
 EVENT_ON_ALL_SFP = '-1'
 # events definition
@@ -792,9 +785,6 @@ class DomInfoUpdateTask(object):
         self.task_thread = None
         self.task_stopping_event = threading.Event()
 
-        # Load the namespace details first from the database_global.json file.
-        swsscommon.SonicDBConfig.initializeGlobalConfig()
-
     def task_worker(self):
         helper_logger.log_info("Start DOM monitoring loop")
 
@@ -841,9 +831,6 @@ class SfpStateUpdateTask(object):
     def __init__(self):
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
-
-        # Load the namespace details first from the database_global.json file.
-        swsscommon.SonicDBConfig.initializeGlobalConfig()
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -1201,8 +1188,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 self.log_error("Failed to load sfputil: %s" % (str(e)), True)
                 sys.exit(SFPUTIL_LOAD_ERROR)
 
-        # Load the namespace details first from the database_global.json file.
-        swsscommon.SonicDBConfig.initializeGlobalConfig()
+        if multi_asic.is_multi_asic():
+            # Load the namespace details first from the database_global.json file.
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
 
         # Load port info
         try:
