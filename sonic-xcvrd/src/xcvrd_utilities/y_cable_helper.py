@@ -142,12 +142,12 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
                     "Error: Could not get active side for mux cable port probe failed {}".format(logical_port_name))
                 return
 
-            if read_side == active_side:
+            if read_side == active_side and (active_side == 1 or active_side == 2):
                 status = 'active'
-            elif active_side == 0:
-                status = 'inactive'
-            else:
+            elif read_side != active_side and (active_side == 1 or active_side == 2):
                 status = 'standby'
+            else:
+                status = 'inactive'
 
 
             fvs = swsscommon.FieldValuePairs([('status', status)])
