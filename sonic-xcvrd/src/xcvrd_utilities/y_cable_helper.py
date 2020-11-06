@@ -118,17 +118,29 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             status = None
             y_cable_response_tbl = {}
             read_side = y_cable.check_read_side(physical_port)
+            y_cable_response_tbl[asic_index] = swsscommon.Table(
+                appl_db[asic_index], "MUX_CABLE_RESPONSE_TABLE")
 
             if not read_side:
-                status = 'Failed'
+                status = 'failure'
+
+                fvs = swsscommon.FieldValuePairs([('status', status)])
+                y_cable_response_tbl[asic_index].set(logical_port_name, fvs)
+
                 helper_logger.log_warning(
                     "Error: Could not get read side for mux cable port probe failed {}".format(logical_port_name))
+                return
 
             active_side = y_cable.check_active_linked_tor_side(physical_port)
             if not active_side:
-                status = 'Failed'
+                status = 'failure'
+
+                fvs = swsscommon.FieldValuePairs([('status', status)])
+                y_cable_response_tbl[asic_index].set(logical_port_name, fvs)
+
                 helper_logger.log_warning(
                     "Error: Could not get active side for mux cable port probe failed {}".format(logical_port_name))
+                return
 
             if read_side == active_side:
                 status = 'active'
@@ -137,8 +149,6 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             else:
                 status = 'standby'
 
-            y_cable_response_tbl[asic_index] = swsscommon.Table(
-                appl_db[asic_index], "MUX_CABLE_RESPONSE_TABLE")
 
             fvs = swsscommon.FieldValuePairs([('status', status)])
 
