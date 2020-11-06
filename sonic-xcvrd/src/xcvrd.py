@@ -1045,7 +1045,7 @@ class SfpStateUpdateTask(object):
                                 helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                                 continue
 
-                    #Since ports could be connected to a mux cable, if there is a change event process the change      
+                    # Since ports could be connected to a mux cable, if there is a change event process the change for being on a Y cable Port
                     y_cable_helper.change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, stopping_event)      
                 else:
                     next_state = STATE_EXIT
@@ -1312,7 +1312,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 
-#This is our main entry point for xcvrd script
+# This is our main entry point for xcvrd script
 def main():
     xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
     xcvrd.run()
