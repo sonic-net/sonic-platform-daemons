@@ -119,7 +119,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             y_cable_response_tbl = {}
             read_side = y_cable.check_read_side(physical_port)
             y_cable_response_tbl[asic_index] = swsscommon.Table(
-                appl_db[asic_index], "MUX_CABLE_RESPONSE_TABLE")
+                appl_db[asic_index], swsscommon.APP_MUX_CABLE_RESPONSE_TABLE_NAME)
 
             if not read_side:
                 status = 'failure'
@@ -422,7 +422,7 @@ class YCableTableUpdateTask(object):
             status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
             mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "MUX_CABLE_COMMAND_TABLE")
+                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             y_cable_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
