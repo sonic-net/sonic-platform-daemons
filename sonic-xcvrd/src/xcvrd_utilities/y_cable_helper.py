@@ -92,11 +92,11 @@ def update_tor_active_side(read_side, status, logical_port_name):
                 y_cable.toggle_mux_to_torA(physical_port)
                 return 1
 
-        # Now that mux has been toggled check to see if
-        # mux has indeed been toggled
-        # might not be neccessary
-        #active_side = y_cable.check_active_linked_tor_side(physical_port)
-
+        ''' TODO: Now that mux has been issued a command for toggle, check to see if
+            mux has indeed been toggled
+            This check might not be neccessary
+            active_side = y_cable.check_active_linked_tor_side(physical_port)
+        '''
     else:
         '''
            Y cable ports should always have
