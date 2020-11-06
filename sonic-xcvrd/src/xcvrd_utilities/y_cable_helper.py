@@ -16,7 +16,7 @@ except ImportError, e:
 
 SELECT_TIMEOUT = 1000
 
-y_cable_y_cable_platform_sfputil = None
+y_cable_platform_sfputil = None
 y_cable_platform_chassis = None
 
 SYSLOG_IDENTIFIER = "y_cable_helper"
@@ -62,7 +62,7 @@ def _wrapper_get_presence(physical_port):
             return y_cable_platform_chassis.get_sfp(physical_port).get_presence()
         except NotImplementedError:
             pass
-    return y_cable_y_cable_platform_sfputil.get_presence(physical_port)
+    return y_cable_platform_sfputil.get_presence(physical_port)
 
 
 # Delete port from Y cable status table
