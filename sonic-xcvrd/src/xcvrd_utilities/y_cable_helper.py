@@ -92,16 +92,11 @@ def update_tor_active_side(read_side, status, logical_port_name):
                 y_cable.toggle_mux_to_torA(physical_port)
                 return 1
 
-        ''' TODO: Now that mux has been issued a command for toggle, check to see if
-            mux has indeed been toggled
-            This check might not be neccessary
-            active_side = y_cable.check_active_linked_tor_side(physical_port)
-        '''
+        # TODO: Should we confirm that the mux was indeed toggled?
     else:
-        '''
-           Y cable ports should always have
-           one to one mapping of physical-to-logical
-           This should not happen'''
+        # Y cable ports should always have
+        # one to one mapping of physical-to-logical
+        # This should not happen
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable table".format(logical_port_name))
         return -1
@@ -157,10 +152,9 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             helper_logger.log_warning(
                 "Error: Could not establish presence for  Y cable port {}".format(logical_port_name))
     else:
-        '''
-        Y cable ports should always have
-        one to one mapping of physical-to-logical
-        This should not happen'''
+        # Y cable ports should always have
+        # one to one mapping of physical-to-logical
+        # This should not happen
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable port {}".format(logical_port_name))
 
@@ -189,10 +183,9 @@ def update_statedb_port_mux_status_table(logical_port_name, mux_config_tbl):
             helper_logger.log_warning(
                 "Error: Could not establish presence for  Y cable port {}".format(logical_port_name))
     else:
-        '''
-        Y cable ports should always have
-        one to one mapping of physical-to-logical
-        This should not happen'''
+        # Y cable ports should always have
+        # one to one mapping of physical-to-logical
+        # This should not happen
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable port {}".format(logical_port_name))
 
@@ -301,10 +294,9 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             check_identifier_presence_and_update_mux_table_entry(
                 state_db, port_tbl, y_cable_tbl, asic_index, logical_port_name, y_cable_presence)
         else:
-            ''' This port does not exist in Port table of config but is present inside
-                logical_ports after loading the port_mappings from port_config_file
-                This should not happen
-            '''
+            # This port does not exist in Port table of config but is present inside
+            # logical_ports after loading the port_mappings from port_config_file
+            # This should not happen
             helper_logger.log_warning(
                 "Could not retreive port inside config_db PORT table ".format(logical_port_name))
 
@@ -453,9 +445,9 @@ class YCableTableUpdateTask(object):
 
             (port, op, fvp) = status_tbl[asic_index].pop()
             if fvp:
-                # This check might not be  need to check, the presence of this Port in keys
+                # This check might be redundant, to check, the presence of this Port in keys
                 # in logical_port_list but keep for now for coherency
-                # also skip checking in logical_port_list
+                # also skip checking in logical_port_list inside sfp_util
                 if port not in y_cable_tbl_keys[asic_index]:
                     continue
 
