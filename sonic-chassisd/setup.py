@@ -1,20 +1,20 @@
 from setuptools import setup
 
 setup(
-    name='sonic-psud',
+    name='sonic-chassisd',
     version='1.0',
-    description='PSU daemon for SONiC',
+    description='Chassis daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Kevin Wang',
-    maintainer_email='kevinw@mellanox.com',
+    maintainer='Manju Prabhu',
+    maintainer_email='manjunath.prabhu@nokia.com',
     packages=[
         'tests'
     ],
     scripts=[
-        'scripts/psud',
+        'scripts/chassisd',
     ],
     setup_requires= [
         'pytest-runner',
@@ -37,6 +37,6 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC psu PSU daemon psud PSUD',
+    keywords='sonic SONiC chassis Chassis daemon chassisd',
     test_suite='setup.get_test_suite'
 )
