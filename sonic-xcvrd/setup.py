@@ -11,7 +11,7 @@ setup(
     maintainer = 'Kebo Liu',
     maintainer_email = 'kebol@mellanox.com',
     packages = find_packages()
-    entry_points = {
+    entry_points={
         'console_scripts': [
             'xcvrd = xcvrd.xcvrd:main',
         ]
