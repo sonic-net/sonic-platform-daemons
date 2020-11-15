@@ -244,9 +244,12 @@ class PsuChassisInfo(logger.Logger):
     def _set_psu_master_led(self, master_status):
         try:
             try:
-                from sonic_platform.psu import Psu
+                if os.environ["PSUD_UNIT_TESTING"] == "1":
+                    from tests.mock_platform import MockPsu as Psu
+                else:
+                    from sonic_platform.psu import Psu
             except ImportError as e:
-                from tests.mock_platform import MockPsu as Psu
+                raise ImportError (str(e) + " - required module not found")
 
             color = DeviceBase.STATUS_LED_COLOR_GREEN if master_status else DeviceBase.STATUS_LED_COLOR_RED
             Psu.set_status_master_led(color)
