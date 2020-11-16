@@ -1,5 +1,5 @@
 STATE_DB = ''
-CHASSIS_STATE_DB = ''
+
 
 class Table:
     def __init__(self, db, table_name):
@@ -18,9 +18,6 @@ class Table:
         if key in self.mock_dict:
             return self.mock_dict[key]
         return None
-
-    def get_size(self):
-        return (len(self.mock_dict))
 
 class FieldValuePairs:
     def __init__(self, fvs):

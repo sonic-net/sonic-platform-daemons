@@ -1,5 +1,5 @@
 STATE_DB = ''
-CHASSIS_STATE_DB = ''
+
 
 class Table:
     def __init__(self, db, table_name):
@@ -19,10 +19,9 @@ class Table:
             return self.mock_dict[key]
         return None
 
-    def get_size(self):
-        return (len(self.mock_dict))
+class FieldValuePairs(dict):
+    def __init__(self, len):
+        self.fv_dict = {}
 
-class FieldValuePairs:
-    def __init__(self, fvs):
-        self.fv_dict = dict(fvs)
-        pass
+    def __setitem__(self, key, val_tuple):
+        self.fv_dict[val_tuple[0]] = val_tuple[1]

@@ -6,6 +6,7 @@
 """
 
 try:
+    import os
     import signal
     import threading
     import time
@@ -13,18 +14,21 @@ try:
 
     from sonic_py_common import daemon_base, logger
     from sonic_py_common.task_base import ProcessTaskBase
+
+    # If unit testing is occurring, mock swsscommon
+    if os.environ["THERMALCTLD_UNIT_TESTING"] == "1":
+        from tests import mock_swsscommon as swsscommon
+    else:
+        from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError(repr(e) + " - required module not found")
 
-try:
-    from swsscommon import swsscommon
-except ImportError as e:
-    from tests import mock_swsscommon as swsscommon
 
 SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
 CHASSIS_INFO_KEY = 'chassis 1'
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
+INVALID_SLOT = -1
 
 # utility functions
 
@@ -513,6 +517,15 @@ class TemperatureUpdater(logger.Logger):
         state_db = daemon_base.db_connect("STATE_DB")
         self.table = swsscommon.Table(state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        self.chassis_table = None
+
+        self.is_chassis_system = chassis.is_modular_chassis()
+        if self.is_chassis_system:
+            my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
+            if my_slot != INVALID_SLOT:
+                table_name = TemperatureUpdater.TEMPER_INFO_TABLE_NAME+'_'+str(my_slot)
+                chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+                self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
 
     def deinit(self):
         """
@@ -521,6 +534,8 @@ class TemperatureUpdater(logger.Logger):
         """
         for name in self.temperature_status_dict.keys():
             self.table._del(name)
+            if self.is_chassis_system and self.chassis_table is not None:
+                self.chassis_table._del(name)
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -591,10 +606,14 @@ class TemperatureUpdater(logger.Logger):
         low_threshold = NOT_AVAILABLE
         high_critical_threshold = NOT_AVAILABLE
         low_critical_threshold = NOT_AVAILABLE
+        maximum_temperature = NOT_AVAILABLE
+        minimum_temperature = NOT_AVAILABLE
         temperature = try_get(thermal.get_temperature)
         is_replaceable = try_get(thermal.is_replaceable, False)
         if temperature != NOT_AVAILABLE:
             temperature_status.set_temperature(name, temperature)
+            minimum_temperature = try_get(thermal.get_minimum_recorded)
+            maximum_temperature = try_get(thermal.get_maximum_recorded)
             high_threshold = try_get(thermal.get_high_threshold)
             low_threshold = try_get(thermal.get_low_threshold)
             high_critical_threshold = try_get(thermal.get_high_critical_threshold)
@@ -621,6 +640,8 @@ class TemperatureUpdater(logger.Logger):
 
         fvs = swsscommon.FieldValuePairs(
             [('temperature', str(temperature)),
+             ('minimum_temperature', str(minimum_temperature)),
+             ('maximum_temperature', str(maximum_temperature)),
              ('high_threshold', str(high_threshold)),
              ('low_threshold', str(low_threshold)),
              ('warning_status', str(warning)),
@@ -631,6 +652,8 @@ class TemperatureUpdater(logger.Logger):
              ])
 
         self.table.set(name, fvs)
+        if self.is_chassis_system and self.chassis_table is not None:
+            self.chassis_table.set(name, fvs)
 
 
 class ThermalMonitor(ProcessTaskBase):
