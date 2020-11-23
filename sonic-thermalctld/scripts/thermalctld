@@ -48,12 +48,13 @@ class FanStatus(logger.Logger):
     absence_fan_count = 0
     fault_fan_count = 0
 
-    def __init__(self, log_identifier):
+    def __init__(self, log_identifier, fan=None):
         """
         Constructor of FanStatus
         """
         super(FanStatus, self).__init__(log_identifier)
 
+        self.fan = fan
         self.presence = True
         self.under_speed = False
         self.over_speed = False
@@ -191,6 +192,7 @@ class FanUpdater(logger.Logger):
                 except Exception as e:
                     self.log_warning('Failed to update PSU FAN status - {}'.format(repr(e)))
 
+        self._update_led_color()
         self.log_debug("End fan updating")
 
     def _refresh_fan_status(self, fan, index, name_prefix='FAN'):
@@ -203,7 +205,7 @@ class FanUpdater(logger.Logger):
         """
         fan_name = try_get(fan.get_name, '{} {}'.format(name_prefix, index + 1))
         if fan_name not in self.fan_status_dict:
-            self.fan_status_dict[fan_name] = FanStatus(SYSLOG_IDENTIFIER)
+            self.fan_status_dict[fan_name] = FanStatus(SYSLOG_IDENTIFIER, fan)
 
         fan_status = self.fan_status_dict[fan_name]
 
@@ -285,6 +287,19 @@ class FanUpdater(logger.Logger):
                 fan.set_status_led(fan.STATUS_LED_COLOR_RED)
         except NotImplementedError as e:
             self.log_warning('Failed to set led to fan, set_status_led not implemented')
+
+    def _update_led_color(self):
+        for fan_name, fan_status in self.fan_status_dict.items():
+            try:
+                fvs = swsscommon.FieldValuePairs([
+                    ('led_status', str(try_get(fan_status.fan.get_status_led)))
+                ])
+            except Exception as e:
+                self.log_warning('Failed to get led status for fan - {}'.format(repr(e)))
+                fvs = swsscommon.FieldValuePairs([
+                    ('led_status', NOT_AVAILABLE)
+                ])
+            self.table.set(fan_name, fvs)
 
 
 class TemperatureStatus(logger.Logger):
