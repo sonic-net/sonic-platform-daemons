@@ -56,6 +56,7 @@ class FanStatus(logger.Logger):
 
         self.fan = fan
         self.presence = True
+        self.status = True
         self.under_speed = False
         self.over_speed = False
         self.invalid_direction = False
@@ -70,6 +71,18 @@ class FanStatus(logger.Logger):
             return False
 
         self.presence = presence
+        return True
+
+    def set_fault_status(self, status):
+        """
+        Set and cache Fan fault status
+        :param status: Fan fault status, False indicate Fault
+        :return: True if status changed else False
+        """
+        if status == self.status:
+            return False
+
+        self.status = status
         return True
 
     def _check_speed_value_available(self, speed, target_speed, tolerance, current_status):
@@ -129,7 +142,7 @@ class FanStatus(logger.Logger):
         Indicate the Fan works as expect
         :return: True if Fan works normal else False
         """
-        return self.presence and not self.under_speed and not self.over_speed and not self.invalid_direction
+        return self.presence and self.status and not self.under_speed and not self.over_speed and not self.invalid_direction
 
 
 #
@@ -229,6 +242,13 @@ class FanUpdater(logger.Logger):
                                         'Fan removed warning cleared: {} was inserted.'.format(fan_name),
                                         'Fan removed warning: {} was removed from '
                                         'the system, potential overheat hazard'.format(fan_name)
+                                        )
+
+        if presence and fan_status.set_fault_status(fan_fault_status):
+            set_led = True
+            self._log_on_status_changed(fan_status.status,
+                                        'Fan fault warning cleared: {} is back to normal.'.format(fan_name),
+                                        'Fan fault warning: {} is broken.'.format(fan_name)
                                         )
 
         if presence and fan_status.set_under_speed(speed, speed_target, speed_tolerance):
