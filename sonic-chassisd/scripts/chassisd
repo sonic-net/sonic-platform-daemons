@@ -246,16 +246,16 @@ class ModuleUpdater(logger.Logger):
         index = -1
         for module in self.chassis.get_all_modules():
             index += 1
-            #Skip fabric cards
+            # Skip fabric cards
             if module.get_type() == ModuleBase.MODULE_TYPE_FABRIC:
                 continue
 
             if self._is_supervisor():
-                #On supervisor skip checking for supervisor
+                # On supervisor skip checking for supervisor
                 if module.get_slot() == self.supervisor_slot:
                     continue
             else:
-                #On line-card check only supervisor
+                # On line-card check only supervisor
                 if module.get_slot() != self.supervisor_slot:
                     continue
 
@@ -263,7 +263,7 @@ class ModuleUpdater(logger.Logger):
             midplane_ip = try_get(module.get_midplane_ip, default=INVALID_IP)
             midplane_access = try_get(module.is_midplane_reachable, default=False)
 
-            #Update db with midplane information
+            # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
                                               (CHASSIS_MIDPLANE_INFO_ACCESS_FIELD, str(midplane_access))])
             self.midplane_table.set(module_key, fvs)
@@ -361,7 +361,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.module_updater.supervisor_slot = try_get(platform_chassis.get_supervisor_slot,
                                                       default=INVALID_SLOT)
         if ((self.module_updater.my_slot == INVALID_SLOT) or
-            (self.module_updater.supervisor_slot == INVALID_SLOT)):
+                (self.module_updater.supervisor_slot == INVALID_SLOT)):
             self.log_error("Chassisd not supported for this platform")
             sys.exit(CHASSIS_NOT_SUPPORTED)
 
