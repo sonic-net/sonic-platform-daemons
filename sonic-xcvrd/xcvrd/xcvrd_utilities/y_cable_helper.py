@@ -81,6 +81,9 @@ def _wrapper_get_presence(physical_port):
 def delete_port_from_y_cable_table(logical_port_name, y_cable_tbl):
     y_cable_tbl._del(logical_port_name)
 
+# Delete port from Y cable status table
+def delete_port_from_y_cable_command_table(logical_port_name, y_cable_command_tbl):
+    y_cable_command_tbl._del(logical_port_name)
 
 def update_table_mux_status_for_response_tbl(table_name, status, logical_port_name):
     fvs = swsscommon.FieldValuePairs([('response', status)])
@@ -484,7 +487,7 @@ class YCableTableUpdateTask(object):
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, state_db, status_tbl, y_cable_tbl = {}, {}, {}, {}
         y_cable_tbl_keys = {}
-        mux_cable_command_tbl = {}
+        mux_cable_command_tbl, y_cable_command_tbl = {}, {}
 
         sel = swsscommon.Select()
 
@@ -497,6 +500,8 @@ class YCableTableUpdateTask(object):
             status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
             mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
+            y_cable_command_tbl[asic_id] = swsscommon.Table(
                 appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             y_cable_tbl[asic_id] = swsscommon.Table(
@@ -577,14 +582,19 @@ class YCableTableUpdateTask(object):
             (port_m, op_m, fvp_m) = mux_cable_command_tbl[asic_index].pop()
             if fvp_m:
 
+                if port_m not in y_cable_tbl_keys[asic_index]:
+                    continue
+
                 fvp_dict = dict(fvp_m)
 
                 if "command" in fvp_dict:
+
                     # check if xcvrd got a probe command
                     probe_identifier = fvp_dict["command"]
 
                     if probe_identifier == "probe":
                         update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db)
+                    delete_port_from_y_cable_command_table(port_m, y_cable_command_tbl[asic_index])
 
     def task_run(self):
         self.task_thread = threading.Thread(target=self.task_worker)
