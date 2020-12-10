@@ -114,13 +114,17 @@ class DaemonPcied(daemon_base.DaemonBase):
             if item["result"] == "Failed":
                 continue
 
-            Bus = item["bus"]
-            Dev = item["dev"]
-            Fn = item["fn"]
-            Id = item["id"]
+            Bus = int(item["bus"], 16)
+            Dev = int(item["dev"], 16)
+            Fn = int(item["fn"], 16)
 
-            device_name = "0x%s|%s:%s.%s" % (Id, Bus, Dev, Fn)
-            aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=int(Bus, 16), device=int(Dev, 16), func=int(Fn, 16))
+            device_name = "%02x:%02x.%d" % (Bus, Dev, Fn)
+            dev_id_path = '/sys/bus/pci/devices/0000:%s/device' % device_name
+            with open(dev_id_path, 'r') as fd:
+                Id = fd.read().strip()
+
+            self.device_table.set(device_name, [('id', Id)])
+            aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, device=Dev, func=Fn)
             self.update_aer_to_statedb(device_name, aer_stats)
 
     def read_state_db(self, key1, key2):
