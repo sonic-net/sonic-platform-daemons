@@ -82,11 +82,6 @@ def delete_port_from_y_cable_table(logical_port_name, y_cable_tbl):
     y_cable_tbl._del(logical_port_name)
 
 
-# Delete port from Y cable status table
-def delete_port_from_y_cable_command_table(logical_port_name, y_cable_command_tbl):
-    y_cable_command_tbl._del(logical_port_name)
-
-
 def update_table_mux_status_for_response_tbl(table_name, status, logical_port_name):
     fvs = swsscommon.FieldValuePairs([('response', status)])
     table_name.set(logical_port_name, fvs)
