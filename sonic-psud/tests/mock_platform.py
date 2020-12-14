@@ -1,6 +1,12 @@
 from .mock_device_base import DeviceBase
 
+
 class MockDevice:
+    STATUS_LED_COLOR_GREEN = "green"
+    STATUS_LED_COLOR_AMBER = "amber"
+    STATUS_LED_COLOR_RED = "red"
+    STATUS_LED_COLOR_OFF = "off"
+
     def __init__(self):
         self.name = None
         self.presence = True
@@ -22,9 +28,10 @@ class MockDevice:
     def get_serial(self):
         return self.serial
 
+
 class MockPsu(MockDevice):
 
-    psu_master_led_color = DeviceBase.STATUS_LED_COLOR_OFF
+    psu_master_led_color = MockDevice.STATUS_LED_COLOR_OFF
 
     def __init__(self, psu_presence, psu_status, psu_name):
         self.name = psu_name
@@ -51,6 +58,7 @@ class MockPsu(MockDevice):
     def get_status_master_led(cls):
         return cls.psu_master_led_color
 
+
 class MockFanDrawer(MockDevice):
     def __init__(self, fan_drawer_presence, fan_drawer_status, fan_drawer_name):
         self.name = fan_drawer_name
@@ -69,6 +77,7 @@ class MockFanDrawer(MockDevice):
     def get_maximum_consumed_power(self):
         return self.max_consumed_power
 
+
 class MockModule(MockDevice):
     def __init__(self, module_presence, module_status, module_name):
         self.name = module_name
@@ -86,6 +95,7 @@ class MockModule(MockDevice):
 
     def get_maximum_consumed_power(self):
         return self.max_consumed_power
+
 
 class MockChassis:
 

@@ -16,11 +16,11 @@ setup(
     scripts=[
         'scripts/psud',
     ],
-    setup_requires= [
+    setup_requires=[
         'pytest-runner',
         'wheel'
     ],
-    tests_require = [
+    tests_require=[
         'pytest',
         'mock>=2.0.0',
         'pytest-cov'
@@ -35,6 +35,7 @@ setup(
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC psu PSU daemon psud PSUD',
