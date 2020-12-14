@@ -21,14 +21,14 @@ setup(
         'enum34; python_version < "3.4"',
         'sonic-py-common',
     ],
-    setup_requires = [
+    setup_requires=[
         'wheel'
     ],
-    tests_require = [
+    tests_require=[
         'pytest',
         'pytest-cov',
     ],
-    classifiers = [
+    classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: No Input/Output (Daemon)',
         'Intended Audience :: Developers',
