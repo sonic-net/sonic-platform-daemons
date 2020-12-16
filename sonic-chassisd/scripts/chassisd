@@ -259,7 +259,7 @@ class ModuleUpdater(logger.Logger):
                 if module.get_slot() != self.supervisor_slot:
                     continue
 
-            module_key = try_get(module.get_name, default='MODULE {}'+str(index))
+            module_key = try_get(module.get_name, default='MODULE {}'.format(index))
             midplane_ip = try_get(module.get_midplane_ip, default=INVALID_IP)
             midplane_access = try_get(module.is_midplane_reachable, default=False)
 

@@ -61,7 +61,7 @@ class MockModule(MockDevice):
         if self.supervisor_slot == self.get_slot():
             self.midplane_ip = '192.168.1.100'
         else:
-            self.midplane_ip = '192.168.1.'+str(self.get_slot())
+            self.midplane_ip = '192.168.1.'.format(self.get_slot())
 
     def is_midplane_reachable(self):
         return self.midplane_access
