@@ -74,6 +74,7 @@ SFPUTIL_LOAD_ERROR = 1
 PORT_CONFIG_LOAD_ERROR = 2
 NOT_IMPLEMENTED_ERROR = 3
 SFP_SYSTEM_ERROR = 4
+NO_FRONTEND_ASICS = 5
 
 RETRY_TIMES_FOR_SYSTEM_READY = 24
 RETRY_PERIOD_FOR_SYSTEM_READY_MSECS = 5000
@@ -1266,6 +1267,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
+
+        # If the namespace list is empty, this would mean it is a multi_asic platform 
+        # and there are no ASIC's with front end interfaces. No need to start xcvrd here.
+        if not namespaces:
+            self.log_error("There is no ASIC with FrontEnd interfaces")
+            sys.exit(NO_FRONTEND_ASICS)
+            
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
