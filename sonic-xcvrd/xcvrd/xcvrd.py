@@ -1271,7 +1271,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # If the namespace list is empty, this would mean it is a multi_asic platform 
         # and there are no ASIC's with front end interfaces. No need to start xcvrd here.
         if not namespaces:
-            self.log_error("There is no ASIC with FrontEnd interfaces")
+            self.log_error("There is no FrontEnd ASICs present ")
             sys.exit(NO_FRONTEND_ASICS)
             
         for namespace in namespaces:
