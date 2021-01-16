@@ -16,7 +16,6 @@ load_source('psud', scripts_path + '/psud')
 from psud import *
 
 
-
 class TestPsuStatus(object):
     """
     Test cases to cover functionality of PsuStatus class
