@@ -2,7 +2,11 @@ import os
 import sys
 from imp import load_source
 
-from mock import MagicMock
+# TODO: Clean this up once we no longer need to support Python 2
+if sys.version_info.major == 3:
+    from unittest.mock import MagicMock
+else:
+    from mock import MagicMock
 
 from .mock_platform import MockPsu
 
