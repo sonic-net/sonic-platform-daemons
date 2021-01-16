@@ -205,7 +205,7 @@ def test_try_get():
 
 class TestDaemonPsud(object):
     """
-    Test cases to cover functionality in PsuChassisInfo class
+    Test cases to cover functionality in DaemonPsud class
     """
 
     def test_set_psu_led(self):
