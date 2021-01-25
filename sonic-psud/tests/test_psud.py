@@ -51,6 +51,51 @@ class TestPsuChassisInfo(object):
     """
     Test cases to cover functionality in PsuChassisInfo class
     """
+    def test_update_master_status(self):
+        chassis = MockChassis()
+        chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+
+        # Test good values while in bad state
+        chassis_info.total_supplied_power = 510.0
+        chassis_info.total_consumed_power = 350.0
+        chassis_info.master_status_good = False
+        ret = chassis_info.update_master_status()
+        assert ret == True
+        assert chassis_info.master_status_good == True
+
+        # Test good values while in good state
+        ret = chassis_info.update_master_status()
+        assert ret == False
+        assert chassis_info.master_status_good == True
+
+        # Test unknown total_supplied_power (0.0)
+        chassis_info.total_supplied_power = 0.0
+        chassis_info.master_status_good = False
+        ret = chassis_info.update_master_status()
+        assert ret == False
+        assert chassis_info.master_status_good == True
+
+        # Test unknown total_consumed_power (0.0)
+        chassis_info.total_supplied_power = 510.0
+        chassis_info.total_consumed_power = 0.0
+        chassis_info.master_status_good = False
+        ret = chassis_info.update_master_status()
+        assert ret == False
+        assert chassis_info.master_status_good == True
+
+        # Test bad values while in good state
+        chassis_info.total_supplied_power = 300.0
+        chassis_info.total_consumed_power = 350.0
+        chassis_info.master_status_good = True
+        ret = chassis_info.update_master_status()
+        assert ret == True
+        assert chassis_info.master_status_good == False
+
+        # Test bad values while in good state
+        ret = chassis_info.update_master_status()
+        assert ret == False
+        assert chassis_info.master_status_good == False
+
     def test_supplied_power(self):
         chassis = MockChassis()
         psu1 = MockPsu(True, True, "PSU 1")
