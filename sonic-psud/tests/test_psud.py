@@ -6,17 +6,18 @@ import pytest
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
-    from unittest.mock import Mock, MagicMock, patch
+    from unittest import mock
 else:
-    from mock import Mock, MagicMock, patch
+    import mock
 from sonic_py_common import daemon_base
 
+from . import mock_swsscommon
 from .mock_platform import MockChassis, MockPsu, MockFanDrawer, MockModule
 
 SYSLOG_IDENTIFIER = 'psud_test'
 NOT_AVAILABLE = 'N/A'
 
-daemon_base.db_connect = MagicMock()
+daemon_base.db_connect = mock.MagicMock()
 
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
@@ -25,7 +26,7 @@ sys.path.insert(0, modules_path)
 
 os.environ["PSUD_UNIT_TESTING"] = "1"
 load_source('psud', scripts_path + '/psud')
-from psud import *
+import psud
 
 CHASSIS_INFO_TABLE = 'CHASSIS_INFO'
 CHASSIS_INFO_KEY_TEMPLATE = 'chassis {}'
@@ -39,11 +40,11 @@ CHASSIS_INFO_POWER_KEY_TEMPLATE = 'chassis_power_budget {}'
 
 @pytest.fixture(scope="class")
 def mock_log_methods():
-    PsuChassisInfo.log_notice = MagicMock()
-    PsuChassisInfo.log_warning = MagicMock()
+    psud.PsuChassisInfo.log_notice = mock.MagicMock()
+    psud.PsuChassisInfo.log_warning = mock.MagicMock()
     yield
-    PsuChassisInfo.log_notice.reset()
-    PsuChassisInfo.log_warning.reset()
+    psud.PsuChassisInfo.log_notice.reset()
+    psud.PsuChassisInfo.log_warning.reset()
 
 
 @pytest.mark.usefixtures("mock_log_methods")
@@ -53,7 +54,7 @@ class TestPsuChassisInfo(object):
     """
     def test_update_master_status(self):
         chassis = MockChassis()
-        chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
 
         # Test good values while in bad state
         chassis_info.total_supplied_power = 510.0
@@ -115,8 +116,8 @@ class TestPsuChassisInfo(object):
 
         total_power = psu1_power + psu2_power + psu3_power
         state_db = daemon_base.db_connect("STATE_DB")
-        chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
         chassis_info.run_power_budget(chassis_tbl)
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
@@ -151,8 +152,8 @@ class TestPsuChassisInfo(object):
 
         total_power = fan_drawer1_power + module1_power
         state_db = daemon_base.db_connect("STATE_DB")
-        chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
         chassis_info.run_power_budget(chassis_tbl)
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
@@ -193,8 +194,8 @@ class TestPsuChassisInfo(object):
         chassis.module_list.append(module1)
 
         state_db = daemon_base.db_connect("STATE_DB")
-        chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
 
         # Check if supplied_power < consumed_power
         chassis_info.run_power_budget(chassis_tbl)
@@ -224,8 +225,8 @@ class TestPsuChassisInfo(object):
 
 
     def test_get_psu_key(self):
-        assert get_psu_key(0) == PSU_INFO_KEY_TEMPLATE.format(0)
-        assert get_psu_key(1) == PSU_INFO_KEY_TEMPLATE.format(1)
+        assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
+        assert psud.get_psu_key(1) == psud.PSU_INFO_KEY_TEMPLATE.format(1)
 
 
     def test_try_get(self):
@@ -235,7 +236,7 @@ class TestPsuChassisInfo(object):
         def callback1():
             return GOOD_CALLBACK_RETURN_VALUE
 
-        ret = try_get(callback1)
+        ret = psud.try_get(callback1)
         assert ret == GOOD_CALLBACK_RETURN_VALUE
 
         # Ensure try_get returns default value if callback returns None
@@ -244,14 +245,14 @@ class TestPsuChassisInfo(object):
         def callback2():
             return None
 
-        ret = try_get(callback2, default=DEFAULT_VALUE)
+        ret = psud.try_get(callback2, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
 
         # Ensure try_get returns default value if callback returns None
         def callback3():
             raise NotImplementedError
 
-        ret = try_get(callback3, default=DEFAULT_VALUE)
+        ret = psud.try_get(callback3, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
 
 
@@ -261,11 +262,11 @@ class TestDaemonPsud(object):
     """
 
     def test_set_psu_led(self):
-        mock_logger = MagicMock()
+        mock_logger = mock.MagicMock()
         mock_psu = MockPsu(True, True, "PSU 1")
-        psu_status = PsuStatus(mock_logger, mock_psu)
+        psu_status = psud.PsuStatus(mock_logger, mock_psu)
 
-        daemon_psud = DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
         psu_status.presence = True
         psu_status.power_good = True
@@ -305,3 +306,19 @@ class TestDaemonPsud(object):
         psu_status.temperature_good = True
         daemon_psud._set_psu_led(mock_psu, psu_status)
         assert mock_psu.get_status_led() == mock_psu.STATUS_LED_COLOR_GREEN
+
+    def test_update_psu_chassis_info(self):
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+        with mock.patch("psud.PsuChassisInfo", mock.MagicMock()) as mock_psu_chassis_info:
+            # If daemon_psud.platform_chassis is None, update_psu_chassis_info() should do nothing
+            psud.platform_chassis = None
+            daemon_psud.psu_chassis_info = None
+            daemon_psud.update_psu_chassis_info(None)
+            assert daemon_psud.psu_chassis_info is None
+
+            # Now we mock platform_chassis, so that psu_chassis_info should be created and run_power_budget() should be called
+            psud.platform_chassis = MockChassis()
+            daemon_psud.update_psu_chassis_info(None)
+            assert daemon_psud.psu_chassis_info is not None
+            daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
