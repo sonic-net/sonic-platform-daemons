@@ -82,6 +82,7 @@ class TestDaemonPsud(object):
     def test_update_psu_chassis_info(self):
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
+        # We mock the actual implementation of psud.PsuChassisInfo because it will be instantiated by daemon_psud.update_psu_chassis_info()
         with mock.patch("psud.PsuChassisInfo", mock.MagicMock()) as mock_psu_chassis_info:
             # If daemon_psud.platform_chassis is None, update_psu_chassis_info() should do nothing
             psud.platform_chassis = None
@@ -89,8 +90,22 @@ class TestDaemonPsud(object):
             daemon_psud.update_psu_chassis_info(None)
             assert daemon_psud.psu_chassis_info is None
 
-            # Now we mock platform_chassis, so that psu_chassis_info should be created and run_power_budget() should be called
+            # Now we mock platform_chassis, so that daemon_psud.psu_chassis_info should be instantiated and run_power_budget() should be called
             psud.platform_chassis = MockChassis()
             daemon_psud.update_psu_chassis_info(None)
             assert daemon_psud.psu_chassis_info is not None
             daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
+
+    def test_update_master_led_color(self):
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+        # If daemon_psud.platform_chassis or daemon_psud.psu_chassis_info is None, update_master_led_color() should do nothing
+        psud.platform_chassis = None
+        daemon_psud.psu_chassis_info = mock.MagicMock()
+        daemon_psud.update_master_led_color(None)
+        daemon_psud.psu_chassis_info._set_psu_master_led.assert_not_called()
+
+        # Now we mock platform_chassis and daemon_psud.psu_chassis_info so that update_master_led_color() should be called
+        psud.platform_chassis = MockChassis()
+        daemon_psud.update_master_led_color(None)
+        daemon_psud.psu_chassis_info._set_psu_master_led.assert_called_with(daemon_psud.psu_chassis_info.master_status_good)
