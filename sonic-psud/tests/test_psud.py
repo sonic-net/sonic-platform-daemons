@@ -94,6 +94,7 @@ class TestDaemonPsud(object):
             psud.platform_chassis = MockChassis()
             daemon_psud.update_psu_chassis_info(None)
             assert daemon_psud.psu_chassis_info is not None
+            assert daemon_psud.psu_chassis_info.run_power_budget.call_count == 1
             daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
 
     def test_update_master_led_color(self):
@@ -108,4 +109,29 @@ class TestDaemonPsud(object):
         # Now we mock platform_chassis and daemon_psud.psu_chassis_info so that update_master_led_color() should be called
         psud.platform_chassis = MockChassis()
         daemon_psud.update_master_led_color(None)
+        assert daemon_psud.psu_chassis_info._set_psu_master_led.call_count == 1
         daemon_psud.psu_chassis_info._set_psu_master_led.assert_called_with(daemon_psud.psu_chassis_info.master_status_good)
+
+    def test_update_psu_entity_info(self):
+        mock_psu1 = MockPsu(True, True, "PSU 1")
+        mock_psu2 = MockPsu(True, True, "PSU 2")
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud._update_single_psu_entity_info = mock.MagicMock()
+
+        # If daemon_psud.platform_chassis is None, _update_psu_entity_info() should do nothing
+        psud.platform_chassis = None
+        daemon_psud._update_psu_entity_info()
+        daemon_psud._update_single_psu_entity_info.assert_not_called()
+
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1])
+        daemon_psud._update_psu_entity_info()
+        assert daemon_psud._update_single_psu_entity_info.call_count == 1
+        daemon_psud._update_single_psu_entity_info.assert_called_with(1, mock_psu1)
+
+        daemon_psud._update_single_psu_entity_info.reset_mock()
+        psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1, mock_psu2])
+        daemon_psud._update_psu_entity_info()
+        assert daemon_psud._update_single_psu_entity_info.call_count == 2
+        daemon_psud._update_single_psu_entity_info.assert_called_with(2, mock_psu2)
