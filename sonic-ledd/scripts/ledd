@@ -6,7 +6,6 @@
 """
 
 import getopt
-import os
 import sys
 
 from sonic_py_common import daemon_base
