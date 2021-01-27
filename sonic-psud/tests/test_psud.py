@@ -104,7 +104,7 @@ class TestDaemonPsud(object):
         psud.platform_chassis = None
         daemon_psud.psu_chassis_info = mock.MagicMock()
         daemon_psud.update_master_led_color(None)
-        daemon_psud.psu_chassis_info._set_psu_master_led.assert_not_called()
+        assert daemon_psud.psu_chassis_info._set_psu_master_led.call_count == 0
 
         # Now we mock platform_chassis and daemon_psud.psu_chassis_info so that update_master_led_color() should be called
         psud.platform_chassis = MockChassis()
@@ -122,7 +122,7 @@ class TestDaemonPsud(object):
         # If daemon_psud.platform_chassis is None, _update_psu_entity_info() should do nothing
         psud.platform_chassis = None
         daemon_psud._update_psu_entity_info()
-        daemon_psud._update_single_psu_entity_info.assert_not_called()
+        assert daemon_psud._update_single_psu_entity_info.call_count == 0
 
         psud.platform_chassis = MockChassis()
         psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1])
