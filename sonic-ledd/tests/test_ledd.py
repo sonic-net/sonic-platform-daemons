@@ -68,9 +68,7 @@ class TestDaemonLedd(object):
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
     @mock.patch("ledd.swsscommon.Select")
-    @mock.patch("ledd.swsscommon.Table")
-    @mock.patch("ledd.swsscommon.DBConnector")
-    def test_run_select_timeout(self, mock_dbconnector, mock_table, mock_select, mock_sst, mock_load_plat_util):
+    def test_run_select_timeout(self, mock_select, mock_sst, mock_load_plat_util):
         select_instance = mock_select.return_value
         select_instance.select.return_value = (ledd.swsscommon.Select.TIMEOUT, None)
 
@@ -79,13 +77,9 @@ class TestDaemonLedd(object):
         assert ret == 1
 
     @mock.patch("ledd.DaemonLedd.load_platform_util")
-    @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
-    @mock.patch("ledd.swsscommon.RedisSelect")
     @mock.patch("ledd.swsscommon.Select")
-    @mock.patch("ledd.swsscommon.Table")
-    @mock.patch("ledd.swsscommon.DBConnector")
-    def test_run_bad_select_return(self, mock_dbconnector, mock_table, mock_select, mock_redis_select, mock_sst, mock_cstrso, mock_load_plat_util):
+    def test_run_bad_select_return(self, mock_select, mock_sst, mock_load_plat_util):
         select_instance = mock_select.return_value
         select_instance.select.return_value = (ledd.swsscommon.Select.ERROR, mock.MagicMock())
 
@@ -96,11 +90,8 @@ class TestDaemonLedd(object):
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
-    @mock.patch("ledd.swsscommon.RedisSelect")
     @mock.patch("ledd.swsscommon.Select")
-    @mock.patch("ledd.swsscommon.Table")
-    @mock.patch("ledd.swsscommon.DBConnector")
-    def test_run_ignore_keys(self, mock_dbconnector, mock_table, mock_select, mock_redis_select, mock_sst, mock_cstrso, mock_load_plat_util):
+    def test_run_ignore_keys(self, mock_select, mock_sst, mock_cstrso, mock_load_plat_util):
         select_instance = mock_select.return_value
         select_instance.select.return_value = (ledd.swsscommon.Select.OBJECT, mock.MagicMock())
 
@@ -118,11 +109,8 @@ class TestDaemonLedd(object):
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
-    @mock.patch("ledd.swsscommon.RedisSelect")
     @mock.patch("ledd.swsscommon.Select")
-    @mock.patch("ledd.swsscommon.Table")
-    @mock.patch("ledd.swsscommon.DBConnector")
-    def test_run_bad_fvp(self, mock_dbconnector, mock_table, mock_select, mock_redis_select, mock_sst, mock_cstrso, mock_load_plat_util):
+    def test_run_bad_fvp(self, mock_select, mock_sst, mock_cstrso, mock_load_plat_util):
         select_instance = mock_select.return_value
         select_instance.select.return_value = (ledd.swsscommon.Select.OBJECT, mock.MagicMock())
 
@@ -140,11 +128,8 @@ class TestDaemonLedd(object):
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
-    @mock.patch("ledd.swsscommon.RedisSelect")
     @mock.patch("ledd.swsscommon.Select")
-    @mock.patch("ledd.swsscommon.Table")
-    @mock.patch("ledd.swsscommon.DBConnector")
-    def test_run_good(self, mock_dbconnector, mock_table, mock_select, mock_redis_select, mock_sst, mock_cstrso, mock_led_control):
+    def test_run_good(self, mock_select, mock_sst, mock_cstrso, mock_led_control):
         select_instance = mock_select.return_value
         select_instance.select.return_value = (ledd.swsscommon.Select.OBJECT, mock.MagicMock())
 
