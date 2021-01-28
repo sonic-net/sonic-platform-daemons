@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 """
     psud
@@ -26,6 +26,11 @@ else:
 #
 # Constants ====================================================================
 #
+
+# TODO: Once we no longer support Python 2, we can eliminate this and get the
+# name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
+SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n) \
+        for n in dir(signal) if n.startswith('SIG') and '_' not in n )
 
 SYSLOG_IDENTIFIER = "psud"
 
@@ -362,7 +367,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.log_info("Caught SIGTERM - exiting...")
             self.stop.set()
         else:
-            self.log_warning("Caught unhandled signal '" + sig + "'")
+            self.log_warning("Caught unhandled signal '{}'".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     # Run daemon
     def run(self):

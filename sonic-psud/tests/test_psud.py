@@ -33,6 +33,49 @@ class TestDaemonPsud(object):
     Test cases to cover functionality in DaemonPsud class
     """
 
+    def test_signal_handler(self):
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.stop.set = mock.MagicMock()
+        daemon_psud.log_info = mock.MagicMock()
+        daemon_psud.log_warning = mock.MagicMock()
+
+        # Test SIGHUP
+        daemon_psud.signal_handler(psud.signal.SIGHUP, None)
+        assert daemon_psud.log_info.call_count == 1
+        daemon_psud.log_info.assert_called_with("Caught SIGHUP - ignoring...")
+        assert daemon_psud.log_warning.call_count == 0
+        assert daemon_psud.stop.set.call_count == 0
+
+        # Test SIGINT
+        daemon_psud.log_info.reset_mock()
+        daemon_psud.log_warning.reset_mock()
+        daemon_psud.stop.set.reset_mock()
+        daemon_psud.signal_handler(psud.signal.SIGINT, None)
+        assert daemon_psud.log_info.call_count == 1
+        daemon_psud.log_info.assert_called_with("Caught SIGINT - exiting...")
+        assert daemon_psud.log_warning.call_count == 0
+        assert daemon_psud.stop.set.call_count == 1
+
+        # Test SIGTERM
+        daemon_psud.log_info.reset_mock()
+        daemon_psud.log_warning.reset_mock()
+        daemon_psud.stop.set.reset_mock()
+        daemon_psud.signal_handler(psud.signal.SIGTERM, None)
+        assert daemon_psud.log_info.call_count == 1
+        daemon_psud.log_info.assert_called_with("Caught SIGTERM - exiting...")
+        assert daemon_psud.log_warning.call_count == 0
+        assert daemon_psud.stop.set.call_count == 1
+
+        # Test an unhandled signal
+        daemon_psud.log_info.reset_mock()
+        daemon_psud.log_warning.reset_mock()
+        daemon_psud.stop.set.reset_mock()
+        daemon_psud.signal_handler(psud.signal.SIGUSR1, None)
+        assert daemon_psud.log_warning.call_count == 1
+        daemon_psud.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1'")
+        assert daemon_psud.log_info.call_count == 0
+        assert daemon_psud.stop.set.call_count == 0
+
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
         mock_psu = MockPsu(True, True, "PSU 1")
