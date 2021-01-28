@@ -178,3 +178,14 @@ class TestDaemonPsud(object):
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 2
         daemon_psud._update_single_psu_entity_info.assert_called_with(2, mock_psu2)
+
+        # Test behavior if _update_single_psu_entity_info raises an exception
+        daemon_psud._update_single_psu_entity_info.reset_mock()
+        daemon_psud._update_single_psu_entity_info.side_effect = Exception("Test message")
+        daemon_psud.log_warning = mock.MagicMock()
+        psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1])
+        daemon_psud._update_psu_entity_info()
+        assert daemon_psud._update_single_psu_entity_info.call_count == 1
+        daemon_psud._update_single_psu_entity_info.assert_called_with(1, mock_psu1)
+        assert daemon_psud.log_warning.call_count == 1
+        daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
