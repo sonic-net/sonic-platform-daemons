@@ -78,7 +78,7 @@ class TestDaemonPsud(object):
 
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1")
+        mock_psu = MockPsu(True, True, "PSU 1", 0)
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
@@ -156,8 +156,8 @@ class TestDaemonPsud(object):
         daemon_psud.psu_chassis_info._set_psu_master_led.assert_called_with(daemon_psud.psu_chassis_info.master_status_good)
 
     def test_update_psu_entity_info(self):
-        mock_psu1 = MockPsu(True, True, "PSU 1")
-        mock_psu2 = MockPsu(True, True, "PSU 2")
+        mock_psu1 = MockPsu(True, True, "PSU 1", 0)
+        mock_psu2 = MockPsu(True, True, "PSU 2", 1)
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud._update_single_psu_entity_info = mock.MagicMock()
@@ -189,3 +189,19 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_entity_info.assert_called_with(1, mock_psu1)
         assert daemon_psud.log_warning.call_count == 1
         daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
+
+    def test_update_single_psu_entity_info(self):
+        mock_psu1 = MockPsu(True, True, "PSU 1", 0)
+
+        psud.try_get = mock.MagicMock(return_value=0)
+
+        expected_fvp = psud.swsscommon.FieldValuePairs(
+            [('position_in_parent', '0'),
+             ('parent_name', psud.CHASSIS_INFO_KEY),
+             ])
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.phy_entity_tbl = mock.MagicMock()
+
+        daemon_psud._update_single_psu_entity_info(0, mock_psu1)
+        daemon_psud.phy_entity_tbl.set.assert_called_with('PSU 0', expected_fvp)

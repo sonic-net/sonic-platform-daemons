@@ -99,17 +99,17 @@ class TestPsuChassisInfo(object):
 
     def test_supplied_power(self):
         chassis = MockChassis()
-        psu1 = MockPsu(True, True, "PSU 1")
+        psu1 = MockPsu(True, True, "PSU 1", 0)
         psu1_power = 510.0
         psu1.set_maximum_supplied_power(psu1_power)
         chassis.psu_list.append(psu1)
 
-        psu2 = MockPsu(True, True, "PSU 2")
+        psu2 = MockPsu(True, True, "PSU 2", 1)
         psu2_power = 800.0
         psu2.set_maximum_supplied_power(psu2_power)
         chassis.psu_list.append(psu2)
 
-        psu3 = MockPsu(True, True, "PSU 3")
+        psu3 = MockPsu(True, True, "PSU 3", 2)
         psu3_power = 350.0
         psu3.set_maximum_supplied_power(psu3_power)
         chassis.psu_list.append(psu3)
@@ -178,7 +178,7 @@ class TestPsuChassisInfo(object):
 
     def test_power_budget(self):
         chassis = MockChassis()
-        psu = MockPsu(True, True, "PSU 1")
+        psu = MockPsu(True, True, "PSU 1", 0)
         psu1_power = 510.0
         psu.set_maximum_supplied_power(psu1_power)
         chassis.psu_list.append(psu)
@@ -208,7 +208,7 @@ class TestPsuChassisInfo(object):
         assert MockPsu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
 
         # Add a PSU
-        psu = MockPsu(True, True, "PSU 2")
+        psu = MockPsu(True, True, "PSU 2", 1)
         psu2_power = 800.0
         psu.set_maximum_supplied_power(psu2_power)
         chassis.psu_list.append(psu)
