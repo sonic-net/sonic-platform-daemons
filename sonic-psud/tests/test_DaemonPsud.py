@@ -76,6 +76,40 @@ class TestDaemonPsud(object):
         assert daemon_psud.log_info.call_count == 0
         assert daemon_psud.stop.set.call_count == 0
 
+    def test_update_psu_data(self):
+        mock_psu1 = MockPsu(True, True, "PSU 1", 0)
+        mock_psu2 = MockPsu(True, True, "PSU 2", 1)
+        psu_tbl = mock.MagicMock()
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud._update_single_psu_data = mock.MagicMock()
+        daemon_psud.log_warning = mock.MagicMock()
+
+        # Test platform_chassis is None
+        psud.platform_chassis = None
+        daemon_psud.update_psu_data(psu_tbl)
+        assert daemon_psud._update_single_psu_data.call_count == 0
+        assert daemon_psud.log_warning.call_count == 0
+
+        # Test with mocked platform_chassis
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1, mock_psu2])
+        daemon_psud.update_psu_data(psu_tbl)
+        assert daemon_psud._update_single_psu_data.call_count == 2
+        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, psu_tbl)
+        assert daemon_psud.log_warning.call_count == 0
+        daemon_psud.log_warning = mock.MagicMock()
+
+        daemon_psud._update_single_psu_data.reset_mock()
+
+        # Test _update_single_psu_data() throws exception
+        daemon_psud._update_single_psu_data.side_effect = Exception("Test message")
+        daemon_psud.update_psu_data(psu_tbl)
+        assert daemon_psud._update_single_psu_data.call_count == 2
+        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, psu_tbl)
+        assert daemon_psud.log_warning.call_count == 2
+        daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
+
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
         mock_psu = MockPsu(True, True, "PSU 1", 0)
