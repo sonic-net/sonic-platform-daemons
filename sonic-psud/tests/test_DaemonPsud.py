@@ -122,23 +122,22 @@ class TestDaemonPsud(object):
         daemon_psud._set_psu_led(mock_psu, psu_status)
         assert mock_psu.get_status_led() == mock_psu.STATUS_LED_COLOR_GREEN
 
+    @mock.patch('psud.PsuChassisInfo', mock.MagicMock())
     def test_update_psu_chassis_info(self):
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
-        # We mock the actual implementation of psud.PsuChassisInfo because it will be instantiated by daemon_psud.update_psu_chassis_info()
-        with mock.patch("psud.PsuChassisInfo", mock.MagicMock()) as mock_psu_chassis_info:
-            # If daemon_psud.platform_chassis is None, update_psu_chassis_info() should do nothing
-            psud.platform_chassis = None
-            daemon_psud.psu_chassis_info = None
-            daemon_psud.update_psu_chassis_info(None)
-            assert daemon_psud.psu_chassis_info is None
+        # If daemon_psud.platform_chassis is None, update_psu_chassis_info() should do nothing
+        psud.platform_chassis = None
+        daemon_psud.psu_chassis_info = None
+        daemon_psud.update_psu_chassis_info(None)
+        assert daemon_psud.psu_chassis_info is None
 
-            # Now we mock platform_chassis, so that daemon_psud.psu_chassis_info should be instantiated and run_power_budget() should be called
-            psud.platform_chassis = MockChassis()
-            daemon_psud.update_psu_chassis_info(None)
-            assert daemon_psud.psu_chassis_info is not None
-            assert daemon_psud.psu_chassis_info.run_power_budget.call_count == 1
-            daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
+        # Now we mock platform_chassis, so that daemon_psud.psu_chassis_info should be instantiated and run_power_budget() should be called
+        psud.platform_chassis = MockChassis()
+        daemon_psud.update_psu_chassis_info(None)
+        assert daemon_psud.psu_chassis_info is not None
+        assert daemon_psud.psu_chassis_info.run_power_budget.call_count == 1
+        daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
 
     def test_update_psu_entity_info(self):
         mock_psu1 = MockPsu(True, True, "PSU 1", 0)
