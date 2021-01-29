@@ -199,8 +199,7 @@ class TestPsuChassisInfo(object):
 
         # Check if supplied_power < consumed_power
         chassis_info.run_power_budget(chassis_tbl)
-        if chassis_info.update_master_status():
-            chassis_info._set_psu_master_led(chassis_info.master_status_good)
+        chassis_info.update_master_status()
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) < float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
@@ -215,8 +214,7 @@ class TestPsuChassisInfo(object):
 
         # Check if supplied_power > consumed_power
         chassis_info.run_power_budget(chassis_tbl)
-        if chassis_info.update_master_status():
-            chassis_info._set_psu_master_led(chassis_info.master_status_good)
+        chassis_info.update_master_status()
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) > float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])

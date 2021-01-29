@@ -140,21 +140,6 @@ class TestDaemonPsud(object):
             assert daemon_psud.psu_chassis_info.run_power_budget.call_count == 1
             daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
 
-    def test_update_master_led_color(self):
-        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
-
-        # If daemon_psud.platform_chassis or daemon_psud.psu_chassis_info is None, update_master_led_color() should do nothing
-        psud.platform_chassis = None
-        daemon_psud.psu_chassis_info = mock.MagicMock()
-        daemon_psud.update_master_led_color(None)
-        assert daemon_psud.psu_chassis_info._set_psu_master_led.call_count == 0
-
-        # Now we mock platform_chassis and daemon_psud.psu_chassis_info so that update_master_led_color() should be called
-        psud.platform_chassis = MockChassis()
-        daemon_psud.update_master_led_color(None)
-        assert daemon_psud.psu_chassis_info._set_psu_master_led.call_count == 1
-        daemon_psud.psu_chassis_info._set_psu_master_led.assert_called_with(daemon_psud.psu_chassis_info.master_status_good)
-
     def test_update_psu_entity_info(self):
         mock_psu1 = MockPsu(True, True, "PSU 1", 0)
         mock_psu2 = MockPsu(True, True, "PSU 2", 1)

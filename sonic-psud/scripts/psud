@@ -18,8 +18,10 @@ from sonic_py_common import daemon_base, logger
 
 # If unit testing is occurring, mock swsscommon and module_base
 if os.getenv("PSUD_UNIT_TESTING") == "1":
+    from tests.mock_platform import MockPsu as Psu
     from tests import mock_swsscommon as swsscommon
 else:
+    from sonic_platform.psu import Psu
     from swsscommon import swsscommon
 
 
@@ -253,22 +255,20 @@ class PsuChassisInfo(logger.Logger):
 
         self.master_status_good = master_status_good
 
-        return True
-
-    def _set_psu_master_led(self, master_status):
+        # Update the PSU master status LED
         try:
-            try:
-                if os.getenv("PSUD_UNIT_TESTING") == "1":
-                    from tests.mock_platform import MockPsu as Psu
-                else:
-                    from sonic_platform.psu import Psu
-            except ImportError as e:
-                raise ImportError(str(e) + " - required module not found")
-
-            color = Psu.STATUS_LED_COLOR_GREEN if master_status else Psu.STATUS_LED_COLOR_RED
+            color = Psu.STATUS_LED_COLOR_GREEN if master_status_good else Psu.STATUS_LED_COLOR_RED
             Psu.set_status_master_led(color)
-        except NotImplementedError as e:
+        except NotImplementedError:
             pass
+
+        log_on_status_changed(self, self.master_status_good,
+                              'PSU supplied power warning cleared: supplied power is back to normal.',
+                              'PSU supplied power warning: {}W supplied-power less than {}W consumed-power'.format(
+                                  self.total_supplied_power, self.total_consumed_power)
+                              )
+
+        return True
 
 # PSU status ===================================================================
 #
@@ -412,9 +412,8 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.update_psu_data(psu_tbl)
             self._update_led_color(psu_tbl)
 
-            if platform_chassis is not None and platform_chassis.is_modular_chassis():
+            if platform_chassis and platform_chassis.is_modular_chassis():
                 self.update_psu_chassis_info(chassis_tbl)
-                self.update_master_led_color(chassis_tbl)
 
             self.first_run = False
 
@@ -608,24 +607,13 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.psu_chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, platform_chassis)
 
         self.psu_chassis_info.run_power_budget(chassis_tbl)
-
-    def update_master_led_color(self, chassis_tbl):
-        if not platform_chassis or not self.psu_chassis_info:
-            return
-
-        psu_chassis_info = self.psu_chassis_info
-        if psu_chassis_info.update_master_status():
-            log_on_status_changed(self, psu_chassis_info.master_status_good,
-                                  'PSU supplied power warning cleared: supplied power is back to normal.',
-                                  'PSU supplied power warning: {}W supplied-power less than {}W consumed-power'.format(
-                                      psu_chassis_info.total_supplied_power, psu_chassis_info.total_consumed_power)
-                                  )
-            psu_chassis_info._set_psu_master_led(psu_chassis_info.master_status_good)
+        self.psu_chassis_info.update_psu_chassis_info()
 
 
 #
 # Main =========================================================================
 #
+
 
 def main():
     psud = DaemonPsud(SYSLOG_IDENTIFIER)
