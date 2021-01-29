@@ -68,3 +68,22 @@ def test_wrapper_get_psu_status():
     psud._wrapper_get_psu_status(1)
     assert psud.platform_psuutil.get_psu_status.call_count == 1
     psud.platform_psuutil.get_psu_status.assert_called_with(1)
+
+
+def test_log_on_status_changed():
+    normal_log = "Normal log message"
+    abnormal_log = "Abnormal log message"
+
+    mock_logger = mock.MagicMock()
+
+    psud.log_on_status_changed(mock_logger, True, normal_log, abnormal_log)
+    assert mock_logger.log_notice.call_count == 1
+    assert mock_logger.log_warning.call_count == 0
+    mock_logger.log_notice.assert_called_with(normal_log)
+
+    mock_logger.log_notice.reset_mock()
+
+    psud.log_on_status_changed(mock_logger, False, normal_log, abnormal_log)
+    assert mock_logger.log_notice.call_count == 0
+    assert mock_logger.log_warning.call_count == 1
+    mock_logger.log_warning.assert_called_with(abnormal_log)
