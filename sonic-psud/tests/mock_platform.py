@@ -30,7 +30,6 @@ class MockDevice:
 
 
 class MockPsu(MockDevice):
-
     master_led_color = MockDevice.STATUS_LED_COLOR_OFF
 
     def __init__(self, presence, status, name, position_in_parent):
@@ -39,6 +38,10 @@ class MockPsu(MockDevice):
         self.status = status
         self.status_led_color = self.STATUS_LED_COLOR_OFF
         self.position_in_parent = position_in_parent
+        self._fan_list = []
+
+    def get_all_fans(self):
+        return self._fan_list
 
     def get_powergood_status(self):
         return self.status
@@ -90,6 +93,19 @@ class MockFanDrawer(MockDevice):
         return self.max_consumed_power
 
 
+class MockFan(MockDevice):
+    def __init__(self, name):
+        self.name = name
+        self.status_led_color = self.STATUS_LED_COLOR_OFF
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_status_led(self):
+        return self.status_led_color
+
+
 class MockModule(MockDevice):
     def __init__(self, module_presence, module_status, module_name):
         self.name = module_name
@@ -110,7 +126,6 @@ class MockModule(MockDevice):
 
 
 class MockChassis:
-
     def __init__(self):
         self.psu_list = []
         self.fan_drawer_list = []
