@@ -79,7 +79,7 @@ class TestDaemonPsud(object):
     def test_update_psu_data(self):
         mock_psu1 = MockPsu(True, True, "PSU 1", 0)
         mock_psu2 = MockPsu(True, True, "PSU 2", 1)
-        psu_tbl = mock.MagicMock()
+        mock_psu_tbl = mock.MagicMock()
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud._update_single_psu_data = mock.MagicMock()
@@ -87,16 +87,16 @@ class TestDaemonPsud(object):
 
         # Test platform_chassis is None
         psud.platform_chassis = None
-        daemon_psud.update_psu_data(psu_tbl)
+        daemon_psud.update_psu_data(mock_psu_tbl)
         assert daemon_psud._update_single_psu_data.call_count == 0
         assert daemon_psud.log_warning.call_count == 0
 
         # Test with mocked platform_chassis
         psud.platform_chassis = MockChassis()
         psud.platform_chassis.get_all_psus = mock.Mock(return_value=[mock_psu1, mock_psu2])
-        daemon_psud.update_psu_data(psu_tbl)
+        daemon_psud.update_psu_data(mock_psu_tbl)
         assert daemon_psud._update_single_psu_data.call_count == 2
-        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, psu_tbl)
+        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, mock_psu_tbl)
         assert daemon_psud.log_warning.call_count == 0
         daemon_psud.log_warning = mock.MagicMock()
 
@@ -104,9 +104,9 @@ class TestDaemonPsud(object):
 
         # Test _update_single_psu_data() throws exception
         daemon_psud._update_single_psu_data.side_effect = Exception("Test message")
-        daemon_psud.update_psu_data(psu_tbl)
+        daemon_psud.update_psu_data(mock_psu_tbl)
         assert daemon_psud._update_single_psu_data.call_count == 2
-        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, psu_tbl)
+        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2, mock_psu_tbl)
         assert daemon_psud.log_warning.call_count == 2
         daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
 
@@ -156,11 +156,71 @@ class TestDaemonPsud(object):
         daemon_psud._set_psu_led(mock_psu, psu_status)
         assert mock_psu.get_status_led() == mock_psu.STATUS_LED_COLOR_GREEN
 
+    def test_update_led_color(self):
+        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu_tbl = mock.MagicMock()
+        mock_logger = mock.MagicMock()
+        psu_status = psud.PsuStatus(mock_logger, mock_psu)
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud._update_psu_fan_led_status = mock.MagicMock()
+        daemon_psud.log_warning = mock.MagicMock()
+
+        # If psud.platform_chassis is None, _update_psu_fan_led_status() should do nothing
+        psud.platform_chassis = None
+        daemon_psud._update_led_color(mock_psu_tbl)
+        assert mock_psu_tbl.set.call_count == 0
+        assert daemon_psud._update_psu_fan_led_status.call_count == 0
+        assert daemon_psud.log_warning.call_count == 0
+
+        psud.platform_chassis = MockChassis()
+        daemon_psud.psu_status_dict[1] = psu_status
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_OFF)])
+        daemon_psud._update_led_color(mock_psu_tbl)
+        assert mock_psu_tbl.set.call_count == 1
+        mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+        daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
+
+        mock_psu_tbl.set.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_GREEN)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_GREEN)])
+        daemon_psud._update_led_color(mock_psu_tbl)
+        assert mock_psu_tbl.set.call_count == 1
+        mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+        daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
+
+        mock_psu_tbl.set.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_RED)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_RED)])
+        daemon_psud._update_led_color(mock_psu_tbl)
+        assert mock_psu_tbl.set.call_count == 1
+        mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+        daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
+
+        mock_psu_tbl.set.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # Test exception handling
+        mock_psu.get_status_led = mock.Mock(side_effect = NotImplementedError)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', psud.NOT_AVAILABLE)])
+        daemon_psud._update_led_color(mock_psu_tbl)
+        assert mock_psu_tbl.set.call_count == 1
+        mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+        daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
+
     @mock.patch('psud.PsuChassisInfo', mock.MagicMock())
     def test_update_psu_chassis_info(self):
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
-        # If daemon_psud.platform_chassis is None, update_psu_chassis_info() should do nothing
+        # If psud.platform_chassis is None, update_psu_chassis_info() should do nothing
         psud.platform_chassis = None
         daemon_psud.psu_chassis_info = None
         daemon_psud.update_psu_chassis_info(None)
@@ -180,7 +240,7 @@ class TestDaemonPsud(object):
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud._update_single_psu_entity_info = mock.MagicMock()
 
-        # If daemon_psud.platform_chassis is None, _update_psu_entity_info() should do nothing
+        # If psud.platform_chassis is None, _update_psu_entity_info() should do nothing
         psud.platform_chassis = None
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 0
