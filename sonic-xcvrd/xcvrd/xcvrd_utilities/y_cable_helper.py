@@ -469,6 +469,289 @@ def delete_ports_status_for_y_cable():
             delete_port_from_y_cable_table(
                 logical_port_name, y_cable_tbl[asic_index])
 
+def _wrapper_get_muxcable_info(physical_port, logical_port_name):
+
+    mux_info_dict = {}
+    mux_static_info_dict = {}
+    y_cable_tbl, state_db = {}, {}
+
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        y_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+
+    asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
+            logical_port_name)
+    if asic_index is None:
+        helper_logger.log_warning(
+                "Got invalid asic index for {}, ignored".format(logical_port_name))
+        return -1
+
+    (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
+    if status is False:
+        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+            logical_port_name, y_cable_tbl[asic_index]))
+        continue
+    mux_port_dict = dict(fvs)
+    read_side = mux_port_dict.get("read_side")
+
+    active_side = y_cable.check_active_linked_tor_side(physical_port)
+
+    if active_side is None:
+        tor_active = 'unknown'
+    if read_side == active_side and (active_side == 1 or active_side == 2):
+        tor_active = 'active'
+    elif read_side != active_side and (active_side == 1 or active_side == 2):
+        tor_active = 'standby'
+    else:
+        tor_active = 'unknown'
+
+    mux_info_dict["tor_active"] = tor_active
+
+    mux_dir_val = y_cable.check_mux_direction(physical_port)
+    if mux_dir_val is None:
+        mux_direction = 'unknown'
+    if read_side == mux_dir_val and (active_side == 1 or active_side == 2):
+        mux_direction = 'self'
+    elif read_side != mux_dir_val and (active_side == 1 or active_side == 2):
+        mux_direction = 'peer'
+
+    mux_info_dict["mux_direction"] = mux_direction
+
+    manual_switch_cnt = y_cable.get_switch_count(physical_port, SWITCH_COUNT_MANUAL)
+    auto_switch_cnt = y_cable.get_switch_count(physical_port, SWITCH_COUNT_AUTO)
+
+    mux_info_dict["manual_switch_count"] = manual_switch_cnt
+    mux_info_dict["auto_switch_count"] = auto_switch_cnt
+
+    lane_active = y_cable.check_if_nic_lanes_active(physical_port)
+
+    if (lane_active & 0x1):
+        mux_info_dict["nic_lane1_active"] = "True"
+    else:
+        mux_info_dict["nic_lane1_active"] = "False"
+
+    if ((lane_active >> 1) & 0x1):
+        mux_info_dict["nic_lane2_active"] = "True"
+    else:
+        mux_info_dict["nic_lane2_active"] = "False"
+
+    if ((lane_active >> 2) & 0x1):
+        mux_info_dict["nic_lane3_active"] = "True"
+    else:
+        mux_info_dict["nic_lane3_active"] = "False"
+
+    if ((lane_active >> 3) & 0x1):
+        mux_info_dict["nic_lane4_active"] = "True"
+    else:
+        mux_info_dict["nic_lane4_active"] = "False"
+
+    if read_side == 1:
+        eye_result_self = get_eye_info(physical_port, 1)
+        eye_result_peer = get_eye_info(physical_port, 2)
+    else:
+        eye_result_self = get_eye_info(physical_port, 2)
+        eye_result_peer = get_eye_info(physical_port, 1)
+
+    eye_result_nic = get_eye_info(physical_port, 3)
+
+    mux_info_dict["Self_eye_height_lane1"] = eye_result_self[0]
+    mux_info_dict["Self_eye_height_lane2"] = eye_result_self[1]
+    mux_info_dict["Peer_eye_height_lane1"] = eye_result_peer[0]
+    mux_info_dict["Peer_eye_height_lane2"] = eye_result_peer[1]
+    mux_info_dict["NIC_eye_height_lane1"] = eye_result_nic[0]
+    mux_info_dict["NIC_eye_height_lane2"] = eye_result_nic[1]
+
+    if read_side == 1:
+        if y_cable.check_if_link_is_active_for_torA(physical_port):
+            mux_info_dict["link_status_self"] = "up"
+        else:
+            mux_info_dict["link_status_self"] = "down"
+        if y_cable.check_if_link_is_active_for_torB(physical_port):
+            mux_info_dict["link_status_peer"] = "up"
+        else:
+            mux_info_dict["link_status_peer"] = "down"
+    else:
+        if y_cable.check_if_link_is_active_for_torB(physical_port):
+            mux_info_dict["link_status_self"] = "up"
+        else:
+            mux_info_dict["link_status_self"] = "down"
+        if y_cable.check_if_link_is_active_for_torA(physical_port):
+            mux_info_dict["link_status_peer"] = "up"
+        else:
+            mux_info_dict["link_status_peer"] = "down"
+
+    if y_cable.check_if_link_is_active_for_NIC(physical_port):
+        mux_info_dict["link_status_nic"] = "up"
+    else:
+        mux_info_dict["link_status_nic"] = "down"
+
+    if read_side == 1:
+        mux_static_info_dict["read_side"] = "tor1"
+    else:
+        mux_static_info_dict["read_side"] = "tor2"
+
+    cursor_nic_values = []
+    cursor_tor1_values = []
+    cursor_tor2_values = []
+    for i in range(0,1):
+        cursor_nic_values[i] = y_cable.get_target_cursor_values(physical_port, i, TARGET_NIC)
+        cursor_tor1_values[i] = y_cable.get_target_cursor_values(physical_port, i, TARGET_TOR1)
+        cursor_tor2_values[i] = y_cable.get_target_cursor_values(physical_port, i, TARGET_TOR2)
+
+    for i in range(0,1):
+        mux_static_info_dict[("Nic_Lane{}_Precursor1".format(i))] = cursor_nic_values[i][0]
+        mux_static_info_dict[("Nic_Lane{}_Precursor2".format(i))] = cursor_nic_values[i][1]
+        mux_static_info_dict[("Nic_Lane{}_Maincursor".format(i))] = cursor_nic_values[i][2]
+        mux_static_info_dict[("Nic_Lane{}_Postcursor1".format(i))] = cursor_nic_values[i][3]
+        mux_static_info_dict[("Nic_Lane{}_Postcursor2".format(i))] = cursor_nic_values[i][4]
+
+    if read_side == 1:
+        for i in range(0,1):
+            mux_static_info_dict[("TOR_self_Lane{}_Precursor1".format(i))] = cursor_tor1_values[i][0]
+            mux_static_info_dict[("TOR_self_Lane{}_Precursor2".format(i))] = cursor_tor1_values[i][1]
+            mux_static_info_dict[("TOR_self_Lane{}_Maincursor".format(i))] = cursor_tor1_values[i][2]
+            mux_static_info_dict[("TOR_self_Lane{}_Postcursor1".format(i))] = cursor_tor1_values[i][3]
+            mux_static_info_dict[("TOR_self_Lane{}_Postcursor2".format(i))] = cursor_tor1_values[i][4]
+
+        for i in range(0,1):
+            mux_static_info_dict[("TOR_peer_Lane{}_Precursor1".format(i))] = cursor_tor2_values[i][0]
+            mux_static_info_dict[("TOR_peer_Lane{}_Precursor2".format(i))] = cursor_tor2_values[i][1]
+            mux_static_info_dict[("TOR_peer_Lane{}_Maincursor".format(i))] = cursor_tor2_values[i][2]
+            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor1".format(i))] = cursor_tor2_values[i][3]
+            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor2".format(i))] = cursor_tor2_values[i][4]
+    else:
+        for i in range(0,1):
+            mux_static_info_dict[("TOR_self_Lane{}_Precursor1".format(i))] = cursor_tor2_values[i][0]
+            mux_static_info_dict[("TOR_self_Lane{}_Precursor2".format(i))] = cursor_tor2_values[i][1]
+            mux_static_info_dict[("TOR_self_Lane{}_Maincursor".format(i))] = cursor_tor2_values[i][2]
+            mux_static_info_dict[("TOR_self_Lane{}_Postcursor1".format(i))] = cursor_tor2_values[i][3]
+            mux_static_info_dict[("TOR_self_Lane{}_Postcursor2".format(i))] = cursor_tor2_values[i][4]
+
+        for i in range(0,1):
+            mux_static_info_dict[("TOR_peer_Lane{}_Precursor1".format(i))] = cursor_tor1_values[i][0]
+            mux_static_info_dict[("TOR_peer_Lane{}_Precursor2".format(i))] = cursor_tor1_values[i][1]
+            mux_static_info_dict[("TOR_peer_Lane{}_Maincursor".format(i))] = cursor_tor1_values[i][2]
+            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor1".format(i))] = cursor_tor1_values[i][3]
+            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor2".format(i))] = cursor_tor1_values[i][4]
+
+   return (mux_info_dict, mux_static_info_dict)
+
+def post_port_mux_info_to_db(logical_port_name, table, static_table,
+                             stop_event=threading.Event()):
+
+    physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+    if physical_port_list is None:
+        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
+        return -1
+
+    if len(physical_port_list) > 1:
+        helper_logger.log_warning(
+            "Error: Retreived multiple ports for a Y cable port {}".format(logical_port_name))
+        return -1
+
+    for physical_port in physical_port_list:
+        if stop_event.is_set():
+            break
+
+        if not _wrapper_get_presence(physical_port):
+            continue
+
+        (mux_info_dict , mux_static_info_dict)= _wrapper_get_muxcable_info(physical_port, logical_port_name)
+        if mux_info_dict is not None:
+            #transceiver_dict[physical_port] = port_info_dict
+            fvs = swsscommon.FieldValuePairs(
+                [('tor_active',  mux_info_dict["tor_active"]),
+                 ('mux_direction',  mux_info_dict["mux_direction"]),
+                 ('manual_switch_count', mux_info_dict["manual_switch_count"]),
+                 ('auto_switch_count', mux_info_dict["auto_switch_count"]),
+                 ('auto_switch_count', mux_info_dict["auto_switch_count"]),
+                 ('link_status_self', mux_info_dict["link_status_self"]),
+                 ('link_status_peer', mux_info_dict["link_status_peer"]),
+                 ('link_status_nic', mux_info_dict["link_status_nic"]),
+                 ('nic_lane1_active', mux_info_dict["nic_lane1_active"]),
+                 ('nic_lane2_active', mux_info_dict["nic_lane2_active"]),
+                 ('nic_lane3_active', mux_info_dict["nic_lane3_active"]),
+                 ('nic_lane4_active', mux_info_dict["nic_lane4_active"]),
+                 ('Self_eye_height_lane1', mux_info_dict["Self_eye_height_lane1"]),
+                 ('Self_eye_height_lane2', mux_info_dict["Self_eye_height_lane2"]),
+                 ('Peer_eye_height_lane1', mux_info_dict["Peer_eye_height_lane1"]),
+                 ('Peer_eye_height_lane2', mux_info_dict["Peer_eye_height_lane1"]),
+                 ('NIC_eye_height_lane1', mux_info_dict["NIC_eye_height_lane1"]),
+                 ('NIC_eye_height_lane2', mux_info_dict["NIC_eye_height_lane2"]),
+                 ])
+            table.set(logical_port_name, fvs)
+        else:
+            return -1
+
+        if mux_static_info_dict is not None:
+            #transceiver_dict[physical_port] = port_info_dict
+            fvs = swsscommon.FieldValuePairs(
+                [('read_side',  mux_static_info_dict["read_side"]),
+                 ('Nic_Lane1_Precursor1', mux_static_info_dict["Nic_Lane1_Precursor1"]),
+                 ('Nic_Lane1_Precursor2', mux_static_info_dict["Nic_Lane1_Precursor2"]),
+                 ('Nic_Lane1_Maincursor', mux_static_info_dict["Nic_Lane1_Maincursor"]),
+                 ('Nic_Lane1_Precursor1', mux_static_info_dict["Nic_Lane1_Postcursor1"]),
+                 ('Nic_Lane1_Postcursor2', mux_static_info_dict["Nic_Lane1_Postcursor2"]),
+                 ('Nic_Lane2_Precursor1', mux_static_info_dict["Nic_Lane2_Precursor1"]),
+                 ('Nic_Lane2_Precursor2', mux_static_info_dict["Nic_Lane2_Precursor2"]),
+                 ('Nic_Lane2_Maincursor', mux_static_info_dict["Nic_Lane2_Maincursor"]),
+                 ('Nic_Lane2_Precursor1', mux_static_info_dict["Nic_Lane2_Postcursor1"]),
+                 ('Nic_Lane2_Postcursor2', mux_static_info_dict["Nic_Lane2_Postcursor2"]),
+                 ('TOR_self_Lane1_Precursor1', mux_static_info_dict["TOR_self_Lane1_Precursor1"]),
+                 ('TOR_self_Lane1_Precursor2', mux_static_info_dict["TOR_self_Lane1_Precursor2"]),
+                 ('TOR_self_Lane1_Maincursor', mux_static_info_dict["TOR_self_Lane1_Maincursor"]),
+                 ('TOR_self_Lane1_Precursor1', mux_static_info_dict["TOR_self_Lane1_Postcursor1"]),
+                 ('TOR_self_Lane1_Postcursor2', mux_static_info_dict["TOR_self_Lane1_Postcursor2"]),
+                 ('TOR_self_Lane2_Precursor1', mux_static_info_dict["TOR_self_Lane2_Precursor1"]),
+                 ('TOR_self_Lane2_Precursor2', mux_static_info_dict["TOR_self_Lane2_Precursor2"]),
+                 ('TOR_self_Lane2_Maincursor', mux_static_info_dict["TOR_self_Lane2_Maincursor"]),
+                 ('TOR_self_Lane2_Precursor1', mux_static_info_dict["TOR_self_Lane2_Postcursor1"]),
+                 ('TOR_self_Lane2_Postcursor2', mux_static_info_dict["TOR_self_Lane2_Postcursor2"]),
+                 ('TOR_peer_Lane1_Precursor1', mux_static_info_dict["TOR_peer_Lane1_Precursor1"]),
+                 ('TOR_peer_Lane1_Precursor2', mux_static_info_dict["TOR_peer_Lane1_Precursor2"]),
+                 ('TOR_peer_Lane1_Maincursor', mux_static_info_dict["TOR_peer_Lane1_Maincursor"]),
+                 ('TOR_peer_Lane1_Precursor1', mux_static_info_dict["TOR_peer_Lane1_Postcursor1"]),
+                 ('TOR_peer_Lane1_Postcursor2', mux_static_info_dict["TOR_peer_Lane1_Postcursor2"]),
+                 ('TOR_peer_Lane2_Precursor1', mux_static_info_dict["TOR_peer_Lane2_Precursor1"]),
+                 ('TOR_peer_Lane2_Precursor2', mux_static_info_dict["TOR_peer_Lane2_Precursor2"]),
+                 ('TOR_peer_Lane2_Maincursor', mux_static_info_dict["TOR_peer_Lane2_Maincursor"]),
+                 ('TOR_peer_Lane2_Precursor1', mux_static_info_dict["TOR_peer_Lane2_Postcursor1"]),
+                 ('TOR_peer_Lane2_Postcursor2', mux_static_info_dict["TOR_peer_Lane2_Postcursor2"]),
+                 ])
+            static_tbl.set(logical_port_name, fvs)
+        else:
+            return -1
+
+
+def post_port_mux_static_info_to_db(is_warm_start, stop_event=threading.Event()):
+    # Connect to STATE_DB and create transceiver mux/static info tables
+    state_db, mux_tbl, static_tbl= {}, {}, {}
+
+    # Get the namespaces in the platform
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
+
+    # Post all the current interface dom/sfp info to STATE_DB
+    logical_port_list = y_cable_platform_sfputil.logical
+    for logical_port_name in logical_port_list:
+        if stop_event.is_set():
+            break
+
+        # Get the asic to which this port belongs
+        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
+        if asic_index is None:
+            logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+            continue
+        post_port_mux_info_to_db(logical_port_name, mux_tbl[asic_index], static_tbl[asic_index], stop_event)
+
+
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
