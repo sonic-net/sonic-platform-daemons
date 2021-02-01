@@ -571,14 +571,8 @@ class DaemonPsud(daemon_base.DaemonBase):
             return
 
         for index, psu_status in self.psu_status_dict.items():
-            try:
-                fvs = swsscommon.FieldValuePairs([
-                    ('led_status', str(try_get(psu_status.psu.get_status_led)))
-                ])
-            except Exception as e:
-                self.log_warning('Failed to get led status for psu {}'.format(index))
-                fvs = swsscommon.FieldValuePairs([
-                    ('led_status', NOT_AVAILABLE)
+            fvs = swsscommon.FieldValuePairs([
+                ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
                 ])
             psu_tbl.set(get_psu_key(index), fvs)
             self._update_psu_fan_led_status(psu_status.psu, index)
@@ -588,15 +582,9 @@ class DaemonPsud(daemon_base.DaemonBase):
         fan_list = psu.get_all_fans()
         for index, fan in enumerate(fan_list):
             fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
-            try:
-                fvs = swsscommon.FieldValuePairs([
-                    (FAN_INFO_LED_STATUS_FIELD, str(try_get(fan.get_status_led)))
-                ])
-            except Exception as e:
-                self.log_warning('Failed to get led status for fan {}'.format(fan_name))
-                fvs = swsscommon.FieldValuePairs([
-                    (FAN_INFO_LED_STATUS_FIELD, NOT_AVAILABLE)
-                ])
+            fvs = swsscommon.FieldValuePairs([
+                (FAN_INFO_LED_STATUS_FIELD, str(try_get(fan.get_status_led, NOT_AVAILABLE)))
+            ])
             self.fan_tbl.set(fan_name, fvs)
 
     def update_psu_chassis_info(self, chassis_tbl):
