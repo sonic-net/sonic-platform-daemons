@@ -563,8 +563,8 @@ class DaemonPsud(daemon_base.DaemonBase):
         try:
             color = psu.STATUS_LED_COLOR_GREEN if psu_status.is_ok() else psu.STATUS_LED_COLOR_RED
             psu.set_status_led(color)
-        except NotImplementedError as e:
-            pass
+        except NotImplementedError:
+            self.log_warning("set_status_led() not implemented")
 
     def _update_led_color(self, psu_tbl):
         if not platform_chassis:

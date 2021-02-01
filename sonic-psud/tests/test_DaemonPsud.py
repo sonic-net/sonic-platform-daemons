@@ -156,6 +156,13 @@ class TestDaemonPsud(object):
         daemon_psud._set_psu_led(mock_psu, psu_status)
         assert mock_psu.get_status_led() == mock_psu.STATUS_LED_COLOR_GREEN
 
+        # Test set_status_led not implemented
+        mock_psu.set_status_led = mock.MagicMock(side_effect = NotImplementedError)
+        daemon_psud.log_warning = mock.MagicMock()
+        daemon_psud._set_psu_led(mock_psu, psu_status)
+        assert daemon_psud.log_warning.call_count == 1
+        daemon_psud.log_warning.assert_called_with("set_status_led() not implemented")
+
     def test_update_led_color(self):
         mock_psu = mock_platform.MockPsu(True, True, "PSU 1", 0)
         mock_psu_tbl = mock.MagicMock()
