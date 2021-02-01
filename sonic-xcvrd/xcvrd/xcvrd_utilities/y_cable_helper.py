@@ -637,7 +637,7 @@ def _wrapper_get_muxcable_info(physical_port, logical_port_name):
             mux_static_info_dict[("TOR_peer_Lane{}_Postcursor1".format(i))] = cursor_tor1_values[i][3]
             mux_static_info_dict[("TOR_peer_Lane{}_Postcursor2".format(i))] = cursor_tor1_values[i][4]
 
-   return (mux_info_dict, mux_static_info_dict)
+   return mux_info_dict, mux_static_info_dict
 
 def post_port_mux_info_to_db(logical_port_name, table, static_table,
                              stop_event=threading.Event()):
