@@ -11,22 +11,10 @@ trigger:
 pool:
   vmImage: 'ubuntu-20.04'
 
-strategy:
-  matrix:
-    Python27:
-      python.version: '2.7'
-    Python37:
-      python.version: '3.7'
-
 container:
   image: sonicdev-microsoft.azurecr.io:443/sonic-slave-buster:latest
 
 steps:
-- task: UsePythonVersion@0
-  displayName: 'Use Python $(python.version)'
-  inputs:
-    versionSpec: '$(python.version)'
-
 #- script: |
 #    sudo apt-get install -y libhiredis0.14 libhiredis-dev
 #    sudo apt-get install -y libzmq5 libzmq3-dev
@@ -44,37 +32,49 @@ steps:
 #  displayName: "Install dependencies"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-chassisd
   displayName: "Test and build sonic-chassisd"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-ledd
   displayName: "Test and build sonic-ledd"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-pcied
   displayName: "Test and build sonic-pcied"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-psud
   displayName: "Test and build sonic-psud"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-syseepromd
   displayName: "Test and build sonic-syseepromd"
 
 - script: |
-    python setup.py test
-    python setup.py bdist_wheel
+    python2 setup.py test
+    python2 setup.py bdist_wheel
+    python3 setup.py test
+    python3 setup.py bdist_wheel
   workingDirectory: sonic-thermalctld
   displayName: "Test and build sonic-thermalctld"
