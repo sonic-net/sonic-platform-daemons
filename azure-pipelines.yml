@@ -4,16 +4,77 @@
 # https://aka.ms/yaml
 
 trigger:
-- main
+  branches:
+    include:
+      - "*"
 
 pool:
   vmImage: 'ubuntu-20.04'
 
+strategy:
+  matrix:
+    Python27:
+      python.version: '2.7'
+    Python37:
+      python.version: '3.7'
+
+container:
+  image: sonicdev-microsoft.azurecr.io:443/sonic-slave-buster:latest
+
 steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+- task: UsePythonVersion@0
+  displayName: 'Use Python $(python.version)'
+  inputs:
+    versionSpec: '$(python.version)'
+
+#- script: |
+#    sudo apt-get install -y libhiredis0.14 libhiredis-dev
+#    sudo apt-get install -y libzmq5 libzmq3-dev
+#    sudo apt-get install -qq -y \
+#        libhiredis-dev \
+#        libnl-3-dev \
+#        libnl-genl-3-dev \
+#        libnl-route-3-dev \
+#        libnl-nf-3-dev \
+#        swig3.0
+#    sudo apt-get install -y libdbus-1-3
+#    sudo apt-get install -y libteam-dev \
+#        libteam5 \
+#        libteamdctl0
+#  displayName: "Install dependencies"
 
 - script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-chassisd
+  displayName: "Test and build sonic-chassisd"
+
+- script: |
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-ledd
+  displayName: "Test and build sonic-ledd"
+
+- script: |
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-pcied
+  displayName: "Test and build sonic-pcied"
+
+- script: |
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-psud
+  displayName: "Test and build sonic-psud"
+
+- script: |
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-syseepromd
+  displayName: "Test and build sonic-syseepromd"
+
+- script: |
+    python setup.py test
+    python setup.py bdist_wheel
+  workingDirectory: sonic-thermalctld
+  displayName: "Test and build sonic-thermalctld"
