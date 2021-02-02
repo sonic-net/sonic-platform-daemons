@@ -14,6 +14,7 @@ import signal
 import sys
 import threading
 from datetime import datetime
+
 from sonic_py_common import daemon_base, logger
 
 # If unit testing is occurring, mock swsscommon and module_base
@@ -547,13 +548,13 @@ class DaemonPsud(daemon_base.DaemonBase):
         fan_list = psu.get_all_fans()
         for index, fan in enumerate(fan_list):
             fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
-            direction = try_get(fan.get_direction) if presence else NOT_AVAILABLE
-            speed = try_get(fan.get_speed) if presence else NOT_AVAILABLE
+            direction = try_get(fan.get_direction, NOT_AVAILABLE) if presence else NOT_AVAILABLE
+            speed = try_get(fan.get_speed, NOT_AVAILABLE) if presence else NOT_AVAILABLE
             status = "True" if presence else "False"
             fvs = swsscommon.FieldValuePairs(
                 [(FAN_INFO_PRESENCE_FIELD, str(presence)),
-                 (FAN_INFO_STATUS_FIELD, str(status)),
-                 (FAN_INFO_DIRECTION_FIELD, str(direction)),
+                 (FAN_INFO_STATUS_FIELD, status),
+                 (FAN_INFO_DIRECTION_FIELD, direction),
                  (FAN_INFO_SPEED_FIELD, str(speed)),
                  (FAN_INFO_TIMESTAMP_FIELD, datetime.now().strftime('%Y%m%d %H:%M:%S'))
                  ])

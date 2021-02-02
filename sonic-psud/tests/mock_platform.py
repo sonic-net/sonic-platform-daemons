@@ -94,9 +94,20 @@ class MockFanDrawer(MockDevice):
 
 
 class MockFan(MockDevice):
-    def __init__(self, name):
+    FAN_DIRECTION_INTAKE = "intake"
+    FAN_DIRECTION_EXHAUST = "exhaust"
+
+    def __init__(self, name, direction, speed=50):
         self.name = name
+        self.direction = direction
+        self.speed = speed
         self.status_led_color = self.STATUS_LED_COLOR_OFF
+
+    def get_direction(self):
+        return self.direction
+
+    def get_speed(self):
+        return self.speed
 
     def set_status_led(self, color):
         self.status_led_color = color
@@ -104,6 +115,7 @@ class MockFan(MockDevice):
 
     def get_status_led(self):
         return self.status_led_color
+
 
 
 class MockModule(MockDevice):
