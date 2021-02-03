@@ -42,7 +42,6 @@ class DaemonPcied(DaemonBase):
 
         (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
         pciefilePath = os.path.join(platform_path, PCIE_CONF_FILE)
-        sys.path.append(os.path.abspath(pciefilePath))
         if not os.path.exists(pciefilePath):
             self.log_error("Platform pcie configuration file doesn't exist! Exiting ...")
             sys.exit("Platform PCIe Configuration file doesn't exist!")
@@ -57,7 +56,6 @@ class DaemonPcied(DaemonBase):
     def check_pcie_devices(self):
         try:
             platform_path, _ = device_info.get_paths_to_platform_and_hwsku_dirs()
-            sys.path.append(os.path.abspath(platform_path))
             from sonic_platform_base.sonic_pcie.pcie_common import PcieUtil
             platform_pcieutil = PcieUtil(platform_path)
         except ImportError as e:
