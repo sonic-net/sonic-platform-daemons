@@ -6,7 +6,7 @@
 trigger:
   branches:
     include:
-      - "*"
+      - '*'
 
 pool:
   vmImage: 'ubuntu-20.04'
@@ -33,12 +33,10 @@ steps:
 
 - script: |
     set -e
-    python2 setup.py test
-    python2 setup.py bdist_wheel
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-chassisd
-  displayName: "Test and build sonic-chassisd"
+  displayName: 'Test and build sonic-chassisd'
 
 - script: |
     set -e
@@ -47,7 +45,7 @@ steps:
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-ledd
-  displayName: "Test and build sonic-ledd"
+  displayName: 'Test and build sonic-ledd'
 
 - script: |
     set -e
@@ -56,7 +54,7 @@ steps:
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-pcied
-  displayName: "Test and build sonic-pcied"
+  displayName: 'Test and build sonic-pcied'
 
 - script: |
     set -e
@@ -65,7 +63,7 @@ steps:
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-psud
-  displayName: "Test and build sonic-psud"
+  displayName: 'Test and build sonic-psud'
 
 - script: |
     set -e
@@ -74,7 +72,7 @@ steps:
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-syseepromd
-  displayName: "Test and build sonic-syseepromd"
+  displayName: 'Test and build sonic-syseepromd'
 
 - script: |
     set -e
@@ -83,4 +81,11 @@ steps:
     python3 setup.py test
     python3 setup.py bdist_wheel
   workingDirectory: sonic-thermalctld
-  displayName: "Test and build sonic-thermalctld"
+  displayName: 'Test and build sonic-thermalctld'
+
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/'
+    archiveFilePatterns: '**/*.whl'
+    artifactName: 'wheels'
+  displayName: 'Archive Python wheel packages'
