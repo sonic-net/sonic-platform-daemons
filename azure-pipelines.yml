@@ -27,7 +27,6 @@ steps:
 
 - script: |
     set -xe
-    ls 
     sudo dpkg -i libnl-3-200_*.deb
     sudo dpkg -i libnl-genl-3-200_*.deb
     sudo dpkg -i libnl-route-3-200_*.deb
@@ -41,7 +40,6 @@ steps:
 
 - script: |
     set -xe
-    ls 
     pip2 install swsssdk-2.0.1-py2-none-any.whl
     pip2 install sonic_py_common-1.0-py2-none-any.whl
     pip3 install swsssdk-2.0.1-py3-none-any.whl
