@@ -261,7 +261,7 @@ class PsuChassisInfo(logger.Logger):
             color = Psu.STATUS_LED_COLOR_GREEN if master_status_good else Psu.STATUS_LED_COLOR_RED
             Psu.set_status_master_led(color)
         except NotImplementedError:
-            pass
+            self.log_warning("set_status_master_led() not implemented")
 
         log_on_status_changed(self, self.master_status_good,
                               'PSU supplied power warning cleared: supplied power is back to normal.',
