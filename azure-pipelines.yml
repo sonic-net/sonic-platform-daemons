@@ -30,6 +30,15 @@ steps:
 #        libteam5 \
 #        libteamdctl0
 #  displayName: "Install dependencies"
+- task: DownloadPipelineArtifact@2
+  inputs:
+    source: specific
+    project: build
+    pipeline: 1
+    artifacts: target/python-wheels
+    runVersion: 'latestFromBranch'
+    runBranch: 'refs/heads/master'
+  displayName: "Download Python wheels from latest sonic-buildimage pipeline"
 
 - script: |
     set -e
