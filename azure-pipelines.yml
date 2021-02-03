@@ -101,7 +101,16 @@ steps:
 
 - task: PublishPipelineArtifact@1
   inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)/'
+    targetPath: '$(System.DefaultWorkingDirectory)/'
     archiveFilePatterns: '**/*.whl'
     artifactName: 'wheels'
   displayName: 'Archive Python wheel packages'
+
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: '$(System.DefaultWorkingDirectory)/'
+    archiveFilePatterns: |
+      **/coverage.xml
+      **/htmlcov
+    artifactName: 'test_coverage'
+  displayName: 'Archive Pytest coverage reports'
