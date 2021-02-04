@@ -369,7 +369,3 @@ steps:
 - publish: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/dist/'
   artifact: sonic-thermalctld
   displayName: "Publish sonic-thermalctld wheels"
-
-#- publish: $(System.DefaultWorkingDirectory)/
-#  artifact: sonic-platform-daemons
-#  displayName: "Archive artifacts"
