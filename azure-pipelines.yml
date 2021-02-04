@@ -99,18 +99,6 @@ steps:
   workingDirectory: sonic-thermalctld
   displayName: 'Test and build sonic-thermalctld'
 
-- task: PublishPipelineArtifact@1
-  inputs:
-    targetPath: '$(System.DefaultWorkingDirectory)/'
-    archiveFilePatterns: '**/*.whl'
-    artifactName: 'wheels'
-  displayName: 'Archive Python wheel packages'
-
-- task: PublishPipelineArtifact@1
-  inputs:
-    targetPath: '$(System.DefaultWorkingDirectory)/'
-    archiveFilePatterns: |
-      **/coverage.xml
-      **/htmlcov
-    artifactName: 'test_coverage'
-  displayName: 'Archive Pytest coverage reports'
+- publish: $(System.DefaultWorkingDirectory)/
+  artifact: sonic-platform-daemons
+  displayName: "Archive artifacts"
