@@ -63,6 +63,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-chassisd (Python 3) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-chassisd/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-chassisd/htmlcov/'
+  displayName: 'Publish sonic-chassisd (Python 3) test coverage'
+
 - script: |
     set -e
     python3 setup.py bdist_wheel
@@ -88,6 +95,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-ledd (Python 2) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-ledd/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-ledd/htmlcov/'
+  displayName: 'Publish sonic-ledd (Python 2) test coverage'
+
 - script: |
     set -e
     python2 setup.py bdist_wheel
@@ -106,6 +120,13 @@ steps:
     failTaskOnFailedTests: true
   condition: succeededOrFailed()
   displayName: 'Publish sonic-ledd (Python 3) test results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-ledd/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-ledd/htmlcov/'
+  displayName: 'Publish sonic-ledd (Python 3) test coverage'
 
 - script: |
     set -e
@@ -132,6 +153,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-pcied (Python 2) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-pcied/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-pcied/htmlcov/'
+  displayName: 'Publish sonic-pcied (Python 2) test coverage'
+
 - script: |
     set -e
     python2 setup.py bdist_wheel
@@ -150,6 +178,13 @@ steps:
     failTaskOnFailedTests: true
   condition: succeededOrFailed()
   displayName: 'Publish sonic-pcied (Python 3) test results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-pcied/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-pcied/htmlcov/'
+  displayName: 'Publish sonic-pcied (Python 3) test coverage'
 
 - script: |
     set -e
@@ -176,6 +211,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-psud (Python 2) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-psud/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-psud/htmlcov/'
+  displayName: 'Publish sonic-psud (Python 2) test coverage'
+
 - script: |
     set -e
     python2 setup.py bdist_wheel
@@ -194,6 +236,13 @@ steps:
     failTaskOnFailedTests: true
   condition: succeededOrFailed()
   displayName: 'Publish sonic-psud (Python 3) test results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-psud/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-psud/htmlcov/'
+  displayName: 'Publish sonic-psud (Python 3) test coverage'
 
 - script: |
     set -e
@@ -220,6 +269,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-syseepromd (Python 2) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/htmlcov/'
+  displayName: 'Publish sonic-syseepromd (Python 2) test coverage'
+
 - script: |
     set -e
     python2 setup.py bdist_wheel
@@ -238,6 +294,13 @@ steps:
     failTaskOnFailedTests: true
   condition: succeededOrFailed()
   displayName: 'Publish sonic-syseepromd (Python 3) test results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/htmlcov/'
+  displayName: 'Publish sonic-syseepromd (Python 3) test coverage'
 
 - script: |
     set -e
@@ -264,6 +327,13 @@ steps:
   condition: succeededOrFailed()
   displayName: 'Publish sonic-thermalctld (Python 2) test results'
 
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/htmlcov/'
+  displayName: 'Publish sonic-thermalctld (Python 2) test coverage'
+
 - script: |
     set -e
     python2 setup.py bdist_wheel
@@ -282,6 +352,13 @@ steps:
     failTaskOnFailedTests: true
   condition: succeededOrFailed()
   displayName: 'Publish sonic-thermalctld (Python 3) test results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/htmlcov/'
+  displayName: 'Publish sonic-thermalctld (Python 3) test coverage'
 
 - script: |
     set -e
