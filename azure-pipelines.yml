@@ -47,58 +47,269 @@ steps:
   workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
   displayName: 'Install Python dependencies'
 
+
+# sonic-chassisd
+
 - script: |
-    set -xe
-    python3 setup.py test
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-chassisd
+  displayName: 'Test sonic-chassisd (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-chassisd (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-chassisd
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-chassisd (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-chassisd
-  displayName: 'Test and build sonic-chassisd'
+  displayName: 'Build sonic-chassisd (Python 3)'
+
+- publish: *.whl
+  artifact: sonic-chassisd
+  workingDirectory: sonic-chassisd/dist
+  displayName: "Publish sonic-chassisd wheels"
+
+# sonic-ledd
 
 - script: |
-    set -xe
-    python2 setup.py test
+    python2 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-ledd
+  displayName: 'Test sonic-ledd (Python 2)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-ledd (Python 2)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-ledd
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-ledd (Python 2) test results'
+
+- script: |
+    set -e
     python2 setup.py bdist_wheel
-    python3 setup.py test
+  workingDirectory: sonic-ledd
+  displayName: 'Build sonic-ledd (Python 2)'
+
+- script: |
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-ledd
+  displayName: 'Test sonic-ledd (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-ledd (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-ledd
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-ledd (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-ledd
-  displayName: 'Test and build sonic-ledd'
+  displayName: 'Build sonic-ledd (Python 3)'
+
+- publish: *.whl
+  artifact: sonic-ledd
+  workingDirectory: sonic-ledd/dist
+  displayName: "Publish sonic-ledd wheels"
+
+# sonic-pcied
 
 - script: |
-    set -xe
-    python2 setup.py test
+    python2 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-pcied
+  displayName: 'Test sonic-pcied (Python 2)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-pcied (Python 2)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-pcied
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-pcied (Python 2) test results'
+
+- script: |
+    set -e
     python2 setup.py bdist_wheel
-    python3 setup.py test
+  workingDirectory: sonic-pcied
+  displayName: 'Build sonic-pcied (Python 2)'
+
+- script: |
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-pcied
+  displayName: 'Test sonic-pcied (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-pcied (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-pcied
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-pcied (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-pcied
-  displayName: 'Test and build sonic-pcied'
+  displayName: 'Build sonic-pcied (Python 3)'
+
+- publish: *.whl
+  artifact: sonic-pcied
+  workingDirectory: sonic-pcied/dist
+  displayName: "Publish sonic-pcied wheels"
+
+# sonic-psud
 
 - script: |
-    set -xe
-    python2 setup.py test
+    python2 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-psud
+  displayName: 'Test sonic-psud (Python 2)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-psud (Python 2)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-psud
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-psud (Python 2) test results'
+
+- script: |
+    set -e
     python2 setup.py bdist_wheel
-    python3 setup.py test
+  workingDirectory: sonic-psud
+  displayName: 'Build sonic-psud (Python 2)'
+
+- script: |
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-psud
+  displayName: 'Test sonic-psud (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-psud (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-psud
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-psud (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-psud
-  displayName: 'Test and build sonic-psud'
+  displayName: 'Build sonic-psud (Python 3)'
+
+- publish: *.whl
+  artifact: sonic-psud
+  workingDirectory: sonic-psud/dist
+  displayName: "Publish sonic-psud wheels"
+
+# sonic-syseepromd
 
 - script: |
-    set -xe
-    python2 setup.py test
+    python2 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-syseepromd
+  displayName: 'Test sonic-syseepromd (Python 2)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-syseepromd (Python 2)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-syseepromd
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-syseepromd (Python 2) test results'
+
+- script: |
+    set -e
     python2 setup.py bdist_wheel
-    python3 setup.py test
+  workingDirectory: sonic-syseepromd
+  displayName: 'Build sonic-syseepromd (Python 2)'
+
+- script: |
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-syseepromd
+  displayName: 'Test sonic-syseepromd (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-syseepromd (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-syseepromd
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-syseepromd (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-syseepromd
-  displayName: 'Test and build sonic-syseepromd'
+  displayName: 'Build sonic-syseepromd (Python 3)'
+
+- publish: *.whl
+  artifact: sonic-syseepromd
+  workingDirectory: sonic-syseepromd/dist
+  displayName: "Publish sonic-syseepromd wheels"
+
+# sonic-thermalctld
 
 - script: |
-    set -xe
-    python2 setup.py test
+    python2 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-thermalctld
+  displayName: 'Test sonic-thermalctld (Python 2)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-thermalctld (Python 2)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-thermalctld
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-thermalctld (Python 2) test results'
+
+- script: |
+    set -e
     python2 setup.py bdist_wheel
-    python3 setup.py test
+  workingDirectory: sonic-thermalctld
+  displayName: 'Build sonic-thermalctld (Python 2)'
+
+- script: |
+    python3 setup.py test -a '-v --junitxml test_results.xml'
+  workingDirectory: sonic-thermalctld
+  displayName: 'Test sonic-thermalctld (Python 3)'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFiles: 'test_results.xml'
+    testRunTitle: sonic-thermalctld (Python 3)
+    failTaskOnFailedTests: true
+  workingDirectory: sonic-thermalctld
+  condition: succeededOrFailed()
+  displayName: 'Publish sonic-thermalctld (Python 3) test results'
+
+- script: |
+    set -e
     python3 setup.py bdist_wheel
   workingDirectory: sonic-thermalctld
-  displayName: 'Test and build sonic-thermalctld'
+  displayName: 'Build sonic-thermalctld (Python 3)'
 
-- publish: $(System.DefaultWorkingDirectory)/
-  artifact: sonic-platform-daemons
-  displayName: "Archive artifacts"
+- publish: *.whl
+  artifact: sonic-thermalctld
+  workingDirectory: sonic-thermalctld/dist
+  displayName: "Publish sonic-thermalctld wheels"
+
+#- publish: $(System.DefaultWorkingDirectory)/
+#  artifact: sonic-platform-daemons
+#  displayName: "Archive artifacts"
