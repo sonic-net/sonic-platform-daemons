@@ -11,8 +11,10 @@ trigger:
 pool:
   vmImage: 'ubuntu-20.04'
 
-container:
-  image: sonicdev-microsoft.azurecr.io:443/sonic-slave-buster:latest
+resources:
+  containers:
+  - container: sonic-slave-buster
+    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-buster:latest
 
 parameters:
 - name: project_list
@@ -40,96 +42,99 @@ parameters:
       python2: true
       python3: true
 
-steps:
-- task: DownloadPipelineArtifact@2
-  inputs:
-    source: specific
-    project: build
-    pipeline: 1
-    artifact: sonic-buildimage.kvm
-    runVersion: 'latestFromBranch'
-    runBranch: 'refs/heads/master'
-  displayName: "Download artifacts from latest sonic-buildimage build"
+jobs:
+  - ${{ each project in parameters.project_list }}:
+    - job: ${{ project.root_dir }}
+      container: sonic-slave-buster
+      steps:
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          source: specific
+          project: build
+          pipeline: 1
+          artifact: sonic-buildimage.kvm
+          runVersion: 'latestFromBranch'
+          runBranch: 'refs/heads/master'
+        displayName: "Download artifacts from latest sonic-buildimage build"
 
-- script: |
-    set -xe
-    sudo dpkg -i libnl-3-200_*.deb
-    sudo dpkg -i libnl-genl-3-200_*.deb
-    sudo dpkg -i libnl-route-3-200_*.deb
-    sudo dpkg -i libnl-nf-3-200_*.deb
-    sudo dpkg -i libhiredis0.14_*.deb
-    sudo dpkg -i libswsscommon_1.0.0_amd64.deb
-    sudo dpkg -i python-swsscommon_1.0.0_amd64.deb
-    sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-  workingDirectory: $(Pipeline.Workspace)/target/debs/buster/
-  displayName: 'Install Debian dependencies'
+      - script: |
+          set -xe
+          sudo dpkg -i libnl-3-200_*.deb
+          sudo dpkg -i libnl-genl-3-200_*.deb
+          sudo dpkg -i libnl-route-3-200_*.deb
+          sudo dpkg -i libnl-nf-3-200_*.deb
+          sudo dpkg -i libhiredis0.14_*.deb
+          sudo dpkg -i libswsscommon_1.0.0_amd64.deb
+          sudo dpkg -i python-swsscommon_1.0.0_amd64.deb
+          sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
+        workingDirectory: $(Pipeline.Workspace)/target/debs/buster/
+        displayName: 'Install Debian dependencies'
 
-- script: |
-    set -xe
-    pip2 install swsssdk-2.0.1-py2-none-any.whl
-    pip2 install sonic_py_common-1.0-py2-none-any.whl
-    pip3 install swsssdk-2.0.1-py3-none-any.whl
-    pip3 install sonic_py_common-1.0-py3-none-any.whl
-  workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
-  displayName: 'Install Python dependencies'
+      - script: |
+          set -xe
+          pip2 install swsssdk-2.0.1-py2-none-any.whl
+          pip2 install sonic_py_common-1.0-py2-none-any.whl
+          pip3 install swsssdk-2.0.1-py3-none-any.whl
+          pip3 install sonic_py_common-1.0-py3-none-any.whl
+        workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
+        displayName: 'Install Python dependencies'
 
-- ${{ each project in parameters.project_list }}:
-  # Python 2
-  - ${{ if eq(project.python2, true) }}:
-    - script: |
-        python2 setup.py test
-      workingDirectory: ${{ project.root_dir }}
-      displayName: 'Test ${{ project.root_dir }} (Python 2)'
+      # Python 2
+      - ${{ if eq(project.python2, true) }}:
+        - script: |
+            python2 setup.py test
+          workingDirectory: ${{ project.root_dir }}
+          displayName: 'Test ${{ project.root_dir }} (Python 2)'
 
-    - task: PublishTestResults@2
-      inputs:
-        testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
-        testRunTitle: ${{ project.root_dir }} (Python 2)
-        failTaskOnFailedTests: true
-      condition: succeededOrFailed()
-      displayName: 'Publish ${{ project.root_dir }} (Python 2) test results'
+        - task: PublishTestResults@2
+          inputs:
+            testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
+            testRunTitle: ${{ project.root_dir }} (Python 2)
+            failTaskOnFailedTests: true
+          condition: succeededOrFailed()
+          displayName: 'Publish ${{ project.root_dir }} (Python 2) test results'
 
-    - task: PublishCodeCoverageResults@1
-      inputs:
-        codeCoverageTool: Cobertura
-        summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
-        reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-      displayName: 'Publish ${{ project.root_dir }} (Python 2) test coverage'
+        - task: PublishCodeCoverageResults@1
+          inputs:
+            codeCoverageTool: Cobertura
+            summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
+            reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
+          displayName: 'Publish ${{ project.root_dir }} (Python 2) test coverage'
 
-    - script: |
-        set -e
-        python2 setup.py bdist_wheel
-      workingDirectory: ${{ project.root_dir }}
-      displayName: 'Build ${{ project.root_dir }} (Python 2)'
+        - script: |
+            set -e
+            python2 setup.py bdist_wheel
+          workingDirectory: ${{ project.root_dir }}
+          displayName: 'Build ${{ project.root_dir }} (Python 2)'
 
-  # Python 3
-  - ${{ if eq(project.python3, true) }}:
-    - script: |
-        python3 setup.py test
-      workingDirectory: ${{ project.root_dir }}
-      displayName: 'Test ${{ project.root_dir }} (Python 3)'
+      # Python 3
+      - ${{ if eq(project.python3, true) }}:
+        - script: |
+            python3 setup.py test
+          workingDirectory: ${{ project.root_dir }}
+          displayName: 'Test ${{ project.root_dir }} (Python 3)'
 
-    - task: PublishTestResults@2
-      inputs:
-        testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
-        testRunTitle: ${{ project.root_dir }} (Python 3)
-        failTaskOnFailedTests: true
-      condition: succeededOrFailed()
-      displayName: 'Publish ${{ project.root_dir }} (Python 3) test results'
+        - task: PublishTestResults@2
+          inputs:
+            testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
+            testRunTitle: ${{ project.root_dir }} (Python 3)
+            failTaskOnFailedTests: true
+          condition: succeededOrFailed()
+          displayName: 'Publish ${{ project.root_dir }} (Python 3) test results'
 
-    - task: PublishCodeCoverageResults@1
-      inputs:
-        codeCoverageTool: Cobertura
-        summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
-        reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-      displayName: 'Publish ${{ project.root_dir }} (Python 3) test coverage'
+        - task: PublishCodeCoverageResults@1
+          inputs:
+            codeCoverageTool: Cobertura
+            summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
+            reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
+          displayName: 'Publish ${{ project.root_dir }} (Python 3) test coverage'
 
-    - script: |
-        set -e
-        python3 setup.py bdist_wheel
-      workingDirectory: ${{ project.root_dir }}
-      displayName: 'Build ${{ project.root_dir }} (Python 3)'
+        - script: |
+            set -e
+            python3 setup.py bdist_wheel
+          workingDirectory: ${{ project.root_dir }}
+          displayName: 'Build ${{ project.root_dir }} (Python 3)'
 
-  - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
-    artifact: ${{ project.root_dir }}
-    displayName: "Publish ${{ project.root_dir }} wheels"
+      - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
+        artifact: ${{ project.root_dir }}
+        displayName: "Publish ${{ project.root_dir }} wheels"
