@@ -1,4 +1,2 @@
 **/*
 !*/dist/*.whl
-!*/coverage.xml
-!*/htmlcov/
