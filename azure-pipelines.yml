@@ -51,7 +51,7 @@ steps:
 # sonic-chassisd
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-chassisd
   displayName: 'Test sonic-chassisd (Python 3)'
 
@@ -76,7 +76,7 @@ steps:
 # sonic-ledd
 
 - script: |
-    python2 setup.py test -a '-v --junitxml test-results.xml'
+    python2 setup.py test
   workingDirectory: sonic-ledd
   displayName: 'Test sonic-ledd (Python 2)'
 
@@ -95,7 +95,7 @@ steps:
   displayName: 'Build sonic-ledd (Python 2)'
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-ledd
   displayName: 'Test sonic-ledd (Python 3)'
 
@@ -120,7 +120,7 @@ steps:
 # sonic-pcied
 
 - script: |
-    python2 setup.py test -a '-v --junitxml test-results.xml'
+    python2 setup.py test
   workingDirectory: sonic-pcied
   displayName: 'Test sonic-pcied (Python 2)'
 
@@ -139,7 +139,7 @@ steps:
   displayName: 'Build sonic-pcied (Python 2)'
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-pcied
   displayName: 'Test sonic-pcied (Python 3)'
 
@@ -164,7 +164,7 @@ steps:
 # sonic-psud
 
 - script: |
-    python2 setup.py test -a '-v --junitxml test-results.xml'
+    python2 setup.py test
   workingDirectory: sonic-psud
   displayName: 'Test sonic-psud (Python 2)'
 
@@ -183,7 +183,7 @@ steps:
   displayName: 'Build sonic-psud (Python 2)'
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-psud
   displayName: 'Test sonic-psud (Python 3)'
 
@@ -208,7 +208,7 @@ steps:
 # sonic-syseepromd
 
 - script: |
-    python2 setup.py test -a '-v --junitxml test-results.xml'
+    python2 setup.py test
   workingDirectory: sonic-syseepromd
   displayName: 'Test sonic-syseepromd (Python 2)'
 
@@ -227,7 +227,7 @@ steps:
   displayName: 'Build sonic-syseepromd (Python 2)'
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-syseepromd
   displayName: 'Test sonic-syseepromd (Python 3)'
 
@@ -252,7 +252,7 @@ steps:
 # sonic-thermalctld
 
 - script: |
-    python2 setup.py test -a '-v --junitxml test-results.xml'
+    python2 setup.py test
   workingDirectory: sonic-thermalctld
   displayName: 'Test sonic-thermalctld (Python 2)'
 
@@ -271,7 +271,7 @@ steps:
   displayName: 'Build sonic-thermalctld (Python 2)'
 
 - script: |
-    python3 setup.py test -a '-v --junitxml test-results.xml'
+    python3 setup.py test
   workingDirectory: sonic-thermalctld
   displayName: 'Test sonic-thermalctld (Python 3)'
 
