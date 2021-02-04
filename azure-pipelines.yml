@@ -20,31 +20,38 @@ parameters:
 - name: project_list
   type: object
   default:
-    - root_dir: sonic-chassisd
+    - name: chassisd
+      root_dir: sonic-chassisd
       python2: false
       python3: true
-    - root_dir: sonic-ledd
+    - name: ledd
+      root_dir: sonic-ledd
       python2: true
       python3: true
-    - root_dir: sonic-pcied
+    - name: pcied
+      root_dir: sonic-pcied
       python2: true
       python3: true
-    - root_dir: sonic-psud
+    - name: psud
+      root_dir: sonic-psud
       python2: true
       python3: true
-    - root_dir: sonic-syseepromd
+    - name: syseepromd
+      root_dir: sonic-syseepromd
       python2: true
       python3: true
-    - root_dir: sonic-thermalctld
+    - name: thermalctld
+      root_dir: sonic-thermalctld
       python2: true
       python3: true
-    - root_dir: sonic-xcvrd
+    - name: xcvrd
+      root_dir: sonic-xcvrd
       python2: true
       python3: true
 
 jobs:
   - ${{ each project in parameters.project_list }}:
-    - job: ${{ project.root_dir }}
+    - job: ${{ project.name }}
       container: sonic-slave-buster
       steps:
       - task: DownloadPipelineArtifact@2
@@ -84,57 +91,57 @@ jobs:
         - script: |
             python2 setup.py test
           workingDirectory: ${{ project.root_dir }}
-          displayName: 'Test ${{ project.root_dir }} (Python 2)'
+          displayName: 'Test ${{ project.name }} (Python 2)'
 
         - task: PublishTestResults@2
           inputs:
             testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
-            testRunTitle: ${{ project.root_dir }} (Python 2)
+            testRunTitle: ${{ project.name }} (Python 2)
             failTaskOnFailedTests: true
           condition: succeededOrFailed()
-          displayName: 'Publish ${{ project.root_dir }} (Python 2) test results'
+          displayName: 'Publish ${{ project.name }} (Python 2) test results'
 
         - task: PublishCodeCoverageResults@1
           inputs:
             codeCoverageTool: Cobertura
             summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
             reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-          displayName: 'Publish ${{ project.root_dir }} (Python 2) test coverage'
+          displayName: 'Publish ${{ project.name }} (Python 2) test coverage'
 
         - script: |
             set -e
             python2 setup.py bdist_wheel
           workingDirectory: ${{ project.root_dir }}
-          displayName: 'Build ${{ project.root_dir }} (Python 2)'
+          displayName: 'Build ${{ project.name }} (Python 2)'
 
       # Python 3
       - ${{ if eq(project.python3, true) }}:
         - script: |
             python3 setup.py test
           workingDirectory: ${{ project.root_dir }}
-          displayName: 'Test ${{ project.root_dir }} (Python 3)'
+          displayName: 'Test ${{ project.name }} (Python 3)'
 
         - task: PublishTestResults@2
           inputs:
             testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
-            testRunTitle: ${{ project.root_dir }} (Python 3)
+            testRunTitle: ${{ project.name }} (Python 3)
             failTaskOnFailedTests: true
           condition: succeededOrFailed()
-          displayName: 'Publish ${{ project.root_dir }} (Python 3) test results'
+          displayName: 'Publish ${{ project.name }} (Python 3) test results'
 
         - task: PublishCodeCoverageResults@1
           inputs:
             codeCoverageTool: Cobertura
             summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
             reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-          displayName: 'Publish ${{ project.root_dir }} (Python 3) test coverage'
+          displayName: 'Publish ${{ project.name }} (Python 3) test coverage'
 
         - script: |
             set -e
             python3 setup.py bdist_wheel
           workingDirectory: ${{ project.root_dir }}
-          displayName: 'Build ${{ project.root_dir }} (Python 3)'
+          displayName: 'Build ${{ project.name }} (Python 3)'
 
       - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
         artifact: ${{ project.root_dir }}
-        displayName: "Publish ${{ project.root_dir }} wheels"
+        displayName: "Publish ${{ project.name }} wheels"
