@@ -1,0 +1,70 @@
+parameters:
+- name: root_dir
+  type: string
+- name: python2
+  type: boolean
+- name: python3
+  type: boolean
+
+
+steps:
+
+# Python 2
+- ${{ if eq(parameters.python2, true) }}:
+  - script:
+      python2 setup.py test
+    workingDirectory: ${{ parameters.root_dir }}
+    displayName: 'Test ${{ parameters.root_dir }} (Python 2)'
+
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/test-results.xml'
+      testRunTitle: ${{ parameters.root_dir }} (Python 2)
+      failTaskOnFailedTests: true
+    condition: succeededOrFailed()
+    displayName: 'Publish ${{ parameters.root_dir }} (Python 2) test results'
+
+  - task: PublishCodeCoverageResults@1
+    inputs:
+      codeCoverageTool: Cobertura
+      summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/coverage.xml'
+      reportDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/htmlcov/'
+    displayName: 'Publish ${{ parameters.root_dir }} (Python 2) test coverage'
+
+  - script: |
+      set -e
+      python2 setup.py bdist_wheel
+    workingDirectory: ${{ parameters.root_dir }}
+    displayName: 'Build ${{ parameters.root_dir }} (Python 2)'
+
+# Python 3
+- ${{ if eq(parameters.python3, true) }}:
+  - script:
+      python3 setup.py test
+    workingDirectory: ${{ parameters.root_dir }}
+    displayName: 'Test ${{ parameters.root_dir }} (Python 3)'
+
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/test-results.xml'
+      testRunTitle: ${{ parameters.root_dir }} (Python 3)
+      failTaskOnFailedTests: true
+    condition: succeededOrFailed()
+    displayName: 'Publish ${{ parameters.root_dir }} (Python 3) test results'
+
+  - task: PublishCodeCoverageResults@1
+    inputs:
+      codeCoverageTool: Cobertura
+      summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/coverage.xml'
+      reportDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/htmlcov/'
+    displayName: 'Publish ${{ parameters.root_dir }} (Python 3) test coverage'
+
+  - script: |
+      set -e
+      python3 setup.py bdist_wheel
+    workingDirectory: ${{ parameters.root_dir }}
+    displayName: 'Build ${{ parameters.root_dir }} (Python 3)'
+
+- publish: '$(System.DefaultWorkingDirectory)/${{ parameters.root_dir }}/dist/'
+  artifact: ${{ parameters.root_dir }}
+  displayName: "Publish ${{ parameters.root_dir }} wheels"

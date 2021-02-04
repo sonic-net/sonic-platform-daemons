@@ -47,325 +47,51 @@ steps:
   workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
   displayName: 'Install Python dependencies'
 
-
 # sonic-chassisd
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-chassisd
-  displayName: 'Test sonic-chassisd (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-chassisd/test-results.xml'
-    testRunTitle: sonic-chassisd (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-chassisd (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-chassisd/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-chassisd/htmlcov/'
-  displayName: 'Publish sonic-chassisd (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-chassisd
-  displayName: 'Build sonic-chassisd (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-chassisd/dist/'
-  artifact: sonic-chassisd
-  displayName: "Publish sonic-chassisd wheels"
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-chassis
+    python2: false
+    python3: true
 
 # sonic-ledd
-
-- script: |
-    python2 setup.py test
-  workingDirectory: sonic-ledd
-  displayName: 'Test sonic-ledd (Python 2)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-ledd/test-results.xml'
-    testRunTitle: sonic-ledd (Python 2)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-ledd (Python 2) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-ledd/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-ledd/htmlcov/'
-  displayName: 'Publish sonic-ledd (Python 2) test coverage'
-
-- script: |
-    set -e
-    python2 setup.py bdist_wheel
-  workingDirectory: sonic-ledd
-  displayName: 'Build sonic-ledd (Python 2)'
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-ledd
-  displayName: 'Test sonic-ledd (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-ledd/test-results.xml'
-    testRunTitle: sonic-ledd (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-ledd (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-ledd/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-ledd/htmlcov/'
-  displayName: 'Publish sonic-ledd (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-ledd
-  displayName: 'Build sonic-ledd (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-ledd/dist/'
-  artifact: sonic-ledd
-  displayName: "Publish sonic-ledd wheels"
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-ledd
+    python2: true
+    python3: true
 
 # sonic-pcied
-
-- script: |
-    python2 setup.py test
-  workingDirectory: sonic-pcied
-  displayName: 'Test sonic-pcied (Python 2)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-pcied/test-results.xml'
-    testRunTitle: sonic-pcied (Python 2)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-pcied (Python 2) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-pcied/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-pcied/htmlcov/'
-  displayName: 'Publish sonic-pcied (Python 2) test coverage'
-
-- script: |
-    set -e
-    python2 setup.py bdist_wheel
-  workingDirectory: sonic-pcied
-  displayName: 'Build sonic-pcied (Python 2)'
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-pcied
-  displayName: 'Test sonic-pcied (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-pcied/test-results.xml'
-    testRunTitle: sonic-pcied (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-pcied (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-pcied/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-pcied/htmlcov/'
-  displayName: 'Publish sonic-pcied (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-pcied
-  displayName: 'Build sonic-pcied (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-pcied/dist/'
-  artifact: sonic-pcied
-  displayName: "Publish sonic-pcied wheels"
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-pcied
+    python2: true
+    python3: true
 
 # sonic-psud
-
-- script: |
-    python2 setup.py test
-  workingDirectory: sonic-psud
-  displayName: 'Test sonic-psud (Python 2)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-psud/test-results.xml'
-    testRunTitle: sonic-psud (Python 2)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-psud (Python 2) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-psud/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-psud/htmlcov/'
-  displayName: 'Publish sonic-psud (Python 2) test coverage'
-
-- script: |
-    set -e
-    python2 setup.py bdist_wheel
-  workingDirectory: sonic-psud
-  displayName: 'Build sonic-psud (Python 2)'
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-psud
-  displayName: 'Test sonic-psud (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-psud/test-results.xml'
-    testRunTitle: sonic-psud (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-psud (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-psud/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-psud/htmlcov/'
-  displayName: 'Publish sonic-psud (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-psud
-  displayName: 'Build sonic-psud (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-psud/dist/'
-  artifact: sonic-psud
-  displayName: "Publish sonic-psud wheels"
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-psud
+    python2: true
+    python3: true
 
 # sonic-syseepromd
-
-- script: |
-    python2 setup.py test
-  workingDirectory: sonic-syseepromd
-  displayName: 'Test sonic-syseepromd (Python 2)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/test-results.xml'
-    testRunTitle: sonic-syseepromd (Python 2)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-syseepromd (Python 2) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/htmlcov/'
-  displayName: 'Publish sonic-syseepromd (Python 2) test coverage'
-
-- script: |
-    set -e
-    python2 setup.py bdist_wheel
-  workingDirectory: sonic-syseepromd
-  displayName: 'Build sonic-syseepromd (Python 2)'
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-syseepromd
-  displayName: 'Test sonic-syseepromd (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/test-results.xml'
-    testRunTitle: sonic-syseepromd (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-syseepromd (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/htmlcov/'
-  displayName: 'Publish sonic-syseepromd (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-syseepromd
-  displayName: 'Build sonic-syseepromd (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-syseepromd/dist/'
-  artifact: sonic-syseepromd
-  displayName: "Publish sonic-syseepromd wheels"
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-syseepromd
+    python2: true
+    python3: true
 
 # sonic-thermalctld
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-thermalctld
+    python2: true
+    python3: true
 
-- script: |
-    python2 setup.py test
-  workingDirectory: sonic-thermalctld
-  displayName: 'Test sonic-thermalctld (Python 2)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/test-results.xml'
-    testRunTitle: sonic-thermalctld (Python 2)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-thermalctld (Python 2) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/htmlcov/'
-  displayName: 'Publish sonic-thermalctld (Python 2) test coverage'
-
-- script: |
-    set -e
-    python2 setup.py bdist_wheel
-  workingDirectory: sonic-thermalctld
-  displayName: 'Build sonic-thermalctld (Python 2)'
-
-- script: |
-    python3 setup.py test
-  workingDirectory: sonic-thermalctld
-  displayName: 'Test sonic-thermalctld (Python 3)'
-
-- task: PublishTestResults@2
-  inputs:
-    testResultsFiles: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/test-results.xml'
-    testRunTitle: sonic-thermalctld (Python 3)
-    failTaskOnFailedTests: true
-  condition: succeededOrFailed()
-  displayName: 'Publish sonic-thermalctld (Python 3) test results'
-
-- task: PublishCodeCoverageResults@1
-  inputs:
-    codeCoverageTool: Cobertura
-    summaryFileLocation: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/coverage.xml'
-    reportDirectory: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/htmlcov/'
-  displayName: 'Publish sonic-thermalctld (Python 3) test coverage'
-
-- script: |
-    set -e
-    python3 setup.py bdist_wheel
-  workingDirectory: sonic-thermalctld
-  displayName: 'Build sonic-thermalctld (Python 3)'
-
-- publish: '$(System.DefaultWorkingDirectory)/sonic-thermalctld/dist/'
-  artifact: sonic-thermalctld
-  displayName: "Publish sonic-thermalctld wheels"
+# sonic-xcvrd
+- template: .azure-pipelines/python-wheel-template.yml
+  parameters:
+    root_dir: sonic-xcvrd
+    python2: true
+    python3: true
