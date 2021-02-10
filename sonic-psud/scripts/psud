@@ -596,7 +596,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.psu_chassis_info = PsuChassisInfo(SYSLOG_IDENTIFIER, platform_chassis)
 
         self.psu_chassis_info.run_power_budget(chassis_tbl)
-        self.psu_chassis_info.update_psu_chassis_info()
+        self.psu_chassis_info.update_master_status()
 
 
 #
