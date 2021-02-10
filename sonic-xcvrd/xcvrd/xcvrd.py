@@ -832,7 +832,7 @@ class DomInfoUpdateTask(object):
         self.task_thread = None
         self.task_stopping_event = threading.Event()
 
-    def task_worker(self, y_cable_presence)):
+    def task_worker(self, y_cable_presence):
         helper_logger.log_info("Start DOM monitoring loop")
 
         # Connect to STATE_DB and create transceiver dom info table
