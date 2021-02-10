@@ -530,7 +530,6 @@ def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, sta
 def get_muxcable_info(physical_port, logical_port_name):
 
     mux_info_dict = {}
-    mux_static_info_dict = {}
     y_cable_tbl, state_db = {}, {}
 
     namespaces = multi_asic.get_front_end_namespaces()
@@ -559,7 +558,7 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     if active_side is None:
         tor_active = 'unknown'
-    if read_side == active_side and (active_side == 1 or active_side == 2):
+    elif read_side == active_side and (active_side == 1 or active_side == 2):
         tor_active = 'active'
     elif read_side != active_side and (active_side == 1 or active_side == 2):
         tor_active = 'standby'
@@ -651,7 +650,6 @@ def get_muxcable_info(physical_port, logical_port_name):
 
 def get_muxcable_static_info(physical_port, logical_port_name):
 
-    mux_info_dict = {}
     mux_static_info_dict = {}
     y_cable_tbl, state_db = {}, {}
 
