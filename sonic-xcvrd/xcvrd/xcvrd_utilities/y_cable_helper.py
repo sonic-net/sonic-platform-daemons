@@ -56,7 +56,6 @@ y_cable_switch_state_values = {
 
 # Find out the underneath physical port list by logical name
 
-
 def logical_port_name_to_physical_port_list(port_name):
     if port_name.startswith("Ethernet"):
         if y_cable_platform_sfputil.is_logical_port(port_name):
@@ -316,6 +315,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
 
     y_cable_tbl = {}
+    static_tbl, mux_tbl = {} , {}
 
     # if there is No Y cable do not do anything here
     if y_cable_presence[0] is False:
@@ -495,7 +495,16 @@ def delete_ports_status_for_y_cable():
 
 def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, static_tbl, mux_tbl, asic_index, logical_port_name):
 
+    # Get the namespaces in the platform
+    config_db, port_tbl = {}, {}
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
+
     if status is False:
         helper_logger.log_warning(
             "Could not retreive fieldvalue pairs for {}, inside config_db".format(logical_port_name))
@@ -508,10 +517,9 @@ def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, sta
             val = mux_table_dict.get("mux_cable", None)
             if val == "true":
 
-                if y_cable_presence[0] is True and static_tbl is not None and mux_tbl is not None:
+                if mux_tbl.get(asic_index, None) is not None:
                     # fill in the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
-                    post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
 
                 else:
                     # first create the state db y cable table and then fill in the entry
@@ -519,13 +527,10 @@ def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, sta
                     for namespace in namespaces:
                         asic_id = multi_asic.get_asic_index_from_namespace(
                             namespace)
-                        state_db[asic_id] = daemon_base.db_connect(
-                            "STATE_DB", namespace)
                         static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
-                    post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
 
 def get_muxcable_info(physical_port, logical_port_name):
 
@@ -605,6 +610,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["nic_lane4_active"] = "False"
 
+
     if read_side == 1:
         eye_result_self = y_cable.get_eye_info(physical_port, 1)
         eye_result_peer = y_cable.get_eye_info(physical_port, 2)
@@ -614,12 +620,26 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     eye_result_nic = y_cable.get_eye_info(physical_port, 3)
 
-    mux_info_dict["Self_eye_height_lane1"] = eye_result_self[0]
-    mux_info_dict["Self_eye_height_lane2"] = eye_result_self[1]
-    mux_info_dict["Peer_eye_height_lane1"] = eye_result_peer[0]
-    mux_info_dict["Peer_eye_height_lane2"] = eye_result_peer[1]
-    mux_info_dict["NIC_eye_height_lane1"] = eye_result_nic[0]
-    mux_info_dict["NIC_eye_height_lane2"] = eye_result_nic[1]
+    if eye_result_self is not None and eye_result_self is not -1:
+        mux_info_dict["Self_eye_height_lane1"] = eye_result_self[0]
+        mux_info_dict["Self_eye_height_lane2"] = eye_result_self[1]
+    else:
+        mux_info_dict["Self_eye_height_lane1"] = "N/A"
+        mux_info_dict["Self_eye_height_lane2"] = "N/A"
+
+    if eye_result_peer is not None and eye_result_peer is not -1:
+        mux_info_dict["Peer_eye_height_lane1"] = eye_result_peer[0]
+        mux_info_dict["Peer_eye_height_lane2"] = eye_result_peer[1]
+    else:
+        mux_info_dict["Peer_eye_height_lane1"] = "N/A"
+        mux_info_dict["Peer_eye_height_lane2"] = "N/A"
+
+    if eye_result_nic is not None and eye_result_nic is not -1:
+        mux_info_dict["NIC_eye_height_lane1"] = eye_result_nic[0]
+        mux_info_dict["NIC_eye_height_lane2"] = eye_result_nic[1]
+    else:
+        mux_info_dict["NIC_eye_height_lane1"] = "N/A"
+        mux_info_dict["NIC_eye_height_lane2"] = "N/A"
 
     if read_side == 1:
         if y_cable.check_if_link_is_active_for_torA(physical_port):
@@ -890,7 +910,6 @@ class YCableTableUpdateTask(object):
             swsscommon.SonicDBConfig.initializeGlobalConfig()
 
     def task_worker(self):
-
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, state_db, status_tbl, y_cable_tbl = {}, {}, {}, {}
         y_cable_tbl_keys = {}

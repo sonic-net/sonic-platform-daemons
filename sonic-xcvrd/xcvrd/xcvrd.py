@@ -829,12 +829,10 @@ def init_port_sfp_status_tbl(stop_event=threading.Event()):
 
 class DomInfoUpdateTask(object):
     def __init__(self):
-        self.task_thread = None
-        self.task_stopping_event = threading.Event()
+        self.task_process = None
+        self.task_stopping_event = multiprocessing.Event()
 
     def task_worker(self, y_cable_presence):
-        helper_logger.log_info("Start DOM monitoring loop")
-
         # Connect to STATE_DB and create transceiver dom info table
         state_db, dom_tbl, status_tbl = {}, {}, {}
         static_tbl, mux_tbl = {}, {}
@@ -860,8 +858,8 @@ class DomInfoUpdateTask(object):
                 if not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
                     post_port_dom_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
                     post_port_dom_threshold_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
-                    if y_cable_presence[0] == True:
-                        y_cable.check_identifier_presence_and_update_mux_info_and_static_entry(state_db, static_tbl, mux_tbl, asic_index, logical_port_name)
+                    if y_cable_presence[0] is True:
+                        y_cable_helper.check_identifier_presence_and_update_mux_info_and_static_entry(state_db, static_tbl, mux_tbl, asic_index, logical_port_name)
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
@@ -869,12 +867,12 @@ class DomInfoUpdateTask(object):
         if self.task_stopping_event.is_set():
             return
 
-        self.task_thread = threading.Thread(target=self.task_worker, args=(y_cable_presence))
-        self.task_thread.start()
+        self.task_process = multiprocessing.Process(target=self.task_worker, args=(y_cable_presence,))
+        self.task_process.start()
 
     def task_stop(self):
         self.task_stopping_event.set()
-        self.task_thread.join()
+        os.kill(self.task_process.pid, signal.SIGKILL)
 
 # Process wrapper class to update sfp state info periodically
 
