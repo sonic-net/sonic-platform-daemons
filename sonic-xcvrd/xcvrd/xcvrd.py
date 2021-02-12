@@ -836,7 +836,7 @@ class DomInfoUpdateTask(object):
 
         # Connect to STATE_DB and create transceiver dom info table
         state_db, dom_tbl, status_tbl = {}, {}, {}
-        static_tbl, mux_tbl = {}, {}
+        mux_tbl = {}
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
@@ -860,7 +860,7 @@ class DomInfoUpdateTask(object):
                     post_port_dom_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
                     post_port_dom_threshold_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
                     if y_cable_presence[0] is True:
-                        y_cable_helper.check_identifier_presence_and_update_mux_info_and_static_entry(state_db, static_tbl, mux_tbl, asic_index, logical_port_name)
+                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name)
 
         helper_logger.log_info("Stop DOM monitoring loop")
 

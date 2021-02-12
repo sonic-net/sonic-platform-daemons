@@ -286,7 +286,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
             if val == "true":
 
                 y_cable_asic_table = y_cable_tbl.get(asic_index, None)
-                if y_cable_presence[0] is True and y_cable_asic_table is not None:
+                mux_asic_table = mux_tbl.get(asic_index, None)
+                static_mux_asic_table = static_tbl.get(asic_index, None)
+                if y_cable_presence[0] is True and y_cable_asic_table is not None and mux_asic_table is not None and static_mux_asic_table is not None:
                     # fill in the newly found entry
                     read_y_cable_and_update_statedb_port_tbl(
                         logical_port_name, y_cable_tbl[asic_index])
@@ -494,7 +496,7 @@ def delete_ports_status_for_y_cable():
             delete_port_from_y_cable_table(
                 logical_port_name, mux_tbl[asic_index])
 
-def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, static_tbl, mux_tbl, asic_index, logical_port_name):
+def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
 
     # Get the namespaces in the platform
     config_db, port_tbl = {}, {}
@@ -528,7 +530,6 @@ def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, sta
                     for namespace in namespaces:
                         asic_id = multi_asic.get_asic_index_from_namespace(
                             namespace)
-                        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
@@ -731,8 +732,8 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["nic_temperature"] = res[0]
         mux_info_dict["nic_voltage"] = res[1]
     else:
-        mux_info_dict["internal_temperature"] = "N/A"
-        mux_info_dict["internal_voltage"] = "N/A"
+        mux_info_dict["nic_temperature"] = "N/A"
+        mux_info_dict["nic_voltage"] = "N/A"
 
     return mux_info_dict
 
@@ -762,20 +763,34 @@ def get_muxcable_static_info(physical_port, logical_port_name):
             logical_port_name, y_cable_tbl[asic_index]))
         return -1
     mux_port_dict = dict(fvs)
-    read_side = mux_port_dict.get("read_side")
+    read_side = int(mux_port_dict.get("read_side"))
 
     if read_side == 1:
         mux_static_info_dict["read_side"] = "tor1"
     else:
         mux_static_info_dict["read_side"] = "tor2"
 
+    dummy_list = ["N/A", "N/A", "N/A", "N/A", "N/A"]
     cursor_nic_values = []
     cursor_tor1_values = []
     cursor_tor2_values = []
     for i in range(1, 3):
-        cursor_nic_values.append(y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_NIC))
-        cursor_tor1_values.append(y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR1))
-        cursor_tor2_values.append(y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR2))
+        cursor_values_nic = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_NIC)
+        if cursor_values_nic is not None and cursor_values_nic is not y_cable.EEPROM_ERROR and isinstance(cursor_values_nic, list):
+            cursor_nic_values.append(cursor_values_nic)
+        else:
+            cursor_nic_values.append(dummy_list)
+        cursor_values_tor1 = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR1)
+        if cursor_values_tor1 is not None and cursor_values_tor1 is not y_cable.EEPROM_ERROR and isinstance(cursor_values_tor1, list):
+            cursor_tor1_values.append(cursor_values_tor1)
+        else:
+            cursor_tor1_values.append(dummy_list)
+
+        cursor_values_tor2 = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR2)
+        if cursor_values_tor2 is not None and cursor_values_tor2 is not y_cable.EEPROM_ERROR and isinstance(cursor_values_tor2, list):
+            cursor_tor2_values.append(cursor_values_tor2)
+        else:
+            cursor_tor2_values.append(dummy_list)
 
     for i in range(1, 3):
         mux_static_info_dict[("Nic_Lane{}_Precursor1".format(i))] = cursor_nic_values[i-1][0]
@@ -831,6 +846,8 @@ def post_port_mux_info_to_db(logical_port_name, table):
     for physical_port in physical_port_list:
 
         if not _wrapper_get_presence(physical_port):
+            helper_logger.log_warning(
+                "Error: trying to post mux info without presence of port {}".format(logical_port_name))
             continue
 
         mux_info_dict = get_muxcable_info(physical_port, logical_port_name)
