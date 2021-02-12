@@ -4,6 +4,7 @@
 """
 
 try:
+    import time
     import threading
 
     from sonic_py_common import daemon_base, logger
@@ -532,6 +533,34 @@ def check_identifier_presence_and_update_mux_info_and_static_entry(state_db, sta
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
+def get_firmware_dict(physical_port, target, side, mux_info_dict):
+
+    result = y_cable.get_firmware_version(physical_port, target)
+
+    if result is not None and isinstance(result, dict):
+        mux_info_dict[("build_slot1_{}".format(side))] = result.get("build_slot1", None)
+        mux_info_dict[("version_slot1_{}".format(side))] = result.get("version_slot1", None)
+        mux_info_dict[("build_slot2_{}".format(side))] = result.get("build_slot2", None)
+        mux_info_dict[("version_slot2_{}".format(side))] = result.get("version_slot2", None)
+        mux_info_dict[("run_slot1_{}".format(side))] = result.get("run_slot1", None)
+        mux_info_dict[("run_slot2_{}".format(side))] = result.get("run_slot2", None)
+        mux_info_dict[("commit_slot1_{}".format(side))] = result.get("commit_slot1", None)
+        mux_info_dict[("commit_slot2_{}".format(side))] = result.get("commit_slot2", None)
+        mux_info_dict[("empty_slot1_{}".format(side))] = result.get("empty_slot1", None)
+        mux_info_dict[("empty_slot2_{}".format(side))] = result.get("empty_slot2", None)
+    else:
+        mux_info_dict[("build_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("build_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot2_{}".format(side))] = "N/A"
+
+
 def get_muxcable_info(physical_port, logical_port_name):
 
     mux_info_dict = {}
@@ -556,12 +585,13 @@ def get_muxcable_info(physical_port, logical_port_name):
         helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
             logical_port_name, y_cable_tbl[asic_index]))
         return -1
+
     mux_port_dict = dict(fvs)
-    read_side = mux_port_dict.get("read_side")
+    read_side = int(mux_port_dict.get("read_side"))
 
     active_side = y_cable.check_active_linked_tor_side(physical_port)
 
-    if active_side is None:
+    if active_side is None or active_side == y_cable.EEPROM_ERROR:
         tor_active = 'unknown'
     elif read_side == active_side and (active_side == 1 or active_side == 2):
         tor_active = 'active'
@@ -573,7 +603,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     mux_info_dict["tor_active"] = tor_active
 
     mux_dir_val = y_cable.check_mux_direction(physical_port)
-    if mux_dir_val is None or mux_dir_val == -1:
+    if mux_dir_val is None or mux_dir_val == y_cable.EEPROM_ERROR:
         mux_direction = 'unknown'
     if read_side == mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'self'
@@ -585,30 +615,45 @@ def get_muxcable_info(physical_port, logical_port_name):
     manual_switch_cnt = y_cable.get_switch_count(physical_port, y_cable.SWITCH_COUNT_MANUAL)
     auto_switch_cnt = y_cable.get_switch_count(physical_port, y_cable.SWITCH_COUNT_AUTO)
 
-    mux_info_dict["manual_switch_count"] = manual_switch_cnt
-    mux_info_dict["auto_switch_count"] = auto_switch_cnt
+    if manual_switch_cnt is not y_cable.EEPROM_ERROR:
+        mux_info_dict["manual_switch_count"] = manual_switch_cnt
+    else:
+        mux_info_dict["manual_switch_count"] = "N/A"
+
+    if auto_switch_cnt is not y_cable.EEPROM_ERROR:
+        mux_info_dict["auto_switch_count"] = auto_switch_cnt
+    else:
+        mux_info_dict["auto_switch_count"] = "N/A"
+
 
     lane_active = y_cable.check_if_nic_lanes_active(physical_port)
 
-    if (lane_active & 0x1):
-        mux_info_dict["nic_lane1_active"] = "True"
-    else:
-        mux_info_dict["nic_lane1_active"] = "False"
+    if lane_active is not y_cable.EEPROM_ERROR:
+        if (lane_active & 0x1):
+            mux_info_dict["nic_lane1_active"] = "True"
+        else:
+            mux_info_dict["nic_lane1_active"] = "False"
 
-    if ((lane_active >> 1) & 0x1):
-        mux_info_dict["nic_lane2_active"] = "True"
-    else:
-        mux_info_dict["nic_lane2_active"] = "False"
+        if ((lane_active >> 1) & 0x1):
+            mux_info_dict["nic_lane2_active"] = "True"
+        else:
+            mux_info_dict["nic_lane2_active"] = "False"
 
-    if ((lane_active >> 2) & 0x1):
-        mux_info_dict["nic_lane3_active"] = "True"
-    else:
-        mux_info_dict["nic_lane3_active"] = "False"
+        if ((lane_active >> 2) & 0x1):
+            mux_info_dict["nic_lane3_active"] = "True"
+        else:
+            mux_info_dict["nic_lane3_active"] = "False"
 
-    if ((lane_active >> 3) & 0x1):
-        mux_info_dict["nic_lane4_active"] = "True"
+        if ((lane_active >> 3) & 0x1):
+            mux_info_dict["nic_lane4_active"] = "True"
+        else:
+            mux_info_dict["nic_lane4_active"] = "False"
     else:
-        mux_info_dict["nic_lane4_active"] = "False"
+        mux_info_dict["nic_lane1_active"] = "N/A"
+        mux_info_dict["nic_lane2_active"] = "N/A"
+        mux_info_dict["nic_lane3_active"] = "N/A"
+        mux_info_dict["nic_lane4_active"] = "N/A"
+
 
 
     if read_side == 1:
@@ -620,21 +665,21 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     eye_result_nic = y_cable.get_eye_info(physical_port, 3)
 
-    if eye_result_self is not None and eye_result_self is not -1:
+    if eye_result_self is not None and eye_result_self is not y_cable.EEPROM_ERROR and isinstance(eye_result_self, list):
         mux_info_dict["Self_eye_height_lane1"] = eye_result_self[0]
         mux_info_dict["Self_eye_height_lane2"] = eye_result_self[1]
     else:
         mux_info_dict["Self_eye_height_lane1"] = "N/A"
         mux_info_dict["Self_eye_height_lane2"] = "N/A"
 
-    if eye_result_peer is not None and eye_result_peer is not -1:
+    if eye_result_peer is not None and eye_result_peer is not y_cable.EEPROM_ERROR and isinstance(eye_result_peer, list):
         mux_info_dict["Peer_eye_height_lane1"] = eye_result_peer[0]
         mux_info_dict["Peer_eye_height_lane2"] = eye_result_peer[1]
     else:
         mux_info_dict["Peer_eye_height_lane1"] = "N/A"
         mux_info_dict["Peer_eye_height_lane2"] = "N/A"
 
-    if eye_result_nic is not None and eye_result_nic is not -1:
+    if eye_result_nic is not None and eye_result_nic is not y_cable.EEPROM_ERROR and isinstance(eye_result_nic, list):
         mux_info_dict["NIC_eye_height_lane1"] = eye_result_nic[0]
         mux_info_dict["NIC_eye_height_lane2"] = eye_result_nic[1]
     else:
@@ -664,6 +709,30 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["link_status_nic"] = "up"
     else:
         mux_info_dict["link_status_nic"] = "down"
+
+
+    get_firmware_dict(physical_port, 0, "nic", mux_info_dict)
+    get_firmware_dict(physical_port, 1, "tor1", mux_info_dict)
+    get_firmware_dict(physical_port, 2, "tor2", mux_info_dict)
+
+    res = y_cable.get_internal_voltage_temp(physical_port)
+
+    if res is not y_cable.EEPROM_ERROR and isinstance(res, tuple):
+        mux_info_dict["internal_temperature"] = res[0]
+        mux_info_dict["internal_voltage"] = res[1]
+    else:
+        mux_info_dict["internal_temperature"] = "N/A"
+        mux_info_dict["internal_voltage"] = "N/A"
+
+
+    res = y_cable.get_nic_voltage_temp(physical_port)
+
+    if res is not y_cable.EEPROM_ERROR and isinstance(res, tuple):
+        mux_info_dict["nic_temperature"] = res[0]
+        mux_info_dict["nic_voltage"] = res[1]
+    else:
+        mux_info_dict["internal_temperature"] = "N/A"
+        mux_info_dict["internal_voltage"] = "N/A"
 
     return mux_info_dict
 
@@ -784,12 +853,45 @@ def post_port_mux_info_to_db(logical_port_name, table):
                  ('Peer_eye_height_lane1', str(mux_info_dict["Peer_eye_height_lane1"])),
                  ('Peer_eye_height_lane2', str(mux_info_dict["Peer_eye_height_lane1"])),
                  ('NIC_eye_height_lane1', str(mux_info_dict["NIC_eye_height_lane1"])),
-                 ('NIC_eye_height_lane2', str(mux_info_dict["NIC_eye_height_lane2"]))
+                 ('NIC_eye_height_lane2', str(mux_info_dict["NIC_eye_height_lane2"])),
+                 ('internal_temperature', str(mux_info_dict["internal_temperature"])),
+                 ('internal_voltage', str(mux_info_dict["internal_voltage"])),
+                 ('nic_temperature', str(mux_info_dict["nic_temperature"])),
+                 ('nic_voltage', str(mux_info_dict["nic_voltage"])),
+                 ('build_slot1_nic', str(mux_info_dict["build_slot1_nic"])),
+                 ('build_slot2_nic', str(mux_info_dict["build_slot2_nic"])),
+                 ('version_slot1_nic', str(mux_info_dict["version_slot1_nic"])),
+                 ('version_slot2_nic', str(mux_info_dict["version_slot2_nic"])),
+                 ('run_slot1_nic', str(mux_info_dict["run_slot1_nic"])),
+                 ('run_slot2_nic', str(mux_info_dict["run_slot2_nic"])),
+                 ('commit_slot1_nic', str(mux_info_dict["commit_slot1_nic"])),
+                 ('commit_slot2_nic', str(mux_info_dict["commit_slot2_nic"])),
+                 ('empty_slot1_nic', str(mux_info_dict["empty_slot1_nic"])),
+                 ('empty_slot2_nic', str(mux_info_dict["empty_slot2_nic"])),
+                 ('build_slot1_tor1', str(mux_info_dict["build_slot1_tor1"])),
+                 ('build_slot2_tor1', str(mux_info_dict["build_slot2_tor1"])),
+                 ('version_slot1_tor1', str(mux_info_dict["version_slot1_tor1"])),
+                 ('version_slot2_tor1', str(mux_info_dict["version_slot2_tor1"])),
+                 ('run_slot1_tor1', str(mux_info_dict["run_slot1_tor1"])),
+                 ('run_slot2_tor1', str(mux_info_dict["run_slot2_tor1"])),
+                 ('commit_slot1_tor1', str(mux_info_dict["commit_slot1_tor1"])),
+                 ('commit_slot2_tor1', str(mux_info_dict["commit_slot2_tor1"])),
+                 ('empty_slot1_tor1', str(mux_info_dict["empty_slot1_tor1"])),
+                 ('empty_slot2_tor1', str(mux_info_dict["empty_slot2_tor1"])),
+                 ('build_slot1_tor2', str(mux_info_dict["build_slot1_tor2"])),
+                 ('build_slot2_tor2', str(mux_info_dict["build_slot2_tor2"])),
+                 ('version_slot1_tor2', str(mux_info_dict["version_slot1_tor2"])),
+                 ('version_slot2_tor2', str(mux_info_dict["version_slot2_tor2"])),
+                 ('run_slot1_tor2', str(mux_info_dict["run_slot1_tor2"])),
+                 ('run_slot2_tor2', str(mux_info_dict["run_slot2_tor2"])),
+                 ('commit_slot1_tor2', str(mux_info_dict["commit_slot1_tor2"])),
+                 ('commit_slot2_tor2', str(mux_info_dict["commit_slot2_tor2"])),
+                 ('empty_slot1_tor2', str(mux_info_dict["empty_slot1_tor2"])),
+                 ('empty_slot2_tor2', str(mux_info_dict["empty_slot2_tor2"]))
                  ])
             table.set(logical_port_name, fvs)
         else:
             return -1
-
 
 def post_port_mux_static_info_to_db(logical_port_name, static_table):
 
@@ -910,6 +1012,7 @@ class YCableTableUpdateTask(object):
             swsscommon.SonicDBConfig.initializeGlobalConfig()
 
     def task_worker(self):
+
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, state_db, status_tbl, y_cable_tbl = {}, {}, {}, {}
         y_cable_tbl_keys = {}
@@ -940,6 +1043,12 @@ class YCableTableUpdateTask(object):
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+
+            # A brief sleep appears necessary in this loop or any spawned
+            # update threads will get stuck. Appears to be due to the sel.select() call.
+            # TODO: Eliminate the need for this sleep.
+            time.sleep(0.1)
+
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
             if state == swsscommon.Select.TIMEOUT:

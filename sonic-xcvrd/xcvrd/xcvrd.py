@@ -829,10 +829,11 @@ def init_port_sfp_status_tbl(stop_event=threading.Event()):
 
 class DomInfoUpdateTask(object):
     def __init__(self):
-        self.task_process = None
-        self.task_stopping_event = multiprocessing.Event()
+        self.task_thread = None
+        self.task_stopping_event = threading.Event()
 
     def task_worker(self, y_cable_presence):
+
         # Connect to STATE_DB and create transceiver dom info table
         state_db, dom_tbl, status_tbl = {}, {}, {}
         static_tbl, mux_tbl = {}, {}
@@ -867,12 +868,12 @@ class DomInfoUpdateTask(object):
         if self.task_stopping_event.is_set():
             return
 
-        self.task_process = multiprocessing.Process(target=self.task_worker, args=(y_cable_presence,))
-        self.task_process.start()
+        self.task_thread = threading.Thread(target=self.task_worker, args=(y_cable_presence,))
+        self.task_thread.start()
 
     def task_stop(self):
         self.task_stopping_event.set()
-        os.kill(self.task_process.pid, signal.SIGKILL)
+        self.task_thread.join()
 
 # Process wrapper class to update sfp state info periodically
 
