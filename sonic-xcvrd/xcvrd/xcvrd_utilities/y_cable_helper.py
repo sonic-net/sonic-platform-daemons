@@ -54,6 +54,7 @@ y_cable_switch_state_values = {
 
 # Find out the underneath physical port list by logical name
 
+
 def logical_port_name_to_physical_port_list(port_name):
     if port_name.startswith("Ethernet"):
         if y_cable_platform_sfputil.is_logical_port(port_name):
@@ -315,7 +316,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
 
     y_cable_tbl = {}
-    static_tbl, mux_tbl = {} , {}
+    static_tbl, mux_tbl = {}, {}
 
     # if there is No Y cable do not do anything here
     if y_cable_presence[0] is False:
@@ -493,6 +494,7 @@ def delete_ports_status_for_y_cable():
             delete_port_from_y_cable_table(
                 logical_port_name, mux_tbl[asic_index])
 
+
 def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
 
     # Get the namespaces in the platform
@@ -530,6 +532,7 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+
 
 def get_firmware_dict(physical_port, target, side, mux_info_dict):
 
@@ -623,7 +626,6 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["auto_switch_count"] = "N/A"
 
-
     lane_active = y_cable.check_if_nic_lanes_active(physical_port)
 
     if lane_active is not y_cable.EEPROM_ERROR:
@@ -651,8 +653,6 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["nic_lane2_active"] = "N/A"
         mux_info_dict["nic_lane3_active"] = "N/A"
         mux_info_dict["nic_lane4_active"] = "N/A"
-
-
 
     if read_side == 1:
         eye_result_self = y_cable.get_eye_info(physical_port, 1)
@@ -708,7 +708,6 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["link_status_nic"] = "down"
 
-
     get_firmware_dict(physical_port, 0, "nic", mux_info_dict)
     get_firmware_dict(physical_port, 1, "tor1", mux_info_dict)
     get_firmware_dict(physical_port, 2, "tor2", mux_info_dict)
@@ -721,7 +720,6 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["internal_temperature"] = "N/A"
         mux_info_dict["internal_voltage"] = "N/A"
-
 
     res = y_cable.get_nic_voltage_temp(physical_port)
 
@@ -906,6 +904,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
             table.set(logical_port_name, fvs)
         else:
             return -1
+
 
 def post_port_mux_static_info_to_db(logical_port_name, static_table):
 
