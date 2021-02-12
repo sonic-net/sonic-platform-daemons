@@ -3,16 +3,13 @@
     helper utlities configuring y_cable for xcvrd daemon
 """
 
-try:
-    import time
-    import threading
+import threading
+import time
 
-    from sonic_py_common import daemon_base, logger
-    from sonic_py_common import multi_asic
-    from sonic_y_cable import y_cable
-    from swsscommon import swsscommon
-except ImportError as e:
-    raise ImportError(str(e) + " - required module not found")
+from sonic_py_common import daemon_base, logger
+from sonic_py_common import multi_asic
+from sonic_y_cable import y_cable
+from swsscommon import swsscommon
 
 
 SELECT_TIMEOUT = 1000
