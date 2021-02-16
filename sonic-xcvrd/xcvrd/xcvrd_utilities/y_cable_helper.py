@@ -846,7 +846,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
             continue
 
         mux_info_dict = get_muxcable_info(physical_port, logical_port_name)
-        if mux_info_dict is not None:
+        if mux_info_dict is not None and mux_info_dict is not -1:
             #transceiver_dict[physical_port] = port_info_dict
             fvs = swsscommon.FieldValuePairs(
                 [('tor_active',  mux_info_dict["tor_active"]),
@@ -925,7 +925,7 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
 
         mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
 
-        if mux_static_info_dict is not None:
+        if mux_static_info_dict is not None and mux_static_info_dict is not -1:
             #transceiver_dict[physical_port] = port_info_dict
             fvs = swsscommon.FieldValuePairs(
                 [('read_side',  mux_static_info_dict["read_side"]),
