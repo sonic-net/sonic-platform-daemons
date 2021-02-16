@@ -664,25 +664,25 @@ def get_muxcable_info(physical_port, logical_port_name):
     eye_result_nic = y_cable.get_eye_info(physical_port, 3)
 
     if eye_result_self is not None and eye_result_self is not y_cable.EEPROM_ERROR and isinstance(eye_result_self, list):
-        mux_info_dict["Self_eye_height_lane1"] = eye_result_self[0]
-        mux_info_dict["Self_eye_height_lane2"] = eye_result_self[1]
+        mux_info_dict["self_eye_height_lane1"] = eye_result_self[0]
+        mux_info_dict["self_eye_height_lane2"] = eye_result_self[1]
     else:
-        mux_info_dict["Self_eye_height_lane1"] = "N/A"
-        mux_info_dict["Self_eye_height_lane2"] = "N/A"
+        mux_info_dict["self_eye_height_lane1"] = "N/A"
+        mux_info_dict["self_eye_height_lane2"] = "N/A"
 
     if eye_result_peer is not None and eye_result_peer is not y_cable.EEPROM_ERROR and isinstance(eye_result_peer, list):
-        mux_info_dict["Peer_eye_height_lane1"] = eye_result_peer[0]
-        mux_info_dict["Peer_eye_height_lane2"] = eye_result_peer[1]
+        mux_info_dict["peer_eye_height_lane1"] = eye_result_peer[0]
+        mux_info_dict["peer_eye_height_lane2"] = eye_result_peer[1]
     else:
-        mux_info_dict["Peer_eye_height_lane1"] = "N/A"
-        mux_info_dict["Peer_eye_height_lane2"] = "N/A"
+        mux_info_dict["peer_eye_height_lane1"] = "N/A"
+        mux_info_dict["peer_eye_height_lane2"] = "N/A"
 
     if eye_result_nic is not None and eye_result_nic is not y_cable.EEPROM_ERROR and isinstance(eye_result_nic, list):
-        mux_info_dict["NIC_eye_height_lane1"] = eye_result_nic[0]
-        mux_info_dict["NIC_eye_height_lane2"] = eye_result_nic[1]
+        mux_info_dict["nic_eye_height_lane1"] = eye_result_nic[0]
+        mux_info_dict["nic_eye_height_lane2"] = eye_result_nic[1]
     else:
-        mux_info_dict["NIC_eye_height_lane1"] = "N/A"
-        mux_info_dict["NIC_eye_height_lane2"] = "N/A"
+        mux_info_dict["nic_eye_height_lane1"] = "N/A"
+        mux_info_dict["nic_eye_height_lane2"] = "N/A"
 
     if read_side == 1:
         if y_cable.check_if_link_is_active_for_torA(physical_port):
@@ -788,40 +788,40 @@ def get_muxcable_static_info(physical_port, logical_port_name):
             cursor_tor2_values.append(dummy_list)
 
     for i in range(1, 3):
-        mux_static_info_dict[("Nic_Lane{}_Precursor1".format(i))] = cursor_nic_values[i-1][0]
-        mux_static_info_dict[("Nic_Lane{}_Precursor2".format(i))] = cursor_nic_values[i-1][1]
-        mux_static_info_dict[("Nic_Lane{}_Maincursor".format(i))] = cursor_nic_values[i-1][2]
-        mux_static_info_dict[("Nic_Lane{}_Postcursor1".format(i))] = cursor_nic_values[i-1][3]
-        mux_static_info_dict[("Nic_Lane{}_Postcursor2".format(i))] = cursor_nic_values[i-1][4]
+        mux_static_info_dict[("nic_lane{}_precursor1".format(i))] = cursor_nic_values[i-1][0]
+        mux_static_info_dict[("nic_lane{}_precursor2".format(i))] = cursor_nic_values[i-1][1]
+        mux_static_info_dict[("nic_lane{}_maincursor".format(i))] = cursor_nic_values[i-1][2]
+        mux_static_info_dict[("nic_lane{}_postcursor1".format(i))] = cursor_nic_values[i-1][3]
+        mux_static_info_dict[("nic_lane{}_postcursor2".format(i))] = cursor_nic_values[i-1][4]
 
     if read_side == 1:
         for i in range(1, 3):
-            mux_static_info_dict[("TOR_self_Lane{}_Precursor1".format(i))] = cursor_tor1_values[i-1][0]
-            mux_static_info_dict[("TOR_self_Lane{}_Precursor2".format(i))] = cursor_tor1_values[i-1][1]
-            mux_static_info_dict[("TOR_self_Lane{}_Maincursor".format(i))] = cursor_tor1_values[i-1][2]
-            mux_static_info_dict[("TOR_self_Lane{}_Postcursor1".format(i))] = cursor_tor1_values[i-1][3]
-            mux_static_info_dict[("TOR_self_Lane{}_Postcursor2".format(i))] = cursor_tor1_values[i-1][4]
+            mux_static_info_dict[("tor_self_lane{}_precursor1".format(i))] = cursor_tor1_values[i-1][0]
+            mux_static_info_dict[("tor_self_lane{}_precursor2".format(i))] = cursor_tor1_values[i-1][1]
+            mux_static_info_dict[("tor_self_lane{}_maincursor".format(i))] = cursor_tor1_values[i-1][2]
+            mux_static_info_dict[("tor_self_lane{}_postcursor1".format(i))] = cursor_tor1_values[i-1][3]
+            mux_static_info_dict[("tor_self_lane{}_postcursor2".format(i))] = cursor_tor1_values[i-1][4]
 
         for i in range(1, 3):
-            mux_static_info_dict[("TOR_peer_Lane{}_Precursor1".format(i))] = cursor_tor2_values[i-1][0]
-            mux_static_info_dict[("TOR_peer_Lane{}_Precursor2".format(i))] = cursor_tor2_values[i-1][1]
-            mux_static_info_dict[("TOR_peer_Lane{}_Maincursor".format(i))] = cursor_tor2_values[i-1][2]
-            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor1".format(i))] = cursor_tor2_values[i-1][3]
-            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor2".format(i))] = cursor_tor2_values[i-1][4]
+            mux_static_info_dict[("tor_peer_lane{}_precursor1".format(i))] = cursor_tor2_values[i-1][0]
+            mux_static_info_dict[("tor_peer_lane{}_precursor2".format(i))] = cursor_tor2_values[i-1][1]
+            mux_static_info_dict[("tor_peer_lane{}_maincursor".format(i))] = cursor_tor2_values[i-1][2]
+            mux_static_info_dict[("tor_peer_lane{}_postcursor1".format(i))] = cursor_tor2_values[i-1][3]
+            mux_static_info_dict[("tor_peer_lane{}_postcursor2".format(i))] = cursor_tor2_values[i-1][4]
     else:
         for i in range(1, 3):
-            mux_static_info_dict[("TOR_self_Lane{}_Precursor1".format(i))] = cursor_tor2_values[i-1][0]
-            mux_static_info_dict[("TOR_self_Lane{}_Precursor2".format(i))] = cursor_tor2_values[i-1][1]
-            mux_static_info_dict[("TOR_self_Lane{}_Maincursor".format(i))] = cursor_tor2_values[i-1][2]
-            mux_static_info_dict[("TOR_self_Lane{}_Postcursor1".format(i))] = cursor_tor2_values[i-1][3]
-            mux_static_info_dict[("TOR_self_Lane{}_Postcursor2".format(i))] = cursor_tor2_values[i-1][4]
+            mux_static_info_dict[("tor_self_lane{}_precursor1".format(i))] = cursor_tor2_values[i-1][0]
+            mux_static_info_dict[("tor_self_lane{}_precursor2".format(i))] = cursor_tor2_values[i-1][1]
+            mux_static_info_dict[("tor_self_lane{}_maincursor".format(i))] = cursor_tor2_values[i-1][2]
+            mux_static_info_dict[("tor_self_lane{}_postcursor1".format(i))] = cursor_tor2_values[i-1][3]
+            mux_static_info_dict[("tor_self_lane{}_postcursor2".format(i))] = cursor_tor2_values[i-1][4]
 
         for i in range(1, 3):
-            mux_static_info_dict[("TOR_peer_Lane{}_Precursor1".format(i))] = cursor_tor1_values[i-1][0]
-            mux_static_info_dict[("TOR_peer_Lane{}_Precursor2".format(i))] = cursor_tor1_values[i-1][1]
-            mux_static_info_dict[("TOR_peer_Lane{}_Maincursor".format(i))] = cursor_tor1_values[i-1][2]
-            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor1".format(i))] = cursor_tor1_values[i-1][3]
-            mux_static_info_dict[("TOR_peer_Lane{}_Postcursor2".format(i))] = cursor_tor1_values[i-1][4]
+            mux_static_info_dict[("tor_peer_lane{}_precursor1".format(i))] = cursor_tor1_values[i-1][0]
+            mux_static_info_dict[("tor_peer_lane{}_precursor2".format(i))] = cursor_tor1_values[i-1][1]
+            mux_static_info_dict[("tor_peer_lane{}_maincursor".format(i))] = cursor_tor1_values[i-1][2]
+            mux_static_info_dict[("tor_peer_lane{}_postcursor1".format(i))] = cursor_tor1_values[i-1][3]
+            mux_static_info_dict[("tor_peer_lane{}_postcursor2".format(i))] = cursor_tor1_values[i-1][4]
 
     return mux_static_info_dict
 
@@ -860,12 +860,12 @@ def post_port_mux_info_to_db(logical_port_name, table):
                  ('nic_lane2_active', mux_info_dict["nic_lane2_active"]),
                  ('nic_lane3_active', mux_info_dict["nic_lane3_active"]),
                  ('nic_lane4_active', mux_info_dict["nic_lane4_active"]),
-                 ('Self_eye_height_lane1', str(mux_info_dict["Self_eye_height_lane1"])),
-                 ('Self_eye_height_lane2', str(mux_info_dict["Self_eye_height_lane2"])),
-                 ('Peer_eye_height_lane1', str(mux_info_dict["Peer_eye_height_lane1"])),
-                 ('Peer_eye_height_lane2', str(mux_info_dict["Peer_eye_height_lane1"])),
-                 ('NIC_eye_height_lane1', str(mux_info_dict["NIC_eye_height_lane1"])),
-                 ('NIC_eye_height_lane2', str(mux_info_dict["NIC_eye_height_lane2"])),
+                 ('self_eye_height_lane1', str(mux_info_dict["self_eye_height_lane1"])),
+                 ('self_eye_height_lane2', str(mux_info_dict["self_eye_height_lane2"])),
+                 ('peer_eye_height_lane1', str(mux_info_dict["peer_eye_height_lane1"])),
+                 ('peer_eye_height_lane2', str(mux_info_dict["peer_eye_height_lane1"])),
+                 ('nic_eye_height_lane1', str(mux_info_dict["nic_eye_height_lane1"])),
+                 ('nic_eye_height_lane2', str(mux_info_dict["nic_eye_height_lane2"])),
                  ('internal_temperature', str(mux_info_dict["internal_temperature"])),
                  ('internal_voltage', str(mux_info_dict["internal_voltage"])),
                  ('nic_temperature', str(mux_info_dict["nic_temperature"])),
@@ -929,36 +929,36 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
             #transceiver_dict[physical_port] = port_info_dict
             fvs = swsscommon.FieldValuePairs(
                 [('read_side',  mux_static_info_dict["read_side"]),
-                 ('Nic_Lane1_Precursor1', str(mux_static_info_dict["Nic_Lane1_Precursor1"])),
-                 ('Nic_Lane1_Precursor2', str(mux_static_info_dict["Nic_Lane1_Precursor2"])),
-                 ('Nic_Lane1_Maincursor', str(mux_static_info_dict["Nic_Lane1_Maincursor"])),
-                 ('Nic_Lane1_Precursor1', str(mux_static_info_dict["Nic_Lane1_Postcursor1"])),
-                 ('Nic_Lane1_Postcursor2', str(mux_static_info_dict["Nic_Lane1_Postcursor2"])),
-                 ('Nic_Lane2_Precursor1', str(mux_static_info_dict["Nic_Lane2_Precursor1"])),
-                 ('Nic_Lane2_Precursor2', str(mux_static_info_dict["Nic_Lane2_Precursor2"])),
-                 ('Nic_Lane2_Maincursor', str(mux_static_info_dict["Nic_Lane2_Maincursor"])),
-                 ('Nic_Lane2_Precursor1', str(mux_static_info_dict["Nic_Lane2_Postcursor1"])),
-                 ('Nic_Lane2_Postcursor2', str(mux_static_info_dict["Nic_Lane2_Postcursor2"])),
-                 ('TOR_self_Lane1_Precursor1', str(mux_static_info_dict["TOR_self_Lane1_Precursor1"])),
-                 ('TOR_self_Lane1_Precursor2', str(mux_static_info_dict["TOR_self_Lane1_Precursor2"])),
-                 ('TOR_self_Lane1_Maincursor', str(mux_static_info_dict["TOR_self_Lane1_Maincursor"])),
-                 ('TOR_self_Lane1_Precursor1', str(mux_static_info_dict["TOR_self_Lane1_Postcursor1"])),
-                 ('TOR_self_Lane1_Postcursor2', str(mux_static_info_dict["TOR_self_Lane1_Postcursor2"])),
-                 ('TOR_self_Lane2_Precursor1', str(mux_static_info_dict["TOR_self_Lane2_Precursor1"])),
-                 ('TOR_self_Lane2_Precursor2', str(mux_static_info_dict["TOR_self_Lane2_Precursor2"])),
-                 ('TOR_self_Lane2_Maincursor', str(mux_static_info_dict["TOR_self_Lane2_Maincursor"])),
-                 ('TOR_self_Lane2_Precursor1', str(mux_static_info_dict["TOR_self_Lane2_Postcursor1"])),
-                 ('TOR_self_Lane2_Postcursor2', str(mux_static_info_dict["TOR_self_Lane2_Postcursor2"])),
-                 ('TOR_peer_Lane1_Precursor1', str(mux_static_info_dict["TOR_peer_Lane1_Precursor1"])),
-                 ('TOR_peer_Lane1_Precursor2', str(mux_static_info_dict["TOR_peer_Lane1_Precursor2"])),
-                 ('TOR_peer_Lane1_Maincursor', str(mux_static_info_dict["TOR_peer_Lane1_Maincursor"])),
-                 ('TOR_peer_Lane1_Precursor1', str(mux_static_info_dict["TOR_peer_Lane1_Postcursor1"])),
-                 ('TOR_peer_Lane1_Postcursor2', str(mux_static_info_dict["TOR_peer_Lane1_Postcursor2"])),
-                 ('TOR_peer_Lane2_Precursor1', str(mux_static_info_dict["TOR_peer_Lane2_Precursor1"])),
-                 ('TOR_peer_Lane2_Precursor2', str(mux_static_info_dict["TOR_peer_Lane2_Precursor2"])),
-                 ('TOR_peer_Lane2_Maincursor', str(mux_static_info_dict["TOR_peer_Lane2_Maincursor"])),
-                 ('TOR_peer_Lane2_Precursor1', str(mux_static_info_dict["TOR_peer_Lane2_Postcursor1"])),
-                 ('TOR_peer_Lane2_Postcursor2', str(mux_static_info_dict["TOR_peer_Lane2_Postcursor2"]))
+                 ('nic_lane1_precursor1', str(mux_static_info_dict["nic_lane1_precursor1"])),
+                 ('nic_lane1_precursor2', str(mux_static_info_dict["nic_lane1_precursor2"])),
+                 ('nic_lane1_maincursor', str(mux_static_info_dict["nic_lane1_maincursor"])),
+                 ('nic_lane1_postcursor1', str(mux_static_info_dict["nic_lane1_postcursor1"])),
+                 ('nic_lane1_postcursor2', str(mux_static_info_dict["nic_lane1_postcursor2"])),
+                 ('nic_lane2_precursor1', str(mux_static_info_dict["nic_lane2_precursor1"])),
+                 ('nic_lane2_precursor2', str(mux_static_info_dict["nic_lane2_precursor2"])),
+                 ('nic_lane2_maincursor', str(mux_static_info_dict["nic_lane2_maincursor"])),
+                 ('nic_lane2_postcursor1', str(mux_static_info_dict["nic_lane2_postcursor1"])),
+                 ('nic_lane2_postcursor2', str(mux_static_info_dict["nic_lane2_postcursor2"])),
+                 ('tor_self_lane1_precursor1', str(mux_static_info_dict["tor_self_lane1_precursor1"])),
+                 ('tor_self_lane1_precursor2', str(mux_static_info_dict["tor_self_lane1_precursor2"])),
+                 ('tor_self_lane1_maincursor', str(mux_static_info_dict["tor_self_lane1_maincursor"])),
+                 ('tor_self_lane1_postcursor1', str(mux_static_info_dict["tor_self_lane1_postcursor1"])),
+                 ('tor_self_lane1_postcursor2', str(mux_static_info_dict["tor_self_lane1_postcursor2"])),
+                 ('tor_self_lane2_precursor1', str(mux_static_info_dict["tor_self_lane2_precursor1"])),
+                 ('tor_self_lane2_precursor2', str(mux_static_info_dict["tor_self_lane2_precursor2"])),
+                 ('tor_self_lane2_maincursor', str(mux_static_info_dict["tor_self_lane2_maincursor"])),
+                 ('tor_self_lane2_postcursor1', str(mux_static_info_dict["tor_self_lane2_postcursor1"])),
+                 ('tor_self_lane2_postcursor2', str(mux_static_info_dict["tor_self_lane2_postcursor2"])),
+                 ('tor_peer_lane1_precursor1', str(mux_static_info_dict["tor_peer_lane1_precursor1"])),
+                 ('tor_peer_lane1_precursor2', str(mux_static_info_dict["tor_peer_lane1_precursor2"])),
+                 ('tor_peer_lane1_maincursor', str(mux_static_info_dict["tor_peer_lane1_maincursor"])),
+                 ('tor_peer_lane1_postcursor1', str(mux_static_info_dict["tor_peer_lane1_postcursor1"])),
+                 ('tor_peer_lane1_postcursor2', str(mux_static_info_dict["tor_peer_lane1_postcursor2"])),
+                 ('tor_peer_lane2_precursor1', str(mux_static_info_dict["tor_peer_lane2_precursor1"])),
+                 ('tor_peer_lane2_precursor2', str(mux_static_info_dict["tor_peer_lane2_precursor2"])),
+                 ('tor_peer_lane2_maincursor', str(mux_static_info_dict["tor_peer_lane2_maincursor"])),
+                 ('tor_peer_lane2_postcursor1', str(mux_static_info_dict["tor_peer_lane2_postcursor1"])),
+                 ('tor_peer_lane2_postcursor2', str(mux_static_info_dict["tor_peer_lane2_postcursor2"]))
                  ])
             static_table.set(logical_port_name, fvs)
         else:
