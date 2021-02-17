@@ -609,7 +609,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     mux_dir_val = y_cable.check_mux_direction(physical_port)
     if mux_dir_val is None or mux_dir_val == y_cable.EEPROM_ERROR:
         mux_direction = 'unknown'
-    if read_side == mux_dir_val and (active_side == 1 or active_side == 2):
+    elif read_side == mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'self'
     elif read_side != mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'peer'
