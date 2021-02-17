@@ -52,6 +52,9 @@ y_cable_switch_state_values = {
     Y_CABLE_STATUS_TORB_ACTIVE
 }
 
+MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
+MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
+
 # Find out the underneath physical port list by logical name
 
 
@@ -304,8 +307,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             "STATE_DB", namespace)
                         y_cable_tbl[asic_id] = swsscommon.Table(
                             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
-                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+                        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                     # fill the newly found entry
                     read_y_cable_and_update_statedb_port_tbl(
                         logical_port_name, y_cable_tbl[asic_index])
@@ -342,8 +345,8 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "STATE_DB", namespace)
                     y_cable_tbl[asic_id] = swsscommon.Table(
                         state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                    static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
-                    mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+                    static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+                    mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                 # fill the newly found entry
                 delete_port_from_y_cable_table(
                     logical_port_name, y_cable_tbl[asic_index])
@@ -472,8 +475,8 @@ def delete_ports_status_for_y_cable():
         y_cable_tbl[asic_id] = swsscommon.Table(
             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
         y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
-        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
-        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -529,7 +532,7 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                     for namespace in namespaces:
                         asic_id = multi_asic.get_asic_index_from_namespace(
                             namespace)
-                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
@@ -974,7 +977,7 @@ def post_mux_static_info_to_db(is_warm_start, stop_event=threading.Event()):
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_STATIC_INFO")
+        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
 
     # Post all the current interface dom/sfp info to STATE_DB
     logical_port_list = y_cable_platform_sfputil.logical
@@ -999,7 +1002,7 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], "MUX_CABLE_INFO")
+        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     # Post all the current interface dom/sfp info to STATE_DB
     logical_port_list = y_cable_platform_sfputil.logical

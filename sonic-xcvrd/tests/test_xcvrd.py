@@ -69,7 +69,7 @@ class TestXcvrdScript(object):
     def test_post_port_dom_info_to_db(self):
         logical_port_name = "Ethernet0"
         stop_event = threading.Event()
-        dom_tbl = Table("STATE_DB", "DOM_INFO_TBL")
+        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         post_port_dom_info_to_db(logical_port_name, dom_tbl, stop_event)
 
     @patch('xcvrd.xcvrd.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -77,8 +77,8 @@ class TestXcvrdScript(object):
     def test_del_port_sfp_dom_info_from_db(self):
         logical_port_name = "Ethernet0"
         stop_event = threading.Event()
-        dom_tbl = Table("STATE_DB", "DOM_INFO_TBL")
-        init_tbl = Table("STATE_DB", "init_info_tbl")
+        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
+        init_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
         del_port_sfp_dom_info_from_db(logical_port_name, init_tbl, dom_tbl)
 
     @patch('xcvrd.xcvrd.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -106,7 +106,7 @@ class TestXcvrdScript(object):
     def test_post_port_dom_threshold_info_to_db(self):
         logical_port_name = "Ethernet0"
         stop_event = threading.Event()
-        dom_tbl = Table("STATE_DB", "DOM_INFO_TBL")
+        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         post_port_dom_threshold_info_to_db(logical_port_name, dom_tbl, stop_event)
 
     @patch('xcvrd.xcvrd.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -132,7 +132,7 @@ class TestXcvrdScript(object):
     def test_post_port_sfp_info_to_db(self):
         logical_port_name = "Ethernet0"
         stop_event = threading.Event()
-        dom_tbl = Table("STATE_DB", "DOM_INFO_TBL")
+        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         transceiver_dict = {}
         post_port_sfp_info_to_db(logical_port_name, dom_tbl, transceiver_dict, stop_event)
 
@@ -272,7 +272,7 @@ class TestXcvrdScript(object):
                                                                        'empty_slot2_tor2': 'False'}))
     def test_post_port_mux_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", "MUX_CABLE_INFO")
+        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_INFO_TABLE)
         rc = post_port_mux_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
 
@@ -312,6 +312,6 @@ class TestXcvrdScript(object):
                                                                               'tor_peer_lane2_postcursor2': '17'}))
     def test_post_port_mux_static_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", "MUX_CABLE_STATIC_INFO")
+        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
         rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
