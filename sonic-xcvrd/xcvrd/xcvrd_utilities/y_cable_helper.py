@@ -613,6 +613,8 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_direction = 'self'
     elif read_side != mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'peer'
+    else:
+        mux_direction = 'unknown'
 
     mux_info_dict["mux_direction"] = mux_direction
 
