@@ -27,7 +27,7 @@ class TestPsuStatus(object):
 
     def test_set_presence(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.presence == False
@@ -49,7 +49,7 @@ class TestPsuStatus(object):
 
     def test_set_power_good(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.power_good == False
@@ -76,7 +76,7 @@ class TestPsuStatus(object):
 
     def test_set_voltage(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.voltage_good == False
@@ -143,7 +143,7 @@ class TestPsuStatus(object):
 
     def test_set_temperature(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.temperature_good == False
@@ -193,7 +193,7 @@ class TestPsuStatus(object):
 
     def test_is_ok(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         psu_status.presence = True

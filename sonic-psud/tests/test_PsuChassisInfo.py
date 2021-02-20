@@ -110,17 +110,17 @@ class TestPsuChassisInfo(object):
 
     def test_supplied_power(self):
         chassis = MockChassis()
-        psu1 = MockPsu(True, True, "PSU 1", 0)
+        psu1 = MockPsu("PSU 1", 0, True, True)
         psu1_power = 510.0
         psu1.set_maximum_supplied_power(psu1_power)
         chassis.psu_list.append(psu1)
 
-        psu2 = MockPsu(True, True, "PSU 2", 1)
+        psu2 = MockPsu("PSU 2", 1, True, True)
         psu2_power = 800.0
         psu2.set_maximum_supplied_power(psu2_power)
         chassis.psu_list.append(psu2)
 
-        psu3 = MockPsu(True, True, "PSU 3", 2)
+        psu3 = MockPsu("PSU 3", 2, True, True)
         psu3_power = 350.0
         psu3.set_maximum_supplied_power(psu3_power)
         chassis.psu_list.append(psu3)
@@ -151,12 +151,12 @@ class TestPsuChassisInfo(object):
 
     def test_consumed_power(self):
         chassis = MockChassis()
-        fan_drawer1 = MockFanDrawer(True, True, "FanDrawer 1")
+        fan_drawer1 = MockFanDrawer("FanDrawer 1", 0, True, True)
         fan_drawer1_power = 510.0
         fan_drawer1.set_maximum_consumed_power(fan_drawer1_power)
         chassis.fan_drawer_list.append(fan_drawer1)
 
-        module1 = MockFanDrawer(True, True, "Module 1")
+        module1 = MockModule("Module 1", 0, True, True)
         module1_power = 700.0
         module1.set_maximum_consumed_power(module1_power)
         chassis.module_list.append(module1)
@@ -189,17 +189,17 @@ class TestPsuChassisInfo(object):
 
     def test_power_budget(self):
         chassis = MockChassis()
-        psu = MockPsu(True, True, "PSU 1", 0)
+        psu = MockPsu("PSU 1", 0, True, True)
         psu1_power = 510.0
         psu.set_maximum_supplied_power(psu1_power)
         chassis.psu_list.append(psu)
 
-        fan_drawer1 = MockFanDrawer(True, True, "FanDrawer 1")
+        fan_drawer1 = MockFanDrawer("FanDrawer 1", 0, True, True)
         fan_drawer1_power = 510.0
         fan_drawer1.set_maximum_consumed_power(fan_drawer1_power)
         chassis.fan_drawer_list.append(fan_drawer1)
 
-        module1 = MockFanDrawer(True, True, "Module 1")
+        module1 = MockModule("Module 1", 0, True, True)
         module1_power = 700.0
         module1.set_maximum_consumed_power(module1_power)
         chassis.module_list.append(module1)
@@ -218,7 +218,7 @@ class TestPsuChassisInfo(object):
         assert MockPsu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
 
         # Add a PSU
-        psu = MockPsu(True, True, "PSU 2", 1)
+        psu = MockPsu("PSU 2", 1, True, True)
         psu2_power = 800.0
         psu.set_maximum_supplied_power(psu2_power)
         chassis.psu_list.append(psu)

@@ -12,7 +12,7 @@ else:
     import mock
 from sonic_py_common import daemon_base
 
-from . import mock_platform
+from .mock_platform import MockChassis, MockFan, MockPsu
 from . import mock_swsscommon
 
 SYSLOG_IDENTIFIER = 'psud_test'
@@ -78,8 +78,8 @@ class TestDaemonPsud(object):
         assert daemon_psud.stop.set.call_count == 0
 
     def test_update_psu_data(self):
-        mock_psu1 = mock_platform.MockPsu(True, True, "PSU 1", 0)
-        mock_psu2 = mock_platform.MockPsu(True, True, "PSU 2", 1)
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
+        mock_psu2 = MockPsu("PSU 2", 1, True, True)
         mock_psu_tbl = mock.MagicMock()
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
@@ -93,7 +93,7 @@ class TestDaemonPsud(object):
         assert daemon_psud.log_warning.call_count == 0
 
         # Test with mocked platform_chassis
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
         psud.platform_chassis.psu_list = [mock_psu1, mock_psu2]
         daemon_psud.update_psu_data(mock_psu_tbl)
         assert daemon_psud._update_single_psu_data.call_count == 2
@@ -113,7 +113,7 @@ class TestDaemonPsud(object):
 
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
-        mock_psu = mock_platform.MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
@@ -165,7 +165,7 @@ class TestDaemonPsud(object):
         daemon_psud.log_warning.assert_called_with("set_status_led() not implemented")
 
     def test_update_led_color(self):
-        mock_psu = mock_platform.MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
         mock_psu_tbl = mock.MagicMock()
         mock_logger = mock.MagicMock()
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
@@ -179,9 +179,9 @@ class TestDaemonPsud(object):
         assert mock_psu_tbl.set.call_count == 0
         assert daemon_psud._update_psu_fan_led_status.call_count == 0
 
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
         daemon_psud.psu_status_dict[1] = psu_status
-        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', mock_platform.MockPsu.STATUS_LED_COLOR_OFF)])
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_OFF)])
         daemon_psud._update_led_color(mock_psu_tbl)
         assert mock_psu_tbl.set.call_count == 1
         mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
@@ -191,8 +191,8 @@ class TestDaemonPsud(object):
         mock_psu_tbl.set.reset_mock()
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
-        mock_psu.set_status_led(mock_platform.MockPsu.STATUS_LED_COLOR_GREEN)
-        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', mock_platform.MockPsu.STATUS_LED_COLOR_GREEN)])
+        mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_GREEN)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_GREEN)])
         daemon_psud._update_led_color(mock_psu_tbl)
         assert mock_psu_tbl.set.call_count == 1
         mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
@@ -202,8 +202,8 @@ class TestDaemonPsud(object):
         mock_psu_tbl.set.reset_mock()
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
-        mock_psu.set_status_led(mock_platform.MockPsu.STATUS_LED_COLOR_RED)
-        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', mock_platform.MockPsu.STATUS_LED_COLOR_RED)])
+        mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_RED)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_RED)])
         daemon_psud._update_led_color(mock_psu_tbl)
         assert mock_psu_tbl.set.call_count == 1
         mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
@@ -223,17 +223,17 @@ class TestDaemonPsud(object):
         daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
 
     def test_update_psu_fan_led_status(self):
-        mock_fan = mock_platform.MockFan("PSU 1 Test Fan 1", mock_platform.MockFan.FAN_DIRECTION_INTAKE)
-        mock_psu = mock_platform.MockPsu(True, True, "PSU 1", 0)
+        mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
         mock_psu._fan_list = [mock_fan]
         mock_logger = mock.MagicMock()
 
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud.fan_tbl = mock.MagicMock()
 
-        expected_fvp = psud.swsscommon.FieldValuePairs([(psud.FAN_INFO_LED_STATUS_FIELD, mock_platform.MockFan.STATUS_LED_COLOR_OFF)])
+        expected_fvp = psud.swsscommon.FieldValuePairs([(psud.FAN_INFO_LED_STATUS_FIELD, MockFan.STATUS_LED_COLOR_OFF)])
         daemon_psud._update_psu_fan_led_status(mock_psu, 1)
         assert daemon_psud.fan_tbl.set.call_count == 1
         daemon_psud.fan_tbl.set.assert_called_with("PSU 1 Test Fan 1", expected_fvp)
@@ -266,15 +266,15 @@ class TestDaemonPsud(object):
         assert daemon_psud.psu_chassis_info is None
 
         # Now we mock platform_chassis, so that daemon_psud.psu_chassis_info should be instantiated and run_power_budget() should be called
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
         daemon_psud.update_psu_chassis_info(None)
         assert daemon_psud.psu_chassis_info is not None
         assert daemon_psud.psu_chassis_info.run_power_budget.call_count == 1
         daemon_psud.psu_chassis_info.run_power_budget.assert_called_with(None)
 
     def test_update_psu_entity_info(self):
-        mock_psu1 = mock_platform.MockPsu(True, True, "PSU 1", 0)
-        mock_psu2 = mock_platform.MockPsu(True, True, "PSU 2", 1)
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
+        mock_psu2 = MockPsu("PSU 2", 1, True, True)
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud._update_single_psu_entity_info = mock.MagicMock()
@@ -284,7 +284,7 @@ class TestDaemonPsud(object):
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 0
 
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
         psud.platform_chassis.psu_list = [mock_psu1]
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 1
@@ -309,7 +309,7 @@ class TestDaemonPsud(object):
 
     @mock.patch('psud.try_get', mock.MagicMock(return_value=0))
     def test_update_single_psu_entity_info(self):
-        mock_psu1 = mock_platform.MockPsu(True, True, "PSU 1", 0)
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
 
         expected_fvp = psud.swsscommon.FieldValuePairs(
             [('position_in_parent', '0'),
@@ -327,12 +327,12 @@ class TestDaemonPsud(object):
         fake_time = datetime.datetime(2021, 1, 1, 12, 34, 56)
         mock_datetime.now.return_value = fake_time
 
-        mock_fan = mock_platform.MockFan("PSU 1 Test Fan 1", mock_platform.MockFan.FAN_DIRECTION_INTAKE)
-        mock_psu1 = mock_platform.MockPsu(True, True, "PSU 1", 0)
+        mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
         mock_psu1._fan_list = [mock_fan]
         mock_logger = mock.MagicMock()
 
-        psud.platform_chassis = mock_platform.MockChassis()
+        psud.platform_chassis = MockChassis()
         psud.platform_chassis.psu_list = [mock_psu1]
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)

@@ -12,7 +12,7 @@ else:
 from sonic_py_common import daemon_base
 
 from . import mock_swsscommon
-from .mock_platform import MockChassis, MockPsu, MockFanDrawer, MockModule
+from .mock_platform import MockPsu
 
 SYSLOG_IDENTIFIER = 'psud_test'
 NOT_AVAILABLE = 'N/A'

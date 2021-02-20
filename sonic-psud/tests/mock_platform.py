@@ -1,144 +1,25 @@
-from .mock_device_base import DeviceBase
+from sonic_platform_base import chassis_base
+from sonic_platform_base import fan_base
+from sonic_platform_base import fan_drawer_base
+from sonic_platform_base import module_base
+from sonic_platform_base import psu_base
 
 
-class MockDevice:
-    STATUS_LED_COLOR_GREEN = "green"
-    STATUS_LED_COLOR_AMBER = "amber"
-    STATUS_LED_COLOR_RED = "red"
-    STATUS_LED_COLOR_OFF = "off"
-
-    def __init__(self):
-        self.name = None
-        self.presence = True
-        self.model = 'Module Model'
-        self.serial = 'Module Serial'
-
-    def get_name(self):
-        return self.name
-
-    def set_presence(self, presence):
-        self.presence = presence
-
-    def get_presence(self):
-        return self.presence
-
-    def get_model(self):
-        return self.model
-
-    def get_serial(self):
-        return self.serial
-
-
-class MockPsu(MockDevice):
-    master_led_color = MockDevice.STATUS_LED_COLOR_OFF
-
-    def __init__(self, presence, status, name, position_in_parent):
+class MockChassis(chassis_base.ChassisBase):
+    def __init__(self,
+                 name='Fixed Chassis',
+                 position_in_parent=0,
+                 presence=True,
+                 model='Module Model',
+                 serial='Module Serial',
+                 status=True):
+        super(MockChassis, self).__init__()
         self.name = name
-        self.presence = True
-        self.status = status
-        self.status_led_color = self.STATUS_LED_COLOR_OFF
         self.position_in_parent = position_in_parent
-        self._fan_list = []
-
-    def get_all_fans(self):
-        return self._fan_list
-
-    def get_powergood_status(self):
-        return self.status
-
-    def set_status_led(self, color):
-        self.status_led_color = color
-        return True
-
-    def get_status_led(self):
-        return self.status_led_color
-
-    def set_status(self, status):
+        self.presence = presence
+        self.model = model
+        self.serial = serial
         self.status = status
-
-    def get_position_in_parent(self):
-        return self.position_in_parent
-
-    def set_maximum_supplied_power(self, supplied_power):
-        self.max_supplied_power = supplied_power
-
-    def get_maximum_supplied_power(self):
-        return self.max_supplied_power
-
-    @classmethod
-    def set_status_master_led(cls, color):
-        cls.master_led_color = color
-
-    @classmethod
-    def get_status_master_led(cls):
-        return cls.master_led_color
-
-
-class MockFanDrawer(MockDevice):
-    def __init__(self, fan_drawer_presence, fan_drawer_status, fan_drawer_name):
-        self.name = fan_drawer_name
-        self.presence = True
-        self.fan_drawer_status = fan_drawer_status
-
-    def get_status(self):
-        return self.fan_drawer_status
-
-    def set_status(self, status):
-        self.fan_drawer_status = status
-
-    def set_maximum_consumed_power(self, consumed_power):
-        self.max_consumed_power = consumed_power
-
-    def get_maximum_consumed_power(self):
-        return self.max_consumed_power
-
-
-class MockFan(MockDevice):
-    FAN_DIRECTION_INTAKE = "intake"
-    FAN_DIRECTION_EXHAUST = "exhaust"
-
-    def __init__(self, name, direction, speed=50):
-        self.name = name
-        self.direction = direction
-        self.speed = speed
-        self.status_led_color = self.STATUS_LED_COLOR_OFF
-
-    def get_direction(self):
-        return self.direction
-
-    def get_speed(self):
-        return self.speed
-
-    def set_status_led(self, color):
-        self.status_led_color = color
-        return True
-
-    def get_status_led(self):
-        return self.status_led_color
-
-
-
-class MockModule(MockDevice):
-    def __init__(self, module_presence, module_status, module_name):
-        self.name = module_name
-        self.presence = True
-        self.module_status = module_status
-
-    def get_status(self):
-        return self.module_status
-
-    def set_status(self, status):
-        self.module_status = status
-
-    def set_maximum_consumed_power(self, consumed_power):
-        self.max_consumed_power = consumed_power
-
-    def get_maximum_consumed_power(self):
-        return self.max_consumed_power
-
-
-class MockChassis:
-    def __init__(self):
         self.psu_list = []
         self.fan_drawer_list = []
         self.module_list = []
@@ -163,3 +44,351 @@ class MockChassis:
 
     def get_all_modules(self):
         return self.module_list
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self.name
+
+    def get_presence(self):
+        return self.presence
+
+    def set_presence(self, presence):
+        self.presence = presence
+
+    def get_model(self):
+        return self.model
+
+    def get_serial(self):
+        return self.serial
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+    def is_replaceable(self):
+        return self.replaceable
+
+    def get_status_led(self):
+        return self.status_led_color
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+
+class MockFan(fan_base.FanBase):
+    def __init__(self,
+                 name,
+                 position_in_parent,
+                 presence=True,
+                 model='Module Model',
+                 serial='Module Serial',
+                 status=True,
+                 direction=fan_base.FanBase.FAN_DIRECTION_INTAKE,
+                 speed=50):
+        super(MockFan, self).__init__()
+        self.status_led_color = self.STATUS_LED_COLOR_OFF
+        self.name = name
+        self.position_in_parent = position_in_parent
+        self.presence = presence
+        self.model = model
+        self.serial = serial
+        self.status = status
+        self.direction = direction
+        self.speed = speed
+
+    def get_direction(self):
+        return self.direction
+
+    def get_speed(self):
+        return self.speed
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self.name
+
+    def get_presence(self):
+        return self.presence
+
+    def set_presence(self, presence):
+        self.presence = presence
+
+    def get_model(self):
+        return self.model
+
+    def get_serial(self):
+        return self.serial
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+    def is_replaceable(self):
+        return self.replaceable
+
+    def get_status_led(self):
+        return self.status_led_color
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+
+class MockFanDrawer(fan_drawer_base.FanDrawerBase):
+    def __init__(self,
+                 name,
+                 position_in_parent,
+                 presence=True,
+                 model='Module Model',
+                 serial='Module Serial',
+                 status=True):
+        super(MockFanDrawer, self).__init__()
+        self.name = name
+        self.position_in_parent = position_in_parent
+        self.presence = presence
+        self.model = model
+        self.serial = serial
+        self.status = status
+        self.max_consumed_power = 500.0
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_maximum_consumed_power(self):
+        return self.max_consumed_power
+
+    def set_maximum_consumed_power(self, consumed_power):
+        self.max_consumed_power = consumed_power
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self.name
+
+    def get_presence(self):
+        return self.presence
+
+    def set_presence(self, presence):
+        self.presence = presence
+
+    def get_model(self):
+        return self.model
+
+    def get_serial(self):
+        return self.serial
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+    def is_replaceable(self):
+        return self.replaceable
+
+    def get_status_led(self):
+        return self.status_led_color
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+
+class MockModule(module_base.ModuleBase):
+    def __init__(self,
+                 name,
+                 position_in_parent,
+                 presence=True,
+                 model='Module Model',
+                 serial='Module Serial',
+                 status=True):
+        super(MockModule, self).__init__()
+        self.name = name
+        self.position_in_parent = position_in_parent
+        self.presence = presence
+        self.model = model
+        self.serial = serial
+        self.status = status
+        self.max_consumed_power = 500.0
+
+    def set_maximum_consumed_power(self, consumed_power):
+        self.max_consumed_power = consumed_power
+
+    def get_maximum_consumed_power(self):
+        return self.max_consumed_power
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self.name
+
+    def get_presence(self):
+        return self.presence
+
+    def set_presence(self, presence):
+        self.presence = presence
+
+    def get_model(self):
+        return self.model
+
+    def get_serial(self):
+        return self.serial
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+    def is_replaceable(self):
+        return self.replaceable
+
+    def get_status_led(self):
+        return self.status_led_color
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+
+class MockPsu(psu_base.PsuBase):
+    def __init__(self,
+                 name,
+                 position_in_parent,
+                 presence=True,
+                 model='Module Model',
+                 serial='Module Serial',
+                 status=True,
+                 voltage=12.0,
+                 current=8.0,
+                 power=100.0,
+                 temp=30.00,
+                 temp_high_th=50.0,
+                 voltage_low_th=11.0,
+                 voltage_high_th=13.0,
+                 replaceable=True):
+        super(MockPsu, self).__init__()
+        self.status_led_color = self.STATUS_LED_COLOR_OFF
+        self.name = name
+        self.position_in_parent = position_in_parent
+        self.presence = presence
+        self.model = model
+        self.serial = serial
+        self.status = status
+        self.voltage = voltage
+        self.current = current
+        self.power = power
+        self.temp = temp
+        self.temp_high_th = temp_high_th
+        self.voltage_low_th = voltage_low_th
+        self.voltage_high_th = voltage_high_th
+        self.replaceable = replaceable
+
+    def get_voltage(self):
+        return self.voltage
+
+    def set_voltage(self, voltage):
+        self.voltage = voltage
+
+    def get_current(self):
+        return self.current
+
+    def set_current(self, current):
+        self.current = current
+
+    def get_power(self):
+        return self.power
+
+    def set_power(self, power):
+        self.power = power
+
+    def get_powergood_status(self):
+        return self.status
+
+    def get_temperature(self):
+        return self.temp
+
+    def set_temperature(self, power):
+        self.temp = temp
+
+    def get_temperature_high_threshold(self):
+        return self.temp_high_th
+
+    def get_voltage_high_threshold(self):
+        return self.voltage_high_th
+
+    def get_voltage_low_threshold(self):
+        return self.voltage_low_th
+
+    def get_maximum_supplied_power(self):
+        return self.max_supplied_power
+
+    def set_maximum_supplied_power(self, supplied_power):
+        self.max_supplied_power = supplied_power
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self.name
+
+    def get_presence(self):
+        return self.presence
+
+    def set_presence(self, presence):
+        self.presence = presence
+
+    def get_model(self):
+        return self.model
+
+    def get_serial(self):
+        return self.serial
+
+    def get_status(self):
+        return self.status
+
+    def set_status(self, status):
+        self.status = status
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
+
+    def is_replaceable(self):
+        return self.replaceable
+
+    def get_status_led(self):
+        return self.status_led_color
+
+    def set_status_led(self, color):
+        self.status_led_color = color
+        return True
+
+    def get_position_in_parent(self):
+        return self.position_in_parent
