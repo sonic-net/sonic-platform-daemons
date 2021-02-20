@@ -171,3 +171,9 @@ def test_log_on_status_changed():
     assert mock_logger.log_notice.call_count == 0
     assert mock_logger.log_warning.call_count == 1
     mock_logger.log_warning.assert_called_with(abnormal_log)
+
+
+@mock.patch('psud.DaemonPsud.run')
+def test_main(mock_run):
+    psud.main()
+    assert mock_run.call_count == 1
