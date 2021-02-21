@@ -78,6 +78,17 @@ class TestDaemonPsud(object):
         assert daemon_psud.log_info.call_count == 0
         assert daemon_psud.stop.set.call_count == 0
 
+    def test_run(self):
+        psud.platform_chassis = MockChassis()
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud._update_psu_entity_info = mock.MagicMock()
+        daemon_psud.update_psu_data = mock.MagicMock()
+        daemon_psud._update_led_color = mock.MagicMock()
+        daemon_psud.update_psu_chassis_info = mock.MagicMock()
+
+        daemon_psud.run()
+        assert daemon_psud.first_run is False
+
     def test_update_psu_data(self):
         mock_psu1 = MockPsu("PSU 1", 0, True, True)
         mock_psu2 = MockPsu("PSU 2", 1, True, True)
