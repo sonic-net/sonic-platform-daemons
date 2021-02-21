@@ -175,5 +175,7 @@ def test_log_on_status_changed():
 
 @mock.patch('psud.DaemonPsud.run')
 def test_main(mock_run):
+    mock_run.return_value = False
+
     psud.main()
     assert mock_run.call_count == 1
