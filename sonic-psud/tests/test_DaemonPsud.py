@@ -111,6 +111,35 @@ class TestDaemonPsud(object):
         assert daemon_psud.log_warning.call_count == 2
         daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
 
+    @mock.patch('psud._wrapper_get_psu_presence', mock.MagicMock())
+    @mock.patch('psud._wrapper_get_psu_status', mock.MagicMock())
+    def test_update_single_psu_data(self):
+        psud._wrapper_get_psu_presence.return_value = True
+        psud._wrapper_get_psu_status.return_value = True
+
+        psu1 = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678')
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis.psu_list.append(psu1)
+
+        mock_psu_tbl = mock.MagicMock()
+
+        expected_fvp = psud.swsscommon.FieldValuePairs(
+            [(psud.PSU_INFO_MODEL_FIELD, 'Fake Model'),
+             (psud.PSU_INFO_SERIAL_FIELD, '12345678'),
+             (psud.PSU_INFO_TEMP_FIELD, '30.0'),
+             (psud.PSU_INFO_TEMP_TH_FIELD, '50.0'),
+             (psud.PSU_INFO_VOLTAGE_FIELD, '12.0'),
+             (psud.PSU_INFO_VOLTAGE_MIN_TH_FIELD, '11.0'),
+             (psud.PSU_INFO_VOLTAGE_MAX_TH_FIELD, '13.0'),
+             (psud.PSU_INFO_CURRENT_FIELD, '8.0'),
+             (psud.PSU_INFO_POWER_FIELD, '100.0'),
+             (psud.PSU_INFO_FRU_FIELD, 'True'),
+             ])
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud._update_single_psu_data(1, psu1, mock_psu_tbl)
+        mock_psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
         mock_psu = MockPsu("PSU 1", 0, True, True)
