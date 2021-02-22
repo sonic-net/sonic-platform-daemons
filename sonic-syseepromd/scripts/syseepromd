@@ -8,20 +8,13 @@
     With this daemon, show syseeprom CLI will be able to get data from state DB instead of access hw or cache.
 '''
 
-import os
 import signal
 import sys
 import threading
 
+import sonic_platform
 from sonic_py_common import daemon_base
-
-# If unit testing is occurring, mock swsscommon and module_base
-if os.getenv("SYSEEPROMD_UNIT_TESTING") == "1":
-    #from tests.mock_platform import MockPsu as Psu
-    from tests import mock_swsscommon as swsscommon
-else:
-    import sonic_platform
-    from swsscommon import swsscommon
+from swsscommon import swsscommon
 
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the

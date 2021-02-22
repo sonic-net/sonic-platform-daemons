@@ -11,25 +11,26 @@ else:
     import mock
 from sonic_py_common import daemon_base
 
-from . import mock_swsscommon
-#from .mock_platform import MockPsu
-
 SYSLOG_IDENTIFIER = 'syseepromd_test'
 NOT_AVAILABLE = 'N/A'
 
 daemon_base.db_connect = mock.MagicMock()
 
-test_path = os.path.dirname(os.path.abspath(__file__))
-modules_path = os.path.dirname(test_path)
-scripts_path = os.path.join(modules_path, "scripts")
+tests_path = os.path.dirname(os.path.abspath(__file__))
+
+# Add mocked_libs path so that the file under test can load mocked modules from there
+mocked_libs_path = os.path.join(tests_path, 'mocked_libs')
+sys.path.insert(0, mocked_libs_path)
+
+# Add path to the file under test so that we can load it
+modules_path = os.path.dirname(tests_path)
+scripts_path = os.path.join(modules_path, 'scripts')
 sys.path.insert(0, modules_path)
 
-os.environ["SYSEEPROMD_UNIT_TESTING"] = "1"
 load_source('syseepromd', os.path.join(scripts_path, 'syseepromd'))
 import syseepromd
 
 
-@mock.patch('syseepromd.DaemonSyseeprom.eeprom', mock.MagicMock())
 def test_post_eeprom_to_db():
     daemon_syseepromd = syseepromd.DaemonSyseeprom()
     daemon_syseepromd.post_eeprom_to_db()
