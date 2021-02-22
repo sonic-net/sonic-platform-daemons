@@ -25,7 +25,7 @@ scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
 
 os.environ["PSUD_UNIT_TESTING"] = "1"
-load_source('psud', scripts_path + '/psud')
+load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
 CHASSIS_INFO_TABLE = 'CHASSIS_INFO'
