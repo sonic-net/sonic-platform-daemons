@@ -199,7 +199,7 @@ class TestPsuChassisInfo(object):
         chassis = MockChassis()
         psu1 = MockPsu("PSU 1", 0, True, True)
         psu1_power = 510.0
-        psu.set_maximum_supplied_power(psu1_power)
+        psu1.set_maximum_supplied_power(psu1_power)
         chassis.psu_list.append(psu1)
 
         fan_drawer1 = MockFanDrawer("FanDrawer 1", 0, True, True)
@@ -228,7 +228,7 @@ class TestPsuChassisInfo(object):
         # Add a PSU
         psu2 = MockPsu("PSU 2", 1, True, True)
         psu2_power = 800.0
-        psu.set_maximum_supplied_power(psu2_power)
+        psu2.set_maximum_supplied_power(psu2_power)
         chassis.psu_list.append(psu2)
 
         # Check if supplied_power > consumed_power
