@@ -9,21 +9,14 @@
     The loop interval is PSU_INFO_UPDATE_PERIOD_SECS in seconds.
 """
 
-import os
 import signal
 import sys
 import threading
 from datetime import datetime
 
+from sonic_platform.psu import Psu
 from sonic_py_common import daemon_base, logger
-
-# If unit testing is occurring, mock swsscommon and module_base
-if os.getenv("PSUD_UNIT_TESTING") == "1":
-    from tests.mock_platform import MockPsu as Psu
-    from tests import mock_swsscommon as swsscommon
-else:
-    from sonic_platform.psu import Psu
-    from swsscommon import swsscommon
+from swsscommon import swsscommon
 
 
 #

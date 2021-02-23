@@ -10,12 +10,16 @@ else:
 
 from .mock_platform import MockPsu
 
-test_path = os.path.dirname(os.path.abspath(__file__))
-modules_path = os.path.dirname(test_path)
+tests_path = os.path.dirname(os.path.abspath(__file__))
+
+# Add mocked_libs path so that the file under test can load mocked modules from there
+mocked_libs_path = os.path.join(tests_path, "mocked_libs")
+sys.path.insert(0, mocked_libs_path)
+
+# Add path to the file under test so that we can load it
+modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-
-os.environ["PSUD_UNIT_TESTING"] = "1"
 load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 

@@ -11,22 +11,28 @@ else:
     import mock
 from sonic_py_common import daemon_base
 
-from . import mock_swsscommon
 from .mock_platform import MockPsu
+
+tests_path = os.path.dirname(os.path.abspath(__file__))
+
+# Add mocked_libs path so that the file under test can load mocked modules from there
+mocked_libs_path = os.path.join(tests_path, "mocked_libs")
+sys.path.insert(0, mocked_libs_path)
+
+# Add path to the file under test so that we can load it
+modules_path = os.path.dirname(tests_path)
+scripts_path = os.path.join(modules_path, "scripts")
+sys.path.insert(0, modules_path)
+load_source('psud', os.path.join(scripts_path, 'psud'))
+import psud
+
+
+daemon_base.db_connect = mock.MagicMock()
+
 
 SYSLOG_IDENTIFIER = 'psud_test'
 NOT_AVAILABLE = 'N/A'
 
-daemon_base.db_connect = mock.MagicMock()
-
-test_path = os.path.dirname(os.path.abspath(__file__))
-modules_path = os.path.dirname(test_path)
-scripts_path = os.path.join(modules_path, "scripts")
-sys.path.insert(0, modules_path)
-
-os.environ["PSUD_UNIT_TESTING"] = "1"
-load_source('psud', os.path.join(scripts_path, 'psud'))
-import psud
 
 @mock.patch('psud.platform_chassis', mock.MagicMock())
 @mock.patch('psud.platform_psuutil', mock.MagicMock())
