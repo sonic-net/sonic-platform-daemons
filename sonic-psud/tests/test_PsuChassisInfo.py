@@ -197,10 +197,10 @@ class TestPsuChassisInfo(object):
 
     def test_power_budget(self):
         chassis = MockChassis()
-        psu = MockPsu("PSU 1", 0, True, True)
+        psu1 = MockPsu("PSU 1", 0, True, True)
         psu1_power = 510.0
         psu.set_maximum_supplied_power(psu1_power)
-        chassis.psu_list.append(psu)
+        chassis.psu_list.append(psu1)
 
         fan_drawer1 = MockFanDrawer("FanDrawer 1", 0, True, True)
         fan_drawer1_power = 510.0
@@ -223,13 +223,13 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) < float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == False
-        assert psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
+        assert psu1.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
 
         # Add a PSU
-        psu = MockPsu("PSU 2", 1, True, True)
+        psu2 = MockPsu("PSU 2", 1, True, True)
         psu2_power = 800.0
         psu.set_maximum_supplied_power(psu2_power)
-        chassis.psu_list.append(psu)
+        chassis.psu_list.append(psu2)
 
         # Check if supplied_power > consumed_power
         chassis_info.run_power_budget(chassis_tbl)
@@ -238,8 +238,8 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) > float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == True
-        assert psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
-
+        assert psu1.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
+        assert psu2.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
     def test_get_psu_key(self):
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
