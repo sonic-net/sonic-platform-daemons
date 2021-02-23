@@ -145,149 +145,59 @@ def test_signal_handler():
     assert daemon_syseepromd.stop_event.set.call_count == 0
 
 
-#@mock.patch('syseepromd.platform_chassis', mock.MagicMock())
-#@mock.patch('syseepromd.platform_psuutil', mock.MagicMock())
-#def test_wrapper_get_num_psus():
-#    # Test new platform API is available and implemented
-#    syseepromd._wrapper_get_num_psus()
-#    assert syseepromd.platform_chassis.get_num_psus.call_count == 1
-#    assert syseepromd.platform_psuutil.get_num_psus.call_count == 0
-#
-#    # Test new platform API is available but not implemented
-#    syseepromd.platform_chassis.get_num_psus.side_effect = NotImplementedError
-#    syseepromd._wrapper_get_num_psus()
-#    assert syseepromd.platform_chassis.get_num_psus.call_count == 2
-#    assert syseepromd.platform_psuutil.get_num_psus.call_count == 1
-#
-#    # Test new platform API not available
-#    syseepromd.platform_chassis = None
-#    syseepromd._wrapper_get_num_psus()
-#    assert syseepromd.platform_psuutil.get_num_psus.call_count == 2
-#
-#
-#@mock.patch('syseepromd.platform_chassis', mock.MagicMock())
-#@mock.patch('syseepromd.platform_psuutil', mock.MagicMock())
-#def test_wrapper_get_psu_presence():
-#    # Test new platform API is available
-#    syseepromd._wrapper_get_psu_presence(1)
-#    assert syseepromd.platform_chassis.get_psu(0).get_presence.call_count == 1
-#    assert syseepromd.platform_psuutil.get_psu_presence.call_count == 0
-#
-#    # Test new platform API is available but not implemented
-#    syseepromd.platform_chassis.get_psu(0).get_presence.side_effect = NotImplementedError
-#    syseepromd._wrapper_get_psu_presence(1)
-#    assert syseepromd.platform_chassis.get_psu(0).get_presence.call_count == 2
-#    assert syseepromd.platform_psuutil.get_psu_presence.call_count == 1
-#
-#    # Test new platform API not available
-#    syseepromd.platform_chassis = None
-#    syseepromd._wrapper_get_psu_presence(1)
-#    assert syseepromd.platform_psuutil.get_psu_presence.call_count == 2
-#    syseepromd.platform_psuutil.get_psu_presence.assert_called_with(1)
-#
-#
-#@mock.patch('syseepromd.platform_chassis', mock.MagicMock())
-#@mock.patch('syseepromd.platform_psuutil', mock.MagicMock())
-#def test_wrapper_get_psu_status():
-#    # Test new platform API is available
-#    syseepromd._wrapper_get_psu_status(1)
-#    assert syseepromd.platform_chassis.get_psu(0).get_powergood_status.call_count == 1
-#    assert syseepromd.platform_psuutil.get_psu_status.call_count == 0
-#
-#    # Test new platform API is available but not implemented
-#    syseepromd.platform_chassis.get_psu(0).get_powergood_status.side_effect = NotImplementedError
-#    syseepromd._wrapper_get_psu_status(1)
-#    assert syseepromd.platform_chassis.get_psu(0).get_powergood_status.call_count == 2
-#    assert syseepromd.platform_psuutil.get_psu_status.call_count == 1
-#
-#    # Test new platform API not available
-#    syseepromd.platform_chassis = None
-#    syseepromd._wrapper_get_psu_status(1)
-#    assert syseepromd.platform_psuutil.get_psu_status.call_count == 2
-#    syseepromd.platform_psuutil.get_psu_status.assert_called_with(1)
-#
-#
-#@mock.patch('syseepromd._wrapper_get_psu_presence', mock.MagicMock())
-#@mock.patch('syseepromd._wrapper_get_psu_status', mock.MagicMock())
-#def test_psu_db_update():
-#    psu_tbl = mock.MagicMock()
-#
-#    syseepromd._wrapper_get_psu_presence.return_value = True
-#    syseepromd._wrapper_get_psu_status.return_value = True
-#    expected_fvp = syseepromd.swsscommon.FieldValuePairs(
-#        [(syseepromd.PSU_INFO_PRESENCE_FIELD, 'true'),
-#         (syseepromd.PSU_INFO_STATUS_FIELD, 'true'),
-#         ])
-#    syseepromd.psu_db_update(psu_tbl, 1)
-#    assert psu_tbl.set.call_count == 1
-#    psu_tbl.set.assert_called_with(syseepromd.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
-#
-#    psu_tbl.set.reset_mock()
-#
-#    syseepromd._wrapper_get_psu_presence.return_value = False
-#    syseepromd._wrapper_get_psu_status.return_value = True
-#    expected_fvp = syseepromd.swsscommon.FieldValuePairs(
-#        [(syseepromd.PSU_INFO_PRESENCE_FIELD, 'false'),
-#         (syseepromd.PSU_INFO_STATUS_FIELD, 'true'),
-#         ])
-#    syseepromd.psu_db_update(psu_tbl, 1)
-#    assert psu_tbl.set.call_count == 1
-#    psu_tbl.set.assert_called_with(syseepromd.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
-#
-#    psu_tbl.set.reset_mock()
-#
-#    syseepromd._wrapper_get_psu_presence.return_value = True
-#    syseepromd._wrapper_get_psu_status.return_value = False
-#    expected_fvp = syseepromd.swsscommon.FieldValuePairs(
-#        [(syseepromd.PSU_INFO_PRESENCE_FIELD, 'true'),
-#         (syseepromd.PSU_INFO_STATUS_FIELD, 'false'),
-#         ])
-#    syseepromd.psu_db_update(psu_tbl, 1)
-#    assert psu_tbl.set.call_count == 1
-#    psu_tbl.set.assert_called_with(syseepromd.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
-#
-#    psu_tbl.set.reset_mock()
-#
-#    syseepromd._wrapper_get_psu_presence.return_value = False
-#    syseepromd._wrapper_get_psu_status.return_value = False
-#    expected_fvp = syseepromd.swsscommon.FieldValuePairs(
-#        [(syseepromd.PSU_INFO_PRESENCE_FIELD, 'false'),
-#         (syseepromd.PSU_INFO_STATUS_FIELD, 'false'),
-#         ])
-#    syseepromd.psu_db_update(psu_tbl, 1)
-#    assert psu_tbl.set.call_count == 1
-#    psu_tbl.set.assert_called_with(syseepromd.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
-#
-#    psu_tbl.set.reset_mock()
-#
-#    syseepromd._wrapper_get_psu_presence.return_value = True
-#    syseepromd._wrapper_get_psu_status.return_value = True
-#    expected_fvp = syseepromd.swsscommon.FieldValuePairs(
-#        [(syseepromd.PSU_INFO_PRESENCE_FIELD, 'true'),
-#         (syseepromd.PSU_INFO_STATUS_FIELD, 'true'),
-#         ])
-#    syseepromd.psu_db_update(psu_tbl, 32)
-#    assert psu_tbl.set.call_count == 32
-#    psu_tbl.set.assert_called_with(syseepromd.PSU_INFO_KEY_TEMPLATE.format(32), expected_fvp)
-#
-#
-#def test_log_on_status_changed():
-#    normal_log = "Normal log message"
-#    abnormal_log = "Abnormal log message"
-#
-#    mock_logger = mock.MagicMock()
-#
-#    syseepromd.log_on_status_changed(mock_logger, True, normal_log, abnormal_log)
-#    assert mock_logger.log_notice.call_count == 1
-#    assert mock_logger.log_warning.call_count == 0
-#    mock_logger.log_notice.assert_called_with(normal_log)
-#
-#    mock_logger.log_notice.reset_mock()
-#
-#    syseepromd.log_on_status_changed(mock_logger, False, normal_log, abnormal_log)
-#    assert mock_logger.log_notice.call_count == 0
-#    assert mock_logger.log_warning.call_count == 1
-#    mock_logger.log_warning.assert_called_with(abnormal_log)
+@mock.patch('syseepromd.EEPROM_INFO_UPDATE_PERIOD_SECS', 1)
+def test_run():
+    daemon_syseepromd = syseepromd.DaemonSyseeprom()
+    daemon_syseepromd.clear_db = mock.MagicMock()
+    daemon_syseepromd.log_info = mock.MagicMock()
+    daemon_syseepromd.log_error = mock.MagicMock()
+    daemon_syseepromd.post_eeprom_to_db = mock.MagicMock(return_value=syseepromd.ERR_NONE)
+
+    # Test no change to EEPROM data
+    daemon_syseepromd.detect_eeprom_table_integrity = mock.MagicMock(return_value=True)
+
+    ret = daemon_syseepromd.run()
+    assert ret == True
+    assert daemon_syseepromd.detect_eeprom_table_integrity.call_count == 1
+    assert daemon_syseepromd.log_info.call_count == 0
+    assert daemon_syseepromd.log_error.call_count == 0
+    assert daemon_syseepromd.clear_db.call_count == 0
+    assert daemon_syseepromd.post_eeprom_to_db.call_count == 0
+
+    # Reset mocks
+    daemon_syseepromd.detect_eeprom_table_integrity.reset_mock()
+
+    # Test EEPROM data has changed, update succeeds
+    daemon_syseepromd.detect_eeprom_table_integrity = mock.MagicMock(return_value=False)
+
+    ret = daemon_syseepromd.run()
+    assert ret == True
+    assert daemon_syseepromd.detect_eeprom_table_integrity.call_count == 1
+    assert daemon_syseepromd.log_info.call_count == 1
+    daemon_syseepromd.log_info.assert_called_with('System EEPROM table was changed, needs update')
+    assert daemon_syseepromd.clear_db.call_count == 1
+    assert daemon_syseepromd.post_eeprom_to_db.call_count == 1
+    assert daemon_syseepromd.log_error.call_count == 0
+
+    # Reset mocks
+    daemon_syseepromd.detect_eeprom_table_integrity.reset_mock()
+    daemon_syseepromd.log_info.reset_mock()
+    daemon_syseepromd.clear_db.reset_mock()
+    daemon_syseepromd.post_eeprom_to_db.reset_mock()
+
+    # Test EEPROM data has changed, update fails
+    daemon_syseepromd.detect_eeprom_table_integrity = mock.MagicMock(return_value=False)
+    daemon_syseepromd.post_eeprom_to_db = mock.MagicMock(return_value=syseepromd.ERR_FAILED_UPDATE_DB)
+
+    ret = daemon_syseepromd.run()
+    assert ret == True
+    assert daemon_syseepromd.detect_eeprom_table_integrity.call_count == 1
+    assert daemon_syseepromd.log_info.call_count == 1
+    daemon_syseepromd.log_info.assert_called_with('System EEPROM table was changed, needs update')
+    assert daemon_syseepromd.clear_db.call_count == 1
+    assert daemon_syseepromd.post_eeprom_to_db.call_count == 1
+    assert daemon_syseepromd.log_error.call_count == 1
+    daemon_syseepromd.log_error.assert_called_with('Failed to post EEPROM to database')
 
 
 @mock.patch('syseepromd.DaemonSyseeprom.run')
