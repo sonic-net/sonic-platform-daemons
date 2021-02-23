@@ -79,6 +79,28 @@ def test_clear_db():
     assert daemon_syseepromd.eeprom_tbl._del.call_count == 2
 
 
+def test_detect_eeprom_table_integrity():
+    daemon_syseepromd = syseepromd.DaemonSyseeprom()
+
+    # Test entries as expected
+    daemon_syseepromd.eeprom_tbl.getKeys = mock.MagicMock(return_value=['key1', 'key2'])
+    daemon_syseepromd.eepromtbl_keys = ['key1', 'key2']
+    ret = daemon_syseepromd.detect_eeprom_table_integrity()
+    assert ret == True
+
+    # Test differing amounts of entries
+    daemon_syseepromd.eeprom_tbl.getKeys = mock.MagicMock(return_value=['key1', 'key2'])
+    daemon_syseepromd.eepromtbl_keys = ['key1']
+    ret = daemon_syseepromd.detect_eeprom_table_integrity()
+    assert ret == False
+
+    # Test same amount of entries, but with different keys
+    daemon_syseepromd.eeprom_tbl.getKeys = mock.MagicMock(return_value=['key1', 'key2'])
+    daemon_syseepromd.eepromtbl_keys = ['key1', 'key3']
+    ret = daemon_syseepromd.detect_eeprom_table_integrity()
+    assert ret == False
+
+
 def test_signal_handler():
     daemon_syseepromd = syseepromd.DaemonSyseeprom()
     daemon_syseepromd.stop_event.set = mock.MagicMock()
