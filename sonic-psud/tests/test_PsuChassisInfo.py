@@ -223,7 +223,7 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) < float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == False
-        assert MockPsu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
+        assert psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
 
         # Add a PSU
         psu = MockPsu("PSU 2", 1, True, True)
@@ -238,7 +238,7 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) > float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == True
-        assert MockPsu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
+        assert psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
 
     def test_get_psu_key(self):
