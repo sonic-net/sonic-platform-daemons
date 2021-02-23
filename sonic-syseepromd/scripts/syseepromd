@@ -12,7 +12,6 @@ import signal
 import sys
 import threading
 
-import sonic_platform
 from sonic_py_common import daemon_base
 from swsscommon import swsscommon
 
@@ -21,6 +20,9 @@ from swsscommon import swsscommon
 # name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
 SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n) \
         for n in dir(signal) if n.startswith('SIG') and '_' not in n )
+
+PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
+PLATFORM_SPECIFIC_CLASS_NAME = 'board'
 
 EEPROM_INFO_UPDATE_PERIOD_SECS = 60
 
@@ -44,12 +46,20 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
         self.eeprom = None
         self.eeprom_tbl = None
 
-        # Load the new platform API
+        # First, try to load the new platform API
         try:
+            import sonic_platform
             self.eeprom = sonic_platform.platform.Platform().get_chassis().get_eeprom()
         except Exception as e:
             self.log_warning(
-                "Failed to load Eeprom class from sonic_platform package due to {}".format(repr(e)))
+                "Failed to load platform-specific eeprom from sonic_platform package due to {}".format(repr(e)))
+
+        # If we didn't successfully load the class from the sonic_platform package, try loading the old plugin
+        if not self.eeprom:
+            try:
+                self.eeprom = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+            except Exception as e:
+                self.log_error("Failed to load platform-specific eeprom implementation: {}".format(repr(e)))
 
         if not self.eeprom:
             sys.exit(ERR_EEPROM_LOAD)
