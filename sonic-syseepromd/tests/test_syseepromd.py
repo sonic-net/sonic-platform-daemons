@@ -68,6 +68,16 @@ def test_post_eeprom_to_db_ok():
     assert daemon_syseepromd.log_error.call_count == 0
     assert daemon_syseepromd.eeprom_tbl.getKeys.call_count == 1
 
+
+def test_clear_db():
+    daemon_syseepromd = syseepromd.DaemonSyseeprom()
+    daemon_syseepromd.eeprom_tbl.getKeys = mock.MagicMock(return_value=['key1', 'key2'])
+    daemon_syseepromd.eeprom_tbl._del = mock.MagicMock()
+
+    daemon_syseepromd.clear_db()
+    assert daemon_syseepromd.eeprom_tbl.getKeys.call_count == 1
+    assert daemon_syseepromd.eeprom_tbl._del.call_count == 2
+
 #@mock.patch('psud.platform_chassis', mock.MagicMock())
 #@mock.patch('psud.platform_psuutil', mock.MagicMock())
 #def test_wrapper_get_num_psus():
