@@ -110,39 +110,52 @@ def test_signal_handler():
     # Test SIGHUP
     daemon_syseepromd.signal_handler(syseepromd.signal.SIGHUP, None)
     assert daemon_syseepromd.log_info.call_count == 1
-    daemon_syseepromd.log_info.assert_called_with("Caught SIGHUP - ignoring...")
+    daemon_syseepromd.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
     assert daemon_syseepromd.log_warning.call_count == 0
     assert daemon_syseepromd.stop_event.set.call_count == 0
+    assert syseepromd.exit_code == 0
+
+    # Reset
+    daemon_syseepromd.log_info.reset_mock()
+    daemon_syseepromd.log_warning.reset_mock()
+    daemon_syseepromd.stop_event.set.reset_mock()
 
     # Test SIGINT
+    test_signal = syseepromd.signal.SIGINT
+    daemon_syseepromd.signal_handler(test_signal, None)
+    assert daemon_syseepromd.log_info.call_count == 1
+    daemon_syseepromd.log_info.assert_called_with("Caught signal 'SIGINT' - exiting...")
+    assert daemon_syseepromd.log_warning.call_count == 0
+    assert daemon_syseepromd.stop_event.set.call_count == 1
+    assert syseepromd.exit_code == (128 + test_signal)
+
+    # Reset
     daemon_syseepromd.log_info.reset_mock()
     daemon_syseepromd.log_warning.reset_mock()
     daemon_syseepromd.stop_event.set.reset_mock()
-    daemon_syseepromd.signal_handler(syseepromd.signal.SIGINT, None)
-    assert daemon_syseepromd.log_info.call_count == 1
-    daemon_syseepromd.log_info.assert_called_with("Caught SIGINT - exiting...")
-    assert daemon_syseepromd.log_warning.call_count == 0
-    assert daemon_syseepromd.stop_event.set.call_count == 1
 
     # Test SIGTERM
-    daemon_syseepromd.log_info.reset_mock()
-    daemon_syseepromd.log_warning.reset_mock()
-    daemon_syseepromd.stop_event.set.reset_mock()
-    daemon_syseepromd.signal_handler(syseepromd.signal.SIGTERM, None)
+    test_signal = syseepromd.signal.SIGTERM
+    daemon_syseepromd.signal_handler(test_signal, None)
     assert daemon_syseepromd.log_info.call_count == 1
-    daemon_syseepromd.log_info.assert_called_with("Caught SIGTERM - exiting...")
+    daemon_syseepromd.log_info.assert_called_with("Caught signal 'SIGTERM' - exiting...")
     assert daemon_syseepromd.log_warning.call_count == 0
     assert daemon_syseepromd.stop_event.set.call_count == 1
+    assert syseepromd.exit_code == (128 + test_signal)
 
-    # Test an unhandled signal
+    # Reset
     daemon_syseepromd.log_info.reset_mock()
     daemon_syseepromd.log_warning.reset_mock()
     daemon_syseepromd.stop_event.set.reset_mock()
+    syseepromd.exit_code = 0
+
+    # Test an unhandled signal
     daemon_syseepromd.signal_handler(syseepromd.signal.SIGUSR1, None)
     assert daemon_syseepromd.log_warning.call_count == 1
-    daemon_syseepromd.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1'")
+    daemon_syseepromd.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
     assert daemon_syseepromd.log_info.call_count == 0
     assert daemon_syseepromd.stop_event.set.call_count == 0
+    assert syseepromd.exit_code == 0
 
 
 @mock.patch('syseepromd.EEPROM_INFO_UPDATE_PERIOD_SECS', 1)

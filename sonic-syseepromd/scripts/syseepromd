@@ -37,6 +37,8 @@ EEPROM_TABLE_NAME = 'EEPROM_INFO'
 
 SYSLOG_IDENTIFIER = 'syseepromd'
 
+exit_code = 0
+
 
 class DaemonSyseeprom(daemon_base.DaemonBase):
     def __init__(self):
@@ -111,20 +113,23 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
 
         return True
 
-    # Signal handler
+    # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
-        if sig == signal.SIGHUP:
-            self.log_info("Caught SIGHUP - ignoring...")
-        elif sig == signal.SIGINT:
-            self.log_info("Caught SIGINT - exiting...")
-            self.stop_event.set()
-        elif sig == signal.SIGTERM:
-            self.log_info("Caught SIGTERM - exiting...")
-            self.stop_event.set()
-        else:
-            self.log_warning("Caught unhandled signal '{}'".format(SIGNALS_TO_NAMES_DICT[sig]))
+        FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
+        NONFATAL_SIGNALS = [signal.SIGHUP]
 
-    # Run daemon
+        global exit_code
+
+        if sig in FATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - exiting...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            exit_code = 128 + sig  # Make sure we exit with a non-zero code so that supervisor will try to restart us
+            self.stop_event.set()
+        elif sig in NONFATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+        else:
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+
+    # Main daemon logic
     def run(self):
         if self.stop_event.wait(EEPROM_INFO_UPDATE_PERIOD_SECS):
             # We received a fatal signal
@@ -155,6 +160,8 @@ def main():
 
     syseepromd.log_info("Shutting down...")
 
+    return exit_code
+
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
