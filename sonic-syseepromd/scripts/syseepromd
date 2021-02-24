@@ -44,6 +44,9 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
     def __init__(self):
         super(DaemonSyseeprom, self).__init__(SYSLOG_IDENTIFIER)
 
+        # Set minimum logging level to INFO
+        self.set_min_log_priority_info()
+
         self.stop_event = threading.Event()
         self.eeprom = None
         self.eeprom_tbl = None
