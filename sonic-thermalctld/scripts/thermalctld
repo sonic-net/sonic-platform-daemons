@@ -1,28 +1,31 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 """
     thermalctld
     Thermal control daemon for SONiC
 """
 
-try:
-    import os
-    import signal
-    import threading
-    import time
-    from datetime import datetime
+import os
+import signal
+import threading
+import time
+from datetime import datetime
 
-    from sonic_py_common import daemon_base, logger
-    from sonic_py_common.task_base import ProcessTaskBase
+import sonic_platform
+from sonic_py_common import daemon_base, logger
+from sonic_py_common.task_base import ProcessTaskBase
 
-    # If unit testing is occurring, mock swsscommon
-    if os.getenv("THERMALCTLD_UNIT_TESTING") == "1":
-        from tests import mock_swsscommon as swsscommon
-    else:
-        from swsscommon import swsscommon
-except ImportError as e:
-    raise ImportError(repr(e) + " - required module not found")
+# If unit testing is occurring, mock swsscommon
+if os.getenv("THERMALCTLD_UNIT_TESTING") == "1":
+    from tests import mock_swsscommon as swsscommon
+else:
+    from swsscommon import swsscommon
 
+
+# TODO: Once we no longer support Python 2, we can eliminate this and get the
+# name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
+SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
+                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
 
 SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
@@ -30,10 +33,15 @@ CHASSIS_INFO_KEY = 'chassis 1'
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT = -1
 
+ERR_UNKNOWN = 1
+ERR_INIT_FAILED = 2
+
+# Thermal control daemon is designed to never exit, it must always
+# return non-zero exit code when exiting and so that supervisord will
+# restart it automatically.
+exit_code = ERR_UNKNOWN
+
 # utility functions
-
-# try get information from platform API and return a default value if caught NotImplementedError
-
 
 def try_get(callback, default=NOT_AVAILABLE):
     """
@@ -63,11 +71,11 @@ class FanStatus(logger.Logger):
     absence_fan_count = 0
     fault_fan_count = 0
 
-    def __init__(self, log_identifier, fan=None, is_psu_fan=False):
+    def __init__(self, fan=None, is_psu_fan=False):
         """
         Constructor of FanStatus
         """
-        super(FanStatus, self).__init__(log_identifier)
+        super(FanStatus, self).__init__(SYSLOG_IDENTIFIER)
 
         self.fan = fan
         self.is_psu_fan = is_psu_fan
@@ -188,12 +196,12 @@ class FanUpdater(logger.Logger):
     FAN_INFO_TABLE_NAME = 'FAN_INFO'
     FAN_DRAWER_INFO_TABLE_NAME = 'FAN_DRAWER_INFO'
 
-    def __init__(self, log_identifier, chassis):
+    def __init__(self, chassis):
         """
         Constructor for FanUpdater
         :param chassis: Object representing a platform chassis
         """
-        super(FanUpdater, self).__init__(log_identifier)
+        super(FanUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
         self.fan_status_dict = {}
@@ -294,7 +302,7 @@ class FanUpdater(logger.Logger):
         fan_name = try_get(fan.get_name, '{} FAN {}'.format(parent_name, fan_index + 1))
         update_entity_info(self.phy_entity_table, parent_name, fan_name, fan, fan_index + 1)
         if fan_name not in self.fan_status_dict:
-            self.fan_status_dict[fan_name] = FanStatus(SYSLOG_IDENTIFIER, fan, is_psu_fan)
+            self.fan_status_dict[fan_name] = FanStatus(fan, is_psu_fan)
 
         fan_status = self.fan_status_dict[fan_name]
 
@@ -423,8 +431,8 @@ class FanUpdater(logger.Logger):
 class TemperatureStatus(logger.Logger):
     TEMPERATURE_DIFF_THRESHOLD = 10
 
-    def __init__(self, log_identifier):
-        super(TemperatureStatus, self).__init__(log_identifier)
+    def __init__(self):
+        super(TemperatureStatus, self).__init__(SYSLOG_IDENTIFIER)
 
         self.temperature = None
         self.over_temperature = False
@@ -507,12 +515,12 @@ class TemperatureUpdater(logger.Logger):
     # Temperature information table name in database
     TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
 
-    def __init__(self, log_identifier, chassis):
+    def __init__(self, chassis):
         """
         Constructor of TemperatureUpdater 
         :param chassis: Object representing a platform chassis
         """
-        super(TemperatureUpdater, self).__init__(log_identifier)
+        super(TemperatureUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
         self.temperature_status_dict = {}
@@ -600,7 +608,7 @@ class TemperatureUpdater(logger.Logger):
             update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
 
         if name not in self.temperature_status_dict:
-            self.temperature_status_dict[name] = TemperatureStatus(SYSLOG_IDENTIFIER)
+            self.temperature_status_dict[name] = TemperatureStatus()
 
         temperature_status = self.temperature_status_dict[name]
 
@@ -661,10 +669,12 @@ class TemperatureUpdater(logger.Logger):
 class ThermalMonitor(ProcessTaskBase):
     # Initial update interval
     INITIAL_INTERVAL = 5
+
     # Update interval value
     UPDATE_INTERVAL = 60
+
     # Update elapse threshold. If update used time is larger than the value, generate a warning log.
-    UPDATE_ELAPSE_THRESHOLD = 30
+    UPDATE_ELAPSED_THRESHOLD = 30
 
     def __init__(self, chassis):
         """
@@ -673,10 +683,16 @@ class ThermalMonitor(ProcessTaskBase):
         """
         ProcessTaskBase.__init__(self)
 
+        self.wait_time = self.INITIAL_INTERVAL
+
         # TODO: Refactor to eliminate the need for this Logger instance
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
-        self.fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
-        self.temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+
+        # Set minimum logging level to INFO
+        self.logger.set_min_log_priority_info()
+
+        self.fan_updater = FanUpdater(chassis)
+        self.temperature_updater = TemperatureUpdater(chassis)
 
     def task_worker(self):
         """
@@ -686,20 +702,19 @@ class ThermalMonitor(ProcessTaskBase):
         self.logger.log_info("Start thermal monitoring loop")
 
         # Start loop to update fan, temperature info in DB periodically
-        wait_time = ThermalMonitor.INITIAL_INTERVAL
-        while not self.task_stopping_event.wait(wait_time):
+        while not self.task_stopping_event.wait(self.wait_time):
             begin = time.time()
             self.fan_updater.update()
             self.temperature_updater.update()
-            elapse = time.time() - begin
-            if elapse < ThermalMonitor.UPDATE_INTERVAL:
-                wait_time = ThermalMonitor.UPDATE_INTERVAL - elapse
+            elapsed = time.time() - begin
+            if elapsed < self.UPDATE_INTERVAL:
+                self.wait_time = self.UPDATE_INTERVAL - elapsed
             else:
-                wait_time = ThermalMonitor.INITIAL_INTERVAL
+                self.wait_time = self.INITIAL_INTERVAL
 
-            if elapse > ThermalMonitor.UPDATE_ELAPSE_THRESHOLD:
+            if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
                 self.logger.log_warning('Update fan and temperature status takes {} seconds, '
-                                        'there might be performance risk'.format(elapse))
+                                        'there might be performance risk'.format(elapsed))
 
         self.fan_updater.deinit()
         self.temperature_updater.deinit()
@@ -718,19 +733,48 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
-    def __init__(self, log_identifier):
+    def __init__(self):
         """
         Constructor of ThermalControlDaemon
         """
-        super(ThermalControlDaemon, self).__init__(log_identifier)
+        super(ThermalControlDaemon, self).__init__(SYSLOG_IDENTIFIER)
+
+        # Set minimum logging level to INFO
+        self.set_min_log_priority_info()
+
         self.stop_event = threading.Event()
 
-        # Thermal control daemon is designed to never exit, it must always
-        # return non zero exit code when exiting and so that supervisord will
-        # restart it automatically.
-        self.exit_code = 1
+        self.wait_time = self.INTERVAL
 
-    # Signal handler
+        chassis = sonic_platform.platform.Platform().get_chassis()
+
+        self.thermal_monitor = ThermalMonitor(chassis)
+        self.thermal_monitor.task_run()
+
+        self.thermal_manager = None
+        try:
+            self.thermal_manager = chassis.get_thermal_manager()
+            if self.thermal_manager:
+                self.thermal_manager.initialize()
+                self.thermal_manager.load(ThermalControlDaemon.POLICY_FILE)
+                self.thermal_manager.init_thermal_algorithm(chassis)
+        except NotImplementedError:
+            self.log_warning('Thermal manager is not supported on this platform.')
+        except Exception as e:
+            self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
+            sys.exit(ERR_INIT_FAILED)
+
+
+    def __del__(self):
+        try:
+            if self.thermal_manager:
+                self.thermal_manager.deinitialize()
+        except Exception as e:
+            self.log_error('Caught exception while destroying thermal manager - {}'.format(repr(e)))
+
+        self.thermal_monitor.task_stop()
+
+    # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
         """
         Signal handler
@@ -738,77 +782,65 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         :param frame: not used
         :return:
         """
-        if sig == signal.SIGHUP:
-            self.log_info("Caught SIGHUP - ignoring...")
-        elif sig == signal.SIGINT or sig == signal.SIGTERM:
-            self.log_info("Caught signal {} - exiting...".format(sig))
-            self.exit_code = sig + 128
-            self.stop_event.set()
-        else:
-            self.log_warning("Caught unhandled signal '" + sig + "'")
+        FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
+        NONFATAL_SIGNALS = [signal.SIGHUP]
 
+        global exit_code
+
+        if sig in FATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - exiting...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            exit_code = 128 + sig  # Make sure we exit with a non-zero code so that supervisor will try to restart us
+            self.stop_event.set()
+        elif sig in NONFATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+        else:
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+
+    # Main daemon logic
     def run(self):
         """
         Run main logical of this daemon
         :return:
         """
-        self.log_info("Starting up...")
+        if self.stop_event.wait(self.wait_time):
+            # We received a fatal signal
+            return False
 
-        import sonic_platform.platform
-        chassis = sonic_platform.platform.Platform().get_chassis()
-
-        thermal_monitor = ThermalMonitor(chassis)
-        thermal_monitor.task_run()
-
-        thermal_manager = None
+        begin = time.time()
         try:
-            thermal_manager = chassis.get_thermal_manager()
-            if thermal_manager:
-                thermal_manager.initialize()
-                thermal_manager.load(ThermalControlDaemon.POLICY_FILE)
-                thermal_manager.init_thermal_algorithm(chassis)
-        except NotImplementedError:
-            self.log_warning('Thermal manager is not supported on this platform.')
+            if self.thermal_manager:
+                self.thermal_manager.run_policy(chassis)
         except Exception as e:
-            self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
+            self.log_error('Caught exception while running thermal policy - {}'.format(repr(e)))
 
-        wait_time = ThermalControlDaemon.INTERVAL
-        while not self.stop_event.wait(wait_time):
-            begin = time.time()
-            try:
-                if thermal_manager:
-                    thermal_manager.run_policy(chassis)
-            except Exception as e:
-                self.log_error('Caught exception while running thermal policy - {}'.format(repr(e)))
-            elapsed = time.time() - begin
-            if elapsed < ThermalControlDaemon.INTERVAL:
-                wait_time = ThermalControlDaemon.INTERVAL - elapsed
-            else:
-                wait_time = ThermalControlDaemon.FAST_START_INTERVAL
+        elapsed = time.time() - begin
+        if elapsed < self.INTERVAL:
+            self.wait_time = self.INTERVAL - elapsed
+        else:
+            self.wait_time = self.FAST_START_INTERVAL
 
-            if elapsed > ThermalControlDaemon.RUN_POLICY_WARN_THRESHOLD_SECS:
-                self.log_warning('Thermal policy execution takes {} seconds, '
-                                 'there might be performance risk'.format(elapsed))
+        if elapsed > self.RUN_POLICY_WARN_THRESHOLD_SECS:
+            self.log_warning('Thermal policy execution takes {} seconds, '
+                             'there might be performance risk'.format(elapsed))
 
-        try:
-            if thermal_manager:
-                thermal_manager.deinitialize()
-        except Exception as e:
-            self.log_error('Caught exception while destroy thermal manager - {}'.format(repr(e)))
-
-        thermal_monitor.task_stop()
-
-        self.log_info("Shutdown with exit code {}...".format(self.exit_code))
-        exit(self.exit_code)
+        return True
 
 
 #
 # Main =========================================================================
 #
 def main():
-    thermal_control = ThermalControlDaemon(SYSLOG_IDENTIFIER)
-    thermal_control.run()
+    thermal_control = ThermalControlDaemon()
+
+    thermal_control.log_info("Starting up...")
+
+    while thermal_control.run():
+        pass
+
+    thermal_control.log_info("Shutting down with exit code {}...".format(exit_code))
+
+    return exit_code
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
