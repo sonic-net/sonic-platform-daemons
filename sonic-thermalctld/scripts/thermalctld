@@ -5,7 +5,6 @@
     Thermal control daemon for SONiC
 """
 
-import os
 import signal
 import threading
 import time
@@ -14,12 +13,7 @@ from datetime import datetime
 import sonic_platform
 from sonic_py_common import daemon_base, logger
 from sonic_py_common.task_base import ProcessTaskBase
-
-# If unit testing is occurring, mock swsscommon
-if os.getenv("THERMALCTLD_UNIT_TESTING") == "1":
-    from tests import mock_swsscommon as swsscommon
-else:
-    from swsscommon import swsscommon
+from swsscommon import swsscommon
 
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the
