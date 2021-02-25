@@ -8,6 +8,7 @@ if sys.version_info.major == 3:
 else:
     import mock
 
+import pytest
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockFan, MockThermal
@@ -32,7 +33,8 @@ import thermalctld
 TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
 
 
-def setup_function():
+@pytest.fixture(scope='function', autouse=True)
+def configure_mocks():
     thermalctld.FanStatus.log_notice = mock.MagicMock()
     thermalctld.FanStatus.log_warning = mock.MagicMock()
     thermalctld.FanUpdater.log_notice = mock.MagicMock()
@@ -42,8 +44,8 @@ def setup_function():
     thermalctld.TemperatureUpdater.log_notice = mock.MagicMock()
     thermalctld.TemperatureUpdater.log_warning = mock.MagicMock()
 
+    yield
 
-def teardown_function():
     thermalctld.FanStatus.log_notice.reset()
     thermalctld.FanStatus.log_warning.reset()
     thermalctld.FanUpdater.log_notice.reset()
