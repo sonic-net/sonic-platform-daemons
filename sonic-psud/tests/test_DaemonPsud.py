@@ -1,7 +1,7 @@
 import datetime
 import os
 import sys
-from imp import load_source
+from imp import load_source  # Replace with importlib once we no longer need to support Python 2
 
 import pytest
 
