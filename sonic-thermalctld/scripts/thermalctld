@@ -62,8 +62,8 @@ def update_entity_info(table, parent_name, key, device, device_index):
 
 
 class FanStatus(logger.Logger):
-    absence_fan_count = 0
-    fault_fan_count = 0
+    absent_fan_count = 0
+    faulty_fan_count = 0
 
     def __init__(self, fan=None, is_psu_fan=False):
         """
@@ -81,12 +81,12 @@ class FanStatus(logger.Logger):
 
     @classmethod
     def get_bad_fan_count(cls):
-        return cls.absence_fan_count + cls.fault_fan_count
+        return cls.absent_fan_count + cls.faulty_fan_count
 
     @classmethod
     def reset_fan_counter(cls):
-        cls.absence_fan_count = 0
-        cls.fault_fan_count = 0
+        cls.absent_fan_count = 0
+        cls.faulty_fan_count = 0
 
     def set_presence(self, presence):
         """
@@ -95,7 +95,7 @@ class FanStatus(logger.Logger):
         :return: True if status changed else False
         """
         if not presence and not self.is_psu_fan:
-            FanStatus.absence_fan_count += 1
+            FanStatus.absent_fan_count += 1
 
         if presence == self.presence:
             return False
@@ -110,7 +110,7 @@ class FanStatus(logger.Logger):
         :return: True if status changed else False
         """
         if not status:
-            FanStatus.fault_fan_count += 1
+            FanStatus.faulty_fan_count += 1
 
         if status == self.status:
             return False

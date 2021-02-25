@@ -134,7 +134,7 @@ def test_fanupdater_fan_absent():
 
 def test_fanupdater_fan_fault():
     chassis = MockChassis()
-    chassis.make_fault_fan()
+    chassis.make_faulty_fan()
     fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     fan_list = chassis.get_all_fans()
@@ -194,7 +194,7 @@ def test_insufficient_fan_number():
 
     chassis = MockChassis()
     chassis.make_absent_fan()
-    chassis.make_fault_fan()
+    chassis.make_faulty_fan()
     fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3

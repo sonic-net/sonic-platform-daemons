@@ -298,7 +298,7 @@ class MockChassis(chassis_base.ChassisBase):
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
-    def make_fault_fan(self):
+    def make_faulty_fan(self):
         fan = MockFan()
         fan.set_status(False)
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
