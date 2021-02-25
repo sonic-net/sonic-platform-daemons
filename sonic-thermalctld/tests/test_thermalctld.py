@@ -126,7 +126,7 @@ def test_fanupdater_fan_absent():
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
     assert fan_updater.log_warning.call_count == 1
 
-    fan_list[0].presence = True
+    fan_list[0].set_presence(True)
     fan_updater.update()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
     assert fan_updater.log_notice.call_count == 1
@@ -141,7 +141,7 @@ def test_fanupdater_fan_fault():
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
     assert fan_updater.log_warning.call_count == 1
 
-    fan_list[0].status = True
+    fan_list[0].set_status(True)
     fan_updater.update()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
     assert fan_updater.log_notice.call_count == 1
@@ -201,12 +201,12 @@ def test_insufficient_fan_number():
     fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 2 fans are not working.')
 
     fan_list = chassis.get_all_fans()
-    fan_list[0].presence = True
+    fan_list[0].set_presence(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 1
     fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fans are not working.')
 
-    fan_list[1].status = True
+    fan_list[1].set_status(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 3
     fan_updater.log_notice.assert_called_with(
