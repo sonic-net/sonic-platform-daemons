@@ -180,11 +180,17 @@ def test_fanupdater_fan_over_speed():
 def test_insufficient_fan_number():
     fan_status1 = thermalctld.FanStatus()
     fan_status2 = thermalctld.FanStatus()
+
     fan_status1.set_presence(False)
     fan_status2.set_fault_status(False)
-    assert FanStatus.get_bad_fan_count() == 2
-    FanStatus.reset_fan_counter()
-    assert FanStatus.get_bad_fan_count() == 0
+    assert thermalctld.FanStatus.get_bad_fan_count() == 2
+    assert fan_status1.get_bad_fan_count() == 2
+    assert fan_status2.get_bad_fan_count() == 2
+
+    thermalctld.FanStatus.reset_fan_counter()
+    assert thermalctld.FanStatus.get_bad_fan_count() == 0
+    assert fan_status1.get_bad_fan_count() == 0
+    assert fan_status2.get_bad_fan_count() == 0
 
     chassis = MockChassis()
     chassis.make_absence_fan()
