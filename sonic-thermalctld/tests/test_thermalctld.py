@@ -1,58 +1,61 @@
 import os
 import sys
-from imp import load_source
+from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
-    from unittest.mock import Mock, MagicMock, patch
+    from unittest import mock
 else:
-    from mock import Mock, MagicMock, patch
+    import mock
+
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockFan, MockThermal
 
-SYSLOG_IDENTIFIER = 'thermalctld_test'
-NOT_AVAILABLE = 'N/A'
+daemon_base.db_connect = mock.MagicMock()
 
-daemon_base.db_connect = MagicMock()
+tests_path = os.path.dirname(os.path.abspath(__file__))
 
-test_path = os.path.dirname(os.path.abspath(__file__))
-modules_path = os.path.dirname(test_path)
-scripts_path = os.path.join(modules_path, "scripts")
+# Add mocked_libs path so that the file under test can load mocked modules from there
+mocked_libs_path = os.path.join(tests_path, 'mocked_libs')
+sys.path.insert(0, mocked_libs_path)
+
+# Add path to the file under test so that we can load it
+modules_path = os.path.dirname(tests_path)
+scripts_path = os.path.join(modules_path, 'scripts')
 sys.path.insert(0, modules_path)
 
-os.environ["THERMALCTLD_UNIT_TESTING"] = "1"
-load_source('thermalctld', scripts_path + '/thermalctld')
-from thermalctld import *
+load_source('thermalctld', os.path.join(scripts_path, 'thermalctld'))
+import thermalctld
 
 
 TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
 
 
 def setup_function():
-    FanStatus.log_notice = MagicMock()
-    FanStatus.log_warning = MagicMock()
-    FanUpdater.log_notice = MagicMock()
-    FanUpdater.log_warning = MagicMock()
-    TemperatureStatus.log_notice = MagicMock()
-    TemperatureStatus.log_warning = MagicMock()
-    TemperatureUpdater.log_notice = MagicMock()
-    TemperatureUpdater.log_warning = MagicMock()
+    thermalctld.FanStatus.log_notice = mock.MagicMock()
+    thermalctld.FanStatus.log_warning = mock.MagicMock()
+    thermalctld.FanUpdater.log_notice = mock.MagicMock()
+    thermalctld.FanUpdater.log_warning = mock.MagicMock()
+    thermalctld.TemperatureStatus.log_notice = mock.MagicMock()
+    thermalctld.TemperatureStatus.log_warning = mock.MagicMock()
+    thermalctld.TemperatureUpdater.log_notice = mock.MagicMock()
+    thermalctld.TemperatureUpdater.log_warning = mock.MagicMock()
 
 
 def teardown_function():
-    FanStatus.log_notice.reset()
-    FanStatus.log_warning.reset()
-    FanUpdater.log_notice.reset()
-    FanUpdater.log_notice.reset()
-    TemperatureStatus.log_notice.reset()
-    TemperatureStatus.log_warning.reset()
-    TemperatureUpdater.log_warning.reset()
-    TemperatureUpdater.log_warning.reset()
+    thermalctld.FanStatus.log_notice.reset()
+    thermalctld.FanStatus.log_warning.reset()
+    thermalctld.FanUpdater.log_notice.reset()
+    thermalctld.FanUpdater.log_notice.reset()
+    thermalctld.TemperatureStatus.log_notice.reset()
+    thermalctld.TemperatureStatus.log_warning.reset()
+    thermalctld.TemperatureUpdater.log_warning.reset()
+    thermalctld.TemperatureUpdater.log_warning.reset()
 
 
 def test_fanstatus_set_presence():
-    fan_status = FanStatus(SYSLOG_IDENTIFIER)
+    fan_status = thermalctld.FanStatus()
     ret = fan_status.set_presence(True)
     assert fan_status.presence
     assert not ret
@@ -63,14 +66,14 @@ def test_fanstatus_set_presence():
 
 
 def test_fanstatus_set_under_speed():
-    fan_status = FanStatus(SYSLOG_IDENTIFIER)
-    ret = fan_status.set_under_speed(NOT_AVAILABLE, NOT_AVAILABLE, NOT_AVAILABLE)
+    fan_status = thermalctld.FanStatus()
+    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = fan_status.set_under_speed(NOT_AVAILABLE, NOT_AVAILABLE, 0)
+    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = fan_status.set_under_speed(NOT_AVAILABLE, 0, 0)
+    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, 0, 0)
     assert not ret
 
     ret = fan_status.set_under_speed(0, 0, 0)
@@ -88,14 +91,14 @@ def test_fanstatus_set_under_speed():
 
 
 def test_fanstatus_set_over_speed():
-    fan_status = FanStatus(SYSLOG_IDENTIFIER)
-    ret = fan_status.set_over_speed(NOT_AVAILABLE, NOT_AVAILABLE, NOT_AVAILABLE)
+    fan_status = thermalctld.FanStatus()
+    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = fan_status.set_over_speed(NOT_AVAILABLE, NOT_AVAILABLE, 0)
+    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = fan_status.set_over_speed(NOT_AVAILABLE, 0, 0)
+    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, 0, 0)
     assert not ret
 
     ret = fan_status.set_over_speed(0, 0, 0)
@@ -115,7 +118,7 @@ def test_fanstatus_set_over_speed():
 def test_fanupdater_fan_absence():
     chassis = MockChassis()
     chassis.make_absence_fan()
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -130,7 +133,7 @@ def test_fanupdater_fan_absence():
 def test_fanupdater_fan_fault():
     chassis = MockChassis()
     chassis.make_fault_fan()
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -145,7 +148,7 @@ def test_fanupdater_fan_fault():
 def test_fanupdater_fan_under_speed():
     chassis = MockChassis()
     chassis.make_under_speed_fan()
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -160,7 +163,7 @@ def test_fanupdater_fan_under_speed():
 def test_fanupdater_fan_over_speed():
     chassis = MockChassis()
     chassis.make_over_speed_fan()
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -173,8 +176,8 @@ def test_fanupdater_fan_over_speed():
 
 
 def test_insufficient_fan_number():
-    fan_status1 = FanStatus(SYSLOG_IDENTIFIER)
-    fan_status2 = FanStatus(SYSLOG_IDENTIFIER)
+    fan_status1 = thermalctld.FanStatus()
+    fan_status2 = thermalctld.FanStatus()
     fan_status1.set_presence(False)
     fan_status2.set_fault_status(False)
     assert FanStatus.get_bad_fan_count() == 2
@@ -184,7 +187,7 @@ def test_insufficient_fan_number():
     chassis = MockChassis()
     chassis.make_absence_fan()
     chassis.make_fault_fan()
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3
     fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 2 fans are not working.')
@@ -203,14 +206,14 @@ def test_insufficient_fan_number():
 
 
 def test_temperature_status_set_over_temper():
-    temperatue_status = TemperatureStatus(SYSLOG_IDENTIFIER)
-    ret = temperatue_status.set_over_temperature(NOT_AVAILABLE, NOT_AVAILABLE)
+    temperatue_status = thermalctld.TemperatureStatus()
+    ret = temperatue_status.set_over_temperature(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = temperatue_status.set_over_temperature(NOT_AVAILABLE, 0)
+    ret = temperatue_status.set_over_temperature(thermalctld.NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = temperatue_status.set_over_temperature(0, NOT_AVAILABLE)
+    ret = temperatue_status.set_over_temperature(0, thermalctld.NOT_AVAILABLE)
     assert not ret
 
     ret = temperatue_status.set_over_temperature(2, 1)
@@ -223,14 +226,14 @@ def test_temperature_status_set_over_temper():
 
 
 def test_temperstatus_set_under_temper():
-    temperature_status = TemperatureStatus(SYSLOG_IDENTIFIER)
-    ret = temperature_status.set_under_temperature(NOT_AVAILABLE, NOT_AVAILABLE)
+    temperature_status = thermalctld.TemperatureStatus()
+    ret = temperature_status.set_under_temperature(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = temperature_status.set_under_temperature(NOT_AVAILABLE, 0)
+    ret = temperature_status.set_under_temperature(thermalctld.NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = temperature_status.set_under_temperature(0, NOT_AVAILABLE)
+    ret = temperature_status.set_under_temperature(0, thermalctld.NOT_AVAILABLE)
     assert not ret
 
     ret = temperature_status.set_under_temperature(1, 2)
@@ -245,7 +248,7 @@ def test_temperstatus_set_under_temper():
 def test_temperupdater_over_temper():
     chassis = MockChassis()
     chassis.make_over_temper_thermal()
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     temperature_updater.log_warning.assert_called_once()
@@ -258,7 +261,7 @@ def test_temperupdater_over_temper():
 def test_temperupdater_under_temper():
     chassis = MockChassis()
     chassis.make_under_temper_thermal()
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     temperature_updater.log_warning.assert_called_once()
@@ -275,7 +278,7 @@ def test_update_fan_with_exception():
     fan.make_over_speed()
     chassis.get_all_fans().append(fan)
 
-    fan_updater = FanUpdater(SYSLOG_IDENTIFIER, chassis)
+    fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
     fan_updater.log_warning.assert_called()
@@ -288,7 +291,7 @@ def test_update_thermal_with_exception():
     thermal.make_over_temper()
     chassis.get_all_thermals().append(thermal)
 
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     temperature_updater.update()
     temperature_updater.log_warning.assert_called()
 
@@ -299,19 +302,19 @@ def test_updater_thermal_check_modular_chassis():
     chassis = MockChassis()
     assert chassis.is_modular_chassis() == False
 
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     assert temperature_updater.chassis_table == None
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(-1)
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     assert temperature_updater.chassis_table == None
 
     my_slot = 1
     chassis.set_my_slot(my_slot)
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
     assert temperature_updater.chassis_table != None
-    assert temperature_updater.chassis_table.table_name == TEMPER_INFO_TABLE_NAME+'_'+str(my_slot)
+    assert temperature_updater.chassis_table.table_name == '{}_{}'.format(TEMPER_INFO_TABLE_NAME, str(my_slot))
 
 
 def test_updater_thermal_check_chassis_table():
@@ -322,7 +325,7 @@ def test_updater_thermal_check_chassis_table():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
 
     temperature_updater.update()
     assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
@@ -344,7 +347,7 @@ def test_updater_thermal_check_min_max():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = TemperatureUpdater(SYSLOG_IDENTIFIER, chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis)
 
     temperature_updater.update()
     slot_dict = temperature_updater.chassis_table.get(thermal.get_name())
