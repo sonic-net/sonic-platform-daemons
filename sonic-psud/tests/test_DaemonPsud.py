@@ -215,7 +215,7 @@ class TestDaemonPsud(object):
         assert mock_psu.get_status_led() == mock_psu.STATUS_LED_COLOR_GREEN
 
         # Test set_status_led not implemented
-        mock_psu.set_status_led = mock.MagicMock(side_effect = NotImplementedError)
+        mock_psu.set_status_led = mock.MagicMock(side_effect=NotImplementedError)
         daemon_psud.log_warning = mock.MagicMock()
         daemon_psud._set_psu_led(mock_psu, psu_status)
         assert daemon_psud.log_warning.call_count == 1
@@ -271,7 +271,7 @@ class TestDaemonPsud(object):
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
         # Test exception handling
-        mock_psu.get_status_led = mock.Mock(side_effect = NotImplementedError)
+        mock_psu.get_status_led = mock.Mock(side_effect=NotImplementedError)
         expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', psud.NOT_AVAILABLE)])
         daemon_psud._update_led_color()
         assert daemon_psud.psu_tbl.set.call_count == 1
@@ -298,7 +298,7 @@ class TestDaemonPsud(object):
         daemon_psud.fan_tbl.set.reset_mock()
 
         # Test Fan.get_status_led not implemented
-        mock_fan.get_status_led = mock.Mock(side_effect = NotImplementedError)
+        mock_fan.get_status_led = mock.Mock(side_effect=NotImplementedError)
         expected_fvp = psud.swsscommon.FieldValuePairs([(psud.FAN_INFO_LED_STATUS_FIELD, psud.NOT_AVAILABLE)])
         daemon_psud._update_psu_fan_led_status(mock_psu, 1)
         assert daemon_psud.fan_tbl.set.call_count == 1
@@ -307,7 +307,7 @@ class TestDaemonPsud(object):
         daemon_psud.fan_tbl.set.reset_mock()
 
         # Test Fan.get_name not implemented
-        mock_fan.get_name = mock.Mock(side_effect = NotImplementedError)
+        mock_fan.get_name = mock.Mock(side_effect=NotImplementedError)
         daemon_psud._update_psu_fan_led_status(mock_psu, 1)
         assert daemon_psud.fan_tbl.set.call_count == 1
         daemon_psud.fan_tbl.set.assert_called_with("PSU 1 FAN 1", expected_fvp)
@@ -395,11 +395,11 @@ class TestDaemonPsud(object):
         daemon_psud.fan_tbl = mock.MagicMock()
 
         expected_fvp = psud.swsscommon.FieldValuePairs(
-                [(psud.FAN_INFO_PRESENCE_FIELD, "True"),
-                 (psud.FAN_INFO_STATUS_FIELD, "True"),
-                 (psud.FAN_INFO_DIRECTION_FIELD, mock_fan.get_direction()),
-                 (psud.FAN_INFO_SPEED_FIELD, str(mock_fan.get_speed())),
-                 (psud.FAN_INFO_TIMESTAMP_FIELD, fake_time.strftime('%Y%m%d %H:%M:%S'))
+            [(psud.FAN_INFO_PRESENCE_FIELD, "True"),
+             (psud.FAN_INFO_STATUS_FIELD, "True"),
+             (psud.FAN_INFO_DIRECTION_FIELD, mock_fan.get_direction()),
+             (psud.FAN_INFO_SPEED_FIELD, str(mock_fan.get_speed())),
+             (psud.FAN_INFO_TIMESTAMP_FIELD, fake_time.strftime('%Y%m%d %H:%M:%S'))
              ])
         daemon_psud._update_psu_fan_data(mock_psu1, 1)
         assert daemon_psud.fan_tbl.set.call_count == 1

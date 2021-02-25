@@ -60,6 +60,7 @@ class TestPsuChassisInfo(object):
     """
     Test cases to cover functionality in PsuChassisInfo class
     """
+
     def test_update_master_status(self):
         chassis = MockChassis()
         chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
@@ -183,7 +184,6 @@ class TestPsuChassisInfo(object):
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
         assert total_power == float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
 
-
     def test_power_budget(self):
         chassis = MockChassis()
         psu1 = MockPsu("PSU 1", 0, True, True)
@@ -233,7 +233,6 @@ class TestPsuChassisInfo(object):
     def test_get_psu_key(self):
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
         assert psud.get_psu_key(1) == psud.PSU_INFO_KEY_TEMPLATE.format(1)
-
 
     def test_try_get(self):
         # Test a proper, working callback

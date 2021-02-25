@@ -25,8 +25,8 @@ from swsscommon import swsscommon
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the
 # name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
-SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n) \
-        for n in dir(signal) if n.startswith('SIG') and '_' not in n )
+SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
+                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
 
 SYSLOG_IDENTIFIER = "psud"
 
@@ -81,6 +81,8 @@ platform_chassis = None
 exit_code = 0
 
 # temporary wrappers that are compliable with both new platform api and old-style plugin mode
+
+
 def _wrapper_get_num_psus():
     if platform_chassis is not None:
         try:
@@ -574,7 +576,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         for index, psu_status in self.psu_status_dict.items():
             fvs = swsscommon.FieldValuePairs([
                 ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
-                ])
+            ])
             self.psu_tbl.set(get_psu_key(index), fvs)
             self._update_psu_fan_led_status(psu_status.psu, index)
 
