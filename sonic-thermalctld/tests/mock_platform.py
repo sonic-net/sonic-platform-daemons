@@ -3,198 +3,306 @@ from sonic_platform_base import fan_base
 from sonic_platform_base import fan_drawer_base
 from sonic_platform_base import module_base
 from sonic_platform_base import psu_base
+from sonic_platform_base import thermal_base
 
-class MockDevice:
+
+class MockFan(fan_base.FanBase):
     def __init__(self):
-        self.name = None
-        self.presence = True
-        self.model = 'FAN Model'
-        self.serial = 'Fan Serial'
+        super(MockFan, self).__init__()
+        self._name = None
+        self._presence = True
+        self._model = 'Fan Model'
+        self._serial = 'Fan Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
 
-    def get_name(self):
-        return self.name
-
-    def get_presence(self):
-        return self.presence
-
-    def get_model(self):
-        return self.model
-
-    def get_serial(self):
-        return self.serial
-
-    def get_position_in_parent(self):
-        return 1
-
-    def is_replaceable(self):
-        return True
-
-    def get_status(self):
-        return True
-
-
-class MockFan(MockDevice):
-    STATUS_LED_COLOR_RED = 'red'
-    STATUS_LED_COLOR_GREEN = 'green'
-
-    def __init__(self):
-        MockDevice.__init__(self)
-        self.speed = 20
-        self.speed_tolerance = 20
-        self.target_speed = 20
-        self.status = True
-        self.direction = 'intake'
-        self.led_status = 'red'
+        self._speed = 20
+        self._speed_tolerance = 20
+        self._target_speed = 20
+        self._direction = self.FAN_DIRECTION_INTAKE
+        self._status_led = self.STATUS_LED_COLOR_RED
 
     def get_speed(self):
-        return self.speed
+        return self._speed
 
     def get_speed_tolerance(self):
-        return self.speed_tolerance
+        return self._speed_tolerance
 
     def get_target_speed(self):
-        return self.target_speed
-
-    def get_status(self):
-        return self.status
+        return self._target_speed
 
     def get_direction(self):
-        return self.direction
+        return self._direction
 
     def get_status_led(self):
-        return self.led_status
+        return self._status_led
 
     def set_status_led(self, value):
-        self.led_status = value
+        self._status_led = value
 
     def make_under_speed(self):
-        self.speed = 1
-        self.target_speed = 2
-        self.speed_tolerance = 0
+        self._speed = 1
+        self._target_speed = 2
+        self._speed_tolerance = 0
 
     def make_over_speed(self):
-        self.speed = 2
-        self.target_speed = 1
-        self.speed_tolerance = 0
+        self._speed = 2
+        self._target_speed = 1
+        self._speed_tolerance = 0
 
     def make_normal_speed(self):
-        self.speed = 1
-        self.target_speed = 1
-        self.speed_tolerance = 0
+        self._speed = 1
+        self._target_speed = 1
+        self._speed_tolerance = 0
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
 
 
 class MockErrorFan(MockFan):
     def get_speed(self):
-        raise Exception('Fail to get speed')
+        raise Exception('Failed to get speed')
 
 
-class MockPsu(MockDevice):
+class MockPsu(psu_base.PsuBase):
     def __init__(self):
-        MockDevice.__init__(self)
-        self.fan_list = []
+        super(MockPsu, self).__init__()
+        self._name = None
+        self._presence = True
+        self._model = 'PSU Model'
+        self._serial = 'PSU Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
+
+        self._fan_list = []
 
     def get_all_fans(self):
-        return self.fan_list
+        return self._fan_list
 
-
-class MockFanDrawer(MockDevice):
-    def __init__(self, index):
-        MockDevice.__init__(self)
-        self.name = 'FanDrawer {}'.format(index)
-        self.fan_list = []
-        self.led_status = 'red'
-
+    # Methods inherited from DeviceBase class and related setters
     def get_name(self):
-        return self.name
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
+
+
+class MockFanDrawer(fan_drawer_base.FanDrawerBase):
+    def __init__(self, index):
+        super(MockFanDrawer, self).__init__()
+        self._name = 'FanDrawer {}'.format(index)
+        self._presence = True
+        self._model = 'Fan Drawer Model'
+        self._serial = 'Fan Drawer Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
+
+        self._fan_list = []
+        self._status_led = self.STATUS_LED_COLOR_RED
 
     def get_all_fans(self):
-        return self.fan_list
+        return self._fan_list
 
     def get_status_led(self):
-        return self.led_status
+        return self._status_led
 
     def set_status_led(self, value):
-        self.led_status = value
+        self._status_led = value
 
-
-class MockThermal(MockDevice):
-    def __init__(self, index=None):
-        MockDevice.__init__(self)
-        self.name = None
-        self.name = 'Thermal {}'.format(index) if index != None else None
-        self.temperature = 2
-        self.minimum_temperature = 1
-        self.maximum_temperature = 5
-        self.high_threshold = 3
-        self.low_threshold = 1
-        self.high_critical_threshold = 4
-        self.low_critical_threshold = 0
-
+    # Methods inherited from DeviceBase class and related setters
     def get_name(self):
-        return self.name
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
+
+
+class MockThermal(thermal_base.ThermalBase):
+    def __init__(self, index=None):
+        super(MockThermal, self).__init__()
+        self._name = 'Thermal {}'.format(index) if index != None else None
+        self._presence = True
+        self._model = 'Thermal Model'
+        self._serial = 'Thermal Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = False
+
+        self._temperature = 2
+        self._minimum_temperature = 1
+        self._maximum_temperature = 5
+        self._high_threshold = 3
+        self._low_threshold = 1
+        self._high_critical_threshold = 4
+        self._low_critical_threshold = 0
 
     def get_temperature(self):
-        return self.temperature
+        return self._temperature
 
     def get_minimum_recorded(self):
-        return self.minimum_temperature
+        return self._minimum_temperature
 
     def get_maximum_recorded(self):
-        return self.maximum_temperature
+        return self._maximum_temperature
 
     def get_high_threshold(self):
-        return self.high_threshold
+        return self._high_threshold
 
     def get_low_threshold(self):
-        return self.low_threshold
+        return self._low_threshold
 
     def get_high_critical_threshold(self):
-        return self.high_critical_threshold
+        return self._high_critical_threshold
 
     def get_low_critical_threshold(self):
-        return self.low_critical_threshold
+        return self._low_critical_threshold
 
     def make_over_temper(self):
-        self.high_threshold = 2
-        self.temperature = 3
-        self.low_threshold = 1
+        self._high_threshold = 2
+        self._temperature = 3
+        self._low_threshold = 1
 
     def make_under_temper(self):
-        self.high_threshold = 3
-        self.temperature = 1
-        self.low_threshold = 2
+        self._high_threshold = 3
+        self._temperature = 1
+        self._low_threshold = 2
 
     def make_normal_temper(self):
-        self.high_threshold = 3
-        self.temperature = 2
-        self.low_threshold = 1
+        self._high_threshold = 3
+        self._temperature = 2
+        self._low_threshold = 1
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
 
 
 class MockErrorThermal(MockThermal):
     def get_temperature(self):
-        raise Exception('Fail to get temperature')
+        raise Exception('Failed to get temperature')
 
 
 class MockChassis(chassis_base.ChassisBase):
     def __init__(self):
         super(MockChassis, self).__init__()
+        self._name = None
+        self._presence = True
+        self._model = 'Chassis Model'
+        self._serial = 'Chassis Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = False
 
         self._is_chassis_system = False
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
 
     def make_absent_fan(self):
         fan = MockFan()
-        fan.presence = False
+        fan.set_presence(False)
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
-        fan_drawer.fan_list.append(fan)
+        fan_drawer._fan_list.append(fan)
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
     def make_fault_fan(self):
         fan = MockFan()
-        fan.status = False
+        fan.set_status(False)
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
-        fan_drawer.fan_list.append(fan)
+        fan_drawer._fan_list.append(fan)
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
@@ -202,7 +310,7 @@ class MockChassis(chassis_base.ChassisBase):
         fan = MockFan()
         fan.make_under_speed()
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
-        fan_drawer.fan_list.append(fan)
+        fan_drawer._fan_list.append(fan)
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
@@ -210,14 +318,14 @@ class MockChassis(chassis_base.ChassisBase):
         fan = MockFan()
         fan.make_over_speed()
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
-        fan_drawer.fan_list.append(fan)
+        fan_drawer._fan_list.append(fan)
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
     def make_error_fan(self):
         fan = MockErrorFan()
         fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
-        fan_drawer.fan_list.append(fan)
+        fan_drawer._fan_list.append(fan)
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
@@ -246,3 +354,31 @@ class MockChassis(chassis_base.ChassisBase):
 
     def get_my_slot(self):
         return self._my_slot
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
