@@ -41,46 +41,59 @@ class TestDaemonPsud(object):
     def test_signal_handler(self):
         psud.platform_chassis = MockChassis()
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
-        daemon_psud.stop.set = mock.MagicMock()
+        daemon_psud.stop_event.set = mock.MagicMock()
         daemon_psud.log_info = mock.MagicMock()
         daemon_psud.log_warning = mock.MagicMock()
 
         # Test SIGHUP
         daemon_psud.signal_handler(psud.signal.SIGHUP, None)
         assert daemon_psud.log_info.call_count == 1
-        daemon_psud.log_info.assert_called_with("Caught SIGHUP - ignoring...")
+        daemon_psud.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
         assert daemon_psud.log_warning.call_count == 0
-        assert daemon_psud.stop.set.call_count == 0
+        assert daemon_psud.stop_event.set.call_count == 0
+        assert psud.exit_code == 0
+
+        # Reset
+        daemon_psud.log_info.reset_mock()
+        daemon_psud.log_warning.reset_mock()
+        daemon_psud.stop_event.set.reset_mock()
 
         # Test SIGINT
+        test_signal = psud.signal.SIGINT
+        daemon_psud.signal_handler(test_signal, None)
+        assert daemon_psud.log_info.call_count == 1
+        daemon_psud.log_info.assert_called_with("Caught signal 'SIGINT' - exiting...")
+        assert daemon_psud.log_warning.call_count == 0
+        assert daemon_psud.stop_event.set.call_count == 1
+        assert psud.exit_code == (128 + test_signal)
+
+        # Reset
         daemon_psud.log_info.reset_mock()
         daemon_psud.log_warning.reset_mock()
-        daemon_psud.stop.set.reset_mock()
-        daemon_psud.signal_handler(psud.signal.SIGINT, None)
-        assert daemon_psud.log_info.call_count == 1
-        daemon_psud.log_info.assert_called_with("Caught SIGINT - exiting...")
-        assert daemon_psud.log_warning.call_count == 0
-        assert daemon_psud.stop.set.call_count == 1
+        daemon_psud.stop_event.set.reset_mock()
 
         # Test SIGTERM
+        test_signal = psud.signal.SIGTERM
+        daemon_psud.signal_handler(test_signal, None)
+        assert daemon_psud.log_info.call_count == 1
+        daemon_psud.log_info.assert_called_with("Caught signal 'SIGTERM' - exiting...")
+        assert daemon_psud.log_warning.call_count == 0
+        assert daemon_psud.stop_event.set.call_count == 1
+        assert psud.exit_code == (128 + test_signal)
+
+        # Reset
         daemon_psud.log_info.reset_mock()
         daemon_psud.log_warning.reset_mock()
-        daemon_psud.stop.set.reset_mock()
-        daemon_psud.signal_handler(psud.signal.SIGTERM, None)
-        assert daemon_psud.log_info.call_count == 1
-        daemon_psud.log_info.assert_called_with("Caught SIGTERM - exiting...")
-        assert daemon_psud.log_warning.call_count == 0
-        assert daemon_psud.stop.set.call_count == 1
+        daemon_psud.stop_event.set.reset_mock()
+        psud.exit_code = 0
 
         # Test an unhandled signal
-        daemon_psud.log_info.reset_mock()
-        daemon_psud.log_warning.reset_mock()
-        daemon_psud.stop.set.reset_mock()
         daemon_psud.signal_handler(psud.signal.SIGUSR1, None)
         assert daemon_psud.log_warning.call_count == 1
-        daemon_psud.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1'")
+        daemon_psud.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
         assert daemon_psud.log_info.call_count == 0
-        assert daemon_psud.stop.set.call_count == 0
+        assert daemon_psud.stop_event.set.call_count == 0
+        assert psud.exit_code == 0
 
     def test_run(self):
         psud.platform_chassis = MockChassis()

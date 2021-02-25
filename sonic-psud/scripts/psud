@@ -78,6 +78,7 @@ PSUUTIL_LOAD_ERROR = 1
 platform_psuutil = None
 platform_chassis = None
 
+exit_code = 0
 
 # temporary wrappers that are compliable with both new platform api and old-style plugin mode
 def _wrapper_get_num_psus():
@@ -344,7 +345,10 @@ class DaemonPsud(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonPsud, self).__init__(log_identifier)
 
-        self.stop = threading.Event()
+        # Set minimum logging level to INFO
+        self.set_min_log_priority_info()
+
+        self.stop_event = threading.Event()
         self.num_psus = 0
         self.psu_status_dict = {}
         self.chassis_tbl = None
@@ -391,22 +395,25 @@ class DaemonPsud(daemon_base.DaemonBase):
         self.chassis_tbl._del(CHASSIS_INFO_KEY)
         self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
-    # Signal handler
+    # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
-        if sig == signal.SIGHUP:
-            self.log_info("Caught SIGHUP - ignoring...")
-        elif sig == signal.SIGINT:
-            self.log_info("Caught SIGINT - exiting...")
-            self.stop.set()
-        elif sig == signal.SIGTERM:
-            self.log_info("Caught SIGTERM - exiting...")
-            self.stop.set()
-        else:
-            self.log_warning("Caught unhandled signal '{}'".format(SIGNALS_TO_NAMES_DICT[sig]))
+        FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
+        NONFATAL_SIGNALS = [signal.SIGHUP]
 
-    # Run daemon
+        global exit_code
+
+        if sig in FATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - exiting...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            exit_code = 128 + sig  # Make sure we exit with a non-zero code so that supervisor will try to restart us
+            self.stop_event.set()
+        elif sig in NONFATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+        else:
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+
+    # Main daemon logic
     def run(self):
-        if self.stop.wait(PSU_INFO_UPDATE_PERIOD_SECS):
+        if self.stop_event.wait(PSU_INFO_UPDATE_PERIOD_SECS):
             # We received a fatal signal
             return False
 
@@ -608,6 +615,8 @@ def main():
 
     psud.log_info("Shutting down...")
 
+    return exit_code
+
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
