@@ -125,7 +125,7 @@ def psu_db_update(psu_tbl, psu_num):
         psu_tbl.set(get_psu_key(psu_index), fvs)
 
 
-# try get information from platform API and return a default value if caught NotImplementedError
+# try get information from platform API and return a default value if we catch NotImplementedError
 def try_get(callback, default=None):
     """
     Handy function to invoke the callback and catch NotImplementedError
@@ -251,11 +251,10 @@ class PsuChassisInfo(logger.Logger):
         self.master_status_good = master_status_good
 
         # Update the PSU master status LED
-        try:
-            color = Psu.STATUS_LED_COLOR_GREEN if master_status_good else Psu.STATUS_LED_COLOR_RED
-            Psu.set_status_master_led(color)
-        except NotImplementedError:
-            self.log_warning("set_status_master_led() not implemented")
+        # set_status_master_led() is a class method implemented in PsuBase
+        # so we do not need to catch NotImplementedError here
+        color = Psu.STATUS_LED_COLOR_GREEN if master_status_good else Psu.STATUS_LED_COLOR_RED
+        Psu.set_status_master_led(color)
 
         log_on_status_changed(self, self.master_status_good,
                               'PSU supplied power warning cleared: supplied power is back to normal.',

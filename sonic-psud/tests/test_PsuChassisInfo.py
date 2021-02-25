@@ -105,17 +105,6 @@ class TestPsuChassisInfo(object):
         assert ret == False
         assert chassis_info.master_status_good == False
 
-        # Test set_status_master_led not implemented
-        with mock.patch.object(MockPsu, "set_status_master_led", mock.Mock(side_effect = NotImplementedError)):
-            chassis_info.total_supplied_power = 510.0
-            chassis_info.total_consumed_power = 350.0
-            chassis_info.master_status_good = False
-            chassis_info.log_warning = mock.MagicMock()
-            ret = chassis_info.update_master_status()
-            assert ret == True
-            assert chassis_info.master_status_good == True
-            chassis_info.log_warning.assert_called_with("set_status_master_led() not implemented")
-
     def test_supplied_power(self):
         chassis = MockChassis()
         psu1 = MockPsu("PSU 1", 0, True, True)
