@@ -18,8 +18,8 @@ from swsscommon import swsscommon
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the
 # name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
-SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n) \
-        for n in dir(signal) if n.startswith('SIG') and '_' not in n )
+SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
+                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
 
 PLATFORM_SPECIFIC_MODULE_NAME = 'eeprom'
 PLATFORM_SPECIFIC_CLASS_NAME = 'board'
