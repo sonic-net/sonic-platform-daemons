@@ -126,9 +126,9 @@ class TestDaemonPsud(object):
         psud.platform_chassis.psu_list = [mock_psu1, mock_psu2]
         daemon_psud.update_psu_data()
         assert daemon_psud._update_single_psu_data.call_count == 2
-        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2)
+        expected_calls = [mock.call(1, mock_psu1), mock.call(2, mock_psu2)]
+        assert daemon_psud._update_single_psu_data.mock_calls == expected_calls
         assert daemon_psud.log_warning.call_count == 0
-        daemon_psud.log_warning = mock.MagicMock()
 
         daemon_psud._update_single_psu_data.reset_mock()
 
@@ -136,9 +136,11 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_data.side_effect = Exception("Test message")
         daemon_psud.update_psu_data()
         assert daemon_psud._update_single_psu_data.call_count == 2
-        daemon_psud._update_single_psu_data.assert_called_with(2, mock_psu2)
+        expected_calls = [mock.call(1, mock_psu1), mock.call(2, mock_psu2)]
+        assert daemon_psud._update_single_psu_data.mock_calls == expected_calls
         assert daemon_psud.log_warning.call_count == 2
-        daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
+        expected_calls = [mock.call("Failed to update PSU data - Test message")] * 2
+        assert daemon_psud.log_warning.mock_calls == expected_calls
 
     @mock.patch('psud._wrapper_get_psu_presence', mock.MagicMock())
     @mock.patch('psud._wrapper_get_psu_status', mock.MagicMock())
@@ -350,7 +352,8 @@ class TestDaemonPsud(object):
         psud.platform_chassis.psu_list = [mock_psu1, mock_psu2]
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 2
-        daemon_psud._update_single_psu_entity_info.assert_called_with(2, mock_psu2)
+        expected_calls = [mock.call(1, mock_psu1), mock.call(2, mock_psu2)]
+        assert daemon_psud._update_single_psu_entity_info.mock_calls == expected_calls
 
         # Test behavior if _update_single_psu_entity_info raises an exception
         daemon_psud._update_single_psu_entity_info.reset_mock()
