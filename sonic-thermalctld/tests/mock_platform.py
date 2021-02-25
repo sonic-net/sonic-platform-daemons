@@ -1,3 +1,9 @@
+from sonic_platform_base import chassis_base
+from sonic_platform_base import fan_base
+from sonic_platform_base import fan_drawer_base
+from sonic_platform_base import module_base
+from sonic_platform_base import psu_base
+
 class MockDevice:
     def __init__(self):
         self.name = None
@@ -169,94 +175,74 @@ class MockErrorThermal(MockThermal):
         raise Exception('Fail to get temperature')
 
 
-class MockChassis:
+class MockChassis(chassis_base.ChassisBase):
     def __init__(self):
-        self.fan_list = []
-        self.psu_list = []
-        self.thermal_list = []
-        self.fan_drawer_list = []
-        self.sfp_list = []
-        self.is_chassis_system = False
+        super(MockChassis, self).__init__()
 
-    def get_all_fans(self):
-        return self.fan_list
+        self._is_chassis_system = False
+        self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
 
-    def get_all_psus(self):
-        return self.psu_list
-
-    def get_all_thermals(self):
-        return self.thermal_list
-
-    def get_all_fan_drawers(self):
-        return self.fan_drawer_list
-
-    def get_all_sfps(self):
-        return self.sfp_list
-
-    def get_num_thermals(self):
-        return len(self.thermal_list)
-
-    def make_absence_fan(self):
+    def make_absent_fan(self):
         fan = MockFan()
         fan.presence = False
-        fan_drawer = MockFanDrawer(len(self.fan_drawer_list))
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
         fan_drawer.fan_list.append(fan)
-        self.fan_list.append(fan)
-        self.fan_drawer_list.append(fan_drawer)
+        self._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
 
     def make_fault_fan(self):
         fan = MockFan()
         fan.status = False
-        fan_drawer = MockFanDrawer(len(self.fan_drawer_list))
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
         fan_drawer.fan_list.append(fan)
-        self.fan_list.append(fan)
-        self.fan_drawer_list.append(fan_drawer)
+        self._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
 
     def make_under_speed_fan(self):
         fan = MockFan()
         fan.make_under_speed()
-        fan_drawer = MockFanDrawer(len(self.fan_drawer_list))
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
         fan_drawer.fan_list.append(fan)
-        self.fan_list.append(fan)
-        self.fan_drawer_list.append(fan_drawer)
+        self._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
 
     def make_over_speed_fan(self):
         fan = MockFan()
         fan.make_over_speed()
-        fan_drawer = MockFanDrawer(len(self.fan_drawer_list))
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
         fan_drawer.fan_list.append(fan)
-        self.fan_list.append(fan)
-        self.fan_drawer_list.append(fan_drawer)
+        self._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
 
     def make_error_fan(self):
         fan = MockErrorFan()
-        fan_drawer = MockFanDrawer(len(self.fan_drawer_list))
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
         fan_drawer.fan_list.append(fan)
-        self.fan_list.append(fan)
-        self.fan_drawer_list.append(fan_drawer)
+        self._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
 
     def make_over_temper_thermal(self):
         thermal = MockThermal()
         thermal.make_over_temper()
-        self.thermal_list.append(thermal)
+        self._thermal_list.append(thermal)
 
     def make_under_temper_thermal(self):
         thermal = MockThermal()
         thermal.make_under_temper()
-        self.thermal_list.append(thermal)
+        self._thermal_list.append(thermal)
 
     def make_error_thermal(self):
         thermal = MockErrorThermal()
-        self.thermal_list.append(thermal)
+        self._thermal_list.append(thermal)
 
     def is_modular_chassis(self):
-        return self.is_chassis_system
+        return self._is_chassis_system
 
     def set_modular_chassis(self, is_true):
-        self.is_chassis_system = is_true
+        self._is_chassis_system = is_true
 
     def set_my_slot(self, my_slot):
-        self.my_slot = my_slot
+        self._my_slot = my_slot
 
     def get_my_slot(self):
-        return self.my_slot
+        return self._my_slot
