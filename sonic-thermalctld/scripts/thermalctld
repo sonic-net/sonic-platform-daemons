@@ -680,7 +680,7 @@ class ThermalMonitor(ProcessTaskBase):
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
         """
-        ProcessTaskBase.__init__(self)
+        super(ThermalMonitor, self).__init__()
 
         self.wait_time = self.INITIAL_INTERVAL
 
