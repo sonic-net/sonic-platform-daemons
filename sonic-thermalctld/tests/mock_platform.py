@@ -4,6 +4,7 @@ from sonic_platform_base import fan_drawer_base
 from sonic_platform_base import module_base
 from sonic_platform_base import psu_base
 from sonic_platform_base import thermal_base
+from sonic_platform_base.sonic_thermal_control import thermal_manager_base
 
 
 class MockFan(fan_base.FanBase):
@@ -276,6 +277,11 @@ class MockErrorThermal(MockThermal):
         raise Exception('Failed to get temperature')
 
 
+class MockThermalManager(thermal_manager_base.ThermalManagerBase):
+    def __init__(self):
+        super(MockThermalManager, self).__init__()
+
+
 class MockChassis(chassis_base.ChassisBase):
     def __init__(self):
         super(MockChassis, self).__init__()
@@ -289,6 +295,7 @@ class MockChassis(chassis_base.ChassisBase):
 
         self._is_chassis_system = False
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
+        self._thermal_manager = MockThermalManager()
 
     def make_absent_fan(self):
         fan = MockFan()
@@ -354,6 +361,9 @@ class MockChassis(chassis_base.ChassisBase):
 
     def get_my_slot(self):
         return self._my_slot
+
+    def get_thermal_manager(self):
+        return self._thermal_manager
 
     # Methods inherited from DeviceBase class and related setters
     def get_name(self):
