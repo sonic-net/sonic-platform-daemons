@@ -712,7 +712,7 @@ class ThermalMonitor(ProcessTaskBase):
                 self.wait_time = self.INITIAL_INTERVAL
 
             if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
-                self.logger.log_warning('Update fan and temperature status takes {} seconds, '
+                self.logger.log_warning('Update fan and temperature status took {} seconds, '
                                         'there might be performance risk'.format(elapsed))
 
         self.logger.log_info("Stop thermal monitoring loop")
@@ -817,7 +817,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.wait_time = self.FAST_START_INTERVAL
 
         if elapsed > self.RUN_POLICY_WARN_THRESHOLD_SECS:
-            self.log_warning('Thermal policy execution takes {} seconds, '
+            self.log_warning('Thermal policy execution took {} seconds, '
                              'there might be performance risk'.format(elapsed))
 
         return True
