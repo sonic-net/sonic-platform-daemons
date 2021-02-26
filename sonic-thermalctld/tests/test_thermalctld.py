@@ -343,9 +343,6 @@ def test_updater_thermal_check_chassis_table():
     temperature_updater.update()
     assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
 
-    temperature_updater.deinit()
-    assert temperature_updater.chassis_table.get_size() == 0
-
 
 def test_updater_thermal_check_min_max():
     chassis = MockChassis()

@@ -68,7 +68,7 @@ class FanStatus(logger.Logger):
 
     def __init__(self, fan=None, is_psu_fan=False):
         """
-        Constructor of FanStatus
+        Initializer of FanStatus
         """
         super(FanStatus, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -193,7 +193,7 @@ class FanUpdater(logger.Logger):
 
     def __init__(self, chassis):
         """
-        Constructor for FanUpdater
+        Initializer for FanUpdater
         :param chassis: Object representing a platform chassis
         """
         super(FanUpdater, self).__init__(SYSLOG_IDENTIFIER)
@@ -205,13 +205,15 @@ class FanUpdater(logger.Logger):
         self.drawer_table = swsscommon.Table(state_db, FanUpdater.FAN_DRAWER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
 
-    def deinit(self):
+    def __del__(self):
         """
         Destructor of FanUpdater
         :return:
         """
         for name in self.fan_status_dict.keys():
             self.table._del(name)
+
+        super(FanUpdater, self).__del__()
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -512,7 +514,7 @@ class TemperatureUpdater(logger.Logger):
 
     def __init__(self, chassis):
         """
-        Constructor of TemperatureUpdater 
+        Initializer of TemperatureUpdater
         :param chassis: Object representing a platform chassis
         """
         super(TemperatureUpdater, self).__init__(SYSLOG_IDENTIFIER)
@@ -532,15 +534,17 @@ class TemperatureUpdater(logger.Logger):
                 chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
                 self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
 
-    def deinit(self):
+    def __del__(self):
         """
-        Destructor of TemperatureUpdater 
+        Destructor of TemperatureUpdater
         :return:
         """
         for name in self.temperature_status_dict.keys():
             self.table._del(name)
             if self.is_chassis_system and self.chassis_table is not None:
                 self.chassis_table._del(name)
+
+        super(TemperatureUpdater, self).__del__()
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -673,7 +677,7 @@ class ThermalMonitor(ProcessTaskBase):
 
     def __init__(self, chassis):
         """
-        Constructor for ThermalMonitor
+        Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
         """
         ProcessTaskBase.__init__(self)
@@ -711,9 +715,6 @@ class ThermalMonitor(ProcessTaskBase):
                 self.logger.log_warning('Update fan and temperature status takes {} seconds, '
                                         'there might be performance risk'.format(elapsed))
 
-        self.fan_updater.deinit()
-        self.temperature_updater.deinit()
-
         self.logger.log_info("Stop thermal monitoring loop")
 
 
@@ -730,7 +731,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     def __init__(self):
         """
-        Constructor of ThermalControlDaemon
+        Initializer of ThermalControlDaemon
         """
         super(ThermalControlDaemon, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -759,7 +760,6 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
             sys.exit(ERR_INIT_FAILED)
 
-
     def __del__(self):
         try:
             if self.thermal_manager:
@@ -768,6 +768,8 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while destroying thermal manager - {}'.format(repr(e)))
 
         self.thermal_monitor.task_stop()
+
+        super(ThermalControlDaemon, self).__del__()
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
