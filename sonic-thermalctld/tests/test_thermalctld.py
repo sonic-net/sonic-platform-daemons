@@ -361,3 +361,60 @@ def test_updater_thermal_check_min_max():
     slot_dict = temperature_updater.chassis_table.get(thermal.get_name())
     assert slot_dict['minimum_temperature'] == str(thermal.get_minimum_recorded())
     assert slot_dict['maximum_temperature'] == str(thermal.get_maximum_recorded())
+
+
+def test_signal_handler():
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.set = mock.MagicMock()
+    daemon_thermalctld.log_info = mock.MagicMock()
+    daemon_thermalctld.log_warning = mock.MagicMock()
+
+    # Test SIGHUP
+    daemon_thermalctld.signal_handler(thermalctld.signal.SIGHUP, None)
+    assert daemon_thermalctld.log_info.call_count == 1
+    daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
+    assert daemon_thermalctld.log_warning.call_count == 0
+    assert daemon_thermalctld.stop_event.set.call_count == 0
+    assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
+
+    # Reset
+    daemon_thermalctld.log_info.reset_mock()
+    daemon_thermalctld.log_warning.reset_mock()
+    daemon_thermalctld.stop_event.set.reset_mock()
+
+    # Test SIGINT
+    test_signal = thermalctld.signal.SIGINT
+    daemon_thermalctld.signal_handler(test_signal, None)
+    assert daemon_thermalctld.log_info.call_count == 1
+    daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGINT' - exiting...")
+    assert daemon_thermalctld.log_warning.call_count == 0
+    assert daemon_thermalctld.stop_event.set.call_count == 1
+    assert thermalctld.exit_code == (128 + test_signal)
+
+    # Reset
+    daemon_thermalctld.log_info.reset_mock()
+    daemon_thermalctld.log_warning.reset_mock()
+    daemon_thermalctld.stop_event.set.reset_mock()
+
+    # Test SIGTERM
+    test_signal = thermalctld.signal.SIGTERM
+    daemon_thermalctld.signal_handler(test_signal, None)
+    assert daemon_thermalctld.log_info.call_count == 1
+    daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGTERM' - exiting...")
+    assert daemon_thermalctld.log_warning.call_count == 0
+    assert daemon_thermalctld.stop_event.set.call_count == 1
+    assert thermalctld.exit_code == (128 + test_signal)
+
+    # Reset
+    daemon_thermalctld.log_info.reset_mock()
+    daemon_thermalctld.log_warning.reset_mock()
+    daemon_thermalctld.stop_event.set.reset_mock()
+    thermalctld.exit_code = thermalctld.ERR_UNKNOWN
+
+    # Test an unhandled signal
+    daemon_thermalctld.signal_handler(thermalctld.signal.SIGUSR1, None)
+    assert daemon_thermalctld.log_warning.call_count == 1
+    daemon_thermalctld.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
+    assert daemon_thermalctld.log_info.call_count == 0
+    assert daemon_thermalctld.stop_event.set.call_count == 0
+    assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
