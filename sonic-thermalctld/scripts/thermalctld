@@ -392,7 +392,7 @@ class FanUpdater(logger.Logger):
                 fan.set_status_led(fan.STATUS_LED_COLOR_RED)
                 fan_drawer.set_status_led(fan.STATUS_LED_COLOR_RED)
         except NotImplementedError as e:
-            self.log_warning('Failed to set led to fan, set_status_led not implemented')
+            self.log_warning('Failed to set status LED for fan {}, set_status_led not implemented'.format(fan_name))
 
     def _update_led_color(self):
         for fan_name, fan_status in self.fan_status_dict.items():
@@ -401,7 +401,7 @@ class FanUpdater(logger.Logger):
                     ('led_status', str(try_get(fan_status.fan.get_status_led)))
                 ])
             except Exception as e:
-                self.log_warning('Failed to get led status for fan - {}'.format(repr(e)))
+                self.log_warning('Failed to get status LED state for fan {} - {}'.format(fan_name, repr(e)))
                 fvs = swsscommon.FieldValuePairs([
                     ('led_status', NOT_AVAILABLE)
                 ])
@@ -416,7 +416,7 @@ class FanUpdater(logger.Logger):
                     ('led_status', str(try_get(drawer.get_status_led)))
                 ])
             except Exception as e:
-                self.log_warning('Failed to get led status for fan drawer')
+                self.log_warning('Failed to get status LED state for fan drawer')
                 fvs = swsscommon.FieldValuePairs([
                     ('led_status', NOT_AVAILABLE)
                 ])
