@@ -254,8 +254,8 @@ class FanUpdater(logger.Logger):
 
         bad_fan_count = FanStatus.get_bad_fan_count()
         if bad_fan_count > 0 and old_bad_fan_count != bad_fan_count:
-            self.log_warning("Insufficient number of working fans warning: {} fans are not working.".format(
-                bad_fan_count
+            self.log_warning("Insufficient number of working fans warning: {} fan{} not working.".format(
+                bad_fan_count, " is" if bad_fan_count == 1 else "s are"
             ))
         elif old_bad_fan_count > 0 and bad_fan_count == 0:
             self.log_notice("Insufficient number of working fans warning cleared: all fans are back to normal.")
@@ -627,7 +627,7 @@ class TemperatureUpdater(logger.Logger):
         warning = False
         if temperature != NOT_AVAILABLE and temperature_status.set_over_temperature(temperature, high_threshold):
             self._log_on_status_changed(not temperature_status.over_temperature,
-                                        'High temperature warning cleared: {} temperature restore to {}C, high threshold {}C.'.
+                                        'High temperature warning cleared: {} temperature restored to {}C, high threshold {}C.'.
                                         format(name, temperature, high_threshold),
                                         'High temperature warning: {} current temperature {}C, high threshold {}C'.
                                         format(name, temperature, high_threshold)
@@ -636,7 +636,7 @@ class TemperatureUpdater(logger.Logger):
 
         if temperature != NOT_AVAILABLE and temperature_status.set_under_temperature(temperature, low_threshold):
             self._log_on_status_changed(not temperature_status.under_temperature,
-                                        'Low temperature warning cleared: {} temperature restore to {}C, low threshold {}C.'.
+                                        'Low temperature warning cleared: {} temperature restored to {}C, low threshold {}C.'.
                                         format(name, temperature, low_threshold),
                                         'Low temperature warning: {} current temperature {}C, low threshold {}C'.
                                         format(name, temperature, low_threshold)
