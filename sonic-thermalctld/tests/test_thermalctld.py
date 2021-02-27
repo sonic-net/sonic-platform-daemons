@@ -361,59 +361,82 @@ def test_updater_thermal_check_min_max():
 
 
 def test_signal_handler():
+
+    # Test SIGHUP
     daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
-
-    # Test SIGHUP
     daemon_thermalctld.signal_handler(thermalctld.signal.SIGHUP, None)
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_info.call_count == 1
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 0
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
-    # Reset
-    daemon_thermalctld.log_info.reset_mock()
-    daemon_thermalctld.log_warning.reset_mock()
-    daemon_thermalctld.stop_event.set.reset_mock()
-
     # Test SIGINT
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.set = mock.MagicMock()
+    daemon_thermalctld.log_info = mock.MagicMock()
+    daemon_thermalctld.log_warning = mock.MagicMock()
     test_signal = thermalctld.signal.SIGINT
     daemon_thermalctld.signal_handler(test_signal, None)
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_info.call_count == 1
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGINT' - exiting...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 1
     assert thermalctld.exit_code == (128 + test_signal)
 
-    # Reset
-    daemon_thermalctld.log_info.reset_mock()
-    daemon_thermalctld.log_warning.reset_mock()
-    daemon_thermalctld.stop_event.set.reset_mock()
-
     # Test SIGTERM
+    thermalctld.exit_code = thermalctld.ERR_UNKNOWN
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.set = mock.MagicMock()
+    daemon_thermalctld.log_info = mock.MagicMock()
+    daemon_thermalctld.log_warning = mock.MagicMock()
     test_signal = thermalctld.signal.SIGTERM
     daemon_thermalctld.signal_handler(test_signal, None)
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_info.call_count == 1
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGTERM' - exiting...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 1
     assert thermalctld.exit_code == (128 + test_signal)
 
-    # Reset
-    daemon_thermalctld.log_info.reset_mock()
-    daemon_thermalctld.log_warning.reset_mock()
-    daemon_thermalctld.stop_event.set.reset_mock()
-    thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-
     # Test an unhandled signal
+    thermalctld.exit_code = thermalctld.ERR_UNKNOWN
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.set = mock.MagicMock()
+    daemon_thermalctld.log_info = mock.MagicMock()
+    daemon_thermalctld.log_warning = mock.MagicMock()
     daemon_thermalctld.signal_handler(thermalctld.signal.SIGUSR1, None)
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_warning.call_count == 1
     daemon_thermalctld.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
     assert daemon_thermalctld.log_info.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 0
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
-    daemon_thermalctld.deinit()
+
+def test_daemon_run():
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=True)
+    ret = daemon_thermalctld.run()
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
+    assert ret is False
+
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=False)
+    ret = daemon_thermalctld.run()
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
+    assert ret is True
+
+
+@mock.patch('thermalctld.ThermalControlDaemon.run')
+def test_main(mock_run):
+    mock_run.return_value = False
+
+    ret = thermalctld.main()
+    assert mock_run.call_count == 1
+    assert  ret != 0
