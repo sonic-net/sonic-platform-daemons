@@ -241,23 +241,23 @@ def test_insufficient_fan_number():
 
 
 def test_temperature_status_set_over_temper():
-    temperatue_status = thermalctld.TemperatureStatus()
-    ret = temperatue_status.set_over_temperature(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
+    temperature_status = thermalctld.TemperatureStatus()
+    ret = temperature_status.set_over_temperature(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = temperatue_status.set_over_temperature(thermalctld.NOT_AVAILABLE, 0)
+    ret = temperature_status.set_over_temperature(thermalctld.NOT_AVAILABLE, 0)
     assert not ret
 
-    ret = temperatue_status.set_over_temperature(0, thermalctld.NOT_AVAILABLE)
+    ret = temperature_status.set_over_temperature(0, thermalctld.NOT_AVAILABLE)
     assert not ret
 
-    ret = temperatue_status.set_over_temperature(2, 1)
+    ret = temperature_status.set_over_temperature(2, 1)
     assert ret
-    assert temperatue_status.over_temperature
+    assert temperature_status.over_temperature
 
-    ret = temperatue_status.set_over_temperature(1, 2)
+    ret = temperature_status.set_over_temperature(1, 2)
     assert ret
-    assert not temperatue_status.over_temperature
+    assert not temperature_status.over_temperature
 
 
 def test_temperstatus_set_under_temper():
@@ -279,6 +279,18 @@ def test_temperstatus_set_under_temper():
     assert ret
     assert not temperature_status.under_temperature
 
+
+def test_temperature_status_set_not_available():
+    THERMAL_NAME = 'Chassis 1 Thermal 1'
+    temperature_status = thermalctld.TemperatureStatus()
+    temperature_status.temperature = 20.0
+
+    temperature_status.set_temperature(THERMAL_NAME, thermalctld.NOT_AVAILABLE)
+    assert temperature_status.temperature is None
+    assert temperature_status.log_warning.call_count == 1
+    temperature_status.log_warning.assert_called_with('Temperature of {} became unavailable'.format(THERMAL_NAME))
+
+
 def test_temperupdater_deinit():
     chassis = MockChassis()
     temp_updater = thermalctld.TemperatureUpdater(chassis)
@@ -289,6 +301,7 @@ def test_temperupdater_deinit():
     assert temp_updater.table._del.call_count == 2
     expected_calls = [mock.call('key1'), mock.call('key2')]
     temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+
 
 def test_temperupdater_over_temper():
     chassis = MockChassis()
@@ -318,7 +331,6 @@ def test_temperupdater_under_temper():
     temperature_updater.update()
     assert temperature_updater.log_notice.call_count == 1
     temperature_updater.log_notice.assert_called_with('Low temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, low threshold 1C')
-
 
 
 def test_update_fan_with_exception():
@@ -364,7 +376,8 @@ def test_update_thermal_with_exception():
         ]
     assert temperature_updater.log_warning.mock_calls == expected_calls
 
-# Modular chassis related tests
+
+# Modular chassis-related tests
 
 
 def test_updater_thermal_check_modular_chassis():
