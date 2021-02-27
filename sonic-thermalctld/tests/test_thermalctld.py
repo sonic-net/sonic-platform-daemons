@@ -125,11 +125,17 @@ def test_fanupdater_fan_absent():
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
     assert fan_updater.log_warning.call_count == 1
+    fan_updater.log_warning.assert_called_with('Fan removed warning: FanDrawer 0 FAN 1 was removed from the system, potential overheat hazard')
 
     fan_list[0].set_presence(True)
     fan_updater.update()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
-    assert fan_updater.log_notice.call_count == 1
+    assert fan_updater.log_notice.call_count == 2
+    expected_calls = [
+        mock.call('Fan removed warning cleared: FanDrawer 0 FAN 1 was inserted.'),
+        mock.call('Insufficient number of working fans warning cleared: all fans are back to normal.')
+    ]
+    assert fan_updater.log_notice.mock_calls == expected_calls
 
 
 def test_fanupdater_fan_fault():
@@ -139,12 +145,22 @@ def test_fanupdater_fan_fault():
     fan_updater.update()
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
-    assert fan_updater.log_warning.call_count == 1
+    assert fan_updater.log_warning.call_count == 2
+    expected_calls = [
+        mock.call('Fan fault warning: FanDrawer 0 FAN 1 is broken.'),
+        mock.call('Insufficient number of working fans warning: 1 fan is not working.')
+    ]
+    assert fan_updater.log_warning.mock_calls == expected_calls
 
     fan_list[0].set_status(True)
     fan_updater.update()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
-    assert fan_updater.log_notice.call_count == 1
+    assert fan_updater.log_notice.call_count == 2
+    expected_calls = [
+        mock.call('Fan fault warning cleared: FanDrawer 0 FAN 1 is back to normal.'),
+        mock.call('Insufficient number of working fans warning cleared: all fans are back to normal.')
+    ]
+    assert fan_updater.log_notice.mock_calls == expected_calls
 
 
 def test_fanupdater_fan_under_speed():
@@ -155,11 +171,13 @@ def test_fanupdater_fan_under_speed():
     fan_list = chassis.get_all_fans()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
     assert fan_updater.log_warning.call_count == 1
+    fan_updater.log_warning.assert_called_with('Fan low speed warning: FanDrawer 0 FAN 1 current speed=1, target speed=2, tolerance=0.')
 
     fan_list[0].make_normal_speed()
     fan_updater.update()
     assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
     assert fan_updater.log_notice.call_count == 1
+    fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 FAN 1 speed is back to normal.')
 
 
 def test_fanupdater_fan_over_speed():
@@ -198,19 +216,28 @@ def test_insufficient_fan_number():
     fan_updater = thermalctld.FanUpdater(chassis)
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3
-    fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 2 fans are not working.')
+    expected_calls = [
+        mock.call('Fan removed warning: FanDrawer 0 FAN 1 was removed from the system, potential overheat hazard'),
+        mock.call('Fan fault warning: FanDrawer 1 FAN 1 is broken.'),
+        mock.call('Insufficient number of working fans warning: 2 fans are not working.')
+    ]
+    assert fan_updater.log_warning.mock_calls == expected_calls
 
     fan_list = chassis.get_all_fans()
     fan_list[0].set_presence(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 1
-    fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fans are not working.')
+    fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fan is not working.')
 
     fan_list[1].set_status(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 3
-    fan_updater.log_notice.assert_called_with(
-        'Insufficient number of working fans warning cleared: all fans are back to normal.')
+    expected_calls = [
+            mock.call('Fan removed warning cleared: FanDrawer 0 FAN 1 was inserted.'),
+            mock.call('Fan fault warning cleared: FanDrawer 1 FAN 1 is back to normal.'),
+        mock.call('Insufficient number of working fans warning cleared: all fans are back to normal.')
+    ]
+    assert fan_updater.log_notice.mock_calls == expected_calls
 
 
 def test_temperature_status_set_over_temper():
@@ -260,6 +287,8 @@ def test_temperupdater_deinit():
 
     temp_updater.deinit()
     assert temp_updater.table._del.call_count == 2
+    expected_calls = [mock.call('key1'), mock.call('key2')]
+    temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
 
 def test_temperupdater_over_temper():
     chassis = MockChassis()
@@ -268,10 +297,12 @@ def test_temperupdater_over_temper():
     temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     assert temperature_updater.log_warning.call_count == 1
+    temperature_updater.log_warning.assert_called_with('High temperature warning: chassis 1 Thermal 1 current temperature 3C, high threshold 2C')
 
     thermal_list[0].make_normal_temper()
     temperature_updater.update()
     assert temperature_updater.log_notice.call_count == 1
+    temperature_updater.log_notice.assert_called_with('High temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, high threshold 3C.')
 
 
 def test_temperupdater_under_temper():
@@ -281,10 +312,13 @@ def test_temperupdater_under_temper():
     temperature_updater.update()
     thermal_list = chassis.get_all_thermals()
     assert temperature_updater.log_warning.call_count == 1
+    temperature_updater.log_warning.assert_called_with('Low temperature warning: chassis 1 Thermal 1 current temperature 1C, low threshold 2C')
 
     thermal_list[0].make_normal_temper()
     temperature_updater.update()
     assert temperature_updater.log_notice.call_count == 1
+    temperature_updater.log_notice.assert_called_with('Low temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, low threshold 1C.')
+
 
 
 def test_update_fan_with_exception():
@@ -299,6 +333,12 @@ def test_update_fan_with_exception():
     assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
     assert fan_updater.log_warning.call_count == 1
 
+    # TODO: Clean this up once we no longer need to support Python 2
+    if sys.version_info.major == 3:
+        fan_updater.log_warning.assert_called_with("Failed to update FAN status - Exception('Failed to get speed')")
+    else:
+        fan_updater.log_warning.assert_called_with("Failed to update FAN status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
+
 
 def test_update_thermal_with_exception():
     chassis = MockChassis()
@@ -309,7 +349,20 @@ def test_update_thermal_with_exception():
 
     temperature_updater = thermalctld.TemperatureUpdater(chassis)
     temperature_updater.update()
-    assert temperature_updater.log_warning.call_count == 1
+    assert temperature_updater.log_warning.call_count == 2
+
+    # TODO: Clean this up once we no longer need to support Python 2
+    if sys.version_info.major == 3:
+        expected_calls = [
+            mock.call("Failed to update thermal status - Exception('Failed to get temperature')"),
+            mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
+        ]
+    else:
+        expected_calls = [
+            mock.call("Failed to update thermal status - Exception('Failed to get temperature',)"),  # Python 2 adds a trailing comma
+            mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
+        ]
+    assert temperature_updater.log_warning.mock_calls == expected_calls
 
 # Modular chassis related tests
 
