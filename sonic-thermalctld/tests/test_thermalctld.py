@@ -533,6 +533,23 @@ def test_daemon_run():
     assert ret is True
 
 
+def test_try_get():
+    def good_callback():
+        return 'good result'
+
+    def unimplemented_callback():
+        raise NotImplementedError
+
+    ret = thermalctld.try_get(good_callback)
+    assert ret == 'good result'
+
+    ret = thermalctld.try_get(unimplemented_callback)
+    assert ret == thermalctld.NOT_AVAILABLE
+
+    ret = thermalctld.try_get(unimplemented_callback, 'my default')
+    assert ret == 'my default'
+
+
 @mock.patch('thermalctld.ThermalControlDaemon.run')
 def test_main(mock_run):
     mock_run.return_value = False
