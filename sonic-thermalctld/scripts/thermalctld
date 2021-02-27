@@ -254,11 +254,11 @@ class FanUpdater(logger.Logger):
 
         bad_fan_count = FanStatus.get_bad_fan_count()
         if bad_fan_count > 0 and old_bad_fan_count != bad_fan_count:
-            self.log_warning("Insufficient number of working fans warning: {} fan{} not working.".format(
+            self.log_warning("Insufficient number of working fans warning: {} fan{} not working".format(
                 bad_fan_count, " is" if bad_fan_count == 1 else "s are"
             ))
         elif old_bad_fan_count > 0 and bad_fan_count == 0:
-            self.log_notice("Insufficient number of working fans warning cleared: all fans are back to normal.")
+            self.log_notice("Insufficient number of working fans warning cleared: all fans are back to normal")
 
         self.log_debug("End fan updating")
 
@@ -319,7 +319,7 @@ class FanUpdater(logger.Logger):
         if fan_status.set_presence(presence):
             set_led = True
             self._log_on_status_changed(fan_status.presence,
-                                        'Fan removed warning cleared: {} was inserted.'.format(fan_name),
+                                        'Fan removed warning cleared: {} was inserted'.format(fan_name),
                                         'Fan removed warning: {} was removed from '
                                         'the system, potential overheat hazard'.format(fan_name)
                                         )
@@ -327,23 +327,23 @@ class FanUpdater(logger.Logger):
         if presence and fan_status.set_fault_status(fan_fault_status):
             set_led = True
             self._log_on_status_changed(fan_status.status,
-                                        'Fan fault warning cleared: {} is back to normal.'.format(fan_name),
-                                        'Fan fault warning: {} is broken.'.format(fan_name)
+                                        'Fan fault warning cleared: {} is back to normal'.format(fan_name),
+                                        'Fan fault warning: {} is broken'.format(fan_name)
                                         )
 
         if presence and fan_status.set_under_speed(speed, speed_target, speed_tolerance):
             set_led = True
             self._log_on_status_changed(not fan_status.under_speed,
-                                        'Fan low speed warning cleared: {} speed is back to normal.'.format(fan_name),
-                                        'Fan low speed warning: {} current speed={}, target speed={}, tolerance={}.'.
+                                        'Fan low speed warning cleared: {} speed is back to normal'.format(fan_name),
+                                        'Fan low speed warning: {} current speed={}, target speed={}, tolerance={}'.
                                         format(fan_name, speed, speed_target, speed_tolerance)
                                         )
 
         if presence and fan_status.set_over_speed(speed, speed_target, speed_tolerance):
             set_led = True
             self._log_on_status_changed(not fan_status.over_speed,
-                                        'Fan high speed warning cleared: {} speed is back to normal.'.format(fan_name),
-                                        'Fan high speed warning: {} target speed={}, current speed={}, tolerance={}.'.
+                                        'Fan high speed warning cleared: {} speed is back to normal'.format(fan_name),
+                                        'Fan high speed warning: {} target speed={}, current speed={}, tolerance={}'.
                                         format(fan_name, speed_target, speed, speed_tolerance)
                                         )
 
@@ -627,7 +627,7 @@ class TemperatureUpdater(logger.Logger):
         warning = False
         if temperature != NOT_AVAILABLE and temperature_status.set_over_temperature(temperature, high_threshold):
             self._log_on_status_changed(not temperature_status.over_temperature,
-                                        'High temperature warning cleared: {} temperature restored to {}C, high threshold {}C.'.
+                                        'High temperature warning cleared: {} temperature restored to {}C, high threshold {}C'.
                                         format(name, temperature, high_threshold),
                                         'High temperature warning: {} current temperature {}C, high threshold {}C'.
                                         format(name, temperature, high_threshold)
@@ -636,7 +636,7 @@ class TemperatureUpdater(logger.Logger):
 
         if temperature != NOT_AVAILABLE and temperature_status.set_under_temperature(temperature, low_threshold):
             self._log_on_status_changed(not temperature_status.under_temperature,
-                                        'Low temperature warning cleared: {} temperature restored to {}C, low threshold {}C.'.
+                                        'Low temperature warning cleared: {} temperature restored to {}C, low threshold {}C'.
                                         format(name, temperature, low_threshold),
                                         'Low temperature warning: {} current temperature {}C, low threshold {}C'.
                                         format(name, temperature, low_threshold)
@@ -754,7 +754,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
                 self.thermal_manager.load(ThermalControlDaemon.POLICY_FILE)
                 self.thermal_manager.init_thermal_algorithm(chassis)
         except NotImplementedError:
-            self.log_warning('Thermal manager is not supported on this platform.')
+            self.log_warning('Thermal manager is not supported on this platform')
         except Exception as e:
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
             sys.exit(ERR_INIT_FAILED)
