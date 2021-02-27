@@ -205,15 +205,13 @@ class FanUpdater(logger.Logger):
         self.drawer_table = swsscommon.Table(state_db, FanUpdater.FAN_DRAWER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
 
-    def __del__(self):
+    def deinit(self):
         """
-        Destructor of FanUpdater
+        Deinitializer of FanUpdater
         :return:
         """
         for name in self.fan_status_dict.keys():
             self.table._del(name)
-
-        super(FanUpdater, self).__del__()
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -534,17 +532,15 @@ class TemperatureUpdater(logger.Logger):
                 chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
                 self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
 
-    def __del__(self):
+    def deinit(self):
         """
-        Destructor of TemperatureUpdater
+        Deinitializer of TemperatureUpdater
         :return:
         """
         for name in self.temperature_status_dict.keys():
             self.table._del(name)
             if self.is_chassis_system and self.chassis_table is not None:
                 self.chassis_table._del(name)
-
-        super(TemperatureUpdater, self).__del__()
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -715,6 +711,9 @@ class ThermalMonitor(ProcessTaskBase):
                 self.logger.log_warning('Update fan and temperature status took {} seconds, '
                                         'there might be performance risk'.format(elapsed))
 
+        self.fan_updater.deinit()
+        self.temperature_updater.deinit()
+
         self.logger.log_info("Stop thermal monitoring loop")
 
 
@@ -760,7 +759,10 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
             sys.exit(ERR_INIT_FAILED)
 
-    def __del__(self):
+    def deinit(self):
+        """
+        Deinitializer of ThermalControlDaemon
+        """
         try:
             if self.thermal_manager:
                 self.thermal_manager.deinitialize()
@@ -768,8 +770,6 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while destroying thermal manager - {}'.format(repr(e)))
 
         self.thermal_monitor.task_stop()
-
-        super(ThermalControlDaemon, self).__del__()
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -835,6 +835,8 @@ def main():
         pass
 
     thermal_control.log_info("Shutting down with exit code {}...".format(exit_code))
+
+    thermal_control.deinit()
 
     return exit_code
 

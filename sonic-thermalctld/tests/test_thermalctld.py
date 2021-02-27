@@ -415,3 +415,5 @@ def test_signal_handler():
     assert daemon_thermalctld.log_info.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 0
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
+
+    daemon_thermalctld.deinit()
