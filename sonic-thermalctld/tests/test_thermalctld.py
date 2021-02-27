@@ -157,7 +157,18 @@ class TestFanUpdater(object):
         expected_calls = [mock.call('key1'), mock.call('key2')]
         fan_updater.table._del.assert_has_calls(expected_calls, any_order=True)
 
-    def test_fanupdater_fan_absent(self):
+    @mock.patch('thermalctld.try_get', mock.MagicMock(return_value=thermalctld.NOT_AVAILABLE))
+    def test_refresh_fan_drawer_status_fan_drawer_get_name_not_impl(self):
+        # Test case where fan_drawer.get_name is not implemented
+        fan_updater = thermalctld.FanUpdater(MockChassis())
+        thermalctld.update_entity_info = mock.MagicMock()
+        mock_fan_drawer = mock.MagicMock()
+        fan_updater._refresh_fan_drawer_status(mock_fan_drawer, 1)
+        assert thermalctld.update_entity_info.call_count == 0
+
+    # TODO: Add a test case for _refresh_fan_drawer_status with a good fan drawer
+
+    def test_fan_absent(self):
         chassis = MockChassis()
         chassis.make_absent_fan()
         fan_updater = thermalctld.FanUpdater(chassis)
@@ -178,7 +189,7 @@ class TestFanUpdater(object):
         assert fan_updater.log_notice.mock_calls == expected_calls
 
 
-    def test_fanupdater_fan_fault(self):
+    def test_fan_faulty(self):
         chassis = MockChassis()
         chassis.make_faulty_fan()
         fan_updater = thermalctld.FanUpdater(chassis)
@@ -203,7 +214,7 @@ class TestFanUpdater(object):
         assert fan_updater.log_notice.mock_calls == expected_calls
 
 
-    def test_fanupdater_fan_under_speed(self):
+    def test_fan_under_speed(self):
         chassis = MockChassis()
         chassis.make_under_speed_fan()
         fan_updater = thermalctld.FanUpdater(chassis)
@@ -220,7 +231,7 @@ class TestFanUpdater(object):
         fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 FAN 1 speed is back to normal')
 
 
-    def test_fanupdater_fan_over_speed(self):
+    def test_fan_over_speed(self):
         chassis = MockChassis()
         chassis.make_over_speed_fan()
         fan_updater = thermalctld.FanUpdater(chassis)
