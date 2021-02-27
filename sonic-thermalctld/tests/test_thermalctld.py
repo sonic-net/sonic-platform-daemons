@@ -56,65 +56,91 @@ def configure_mocks():
     thermalctld.TemperatureUpdater.log_warning.reset()
 
 
-def test_fanstatus_set_presence():
-    fan_status = thermalctld.FanStatus()
-    ret = fan_status.set_presence(True)
-    assert fan_status.presence
-    assert not ret
+class TestFanStatus(object):
+    """
+    Test cases to cover functionality in FanStatus class
+    """
+    def test_check_speed_value_available(self):
+        fan_status = thermalctld.FanStatus()
 
-    ret = fan_status.set_presence(False)
-    assert not fan_status.presence
-    assert ret
+        ret = fan_status._check_speed_value_available(30, 32, 5, True)
+        assert ret == True
+        assert fan_status.log_warning.call_count == 0
 
+        ret = fan_status._check_speed_value_available(thermalctld.NOT_AVAILABLE, 32, 105, True)
+        assert ret == False
+        assert fan_status.log_warning.call_count == 1
+        fan_status.log_warning.assert_called_with('Invalid tolerance value: 105')
 
-def test_fanstatus_set_under_speed():
-    fan_status = thermalctld.FanStatus()
-    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
-    assert not ret
+        # Reset
+        fan_status.log_warning.reset_mock()
 
-    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
-    assert not ret
+        ret = fan_status._check_speed_value_available(thermalctld.NOT_AVAILABLE, 32, 5, False)
+        assert ret == False
+        assert fan_status.log_warning.call_count == 0
 
-    ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, 0, 0)
-    assert not ret
+        ret = fan_status._check_speed_value_available(thermalctld.NOT_AVAILABLE, 32, 5, True)
+        assert ret == False
+        assert fan_status.log_warning.call_count == 1
+        fan_status.log_warning.assert_called_with('Fan speed or target_speed or tolerance became unavailable, speed=N/A, target_speed=32, tolerance=5')
 
-    ret = fan_status.set_under_speed(0, 0, 0)
-    assert not ret
+    def test_set_presence(self):
+        fan_status = thermalctld.FanStatus()
+        ret = fan_status.set_presence(True)
+        assert fan_status.presence
+        assert not ret
 
-    ret = fan_status.set_under_speed(80, 100, 19)
-    assert ret
-    assert fan_status.under_speed
-    assert not fan_status.is_ok()
+        ret = fan_status.set_presence(False)
+        assert not fan_status.presence
+        assert ret
 
-    ret = fan_status.set_under_speed(81, 100, 19)
-    assert ret
-    assert not fan_status.under_speed
-    assert fan_status.is_ok()
+    def test_set_under_speed(self):
+        fan_status = thermalctld.FanStatus()
+        ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
+        assert not ret
 
+        ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
+        assert not ret
 
-def test_fanstatus_set_over_speed():
-    fan_status = thermalctld.FanStatus()
-    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
-    assert not ret
+        ret = fan_status.set_under_speed(thermalctld.NOT_AVAILABLE, 0, 0)
+        assert not ret
 
-    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
-    assert not ret
+        ret = fan_status.set_under_speed(0, 0, 0)
+        assert not ret
 
-    ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, 0, 0)
-    assert not ret
+        ret = fan_status.set_under_speed(80, 100, 19)
+        assert ret
+        assert fan_status.under_speed
+        assert not fan_status.is_ok()
 
-    ret = fan_status.set_over_speed(0, 0, 0)
-    assert not ret
+        ret = fan_status.set_under_speed(81, 100, 19)
+        assert ret
+        assert not fan_status.under_speed
+        assert fan_status.is_ok()
 
-    ret = fan_status.set_over_speed(120, 100, 19)
-    assert ret
-    assert fan_status.over_speed
-    assert not fan_status.is_ok()
+    def test_set_over_speed(self):
+        fan_status = thermalctld.FanStatus()
+        ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE)
+        assert not ret
 
-    ret = fan_status.set_over_speed(120, 100, 21)
-    assert ret
-    assert not fan_status.over_speed
-    assert fan_status.is_ok()
+        ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, thermalctld.NOT_AVAILABLE, 0)
+        assert not ret
+
+        ret = fan_status.set_over_speed(thermalctld.NOT_AVAILABLE, 0, 0)
+        assert not ret
+
+        ret = fan_status.set_over_speed(0, 0, 0)
+        assert not ret
+
+        ret = fan_status.set_over_speed(120, 100, 19)
+        assert ret
+        assert fan_status.over_speed
+        assert not fan_status.is_ok()
+
+        ret = fan_status.set_over_speed(120, 100, 21)
+        assert ret
+        assert not fan_status.over_speed
+        assert fan_status.is_ok()
 
 
 def test_fanupdater_fan_absent():
