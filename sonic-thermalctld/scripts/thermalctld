@@ -126,7 +126,7 @@ class FanStatus(logger.Logger):
                 return False
 
             if current_status is True:
-                self.log_warning('Fan speed or target_speed or tolerance become unavailable, '
+                self.log_warning('Fan speed or target_speed or tolerance became unavailable, '
                                  'speed={}, target_speed={}, tolerance={}'.format(speed, target_speed, tolerance))
             return False
         return True
@@ -442,7 +442,7 @@ class TemperatureStatus(logger.Logger):
         """
         if temperature == NOT_AVAILABLE:
             if self.temperature is not None:
-                self.log_warning('Temperature of {} become unavailable'.format(name))
+                self.log_warning('Temperature of {} became unavailable'.format(name))
                 self.temperature = None
             return
 
@@ -459,7 +459,7 @@ class TemperatureStatus(logger.Logger):
     def _check_temperature_value_available(self, temperature, threshold, current_status):
         if temperature == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
             if current_status is True:
-                self.log_warning('Thermal temperature or threshold become unavailable, '
+                self.log_warning('Thermal temperature or threshold became unavailable, '
                                  'temperature={}, threshold={}'.format(temperature, threshold))
             return False
         return True
