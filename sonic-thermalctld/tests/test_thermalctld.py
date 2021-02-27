@@ -252,6 +252,14 @@ def test_temperstatus_set_under_temper():
     assert ret
     assert not temperature_status.under_temperature
 
+def test_temperupdater_deinit():
+    chassis = MockChassis()
+    temp_updater = thermalctld.TemperatureUpdater(chassis)
+    temp_updater.temperature_status_dict  = { 'key1': 'value1', 'key2': 'value2' }
+    temp_updater.table._del = mock.MagicMock()
+
+    temp_updater.deinit()
+    assert temp_updater.table._del.call_count == 2
 
 def test_temperupdater_over_temper():
     chassis = MockChassis()
