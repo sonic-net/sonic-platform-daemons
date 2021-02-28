@@ -200,8 +200,12 @@ class TestFanUpdater(object):
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
-        assert fan_updater.log_warning.call_count == 1
-        fan_updater.log_warning.assert_called_with('Fan removed warning: FanDrawer 0 fan 1 was removed from the system, potential overheat hazard')
+        assert fan_updater.log_warning.call_count == 2
+        expected_calls = [
+            mock.call('Fan removed warning: FanDrawer 0 fan 1 was removed from the system, potential overheat hazard'),
+            mock.call('Insufficient number of working fans warning: 1 fan is not working')
+        ]
+        assert fan_updater.log_warning.mock_calls == expected_calls
 
         fan_list[0].set_presence(True)
         fan_updater.update()
@@ -261,11 +265,13 @@ class TestFanUpdater(object):
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
+        fan_updater.log_warning.assert_called_with('Fan high speed warning: FanDrawer 0 fan 1 target speed=1, current speed=2, tolerance=0')
 
         fan_list[0].make_normal_speed()
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
+        fan_updater.log_notice.assert_called_with('Fan high speed warning cleared: FanDrawer 0 fan 1 speed is back to normal')
 
     def test_update_psu_fans(self):
         chassis = MockChassis()
