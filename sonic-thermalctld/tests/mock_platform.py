@@ -3,6 +3,7 @@ from sonic_platform_base import fan_base
 from sonic_platform_base import fan_drawer_base
 from sonic_platform_base import module_base
 from sonic_platform_base import psu_base
+from sonic_platform_base import sfp_base
 from sonic_platform_base import thermal_base
 from sonic_platform_base.sonic_thermal_control import thermal_manager_base
 
@@ -91,6 +92,57 @@ class MockErrorFan(MockFan):
         raise Exception('Failed to get speed')
 
 
+class MockFanDrawer(fan_drawer_base.FanDrawerBase):
+    def __init__(self, index):
+        super(MockFanDrawer, self).__init__()
+        self._name = 'FanDrawer {}'.format(index)
+        self._presence = True
+        self._model = 'Fan Drawer Model'
+        self._serial = 'Fan Drawer Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
+
+        self._status_led = self.STATUS_LED_COLOR_RED
+
+    def get_all_fans(self):
+        return self._fan_list
+
+    def get_status_led(self):
+        return self._status_led
+
+    def set_status_led(self, value):
+        self._status_led = value
+
+    # Methods inherited from DeviceBase class and related setters
+    def get_name(self):
+        return self._name
+
+    def get_presence(self):
+        return self._presence
+
+    def set_presence(self, presence):
+        self._presence = presence
+
+    def get_model(self):
+        return self._model
+
+    def get_serial(self):
+        return self._serial
+
+    def get_status(self):
+        return self._status
+
+    def set_status(self, status):
+        self._status = status
+
+    def get_position_in_parent(self):
+        return self._position_in_parent
+
+    def is_replaceable(self):
+        return self._replaceable
+
+
 class MockPsu(psu_base.PsuBase):
     def __init__(self):
         super(MockPsu, self).__init__()
@@ -101,8 +153,6 @@ class MockPsu(psu_base.PsuBase):
         self._status = True
         self._position_in_parent = 1
         self._replaceable = True
-
-        self._fan_list = []
 
     def get_all_fans(self):
         return self._fan_list
@@ -136,28 +186,16 @@ class MockPsu(psu_base.PsuBase):
         return self._replaceable
 
 
-class MockFanDrawer(fan_drawer_base.FanDrawerBase):
-    def __init__(self, index):
-        super(MockFanDrawer, self).__init__()
-        self._name = 'FanDrawer {}'.format(index)
+class MockSfp(sfp_base.SfpBase):
+    def __init__(self):
+        super(MockSfp, self).__init__()
+        self._name = None
         self._presence = True
-        self._model = 'Fan Drawer Model'
-        self._serial = 'Fan Drawer Serial'
+        self._model = 'SFP Model'
+        self._serial = 'SFP Serial'
         self._status = True
         self._position_in_parent = 1
         self._replaceable = True
-
-        self._fan_list = []
-        self._status_led = self.STATUS_LED_COLOR_RED
-
-    def get_all_fans(self):
-        return self._fan_list
-
-    def get_status_led(self):
-        return self._status_led
-
-    def set_status_led(self, value):
-        self._status_led = value
 
     # Methods inherited from DeviceBase class and related setters
     def get_name(self):
