@@ -11,7 +11,7 @@ else:
 import pytest
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockPsu, MockThermal
+from .mock_platform import MockChassis, MockFan, MockPsu, MockSfp, MockThermal
 
 daemon_base.db_connect = mock.MagicMock()
 
@@ -449,6 +449,21 @@ class TestTemperatureUpdater(object):
         mock_thermal = MockThermal()
         psu._thermal_list.append(mock_thermal)
         chassis._psu_list.append(psu)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 0
+
+        temperature_updater._refresh_temperature_status = mock.MagicMock(side_effect=Exception("Test message"))
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 1
+        temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Test message")
+
+    def test_update_sfp_thermals(self):
+        chassis = MockChassis()
+        sfp = MockSfp()
+        mock_thermal = MockThermal()
+        sfp._thermal_list.append(mock_thermal)
+        chassis._sfp_list.append(sfp)
         temperature_updater = thermalctld.TemperatureUpdater(chassis)
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
