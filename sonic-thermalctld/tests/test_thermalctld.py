@@ -168,6 +168,17 @@ class TestFanUpdater(object):
 
     # TODO: Add a test case for _refresh_fan_drawer_status with a good fan drawer
 
+    def test_set_fan_led_exception(self):
+        fan_status = thermalctld.FanStatus()
+        mock_fan_drawer = mock.MagicMock()
+        mock_fan = MockFan()
+        mock_fan.set_status_led = mock.MagicMock(side_effect=NotImplementedError)
+
+        fan_updater = thermalctld.FanUpdater(MockChassis())
+        fan_updater._set_fan_led(mock_fan_drawer, mock_fan, 'Test Fan', fan_status)
+        assert fan_updater.log_warning.call_count == 1
+        fan_updater.log_warning.assert_called_with('Failed to set status LED for fan Test Fan, set_status_led not implemented')
+
     def test_fan_absent(self):
         chassis = MockChassis()
         chassis.make_absent_fan()
