@@ -689,6 +689,20 @@ class ThermalMonitor(ProcessTaskBase):
         self.fan_updater = FanUpdater(chassis)
         self.temperature_updater = TemperatureUpdater(chassis)
 
+    def main(self):
+        begin = time.time()
+        self.fan_updater.update()
+        self.temperature_updater.update()
+        elapsed = time.time() - begin
+        if elapsed < self.UPDATE_INTERVAL:
+            self.wait_time = self.UPDATE_INTERVAL - elapsed
+        else:
+            self.wait_time = self.INITIAL_INTERVAL
+
+        if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
+            self.logger.log_warning('Update fan and temperature status took {} seconds, '
+                                    'there might be performance risk'.format(elapsed))
+
     def task_worker(self):
         """
         Thread function to handle Fan status update and temperature status update
@@ -698,18 +712,7 @@ class ThermalMonitor(ProcessTaskBase):
 
         # Start loop to update fan, temperature info in DB periodically
         while not self.task_stopping_event.wait(self.wait_time):
-            begin = time.time()
-            self.fan_updater.update()
-            self.temperature_updater.update()
-            elapsed = time.time() - begin
-            if elapsed < self.UPDATE_INTERVAL:
-                self.wait_time = self.UPDATE_INTERVAL - elapsed
-            else:
-                self.wait_time = self.INITIAL_INTERVAL
-
-            if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
-                self.logger.log_warning('Update fan and temperature status took {} seconds, '
-                                        'there might be performance risk'.format(elapsed))
+            self.main()
 
         self.fan_updater.deinit()
         self.temperature_updater.deinit()
