@@ -158,10 +158,10 @@ class TestFanUpdater(object):
         fan_updater.table._del.assert_has_calls(expected_calls, any_order=True)
 
     @mock.patch('thermalctld.try_get', mock.MagicMock(return_value=thermalctld.NOT_AVAILABLE))
+    @mock.patch('thermalctld.update_entity_info', mock.MagicMock())
     def test_refresh_fan_drawer_status_fan_drawer_get_name_not_impl(self):
         # Test case where fan_drawer.get_name is not implemented
         fan_updater = thermalctld.FanUpdater(MockChassis())
-        thermalctld.update_entity_info = mock.MagicMock()
         mock_fan_drawer = mock.MagicMock()
         fan_updater._refresh_fan_drawer_status(mock_fan_drawer, 1)
         assert thermalctld.update_entity_info.call_count == 0
@@ -573,6 +573,19 @@ def test_try_get():
 
     ret = thermalctld.try_get(unimplemented_callback, 'my default')
     assert ret == 'my default'
+
+
+def test_update_entity_info():
+    mock_table = mock.MagicMock()
+    mock_fan = MockFan()
+    expected_fvp = thermalctld.swsscommon.FieldValuePairs(
+        [('position_in_parent', '1'),
+         ('parent_name', 'Parent Name')
+         ])
+
+    thermalctld.update_entity_info(mock_table, 'Parent Name', 'Key Name', mock_fan, 1)
+    assert mock_table.set.call_count == 1
+    mock_table.set.assert_called_with('Key Name', expected_fvp)
 
 
 @mock.patch('thermalctld.ThermalControlDaemon.run')
