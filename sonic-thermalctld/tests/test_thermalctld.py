@@ -199,7 +199,6 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
 
-
     def test_fan_faulty(self):
         chassis = MockChassis()
         chassis.make_faulty_fan()
@@ -224,7 +223,6 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
 
-
     def test_fan_under_speed(self):
         chassis = MockChassis()
         chassis.make_under_speed_fan()
@@ -241,7 +239,6 @@ class TestFanUpdater(object):
         assert fan_updater.log_notice.call_count == 1
         fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 FAN 1 speed is back to normal')
 
-
     def test_fan_over_speed(self):
         chassis = MockChassis()
         chassis.make_over_speed_fan()
@@ -255,6 +252,21 @@ class TestFanUpdater(object):
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
+
+
+class TestThermalMonitor(object):
+    """
+    Test cases to cover functionality in ThermalMonitor class
+    """
+    def test_main(self):
+        mock_chassis = MockChassis()
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
+        thermal_monitor.fan_updater.update = mock.MagicMock()
+        thermal_monitor.temperature_updater.update = mock.MagicMock()
+
+        thermal_monitor.main()
+        assert thermal_monitor.fan_updater.update.call_count == 1
+        assert thermal_monitor.temperature_updater.update.call_count == 1
 
 
 def test_insufficient_fan_number():
