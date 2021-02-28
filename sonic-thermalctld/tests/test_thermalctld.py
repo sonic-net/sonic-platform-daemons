@@ -168,6 +168,24 @@ class TestFanUpdater(object):
 
     # TODO: Add a test case for _refresh_fan_drawer_status with a good fan drawer
 
+    def test_update_fan_with_exception(self):
+        chassis = MockChassis()
+        chassis.make_error_fan()
+        fan = MockFan()
+        fan.make_over_speed()
+        chassis.get_all_fans().append(fan)
+
+        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater.update()
+        assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
+        assert fan_updater.log_warning.call_count == 1
+
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed')")
+        else:
+            fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
+
     def test_set_fan_led_exception(self):
         fan_status = thermalctld.FanStatus()
         mock_fan_drawer = mock.MagicMock()
@@ -253,7 +271,7 @@ class TestFanUpdater(object):
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
 
-    def test_psu_fans(self):
+    def test_update_psu_fans(self):
         chassis = MockChassis()
         psu = MockPsu()
         mock_fan = MockFan()
@@ -384,90 +402,91 @@ def test_temperature_status_set_not_available():
     temperature_status.log_warning.assert_called_with('Temperature of {} became unavailable'.format(THERMAL_NAME))
 
 
-def test_temperupdater_deinit():
-    chassis = MockChassis()
-    temp_updater = thermalctld.TemperatureUpdater(chassis)
-    temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
-    temp_updater.table._del = mock.MagicMock()
+class TestTemperatureUpdater(object):
+    """
+    Test cases to cover functionality in TemperatureUpdater class
+    """
+    def test_deinit(self):
+        chassis = MockChassis()
+        temp_updater = thermalctld.TemperatureUpdater(chassis)
+        temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
+        temp_updater.table._del = mock.MagicMock()
 
-    temp_updater.deinit()
-    assert temp_updater.table._del.call_count == 2
-    expected_calls = [mock.call('key1'), mock.call('key2')]
-    temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        temp_updater.deinit()
+        assert temp_updater.table._del.call_count == 2
+        expected_calls = [mock.call('key1'), mock.call('key2')]
+        temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
 
+    def test_over_temper(self):
+        chassis = MockChassis()
+        chassis.make_over_temper_thermal()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater.update()
+        thermal_list = chassis.get_all_thermals()
+        assert temperature_updater.log_warning.call_count == 1
+        temperature_updater.log_warning.assert_called_with('High temperature warning: chassis 1 Thermal 1 current temperature 3C, high threshold 2C')
 
-def test_temperupdater_over_temper():
-    chassis = MockChassis()
-    chassis.make_over_temper_thermal()
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
-    temperature_updater.update()
-    thermal_list = chassis.get_all_thermals()
-    assert temperature_updater.log_warning.call_count == 1
-    temperature_updater.log_warning.assert_called_with('High temperature warning: chassis 1 Thermal 1 current temperature 3C, high threshold 2C')
+        thermal_list[0].make_normal_temper()
+        temperature_updater.update()
+        assert temperature_updater.log_notice.call_count == 1
+        temperature_updater.log_notice.assert_called_with('High temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, high threshold 3C')
 
-    thermal_list[0].make_normal_temper()
-    temperature_updater.update()
-    assert temperature_updater.log_notice.call_count == 1
-    temperature_updater.log_notice.assert_called_with('High temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, high threshold 3C')
+    def test_under_temper(self):
+        chassis = MockChassis()
+        chassis.make_under_temper_thermal()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater.update()
+        thermal_list = chassis.get_all_thermals()
+        assert temperature_updater.log_warning.call_count == 1
+        temperature_updater.log_warning.assert_called_with('Low temperature warning: chassis 1 Thermal 1 current temperature 1C, low threshold 2C')
 
+        thermal_list[0].make_normal_temper()
+        temperature_updater.update()
+        assert temperature_updater.log_notice.call_count == 1
+        temperature_updater.log_notice.assert_called_with('Low temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, low threshold 1C')
 
-def test_temperupdater_under_temper():
-    chassis = MockChassis()
-    chassis.make_under_temper_thermal()
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
-    temperature_updater.update()
-    thermal_list = chassis.get_all_thermals()
-    assert temperature_updater.log_warning.call_count == 1
-    temperature_updater.log_warning.assert_called_with('Low temperature warning: chassis 1 Thermal 1 current temperature 1C, low threshold 2C')
+    def test_update_psu_thermals(self):
+        chassis = MockChassis()
+        psu = MockPsu()
+        mock_thermal = MockThermal()
+        psu._thermal_list.append(mock_thermal)
+        chassis._psu_list.append(psu)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 0
 
-    thermal_list[0].make_normal_temper()
-    temperature_updater.update()
-    assert temperature_updater.log_notice.call_count == 1
-    temperature_updater.log_notice.assert_called_with('Low temperature warning cleared: chassis 1 Thermal 1 temperature restored to 2C, low threshold 1C')
+        temperature_updater._refresh_temperature_status = mock.MagicMock(side_effect=Exception("Test message"))
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 1
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Exception('Test message')")
+        else:
+            temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Exception('Test message',)")  # Python 2 adds a trailing comma
 
+    def test_update_thermal_with_exception(self):
+        chassis = MockChassis()
+        chassis.make_error_thermal()
+        thermal = MockThermal()
+        thermal.make_over_temper()
+        chassis.get_all_thermals().append(thermal)
 
-def test_update_fan_with_exception():
-    chassis = MockChassis()
-    chassis.make_error_fan()
-    fan = MockFan()
-    fan.make_over_speed()
-    chassis.get_all_fans().append(fan)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 2
 
-    fan_updater = thermalctld.FanUpdater(chassis)
-    fan_updater.update()
-    assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
-    assert fan_updater.log_warning.call_count == 1
-
-    # TODO: Clean this up once we no longer need to support Python 2
-    if sys.version_info.major == 3:
-        fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed')")
-    else:
-        fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
-
-
-def test_update_thermal_with_exception():
-    chassis = MockChassis()
-    chassis.make_error_thermal()
-    thermal = MockThermal()
-    thermal.make_over_temper()
-    chassis.get_all_thermals().append(thermal)
-
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
-    temperature_updater.update()
-    assert temperature_updater.log_warning.call_count == 2
-
-    # TODO: Clean this up once we no longer need to support Python 2
-    if sys.version_info.major == 3:
-        expected_calls = [
-            mock.call("Failed to update thermal status - Exception('Failed to get temperature')"),
-            mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
-        ]
-    else:
-        expected_calls = [
-            mock.call("Failed to update thermal status - Exception('Failed to get temperature',)"),  # Python 2 adds a trailing comma
-            mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
-        ]
-    assert temperature_updater.log_warning.mock_calls == expected_calls
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            expected_calls = [
+                mock.call("Failed to update thermal status - Exception('Failed to get temperature')"),
+                mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
+            ]
+        else:
+            expected_calls = [
+                mock.call("Failed to update thermal status - Exception('Failed to get temperature',)"),  # Python 2 adds a trailing comma
+                mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
+            ]
+        assert temperature_updater.log_warning.mock_calls == expected_calls
 
 
 # Modular chassis-related tests
@@ -528,7 +547,6 @@ def test_updater_thermal_check_min_max():
 
 
 def test_signal_handler():
-
     # Test SIGHUP
     daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
