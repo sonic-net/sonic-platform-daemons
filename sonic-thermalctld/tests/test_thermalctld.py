@@ -11,7 +11,7 @@ else:
 import pytest
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockThermal
+from .mock_platform import MockChassis, MockFan, MockPsu, MockThermal
 
 daemon_base.db_connect = mock.MagicMock()
 
@@ -187,14 +187,14 @@ class TestFanUpdater(object):
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
-        fan_updater.log_warning.assert_called_with('Fan removed warning: FanDrawer 0 FAN 1 was removed from the system, potential overheat hazard')
+        fan_updater.log_warning.assert_called_with('Fan removed warning: FanDrawer 0 fan 1 was removed from the system, potential overheat hazard')
 
         fan_list[0].set_presence(True)
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 2
         expected_calls = [
-            mock.call('Fan removed warning cleared: FanDrawer 0 FAN 1 was inserted'),
+            mock.call('Fan removed warning cleared: FanDrawer 0 fan 1 was inserted'),
             mock.call('Insufficient number of working fans warning cleared: all fans are back to normal')
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
@@ -208,7 +208,7 @@ class TestFanUpdater(object):
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 2
         expected_calls = [
-            mock.call('Fan fault warning: FanDrawer 0 FAN 1 is broken'),
+            mock.call('Fan fault warning: FanDrawer 0 fan 1 is broken'),
             mock.call('Insufficient number of working fans warning: 1 fan is not working')
         ]
         assert fan_updater.log_warning.mock_calls == expected_calls
@@ -218,7 +218,7 @@ class TestFanUpdater(object):
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 2
         expected_calls = [
-            mock.call('Fan fault warning cleared: FanDrawer 0 FAN 1 is back to normal'),
+            mock.call('Fan fault warning cleared: FanDrawer 0 fan 1 is back to normal'),
             mock.call('Insufficient number of working fans warning cleared: all fans are back to normal')
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
@@ -231,13 +231,13 @@ class TestFanUpdater(object):
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
-        fan_updater.log_warning.assert_called_with('Fan low speed warning: FanDrawer 0 FAN 1 current speed=1, target speed=2, tolerance=0')
+        fan_updater.log_warning.assert_called_with('Fan low speed warning: FanDrawer 0 fan 1 current speed=1, target speed=2, tolerance=0')
 
         fan_list[0].make_normal_speed()
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
-        fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 FAN 1 speed is back to normal')
+        fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 fan 1 speed is back to normal')
 
     def test_fan_over_speed(self):
         chassis = MockChassis()
@@ -252,6 +252,25 @@ class TestFanUpdater(object):
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
+
+    def test_psu_fans(self):
+        chassis = MockChassis()
+        psu = MockPsu()
+        mock_fan = MockFan()
+        psu._fan_list.append(mock_fan)
+        chassis._psu_list.append(psu)
+        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 0
+
+        fan_updater._refresh_fan_status = mock.MagicMock(side_effect=Exception("Test message"))
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 1
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message')")
+        else:
+            fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message',)")  # Python 2 adds a trailing comma
 
 
 class TestThermalMonitor(object):
@@ -291,8 +310,8 @@ def test_insufficient_fan_number():
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3
     expected_calls = [
-        mock.call('Fan removed warning: FanDrawer 0 FAN 1 was removed from the system, potential overheat hazard'),
-        mock.call('Fan fault warning: FanDrawer 1 FAN 1 is broken'),
+        mock.call('Fan removed warning: FanDrawer 0 fan 1 was removed from the system, potential overheat hazard'),
+        mock.call('Fan fault warning: FanDrawer 1 fan 1 is broken'),
         mock.call('Insufficient number of working fans warning: 2 fans are not working')
     ]
     assert fan_updater.log_warning.mock_calls == expected_calls
@@ -307,8 +326,8 @@ def test_insufficient_fan_number():
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 3
     expected_calls = [
-            mock.call('Fan removed warning cleared: FanDrawer 0 FAN 1 was inserted'),
-            mock.call('Fan fault warning cleared: FanDrawer 1 FAN 1 is back to normal'),
+            mock.call('Fan removed warning cleared: FanDrawer 0 fan 1 was inserted'),
+            mock.call('Fan fault warning cleared: FanDrawer 1 fan 1 is back to normal'),
         mock.call('Insufficient number of working fans warning cleared: all fans are back to normal')
     ]
     assert fan_updater.log_notice.mock_calls == expected_calls
@@ -421,9 +440,9 @@ def test_update_fan_with_exception():
 
     # TODO: Clean this up once we no longer need to support Python 2
     if sys.version_info.major == 3:
-        fan_updater.log_warning.assert_called_with("Failed to update FAN status - Exception('Failed to get speed')")
+        fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed')")
     else:
-        fan_updater.log_warning.assert_called_with("Failed to update FAN status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
+        fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
 
 
 def test_update_thermal_with_exception():
