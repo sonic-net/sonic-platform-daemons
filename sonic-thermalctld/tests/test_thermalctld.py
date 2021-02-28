@@ -180,11 +180,7 @@ class TestFanUpdater(object):
         assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
 
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed')")
-        else:
-            fan_updater.log_warning.assert_called_with("Failed to update fan status - Exception('Failed to get speed',)")  # Python 2 adds a trailing comma
+        fan_updater.log_warning.assert_called_with("Failed to update fan status - Failed to get speed")
 
     def test_set_fan_led_exception(self):
         fan_status = thermalctld.FanStatus()
@@ -284,11 +280,7 @@ class TestFanUpdater(object):
         fan_updater._refresh_fan_status = mock.MagicMock(side_effect=Exception("Test message"))
         fan_updater.update()
         assert fan_updater.log_warning.call_count == 1
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message')")
-        else:
-            fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message',)")  # Python 2 adds a trailing comma
+        fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Test message")
 
 
 class TestThermalMonitor(object):
@@ -458,11 +450,7 @@ class TestTemperatureUpdater(object):
         temperature_updater._refresh_temperature_status = mock.MagicMock(side_effect=Exception("Test message"))
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 1
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Exception('Test message')")
-        else:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Exception('Test message',)")  # Python 2 adds a trailing comma
+        temperature_updater.log_warning.assert_called_with("Failed to update thermal status - Test message")
 
     def test_update_thermal_with_exception(self):
         chassis = MockChassis()
@@ -475,17 +463,10 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 2
 
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            expected_calls = [
-                mock.call("Failed to update thermal status - Exception('Failed to get temperature')"),
-                mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
-            ]
-        else:
-            expected_calls = [
-                mock.call("Failed to update thermal status - Exception('Failed to get temperature',)"),  # Python 2 adds a trailing comma
-                mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
-            ]
+        expected_calls = [
+            mock.call("Failed to update thermal status - Failed to get temperature"),
+            mock.call('High temperature warning: chassis 1 Thermal 2 current temperature 3C, high threshold 2C')
+        ]
         assert temperature_updater.log_warning.mock_calls == expected_calls
 
 
