@@ -1105,8 +1105,7 @@ class YCableTableUpdateTask(object):
                     mux_port_dict = dict(fvs)
                     old_status = mux_port_dict.get("state")
                     read_side = mux_port_dict.get("read_side")
-                    prev_active_side = mux_port_dict.get("active_side")
-                    # Now if the old_status does not match new_status toggle the mux appropriately
+                    # Now whatever is the state requested, toggle the mux appropriately
                     active_side = update_tor_active_side(
                         read_side, new_status, port)
                     if active_side == -1:
