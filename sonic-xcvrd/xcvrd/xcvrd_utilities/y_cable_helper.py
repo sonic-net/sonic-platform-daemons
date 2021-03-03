@@ -1108,7 +1108,7 @@ class YCableTableUpdateTask(object):
                     # Now whatever is the state requested, toggle the mux appropriately
                     active_side = update_tor_active_side(read_side, new_status, port)
                     if active_side == -1:
-                        helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port  {} state from {} to {}, writing unknown".format(
+                        helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(
                             port, old_status, new_status))
                         new_status = 'unknown'
 
@@ -1117,7 +1117,7 @@ class YCableTableUpdateTask(object):
                                                                read_side),
                                                               ('active_side', str(active_side))])
                     y_cable_tbl[asic_index].set(port, fvs_updated)
-                    helper_logger.log_info("Got a change event for toggle the mux-direction active side for port  {} state from {} to {}".format(
+                    helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
                         port, old_status, new_status))
                 else:
                     helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
