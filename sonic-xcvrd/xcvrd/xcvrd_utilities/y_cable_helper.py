@@ -1106,8 +1106,7 @@ class YCableTableUpdateTask(object):
                     old_status = mux_port_dict.get("state")
                     read_side = mux_port_dict.get("read_side")
                     # Now whatever is the state requested, toggle the mux appropriately
-                    active_side = update_tor_active_side(
-                        read_side, new_status, port)
+                    active_side = update_tor_active_side(read_side, new_status, port)
                     if active_side == -1:
                         helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port  {} state from {} to {}, writing unknown".format(
                             port, old_status, new_status))
