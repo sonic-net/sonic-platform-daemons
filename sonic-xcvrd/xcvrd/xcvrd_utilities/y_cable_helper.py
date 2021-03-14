@@ -537,32 +537,44 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
 
-def get_firmware_dict(physical_port, target, side, mux_info_dict):
+def get_firmware_dict(physical_port, target, side, mux_info_dict, read_side):
 
     result = y_cable.get_firmware_version(physical_port, target)
 
     if result is not None and isinstance(result, dict):
-        mux_info_dict[("build_slot1_{}".format(side))] = result.get("build_slot1", None)
-        mux_info_dict[("version_slot1_{}".format(side))] = result.get("version_slot1", None)
-        mux_info_dict[("build_slot2_{}".format(side))] = result.get("build_slot2", None)
-        mux_info_dict[("version_slot2_{}".format(side))] = result.get("version_slot2", None)
-        mux_info_dict[("run_slot1_{}".format(side))] = result.get("run_slot1", None)
-        mux_info_dict[("run_slot2_{}".format(side))] = result.get("run_slot2", None)
-        mux_info_dict[("commit_slot1_{}".format(side))] = result.get("commit_slot1", None)
-        mux_info_dict[("commit_slot2_{}".format(side))] = result.get("commit_slot2", None)
-        mux_info_dict[("empty_slot1_{}".format(side))] = result.get("empty_slot1", None)
-        mux_info_dict[("empty_slot2_{}".format(side))] = result.get("empty_slot2", None)
+        if read_side == 1:
+            mux_info_dict[("build_slot_self_{}".format(side))] = result.get("build_slot1", None)
+            mux_info_dict[("version_slot_self_{}".format(side))] = result.get("version_slot1", None)
+            mux_info_dict[("build_slot_peer_{}".format(side))] = result.get("build_slot2", None)
+            mux_info_dict[("version_slot_peer_{}".format(side))] = result.get("version_slot2", None)
+            mux_info_dict[("run_slot_self_{}".format(side))] = result.get("run_slot1", None)
+            mux_info_dict[("run_slot_peer_{}".format(side))] = result.get("run_slot2", None)
+            mux_info_dict[("commit_slot_self_{}".format(side))] = result.get("commit_slot1", None)
+            mux_info_dict[("commit_slot_peer_{}".format(side))] = result.get("commit_slot2", None)
+            mux_info_dict[("empty_slot_self_{}".format(side))] = result.get("empty_slot1", None)
+            mux_info_dict[("empty_slot_peer_{}".format(side))] = result.get("empty_slot2", None)
+        else:
+            mux_info_dict[("build_slot_peer_{}".format(side))] = result.get("build_slot1", None)
+            mux_info_dict[("version_slot_peer_{}".format(side))] = result.get("version_slot1", None)
+            mux_info_dict[("build_slot_self_{}".format(side))] = result.get("build_slot2", None)
+            mux_info_dict[("version_slot_self_{}".format(side))] = result.get("version_slot2", None)
+            mux_info_dict[("run_slot_peer_{}".format(side))] = result.get("run_slot1", None)
+            mux_info_dict[("run_slot_self_{}".format(side))] = result.get("run_slot2", None)
+            mux_info_dict[("commit_slot_peer_{}".format(side))] = result.get("commit_slot1", None)
+            mux_info_dict[("commit_slot_self_{}".format(side))] = result.get("commit_slot2", None)
+            mux_info_dict[("empty_slot_peer_{}".format(side))] = result.get("empty_slot1", None)
+            mux_info_dict[("empty_slot_self_{}".format(side))] = result.get("empty_slot2", None)
     else:
-        mux_info_dict[("build_slot1_{}".format(side))] = "N/A"
-        mux_info_dict[("version_slot1_{}".format(side))] = "N/A"
-        mux_info_dict[("build_slot2_{}".format(side))] = "N/A"
-        mux_info_dict[("version_slot2_{}".format(side))] = "N/A"
-        mux_info_dict[("run_slot1_{}".format(side))] = "N/A"
-        mux_info_dict[("run_slot2_{}".format(side))] = "N/A"
-        mux_info_dict[("commit_slot1_{}".format(side))] = "N/A"
-        mux_info_dict[("commit_slot2_{}".format(side))] = "N/A"
-        mux_info_dict[("empty_slot1_{}".format(side))] = "N/A"
-        mux_info_dict[("empty_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("build_slot_self_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot_self_{}".format(side))] = "N/A"
+        mux_info_dict[("build_slotpeer_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot_peer_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot_self_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot_peer_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot_self_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot_peer_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot_self_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot_peer_{}".format(side))] = "N/A"
 
 
 def get_muxcable_info(physical_port, logical_port_name):
@@ -713,9 +725,9 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["link_status_nic"] = "down"
 
-    get_firmware_dict(physical_port, 0, "nic", mux_info_dict)
-    get_firmware_dict(physical_port, 1, "tor1", mux_info_dict)
-    get_firmware_dict(physical_port, 2, "tor2", mux_info_dict)
+    get_firmware_dict(physical_port, 0, "nic", mux_info_dict, read_side)
+    get_firmware_dict(physical_port, 1, "tor1", mux_info_dict, read_side)
+    get_firmware_dict(physical_port, 2, "tor2", mux_info_dict, read_side)
 
     res = y_cable.get_internal_voltage_temp(physical_port)
 
