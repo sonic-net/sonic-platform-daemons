@@ -537,44 +537,32 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
 
-def get_firmware_dict(physical_port, target, side, mux_info_dict, read_side):
+def get_firmware_dict(physical_port, target, side, mux_info_dict):
 
     result = y_cable.get_firmware_version(physical_port, target)
 
     if result is not None and isinstance(result, dict):
-        if read_side == 1:
-            mux_info_dict[("build_slot_self_{}".format(side))] = result.get("build_slot1", None)
-            mux_info_dict[("version_slot_self_{}".format(side))] = result.get("version_slot1", None)
-            mux_info_dict[("build_slot_peer_{}".format(side))] = result.get("build_slot2", None)
-            mux_info_dict[("version_slot_peer_{}".format(side))] = result.get("version_slot2", None)
-            mux_info_dict[("run_slot_self_{}".format(side))] = result.get("run_slot1", None)
-            mux_info_dict[("run_slot_peer_{}".format(side))] = result.get("run_slot2", None)
-            mux_info_dict[("commit_slot_self_{}".format(side))] = result.get("commit_slot1", None)
-            mux_info_dict[("commit_slot_peer_{}".format(side))] = result.get("commit_slot2", None)
-            mux_info_dict[("empty_slot_self_{}".format(side))] = result.get("empty_slot1", None)
-            mux_info_dict[("empty_slot_peer_{}".format(side))] = result.get("empty_slot2", None)
-        else:
-            mux_info_dict[("build_slot_peer_{}".format(side))] = result.get("build_slot1", None)
-            mux_info_dict[("version_slot_peer_{}".format(side))] = result.get("version_slot1", None)
-            mux_info_dict[("build_slot_self_{}".format(side))] = result.get("build_slot2", None)
-            mux_info_dict[("version_slot_self_{}".format(side))] = result.get("version_slot2", None)
-            mux_info_dict[("run_slot_peer_{}".format(side))] = result.get("run_slot1", None)
-            mux_info_dict[("run_slot_self_{}".format(side))] = result.get("run_slot2", None)
-            mux_info_dict[("commit_slot_peer_{}".format(side))] = result.get("commit_slot1", None)
-            mux_info_dict[("commit_slot_self_{}".format(side))] = result.get("commit_slot2", None)
-            mux_info_dict[("empty_slot_peer_{}".format(side))] = result.get("empty_slot1", None)
-            mux_info_dict[("empty_slot_self_{}".format(side))] = result.get("empty_slot2", None)
+        mux_info_dict[("build_slot1_{}".format(side))] = result.get("build_slot1", None)
+        mux_info_dict[("version_slot1_{}".format(side))] = result.get("version_slot1", None)
+        mux_info_dict[("build_slot2_{}".format(side))] = result.get("build_slot2", None)
+        mux_info_dict[("version_slot2_{}".format(side))] = result.get("version_slot2", None)
+        mux_info_dict[("run_slot1_{}".format(side))] = result.get("run_slot1", None)
+        mux_info_dict[("run_slot2_{}".format(side))] = result.get("run_slot2", None)
+        mux_info_dict[("commit_slot1_{}".format(side))] = result.get("commit_slot1", None)
+        mux_info_dict[("commit_slot2_{}".format(side))] = result.get("commit_slot2", None)
+        mux_info_dict[("empty_slot1_{}".format(side))] = result.get("empty_slot1", None)
+        mux_info_dict[("empty_slot2_{}".format(side))] = result.get("empty_slot2", None)
     else:
-        mux_info_dict[("build_slot_self_{}".format(side))] = "N/A"
-        mux_info_dict[("version_slot_self_{}".format(side))] = "N/A"
-        mux_info_dict[("build_slotpeer_{}".format(side))] = "N/A"
-        mux_info_dict[("version_slot_peer_{}".format(side))] = "N/A"
-        mux_info_dict[("run_slot_self_{}".format(side))] = "N/A"
-        mux_info_dict[("run_slot_peer_{}".format(side))] = "N/A"
-        mux_info_dict[("commit_slot_self_{}".format(side))] = "N/A"
-        mux_info_dict[("commit_slot_peer_{}".format(side))] = "N/A"
-        mux_info_dict[("empty_slot_self_{}".format(side))] = "N/A"
-        mux_info_dict[("empty_slot_peer_{}".format(side))] = "N/A"
+        mux_info_dict[("build_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("build_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("version_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("run_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("commit_slot2_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot1_{}".format(side))] = "N/A"
+        mux_info_dict[("empty_slot2_{}".format(side))] = "N/A"
 
 
 def get_muxcable_info(physical_port, logical_port_name):
@@ -725,9 +713,13 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["link_status_nic"] = "down"
 
-    get_firmware_dict(physical_port, 0, "nic", mux_info_dict, read_side)
-    get_firmware_dict(physical_port, 1, "tor1", mux_info_dict, read_side)
-    get_firmware_dict(physical_port, 2, "tor2", mux_info_dict, read_side)
+    get_firmware_dict(physical_port, 0, "nic", mux_info_dict)
+    if read_side == 1:
+        get_firmware_dict(physical_port, 1, "tor_self", mux_info_dict)
+        get_firmware_dict(physical_port, 2, "tor_peer", mux_info_dict)
+    else:
+        get_firmware_dict(physical_port, 1, "tor_peer", mux_info_dict)
+        get_firmware_dict(physical_port, 2, "tor_self", mux_info_dict)
 
     res = y_cable.get_internal_voltage_temp(physical_port)
 
@@ -897,26 +889,26 @@ def post_port_mux_info_to_db(logical_port_name, table):
                  ('commit_slot2_nic', str(mux_info_dict["commit_slot2_nic"])),
                  ('empty_slot1_nic', str(mux_info_dict["empty_slot1_nic"])),
                  ('empty_slot2_nic', str(mux_info_dict["empty_slot2_nic"])),
-                 ('build_slot1_tor1', str(mux_info_dict["build_slot1_tor1"])),
-                 ('build_slot2_tor1', str(mux_info_dict["build_slot2_tor1"])),
-                 ('version_slot1_tor1', str(mux_info_dict["version_slot1_tor1"])),
-                 ('version_slot2_tor1', str(mux_info_dict["version_slot2_tor1"])),
-                 ('run_slot1_tor1', str(mux_info_dict["run_slot1_tor1"])),
-                 ('run_slot2_tor1', str(mux_info_dict["run_slot2_tor1"])),
-                 ('commit_slot1_tor1', str(mux_info_dict["commit_slot1_tor1"])),
-                 ('commit_slot2_tor1', str(mux_info_dict["commit_slot2_tor1"])),
-                 ('empty_slot1_tor1', str(mux_info_dict["empty_slot1_tor1"])),
-                 ('empty_slot2_tor1', str(mux_info_dict["empty_slot2_tor1"])),
-                 ('build_slot1_tor2', str(mux_info_dict["build_slot1_tor2"])),
-                 ('build_slot2_tor2', str(mux_info_dict["build_slot2_tor2"])),
-                 ('version_slot1_tor2', str(mux_info_dict["version_slot1_tor2"])),
-                 ('version_slot2_tor2', str(mux_info_dict["version_slot2_tor2"])),
-                 ('run_slot1_tor2', str(mux_info_dict["run_slot1_tor2"])),
-                 ('run_slot2_tor2', str(mux_info_dict["run_slot2_tor2"])),
-                 ('commit_slot1_tor2', str(mux_info_dict["commit_slot1_tor2"])),
-                 ('commit_slot2_tor2', str(mux_info_dict["commit_slot2_tor2"])),
-                 ('empty_slot1_tor2', str(mux_info_dict["empty_slot1_tor2"])),
-                 ('empty_slot2_tor2', str(mux_info_dict["empty_slot2_tor2"]))
+                 ('build_slot1_tor_self', str(mux_info_dict["build_slot1_tor_self"])),
+                 ('build_slot2_tor_self', str(mux_info_dict["build_slot2_tor_self"])),
+                 ('version_slot1_tor_self', str(mux_info_dict["version_slot1_tor_self"])),
+                 ('version_slot2_tor_self', str(mux_info_dict["version_slot2_tor_self"])),
+                 ('run_slot1_tor_self', str(mux_info_dict["run_slot1_tor_self"])),
+                 ('run_slot2_tor_self', str(mux_info_dict["run_slot2_tor_self"])),
+                 ('commit_slot1_tor_self', str(mux_info_dict["commit_slot1_tor_self"])),
+                 ('commit_slot2_tor_self', str(mux_info_dict["commit_slot2_tor_self"])),
+                 ('empty_slot1_tor_self', str(mux_info_dict["empty_slot1_tor_self"])),
+                 ('empty_slot2_tor_self', str(mux_info_dict["empty_slot2_tor_self"])),
+                 ('build_slot1_tor_peer', str(mux_info_dict["build_slot1_tor_peer"])),
+                 ('build_slot2_tor_peer', str(mux_info_dict["build_slot2_tor_peer"])),
+                 ('version_slot1_tor_peer', str(mux_info_dict["version_slot1_tor_peer"])),
+                 ('version_slot2_tor_peer', str(mux_info_dict["version_slot2_tor_peer"])),
+                 ('run_slot1_tor_peer', str(mux_info_dict["run_slot1_tor_peer"])),
+                 ('run_slot2_tori_peer', str(mux_info_dict["run_slot2_tor_peer"])),
+                 ('commit_slot1_tor_peer', str(mux_info_dict["commit_slot1_tor_peer"])),
+                 ('commit_slot2_tor_peer', str(mux_info_dict["commit_slot2_tor_peer"])),
+                 ('empty_slot1_tor_peer', str(mux_info_dict["empty_slot1_tor_peer"])),
+                 ('empty_slot2_tor_peer', str(mux_info_dict["empty_slot2_tor_peer"]))
                  ])
             table.set(logical_port_name, fvs)
         else:
