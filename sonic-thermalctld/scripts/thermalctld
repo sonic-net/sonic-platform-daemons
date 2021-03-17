@@ -640,6 +640,36 @@ class TemperatureUpdater(logger.Logger):
                                         )
         warning = warning | temperature_status.under_temperature
 
+        THRESH_NAME_LIST = ['high_threshold', 'low_threshold', 'critical_high_threshold', 'critical_low_threshold']
+        THRESH_COMP_VAL_LIST = [high_threshold, low_threshold, high_critical_threshold, low_critical_threshold]
+        THRESH_FUNC_LIST = [thermal.set_high_threshold, thermal.set_low_threshold, thermal.set_high_critical_threshold, thermal.set_low_critical_threshold]
+
+        ovalues = self.table.get(name)
+
+        for first, second in ovalues[1]:
+            if second == NOT_AVAILABLE:
+                continue
+
+            th_type = 0
+            if first in THRESH_NAME_LIST:
+                th_type = THRESH_NAME_LIST.index(first)
+            else:
+                continue
+
+            if second != str(THRESH_COMP_VAL_LIST[th_type]):
+                try:
+                    if THRESH_FUNC_LIST[th_type](float(second)) is True:
+                        self.log_info(f'Changed {THRESH_NAME_LIST[th_type]} of {name} from {str(THRESH_COMP_VAL_LIST[th_type])} to {second}')
+                    else:
+                        self.log_error(f'Cannot change {THRESH_NAME_LIST[th_type]} of {name}')
+                except NotImplementedError:
+                    self.log_error(f'Cannot change {THRESH_NAME_LIST[th_type]}, function not implemented')
+
+        high_threshold = try_get(thermal.get_high_threshold)
+        low_threshold = try_get(thermal.get_low_threshold)
+        high_critical_threshold = try_get(thermal.get_high_critical_threshold)
+        low_critical_threshold = try_get(thermal.get_low_critical_threshold)
+
         fvs = swsscommon.FieldValuePairs(
             [('temperature', str(temperature)),
              ('minimum_temperature', str(minimum_temperature)),
