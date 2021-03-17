@@ -123,7 +123,7 @@ class TestDaemonPsud(object):
 
         # Test with mocked platform_chassis
         psud.platform_chassis = MockChassis()
-        psud.platform_chassis.psu_list = [mock_psu1, mock_psu2]
+        psud.platform_chassis._psu_list = [mock_psu1, mock_psu2]
         daemon_psud.update_psu_data()
         assert daemon_psud._update_single_psu_data.call_count == 2
         expected_calls = [mock.call(1, mock_psu1), mock.call(2, mock_psu2)]
@@ -150,7 +150,7 @@ class TestDaemonPsud(object):
 
         psu1 = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678')
         psud.platform_chassis = MockChassis()
-        psud.platform_chassis.psu_list.append(psu1)
+        psud.platform_chassis._psu_list.append(psu1)
 
         expected_fvp = psud.swsscommon.FieldValuePairs(
             [(psud.PSU_INFO_MODEL_FIELD, 'Fake Model'),
@@ -343,13 +343,13 @@ class TestDaemonPsud(object):
         assert daemon_psud._update_single_psu_entity_info.call_count == 0
 
         psud.platform_chassis = MockChassis()
-        psud.platform_chassis.psu_list = [mock_psu1]
+        psud.platform_chassis._psu_list = [mock_psu1]
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 1
         daemon_psud._update_single_psu_entity_info.assert_called_with(1, mock_psu1)
 
         daemon_psud._update_single_psu_entity_info.reset_mock()
-        psud.platform_chassis.psu_list = [mock_psu1, mock_psu2]
+        psud.platform_chassis._psu_list = [mock_psu1, mock_psu2]
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 2
         expected_calls = [mock.call(1, mock_psu1), mock.call(2, mock_psu2)]
@@ -359,7 +359,7 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_entity_info.reset_mock()
         daemon_psud._update_single_psu_entity_info.side_effect = Exception("Test message")
         daemon_psud.log_warning = mock.MagicMock()
-        psud.platform_chassis.psu_list = [mock_psu1]
+        psud.platform_chassis._psu_list = [mock_psu1]
         daemon_psud._update_psu_entity_info()
         assert daemon_psud._update_single_psu_entity_info.call_count == 1
         daemon_psud._update_single_psu_entity_info.assert_called_with(1, mock_psu1)
@@ -392,7 +392,7 @@ class TestDaemonPsud(object):
         mock_logger = mock.MagicMock()
 
         psud.platform_chassis = MockChassis()
-        psud.platform_chassis.psu_list = [mock_psu1]
+        psud.platform_chassis._psu_list = [mock_psu1]
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud.fan_tbl = mock.MagicMock()

@@ -235,7 +235,7 @@ class MockModule(module_base.ModuleBase):
         self._max_consumed_power = consumed_power
 
     def get_maximum_consumed_power(self):
-        return self.max_consumed_power
+        return self._max_consumed_power
 
     # Methods inherited from DeviceBase class and related setters
     def get_name(self):
@@ -301,43 +301,43 @@ class MockPsu(psu_base.PsuBase):
         self._status_led_color = self.STATUS_LED_COLOR_OFF
 
     def get_voltage(self):
-        return self.voltage
+        return self._voltage
 
     def set_voltage(self, voltage):
         self._voltage = voltage
 
     def get_current(self):
-        return self.current
+        return self._current
 
     def set_current(self, current):
         self._current = current
 
     def get_power(self):
-        return self.power
+        return self._power
 
     def set_power(self, power):
         self._power = power
 
     def get_powergood_status(self):
-        return self.status
+        return self._status
 
     def get_temperature(self):
-        return self.temp
+        return self._temp
 
     def set_temperature(self, power):
         self._temp = temp
 
     def get_temperature_high_threshold(self):
-        return self.temp_high_th
+        return self._temp_high_th
 
     def get_voltage_high_threshold(self):
-        return self.voltage_high_th
+        return self._voltage_high_th
 
     def get_voltage_low_threshold(self):
-        return self.voltage_low_th
+        return self._voltage_low_th
 
     def get_maximum_supplied_power(self):
-        return self.max_supplied_power
+        return self._max_supplied_power
 
     def set_maximum_supplied_power(self, supplied_power):
         self._max_supplied_power = supplied_power
@@ -351,7 +351,7 @@ class MockPsu(psu_base.PsuBase):
 
     # Methods inherited from DeviceBase class and related setters
     def get_name(self):
-        return self.name
+        return self._name
 
     def get_presence(self):
         return self._presence
