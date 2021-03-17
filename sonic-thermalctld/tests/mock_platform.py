@@ -148,7 +148,7 @@ class MockThermal(MockDevice):
     def get_low_critical_threshold(self):
         return self.low_critical_threshold
 
-   def set_high_threshold(self, value):
+    def set_high_threshold(self, value):
         self.high_threshold = value
         return True
 
