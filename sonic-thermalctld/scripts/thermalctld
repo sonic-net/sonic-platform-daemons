@@ -659,11 +659,11 @@ class TemperatureUpdater(logger.Logger):
             if second != str(THRESH_COMP_VAL_LIST[th_type]):
                 try:
                     if THRESH_FUNC_LIST[th_type](float(second)) is True:
-                        self.log_info(f'Changed {THRESH_NAME_LIST[th_type]} of {name} from {str(THRESH_COMP_VAL_LIST[th_type])} to {second}')
+                        self.log_info('Changed {} of {} from {} to {}'.format(THRESH_NAME_LIST[th_type], name, str(THRESH_COMP_VAL_LIST[th_type]), second))
                     else:
-                        self.log_error(f'Cannot change {THRESH_NAME_LIST[th_type]} of {name}')
+                        self.log_error('Cannot change {} of {}'.format(THRESH_NAME_LIST[th_type], name))
                 except NotImplementedError:
-                    self.log_error(f'Cannot change {THRESH_NAME_LIST[th_type]}, function not implemented')
+                    self.log_error('Cannot change {}, function not implemented'.format(THRESH_NAME_LIST[th_type]))
 
         high_threshold = try_get(thermal.get_high_threshold)
         low_threshold = try_get(thermal.get_low_threshold)
