@@ -205,7 +205,7 @@ class TestPsuChassisInfo(object):
         chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
         chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
 
-        # Check if supplied_power < consumed_power
+        # Check case where supplied_power < consumed_power
         chassis_info.run_power_budget(chassis_tbl)
         chassis_info.update_master_status()
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
@@ -220,7 +220,7 @@ class TestPsuChassisInfo(object):
         psu2.set_maximum_supplied_power(psu2_power)
         chassis._psu_list.append(psu2)
 
-        # Check if supplied_power > consumed_power
+        # Check case where supplied_power > consumed_power
         chassis_info.run_power_budget(chassis_tbl)
         chassis_info.update_master_status()
         fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
