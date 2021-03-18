@@ -212,7 +212,11 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) < float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == False
-        assert psu1.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
+
+        # We cannot call get_status_master_led() on our mocked PSUs, because
+        # they are not instantiated from the same Psu class loaded in psud,
+        # so we must call it on the class there.
+        assert psud.Psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_RED
 
         # Add a PSU
         psu2 = MockPsu("PSU 2", 1, True, True)
@@ -227,8 +231,11 @@ class TestPsuChassisInfo(object):
 
         assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) > float(fvs[CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD])
         assert chassis_info.master_status_good == True
-        assert psu1.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
-        assert psu2.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
+
+        # We cannot call get_status_master_led() on our mocked PSUs, because
+        # they are not instantiated from the same Psu class loaded in psud,
+        # so we must call it on the class there.
+        assert psud.Psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
     def test_get_psu_key(self):
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
