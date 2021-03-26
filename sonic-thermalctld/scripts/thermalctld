@@ -506,6 +506,7 @@ class TemperatureStatus(logger.Logger):
 class TemperatureUpdater(logger.Logger):
     # Temperature information table name in database
     TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
+    THRESH_NAME_LIST = ['high_threshold', 'low_threshold', 'critical_high_threshold', 'critical_low_threshold']
 
     def __init__(self, log_identifier, chassis):
         """
@@ -517,7 +518,9 @@ class TemperatureUpdater(logger.Logger):
         self.chassis = chassis
         self.temperature_status_dict = {}
         state_db = daemon_base.db_connect("STATE_DB")
+        config_db = daemon_base.db_connect("CONFIG_DB")
         self.table = swsscommon.Table(state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
+        self.config_table = swsscommon.Table(config_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None
 
@@ -640,35 +643,33 @@ class TemperatureUpdater(logger.Logger):
                                         )
         warning = warning | temperature_status.under_temperature
 
-        THRESH_NAME_LIST = ['high_threshold', 'low_threshold', 'critical_high_threshold', 'critical_low_threshold']
+        # Update thresholds from CONFIG_DB
         THRESH_COMP_VAL_LIST = [high_threshold, low_threshold, high_critical_threshold, low_critical_threshold]
         THRESH_FUNC_LIST = [thermal.set_high_threshold, thermal.set_low_threshold, thermal.set_high_critical_threshold, thermal.set_low_critical_threshold]
 
-        ovalues = self.table.get(name)
+        ovalues = self.config_table.get(name)
 
         for first, second in ovalues[1]:
             if second == NOT_AVAILABLE:
                 continue
 
             th_type = 0
-            if first in THRESH_NAME_LIST:
-                th_type = THRESH_NAME_LIST.index(first)
+            if first in TemperatureUpdater.THRESH_NAME_LIST:
+                th_type = TemperatureUpdater.THRESH_NAME_LIST.index(first)
             else:
                 continue
 
             if second != str(THRESH_COMP_VAL_LIST[th_type]):
                 try:
                     if THRESH_FUNC_LIST[th_type](float(second)) is True:
-                        self.log_info('Changed {} of {} from {} to {}'.format(THRESH_NAME_LIST[th_type], name, str(THRESH_COMP_VAL_LIST[th_type]), second))
-                    else:
-                        self.log_error('Cannot change {} of {}'.format(THRESH_NAME_LIST[th_type], name))
-                except NotImplementedError:
-                    self.log_error('Cannot change {}, function not implemented'.format(THRESH_NAME_LIST[th_type]))
+                        self.log_info('Changed {} of {} from {} to {}'.format(TemperatureUpdater.THRESH_NAME_LIST[th_type], name, \
+                        str(THRESH_COMP_VAL_LIST[th_type]), second))
 
-        high_threshold = try_get(thermal.get_high_threshold)
-        low_threshold = try_get(thermal.get_low_threshold)
-        high_critical_threshold = try_get(thermal.get_high_critical_threshold)
-        low_critical_threshold = try_get(thermal.get_low_critical_threshold)
+                        THRESH_COMP_VAL_LIST[th_type] = float(second)
+                    else:
+                        self.log_error('Cannot change {} of {}'.format(TemperatureUpdater.THRESH_NAME_LIST[th_type], name))
+                except NotImplementedError:
+                    self.log_error('Cannot change {}, function not implemented'.format(TemperatureUpdater.THRESH_NAME_LIST[th_type]))
 
         fvs = swsscommon.FieldValuePairs(
             [('temperature', str(temperature)),
