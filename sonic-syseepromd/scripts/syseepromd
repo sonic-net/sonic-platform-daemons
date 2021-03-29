@@ -57,14 +57,13 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
             self.eeprom = sonic_platform.platform.Platform().get_chassis().get_eeprom()
         except Exception as e:
             self.log_warning(
-                "Failed to load platform-specific eeprom from sonic_platform package due to {}".format(repr(e)))
+                "Failed to load platform-specific eeprom from sonic_platform package due to {}. Trying deprecated plugin method ...".format(repr(e)))
 
-        # If we didn't successfully load the class from the sonic_platform package, try loading the old plugin
-        if not self.eeprom:
+            # If we didn't successfully load the class from the sonic_platform package, try loading the old plugin
             try:
                 self.eeprom = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
-                self.log_error("Failed to load platform-specific eeprom implementation: {}".format(repr(e)))
+                self.log_error("Failed to load platform-specific eeprom from deprecated plugin: {}".format(repr(e)))
 
         if not self.eeprom:
             sys.exit(ERR_EEPROM_LOAD)
