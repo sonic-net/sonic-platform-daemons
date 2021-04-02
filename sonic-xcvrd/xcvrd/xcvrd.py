@@ -643,7 +643,7 @@ def get_media_settings_key(physical_port, transceiver_dict):
     try:
         media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
     except ValueError as e:
-        helper_logger.log_warning("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
+        helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
     media_compliance_code = ''
     media_type = ''
