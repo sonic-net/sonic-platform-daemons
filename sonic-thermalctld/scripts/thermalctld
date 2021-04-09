@@ -29,7 +29,6 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT = -1
 
 ERR_UNKNOWN = 1
-ERR_INIT_FAILED = 2
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
