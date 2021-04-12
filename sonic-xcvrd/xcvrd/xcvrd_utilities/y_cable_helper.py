@@ -26,20 +26,13 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 SFP_STATUS_REMOVED = '0'
 SFP_STATUS_INSERTED = '1'
 
-# SFP error codes, stored as strings. Can add more as needed.
-SFP_STATUS_ERR_I2C_STUCK = '2'
-SFP_STATUS_ERR_BAD_EEPROM = '3'
-SFP_STATUS_ERR_UNSUPPORTED_CABLE = '4'
-SFP_STATUS_ERR_HIGH_TEMP = '5'
-SFP_STATUS_ERR_BAD_CABLE = '6'
-
-# Store the error codes in a set for convenience
-errors_block_eeprom_reading = {
-    SFP_STATUS_ERR_I2C_STUCK,
-    SFP_STATUS_ERR_BAD_EEPROM,
-    SFP_STATUS_ERR_UNSUPPORTED_CABLE,
-    SFP_STATUS_ERR_HIGH_TEMP,
-    SFP_STATUS_ERR_BAD_CABLE
+# SFP error code dictinary, new elements can be added if new errors need to be supported.
+SFP_STATUS_ERR_DICT = {
+    2: 'SFP_STATUS_ERR_I2C_STUCK',
+    4: 'SFP_STATUS_ERR_BAD_EEPROM',
+    8: 'SFP_STATUS_ERR_UNSUPPORTED_CABLE',
+    16: 'SFP_STATUS_ERR_HIGH_TEMP',
+    32: 'SFP_STATUS_ERR_BAD_CABLE'
 }
 
 Y_CABLE_STATUS_NO_TOR_ACTIVE = 0
@@ -439,7 +432,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                     helper_logger.log_info("Got SFP inserted event")
                     check_identifier_presence_and_update_mux_table_entry(
                         state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
-                elif value == SFP_STATUS_REMOVED or value in errors_block_eeprom_reading:
+                elif value == SFP_STATUS_REMOVED or is_error_sfp_status(value):
                     check_identifier_presence_and_delete_mux_table_entry(
                         state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
 
@@ -989,6 +982,13 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
             continue
         post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
+
+def is_error_sfp_status(status):
+    int_status = int(status)
+    for error_code in SFP_STATUS_ERR_DICT.keys():
+        if int_status & error_code:
+            return True
+    return False
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
