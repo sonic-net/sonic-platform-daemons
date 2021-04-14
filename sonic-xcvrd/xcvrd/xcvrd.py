@@ -783,7 +783,7 @@ def update_port_transceiver_status_table(logical_port_name, status_tbl, status, 
             if error_code & int_status:
                 error_list.append(error_msg)
         if error_list:
-            fvs = swsscommon.FieldValuePairs([('status', status), ('error', '|'.join(error_list))])
+            fvs = swsscommon.FieldValuePairs([('status', str(int_status & 1)), ('error', '|'.join(error_list))])
             status_tbl.set(logical_port_name, fvs)
         else:
             # SFP return unkown event, just ignore for now.
