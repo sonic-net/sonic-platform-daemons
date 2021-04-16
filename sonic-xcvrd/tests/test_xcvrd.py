@@ -242,36 +242,15 @@ class TestXcvrdScript(object):
                                                                        'internal_voltage': '3.3',
                                                                        'nic_temperature': '20',
                                                                        'nic_voltage': '2.7',
-                                                                       'build_slot1_nic': 'MS',
-                                                                       'build_slot2_nic': 'MS',
-                                                                       'version_slot1_nic': '1.7',
-                                                                       'version_slot2_nic': '1.7',
-                                                                       'run_slot1_nic': 'True',
-                                                                       'run_slot2_nic': 'False',
-                                                                       'commit_slot1_nic': 'True',
-                                                                       'commit_slot2_nic': 'False',
-                                                                       'empty_slot1_nic': 'True',
-                                                                       'empty_slot2_nic': 'False',
-                                                                       'build_slot1_tor1': 'MS',
-                                                                       'build_slot2_tor1': 'MS',
-                                                                       'version_slot1_tor1': '1.7',
-                                                                       'version_slot2_tor1': '1.7',
-                                                                       'run_slot1_tor1': 'True',
-                                                                       'run_slot2_tor1': 'False',
-                                                                       'commit_slot1_tor1': 'True',
-                                                                       'commit_slot2_tor1': 'False',
-                                                                       'empty_slot1_tor1': 'True',
-                                                                       'empty_slot2_tor1': 'False',
-                                                                       'build_slot1_tor2': 'MS',
-                                                                       'build_slot2_tor2': 'MS',
-                                                                       'version_slot1_tor2': '1.7',
-                                                                       'version_slot2_tor2': '1.7',
-                                                                       'run_slot1_tor2': 'True',
-                                                                       'run_slot2_tor2': 'False',
-                                                                       'commit_slot1_tor2': 'True',
-                                                                       'commit_slot2_tor2': 'False',
-                                                                       'empty_slot1_tor2': 'True',
-                                                                       'empty_slot2_tor2': 'False'}))
+                                                                       'version_nic_active': '1.6MS',
+                                                                       'version_nic_inactive': '1.7MS',
+                                                                       'version_nic_next': '1.7MS',
+                                                                       'version_self_active': '1.6MS',
+                                                                       'version_self_inactive': '1.7MS',
+                                                                       'version_self_next': '1.7MS',
+                                                                       'version_peer_active': '1.6MS',
+                                                                       'version_peer_inactive': '1.7MS',
+                                                                       'version_peer_next': '1.7MS'}))
     def test_post_port_mux_info_to_db(self):
         logical_port_name = "Ethernet0"
         mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_INFO_TABLE)
@@ -317,3 +296,25 @@ class TestXcvrdScript(object):
         mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
         rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
+
+    def test_get_media_settings_key(self):
+        xcvr_info_dict = {
+            0: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+
+        # Test a good 'specification_compliance' value
+        result = get_media_settings_key(0, xcvr_info_dict)
+        assert result == ['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M']
+
+        # Test a bad 'specification_compliance' value
+        xcvr_info_dict[0]['specification_compliance'] = 'N/A'
+        result = get_media_settings_key(0, xcvr_info_dict)
+        assert result == ['MOLEX-1064141421', 'QSFP+']
+        # TODO: Ensure that error message was logged

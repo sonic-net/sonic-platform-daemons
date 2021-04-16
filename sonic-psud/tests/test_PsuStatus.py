@@ -1,6 +1,6 @@
 import os
 import sys
-from imp import load_source
+from imp import load_source  # Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
@@ -10,13 +10,17 @@ else:
 
 from .mock_platform import MockPsu
 
-test_path = os.path.dirname(os.path.abspath(__file__))
-modules_path = os.path.dirname(test_path)
+tests_path = os.path.dirname(os.path.abspath(__file__))
+
+# Add mocked_libs path so that the file under test can load mocked modules from there
+mocked_libs_path = os.path.join(tests_path, "mocked_libs")
+sys.path.insert(0, mocked_libs_path)
+
+# Add path to the file under test so that we can load it
+modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-
-os.environ["PSUD_UNIT_TESTING"] = "1"
-load_source('psud', scripts_path + '/psud')
+load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
 
@@ -27,7 +31,7 @@ class TestPsuStatus(object):
 
     def test_set_presence(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.presence == False
@@ -49,7 +53,7 @@ class TestPsuStatus(object):
 
     def test_set_power_good(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.power_good == False
@@ -76,7 +80,7 @@ class TestPsuStatus(object):
 
     def test_set_voltage(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.voltage_good == False
@@ -117,33 +121,33 @@ class TestPsuStatus(object):
         assert psu_status.voltage_good == True
 
         # Test passing parameters as None when voltage_good == True
-        ret = psu_status.set_voltage(None, 12.5, 11.5)
+        ret = psu_status.set_voltage(psud.NOT_AVAILABLE, 12.5, 11.5)
         assert ret == False
         assert psu_status.voltage_good == True
-        ret = psu_status.set_voltage(11.5, None, 11.5)
+        ret = psu_status.set_voltage(11.5, psud.NOT_AVAILABLE, 11.5)
         assert ret == False
         assert psu_status.voltage_good == True
-        ret = psu_status.set_voltage(11.5, 12.5, None)
+        ret = psu_status.set_voltage(11.5, 12.5, psud.NOT_AVAILABLE)
         assert ret == False
         assert psu_status.voltage_good == True
 
         # Test passing parameters as None when voltage_good == False
         psu_status.voltage_good = False
-        ret = psu_status.set_voltage(None, 12.5, 11.5)
+        ret = psu_status.set_voltage(psud.NOT_AVAILABLE, 12.5, 11.5)
         assert ret == False
         assert psu_status.voltage_good == True
         psu_status.voltage_good = False
-        ret = psu_status.set_voltage(11.5, None, 11.5)
+        ret = psu_status.set_voltage(11.5, psud.NOT_AVAILABLE, 11.5)
         assert ret == False
         assert psu_status.voltage_good == True
         psu_status.voltage_good = False
-        ret = psu_status.set_voltage(11.5, 12.5, None)
+        ret = psu_status.set_voltage(11.5, 12.5, psud.NOT_AVAILABLE)
         assert ret == False
         assert psu_status.voltage_good == True
 
     def test_set_temperature(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         assert psu_status.temperature_good == False
@@ -174,26 +178,26 @@ class TestPsuStatus(object):
         assert psu_status.temperature_good == True
 
         # Test passing parameters as None when temperature_good == True
-        ret = psu_status.set_temperature(None, 50.0)
+        ret = psu_status.set_temperature(psud.NOT_AVAILABLE, 50.0)
         assert ret == False
         assert psu_status.temperature_good == True
-        ret = psu_status.set_temperature(20.123, None)
+        ret = psu_status.set_temperature(20.123, psud.NOT_AVAILABLE)
         assert ret == False
         assert psu_status.temperature_good == True
 
         # Test passing parameters as None when temperature_good == False
         psu_status.temperature_good = False
-        ret = psu_status.set_temperature(None, 50.0)
+        ret = psu_status.set_temperature(psud.NOT_AVAILABLE, 50.0)
         assert ret == False
         assert psu_status.temperature_good == True
         psu_status.temperature_good = False
-        ret = psu_status.set_temperature(20.123, None)
+        ret = psu_status.set_temperature(20.123, psud.NOT_AVAILABLE)
         assert ret == False
         assert psu_status.temperature_good == True
 
     def test_is_ok(self):
         mock_logger = mock.MagicMock()
-        mock_psu = MockPsu(True, True, "PSU 1", 0)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
 
         psu_status = psud.PsuStatus(mock_logger, mock_psu)
         psu_status.presence = True
