@@ -4,7 +4,6 @@
 """
 
 import threading
-import time
 
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
