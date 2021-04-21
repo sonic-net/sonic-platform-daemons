@@ -1032,11 +1032,6 @@ class YCableTableUpdateTask(object):
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
 
-            # A brief sleep appears necessary in this loop or any spawned
-            # update threads will get stuck. Appears to be due to the sel.select() call.
-            # TODO: Eliminate the need for this sleep.
-            time.sleep(0.1)
-
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
             if state == swsscommon.Select.TIMEOUT:
