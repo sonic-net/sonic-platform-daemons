@@ -282,9 +282,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
     else:
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
-        if "mux_cable" in mux_table_dict:
-            val = mux_table_dict.get("mux_cable", None)
-            if val == "true":
+        if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val == "active" or val == "auto":
 
                 y_cable_asic_table = y_cable_tbl.get(asic_index, None)
                 mux_asic_table = mux_tbl.get(asic_index, None)
@@ -373,7 +373,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable
@@ -414,7 +414,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
@@ -518,9 +518,9 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
     else:
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
-        if "mux_cable" in mux_table_dict:
-            val = mux_table_dict.get("mux_cable", None)
-            if val == "true":
+        if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val == "active" or val == "auto":
 
                 if mux_tbl.get(asic_index, None) is not None:
                     # fill in the newly found entry
