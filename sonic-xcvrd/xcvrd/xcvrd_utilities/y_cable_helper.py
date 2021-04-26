@@ -10,6 +10,7 @@ from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
 from sonic_y_cable import y_cable
 from swsscommon import swsscommon
+from . import sfp_status_helper
 
 
 SELECT_TIMEOUT = 1000
@@ -20,20 +21,6 @@ y_cable_platform_chassis = None
 SYSLOG_IDENTIFIER = "y_cable_helper"
 
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
-
-
-# SFP status definition, shall be aligned with the definition in get_change_event() of ChassisBase
-SFP_STATUS_REMOVED = '0'
-SFP_STATUS_INSERTED = '1'
-
-# SFP error code dictinary, new elements can be added if new errors need to be supported.
-SFP_STATUS_ERR_DICT = {
-    2: 'SFP_STATUS_ERR_I2C_STUCK',
-    4: 'SFP_STATUS_ERR_BAD_EEPROM',
-    8: 'SFP_STATUS_ERR_UNSUPPORTED_CABLE',
-    16: 'SFP_STATUS_ERR_HIGH_TEMP',
-    32: 'SFP_STATUS_ERR_BAD_CABLE'
-}
 
 Y_CABLE_STATUS_NO_TOR_ACTIVE = 0
 Y_CABLE_STATUS_TORA_ACTIVE = 1
@@ -428,11 +415,11 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                 continue
 
             if logical_port_name in port_table_keys[asic_index]:
-                if value == SFP_STATUS_INSERTED:
+                if value == sfp_status_helper.SFP_STATUS_INSERTED:
                     helper_logger.log_info("Got SFP inserted event")
                     check_identifier_presence_and_update_mux_table_entry(
                         state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
-                elif value == SFP_STATUS_REMOVED or is_error_sfp_status(value):
+                elif value == sfp_status_helper.SFP_STATUS_REMOVED or sfp_status_helper.is_error_block_eeprom_reading(value):
                     check_identifier_presence_and_delete_mux_table_entry(
                         state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
 
@@ -982,13 +969,6 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
             continue
         post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
-
-def is_error_sfp_status(status):
-    int_status = int(status)
-    for error_code in SFP_STATUS_ERR_DICT.keys():
-        if int_status & error_code:
-            return True
-    return False
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):

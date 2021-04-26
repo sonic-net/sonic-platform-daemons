@@ -24,13 +24,15 @@ sys.modules['sonic_y_cable.y_cable'] = MagicMock()
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "xcvrd")
-helper_file_path = os.path.join(scripts_path, "xcvrd_utilities"+"/y_cable_helper.py")
+#helper_file_path = os.path.join(scripts_path, "xcvrd_utilities"+"/y_cable_helper.py")
 sys.path.insert(0, modules_path)
 
 os.environ["XCVRD_UNIT_TESTING"] = "1"
-load_source('y_cable_helper', scripts_path + '/xcvrd_utilities/y_cable_helper.py')
-from y_cable_helper import *
+#load_source('y_cable_helper', scripts_path + '/xcvrd_utilities/y_cable_helper.py')
+#load_source('sfp_status_helper', scripts_path + '/xcvrd_utilities/sfp_status_helper.py')
+from xcvrd.xcvrd_utilities.y_cable_helper import *
 from xcvrd.xcvrd import *
+from xcvrd.xcvrd_utilities.sfp_status_helper import *
 
 
 class TestXcvrdScript(object):
@@ -219,9 +221,9 @@ class TestXcvrdScript(object):
         init_port_sfp_status_tbl(stop_event)
 
     @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
-    @patch('y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('y_cable_helper._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('y_cable_helper.get_muxcable_info', MagicMock(return_value={'tor_active': 'self',
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.get_muxcable_info', MagicMock(return_value={'tor_active': 'self',
                                                                        'mux_direction': 'self',
                                                                        'manual_switch_count': '7',
                                                                        'auto_switch_count': '71',
@@ -258,9 +260,9 @@ class TestXcvrdScript(object):
         assert(rc != -1)
 
     @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
-    @patch('y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('y_cable_helper._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('y_cable_helper.get_muxcable_static_info', MagicMock(return_value={'read_side': 'self',
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.get_muxcable_static_info', MagicMock(return_value={'read_side': 'self',
                                                                               'nic_lane1_precursor1': '1',
                                                                               'nic_lane1_precursor2': '-7',
                                                                               'nic_lane1_maincursor': '-1',
@@ -368,13 +370,13 @@ class TestXcvrdScript(object):
         status_tbl.get = MagicMock(return_value=(True, {'error': 'N/A'}))
         assert not detect_port_in_error_status(None, status_tbl)
 
-        status_tbl.get = MagicMock(return_value=(True, {'error': 'something'}))
+        status_tbl.get = MagicMock(return_value=(True, {'error': 'SFP_STATUS_ERR_I2C_STUCK'}))
         assert detect_port_in_error_status(None, status_tbl)
 
     def test_is_error_sfp_status(self):
         error_values = ['3', '5', '9', '17', '33']
         for error_value in error_values:
-            assert is_error_sfp_status(error_value)
+            assert is_error_block_eeprom_reading(error_value)
 
-        assert not is_error_sfp_status(SFP_STATUS_INSERTED)
-        assert not is_error_sfp_status(SFP_STATUS_REMOVED)
+        assert not is_error_block_eeprom_reading(SFP_STATUS_INSERTED)
+        assert not is_error_block_eeprom_reading(SFP_STATUS_REMOVED)
