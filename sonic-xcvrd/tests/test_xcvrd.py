@@ -311,10 +311,10 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = get_media_settings_key(0, xcvr_info_dict)
-        assert result == ['MOLEX-1064141421', 'QSFP+-*']
+        assert result == ['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M']
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = get_media_settings_key(0, xcvr_info_dict)
-        assert result == ['MOLEX-1064141421', 'QSFP+']
+        assert result == ['MOLEX-1064141421', 'QSFP+-*']
         # TODO: Ensure that error message was logged
