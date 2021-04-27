@@ -667,7 +667,7 @@ def get_media_settings_key(physical_port, transceiver_dict):
             if len(media_len) != 0:
                 media_key += '-' + media_len + 'M'
     else:
-        media_key += - + '*'
+        media_key += '-' + '*'
 
     return [vendor_key, media_key]
 
