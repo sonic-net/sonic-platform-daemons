@@ -659,8 +659,13 @@ def get_media_settings_key(physical_port, transceiver_dict):
         media_key += media_type
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
-        if len(media_len) != 0:
-            media_key += '-' + media_len + 'M'
+        if _wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+            if media_compliance_code == "passive_copper_media_interface":
+                if len(media_len) != 0:
+                    media_key += '-' + media_len + 'M'
+        else:
+            if len(media_len) != 0:
+                media_key += '-' + media_len + 'M'
     else:
         media_key += - + '*'
 
@@ -745,7 +750,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         media_dict = get_media_settings_value(physical_port, key)
 
         if(len(media_dict) == 0):
-            helper_logger.log_error("Error in obtaining media setting")
+            helper_logger.log_error("Error in obtaining media setting for",logical_port_name)
             return
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
