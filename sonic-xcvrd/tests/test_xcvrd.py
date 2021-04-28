@@ -24,12 +24,9 @@ sys.modules['sonic_y_cable.y_cable'] = MagicMock()
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "xcvrd")
-#helper_file_path = os.path.join(scripts_path, "xcvrd_utilities"+"/y_cable_helper.py")
 sys.path.insert(0, modules_path)
 
 os.environ["XCVRD_UNIT_TESTING"] = "1"
-#load_source('y_cable_helper', scripts_path + '/xcvrd_utilities/y_cable_helper.py')
-#load_source('sfp_status_helper', scripts_path + '/xcvrd_utilities/sfp_status_helper.py')
 from xcvrd.xcvrd_utilities.y_cable_helper import *
 from xcvrd.xcvrd import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
