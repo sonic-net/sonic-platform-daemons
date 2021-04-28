@@ -374,6 +374,12 @@ class MockChassis(chassis_base.ChassisBase):
         self._fan_list.append(fan)
         self._fan_drawer_list.append(fan_drawer)
 
+    def make_normal_fan(self):
+        fan = MockFan()
+        fan_drawer = MockFanDrawer(len(self._fan_drawer_list))
+        fan_drawer._fan_list.append(fan)
+        self._fan_drawer_list.append(fan_drawer)
+
     def make_over_temper_thermal(self):
         thermal = MockThermal()
         thermal.make_over_temper()
