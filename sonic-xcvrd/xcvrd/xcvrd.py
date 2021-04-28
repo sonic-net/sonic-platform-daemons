@@ -750,7 +750,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         media_dict = get_media_settings_value(physical_port, key)
 
         if(len(media_dict) == 0):
-            helper_logger.log_error("Error in obtaining media setting for",logical_port_name)
+            helper_logger.log_error("Error in obtaining media setting for", logical_port_name)
             return
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
