@@ -283,35 +283,37 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val in ["active", "auto"]:
 
-            y_cable_asic_table = y_cable_tbl.get(asic_index, None)
-            mux_asic_table = mux_tbl.get(asic_index, None)
-            static_mux_asic_table = static_tbl.get(asic_index, None)
-            if y_cable_presence[0] is True and y_cable_asic_table is not None and mux_asic_table is not None and static_mux_asic_table is not None:
-                # fill in the newly found entry
-                read_y_cable_and_update_statedb_port_tbl(
-                    logical_port_name, y_cable_tbl[asic_index])
-                post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
-                post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
+                y_cable_asic_table = y_cable_tbl.get(asic_index, None)
+                mux_asic_table = mux_tbl.get(asic_index, None)
+                static_mux_asic_table = static_tbl.get(asic_index, None)
+                if y_cable_presence[0] is True and y_cable_asic_table is not None and mux_asic_table is not None and static_mux_asic_table is not None:
+                    # fill in the newly found entry
+                    read_y_cable_and_update_statedb_port_tbl(
+                        logical_port_name, y_cable_tbl[asic_index])
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                    post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
 
-            else:
-                # first create the state db y cable table and then fill in the entry
-                y_cable_presence[:] = [True]
-                namespaces = multi_asic.get_front_end_namespaces()
-                for namespace in namespaces:
-                    asic_id = multi_asic.get_asic_index_from_namespace(
-                        namespace)
-                    state_db[asic_id] = daemon_base.db_connect(
-                        "STATE_DB", namespace)
-                    y_cable_tbl[asic_id] = swsscommon.Table(
-                        state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                    static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-                    mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
-                # fill the newly found entry
-                read_y_cable_and_update_statedb_port_tbl(
-                    logical_port_name, y_cable_tbl[asic_index])
-                post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
-                post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
+                else:
+                    # first create the state db y cable table and then fill in the entry
+                    y_cable_presence[:] = [True]
+                    namespaces = multi_asic.get_front_end_namespaces()
+                    for namespace in namespaces:
+                        asic_id = multi_asic.get_asic_index_from_namespace(
+                            namespace)
+                        state_db[asic_id] = daemon_base.db_connect(
+                            "STATE_DB", namespace)
+                        y_cable_tbl[asic_id] = swsscommon.Table(
+                            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+                        static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
+                    # fill the newly found entry
+                    read_y_cable_and_update_statedb_port_tbl(
+                        logical_port_name, y_cable_tbl[asic_index])
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                    post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
 
 
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
@@ -517,20 +519,22 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val in ["active", "auto"]:
 
-            if mux_tbl.get(asic_index, None) is not None:
-                # fill in the newly found entry
-                post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                if mux_tbl.get(asic_index, None) is not None:
+                    # fill in the newly found entry
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
-            else:
-                # first create the state db y cable table and then fill in the entry
-                namespaces = multi_asic.get_front_end_namespaces()
-                for namespace in namespaces:
-                    asic_id = multi_asic.get_asic_index_from_namespace(
-                        namespace)
-                    mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
-                # fill the newly found entry
-                post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                else:
+                    # first create the state db y cable table and then fill in the entry
+                    namespaces = multi_asic.get_front_end_namespaces()
+                    for namespace in namespaces:
+                        asic_id = multi_asic.get_asic_index_from_namespace(
+                            namespace)
+                        mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
+                    # fill the newly found entry
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
 
 def get_firmware_dict(physical_port, target, side, mux_info_dict):
