@@ -644,9 +644,6 @@ def test_signal_handler():
 
 def test_daemon_run():
     daemon_thermalctld = thermalctld.ThermalControlDaemon()
-    chassis = MockChassis()
-    chassis.make_normal_fan()
-    daemon_thermalctld.chassis = chassis
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=True)
     ret = daemon_thermalctld.run()
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
