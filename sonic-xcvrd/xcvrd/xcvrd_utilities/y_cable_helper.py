@@ -314,6 +314,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                         logical_port_name, y_cable_tbl[asic_index])
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
                     post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
+            else:
+                helper_logger.log_warning(
+                    "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
@@ -535,6 +538,9 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+            else:
+                helper_logger.log_warning(
+                    "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
 def get_firmware_dict(physical_port, target, side, mux_info_dict):
