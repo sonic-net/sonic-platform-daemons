@@ -62,6 +62,7 @@ jobs:
           artifact: sonic-buildimage.vs
           runVersion: 'latestFromBranch'
           runBranch: 'refs/heads/master'
+          patterns: 'target/@(debs|python-wheels)/**'
         displayName: "Download artifacts from latest sonic-buildimage build"
 
       - script: |
