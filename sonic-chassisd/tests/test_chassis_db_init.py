@@ -36,5 +36,3 @@ def test_provision_db():
     assert serial == fvs[CHASSIS_INFO_SERIAL_FIELD]
     assert model == fvs[CHASSIS_INFO_MODEL_FIELD]
     assert revision == fvs[CHASSIS_INFO_REV_FIELD]
-
-
