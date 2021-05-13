@@ -1062,9 +1062,10 @@ class YCableTableUpdateTask(object):
                 (port, op, fvp) = status_tbl[asic_index].pop()
                 if not port:
                     break
+
                 # entering this section signifies a start for xcvrd state
                 # change request from swss so initiate recording in mux_metrics table
-                time_start = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f"))
+                time_start = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                 if fvp:
                     # This check might be redundant, to check, the presence of this Port in keys
                     # in logical_port_list but keep for now for coherency
@@ -1098,7 +1099,7 @@ class YCableTableUpdateTask(object):
                         y_cable_tbl[asic_index].set(port, fvs_updated)
                         helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
                             port, old_status, new_status))
-                        time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f"))
+                        time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                         fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                   ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
                         mux_metrics_tbl[asic_index].set(port, fvs_metrics)
