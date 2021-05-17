@@ -15,7 +15,6 @@ try:
     import threading
     import time
 
-    from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
