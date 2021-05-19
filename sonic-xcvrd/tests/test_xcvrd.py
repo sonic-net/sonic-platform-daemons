@@ -1,10 +1,7 @@
 import os
 import sys
-import subprocess
 
-import pytest
 import unittest
-from imp import load_source
 if sys.version_info >= (3, 3):
     from unittest.mock import MagicMock, patch
 else:
@@ -27,8 +24,8 @@ scripts_path = os.path.join(modules_path, "xcvrd")
 sys.path.insert(0, modules_path)
 
 os.environ["XCVRD_UNIT_TESTING"] = "1"
-from xcvrd.xcvrd_utilities.y_cable_helper import *
 from xcvrd.xcvrd import *
+from xcvrd.xcvrd_utilities.y_cable_helper import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 
 
