@@ -164,12 +164,14 @@ class ModuleUpdater(logger.Logger):
         state_db = daemon_base.db_connect("STATE_DB")
         self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
         self.module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
-        self.asic_table = swsscommon.Table(state_db, CHASSIS_ASIC_INFO_TABLE)
         self.midplane_table = swsscommon.Table(state_db, CHASSIS_MIDPLANE_INFO_TABLE)
         self.info_dict_keys = [CHASSIS_MODULE_INFO_NAME_FIELD,
                                CHASSIS_MODULE_INFO_DESC_FIELD,
                                CHASSIS_MODULE_INFO_SLOT_FIELD,
                                CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+        chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+        self.asic_table = swsscommon.Table(chassis_state_db, CHASSIS_ASIC_INFO_TABLE)
 
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
@@ -189,6 +191,10 @@ class ModuleUpdater(logger.Logger):
 
         if self.chassis_table is not None:
             self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+
+        if self.asic_table is not None:
+            for key in self.asic_table.getKeys():
+                self.asic_table.delete(key)
 
     def modules_num_update(self):
         # Check if module list is populated
