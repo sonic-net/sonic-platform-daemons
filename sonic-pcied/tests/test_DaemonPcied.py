@@ -10,6 +10,7 @@ if sys.version_info.major == 3:
     from unittest import mock
 else:
     import mock
+
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockPcieUtil
@@ -58,6 +59,8 @@ pcie_device_list = \
  {'bus': '00', 'dev': '03', 'fn': '0', 'id': '1f13', 'name': 'PCI C'}]
 """
 
+pcie_check_result_no = []
+
 pcie_check_result_pass = \
 """
 [{'bus': '00', 'dev': '01', 'fn': '0', 'id': '1f10', 'name': 'PCI A', 'result': 'Passed'},
@@ -77,9 +80,9 @@ class TestDaemonPcied(object):
     Test cases to cover functionality in DaemonPcied class
     """
 
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_signal_handler(self):
-        pcied.platform_chassis = MockChassis()
-        daemon_pcied = psud.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.stop_event.set = mock.MagicMock()
         daemon_pcied.log_info = mock.MagicMock()
         daemon_pcied.log_warning = mock.MagicMock()
@@ -134,53 +137,77 @@ class TestDaemonPcied(object):
         assert daemon_pcied.stop_event.set.call_count == 0
         assert pcied.exit_code == 0
 
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_run(self):
-        pcied.platform_pcieutil = MockPcieUtil()
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.check_pcie_devices = mock.MagicMock()
 
         daemon_pcied.run()
         assert daemon_pcied.check_pcie_devices.call_count == 1
 
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied._wrapper_get_pcie_check', mock.MagicMock())
     def test_check_pcie_devices(self):
-        pcied.platform_pcieutil = MockPcieUtil()
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
+        daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
+
+        daemon_pcied.check_pcie_devices()
+        assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
+        assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 0
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_update_pcie_devices_status_db(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.status_table = mock.MagicMock()
+        daemon_pcied.log_info = mock.MagicMock()
+        daemon_pcied.log_error = mock.MagicMock()
+
+        # test for pass resultInfo
+        daemon_pcied.update_pcie_devices_status_db(0)
+        assert daemon_pcied.status_table.set.call_count == 1
+        assert daemon_pcied.log_info.call_count == 1
+        assert daemon_pcied.log_error.call_count == 0
+
+        daemon_pcied.status_table.set.reset_mock()
+        daemon_pcied.log_info.reset_mock()
+
+        # test for resultInfo with 1 device failed to detect
+        daemon_pcied.update_pcie_devices_status_db(1)
+        assert daemon_pcied.status_table.set.call_count == 1
+        assert daemon_pcied.log_info.call_count == 0
+        assert daemon_pcied.log_error.call_count == 1
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied._wrapper_get_pcie_aer_stats', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_check_n_update_pcie_aer_stats(self, mock_read):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.device_table = mock.MagicMock()
         daemon_pcied.update_aer_to_statedb = mock.MagicMock()
-        daemon_pcied.log_warning = mock.MagicMock()
 
-        # Test platform_pcieutil is None
-        pcied.platform_pcieutil = None
-        daemon_pcied.check_pcie_devices()
+        mock_read.return_value = None
+        daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 0
-        assert daemon_pcied.log_warning.call_count == 0
+        assert daemon_pcied.device_table.set.call_count == 0
 
-        # Test with mocked platform_pcieutil
-        pcied.platform_pcieutil = MockPcieUtil()
-        daemon_pcied.check_pcie_devices()
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 1
+        assert daemon_pcied.device_table.set.call_count == 1
 
-        # Test with mocked platform_pcieutil with 3 mocked pcie devices + all passed results
-        pcied.platform_pcieutil = MockPcieUtil(pcie_device_list, pcie_check_result_pass, pcie_no_aer_stats)
-        daemon_pcied.check_pcie_devices()
-        assert daemon_pcied.update_aer_to_statedb.call_count == 3
 
-        # Test with mocked platform_pcieutil with 3 mocked pcie devices + 1 failed result
-        pcied.platform_pcieutil = MockPcieUtil(pcie_device_list, pcie_check_result_fail, pcie_no_aer_stats)
-        daemon_pcied.check_pcie_devices()
-        assert daemon_pcied.update_aer_to_statedb.call_count == 2
-        daemon_pcied.device_table.set.reset_mock()
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_update_aer_to_statedb(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.log_debug = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        daemon_pcied.device_name = mock.MagicMock()
+        daemon_pcied.aer_stats = mock.MagicMock()
 
-    def test_update_aer_to_stats(self):
-        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
-        daemon_psud.log_debug = mock.MagicMock()
-        daemon_psud.device_table = mock.MagicMock()
-        daemon_psud.update_aer_to_stats(mocked_device, pcie_no_aer_stats)
-        assert daemon_pcied.log_debug.call_count == 1
 
-        daemon_psud.fan_tbl.set.reset_mock()
-
-        mocked_device_name = "00:01.0"
         mocked_expected_fvp = pcied.swsscommon.FieldValuePairs(
             [("correctable|field1", '0'),
              ("correctable|field2", '0'),
@@ -190,8 +217,8 @@ class TestDaemonPcied(object):
              ("non_fatal|field6", '0'),
              ])
 
-        daemon_psud.update_aer_to_stats(mocked_device, pcie_aer_stats_no_err)
-        assert daemon_pcied.log_debug.call_count == 0
-        daemon_psud.device_table.set.assert_called_with(mocked_device, expected_fvp)
+        daemon_pcied.update_aer_to_statedb() 
+        assert daemon_pcied.log_debug.call_count == 1
+        assert daemon_pcied.device_table.set.call_count == 0
 
-        daemon_psud.fan_tbl.set.reset_mock()
+        daemon_pcied.device_table.set.reset_mock()
