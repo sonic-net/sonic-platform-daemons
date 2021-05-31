@@ -176,11 +176,13 @@ def _wrapper_get_transceiver_change_event(timeout):
     if platform_chassis is not None:
         try:
             status, events = platform_chassis.get_change_event(timeout)
-            sfp_events = events['sfp']
-            return status, sfp_events
+            sfp_events = events.get('sfp')
+            sfp_errors = events.get('sfp_error')
+            return status, sfp_events, sfp_errors
         except NotImplementedError:
             pass
-    return platform_sfputil.get_transceiver_change_event(timeout)
+    status, events = platform_sfputil.get_transceiver_change_event(timeout)
+    return status, events, None
 
 
 def _wrapper_get_sfp_type(physical_port):
@@ -191,6 +193,14 @@ def _wrapper_get_sfp_type(physical_port):
             pass
     return None
 
+
+def _wrapper_get_sfp_error_description(physical_port):
+    if platform_chassis:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_error_description()
+        except NotImplementedError:
+            pass
+    return None
 # Remove unnecessary unit from the raw data
 
 
@@ -759,22 +769,9 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 # Update port SFP status table on receiving SFP change event
 
 
-def update_port_transceiver_status_table(logical_port_name, status_tbl, status, has_error=False):
-    if not has_error:
-        fvs = swsscommon.FieldValuePairs([('status', status), ('error', 'N/A')])
-        status_tbl.set(logical_port_name, fvs)
-    else:
-        error_list = []
-        int_status = int(status)
-        for error_code, error_msg in sfp_status_helper.SFP_STATUS_ERR_DICT.items():
-            if error_code & int_status:
-                error_list.append(error_msg)
-        if error_list:
-            fvs = swsscommon.FieldValuePairs([('status', str(int_status & 1)), ('error', '|'.join(error_list))])
-            status_tbl.set(logical_port_name, fvs)
-        else:
-            # SFP return unkown event, just ignore for now.
-            helper_logger.log_warning("Got unknown event {}, ignored".format(status))
+def update_port_transceiver_status_table(logical_port_name, status_tbl, status, error_descriptions='N/A'):
+    fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
+    status_tbl.set(logical_port_name, fvs)
 
 
 # Delete port from SFP status table
@@ -1003,7 +1000,7 @@ class SfpStateUpdateTask(object):
         while not stopping_event.is_set():
             next_state = state
             time_start = time.time()
-            status, port_dict = _wrapper_get_transceiver_change_event(timeout)
+            status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
             if not port_dict:
                 continue
             helper_logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
@@ -1083,21 +1080,32 @@ class SfpStateUpdateTask(object):
                                 helper_logger.log_info("Got SFP removed event")
                                 update_port_transceiver_status_table(
                                     logical_port, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_REMOVED)
-                                helper_logger.log_info("receive plug out and pdate port sfp status table.")
+                                helper_logger.log_info("receive plug out and update port sfp status table.")
                                 del_port_sfp_dom_info_from_db(logical_port, int_tbl[asic_index], dom_tbl[asic_index])
                             else:
-                                helper_logger.log_info("Got SFP Error event")
-                                # Add port to error table to stop accessing eeprom of it
-                                # If the port already in the error table, the stored error code will
-                                # be updated to the new one.
-                                update_port_transceiver_status_table(logical_port, status_tbl[asic_index], value, True)
-                                helper_logger.log_info("receive error update port sfp status table.")
-                                # In this case EEPROM is not accessible, so remove the DOM info
-                                # since it will be outdated if long time no update.
-                                # but will keep the interface info in the DB since it static.
-                                if sfp_status_helper.is_error_block_eeprom_reading(value):
-                                    del_port_sfp_dom_info_from_db(logical_port, None, dom_tbl[asic_index])
+                                try:
+                                    error_bits = int(value)
+                                    helper_logger.log_info("Got SFP error event {}".format(value))
 
+                                    error_descriptions = sfp_status_helper.fetch_generic_error_description(error_bits)
+
+                                    if sfp_status_helper.has_vendor_specific_error(error_bits):
+                                        if error_dict:
+                                            vendor_specific_error_description = error_dict.get(key)
+                                        else:
+                                            vendor_specific_error_description = _wrapper_get_sfp_error_description(key)
+                                        error_descriptions.append(vendor_specific_error_description)
+
+                                    # Add error info to database
+                                    # Any existing error will be replaced by the new one.
+                                    update_port_transceiver_status_table(logical_port, status_tbl[asic_index], value, '|'.join(error_descriptions))
+                                    helper_logger.log_info("Receive error update port sfp status table.")
+                                    # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
+                                    # The interface info remains in the DB since it is static.
+                                    if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
+                                        del_port_sfp_dom_info_from_db(logical_port, None, dom_tbl[asic_index])
+                                except (TypeError, ValueError) as e:
+                                    logger.log_error("Got unrecognized event {}, ignored".format(value))
 
                     # Since ports could be connected to a mux cable, if there is a change event process the change for being on a Y cable Port
                     y_cable_helper.change_ports_status_for_y_cable_change_event(

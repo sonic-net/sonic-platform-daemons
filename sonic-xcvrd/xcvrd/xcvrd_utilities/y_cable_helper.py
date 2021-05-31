@@ -419,11 +419,19 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                     helper_logger.log_info("Got SFP inserted event")
                     check_identifier_presence_and_update_mux_table_entry(
                         state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
-                elif value == sfp_status_helper.SFP_STATUS_REMOVED or sfp_status_helper.is_error_block_eeprom_reading(value):
+                elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                     check_identifier_presence_and_delete_mux_table_entry(
                         state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
 
                 else:
+                    try:
+                        # Now that the value is in bitmap format, let's convert it to number
+                        event_bits = int(value)
+                        if sfp_status_helper.is_error_block_eeprom_reading(event_bits):
+                            check_identifier_presence_and_delete_mux_table_entry(
+                                state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                    except:
+                        pass
                     # SFP return unkown event, just ignore for now.
                     helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                     continue
