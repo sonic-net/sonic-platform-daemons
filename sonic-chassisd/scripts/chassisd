@@ -193,8 +193,9 @@ class ModuleUpdater(logger.Logger):
             self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
         if self.asic_table is not None:
-            for key in self.asic_table.getKeys():
-                self.asic_table.delete(key)
+            asics = list(self.asic_table.getKeys())
+            for asic in asics:
+                self.asic_table._del(asic)
 
     def modules_num_update(self):
         # Check if module list is populated
@@ -208,6 +209,8 @@ class ModuleUpdater(logger.Logger):
         self.chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
 
     def module_db_update(self):
+        notOnlineModules = []
+
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
             if module_info_dict is not None:
@@ -229,6 +232,10 @@ class ModuleUpdater(logger.Logger):
                                                   (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
                 self.module_table.set(key, fvs)
 
+                if module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] != str(ModuleBase.MODULE_STATUS_ONLINE):
+                   notOnlineModules.append(key)
+                   continue
+
                 for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
                    asic_global_id, asic_pci_addr = asic
                    asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
@@ -236,6 +243,13 @@ class ModuleUpdater(logger.Logger):
                                                           (CHASSIS_MODULE_INFO_NAME_FIELD, key),
                                                           (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
                    self.asic_table.set(asic_key, asic_fvs)
+
+        # Asics that are on the "not online" modules need to be cleaned up
+        asics = list(self.asic_table.getKeys())
+        for asic in asics:
+           fvs = self.asic_table.get(asic)
+           if fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
+              self.asic_table._del(asic)
 
     def _get_module_info(self, module_index):
         """
