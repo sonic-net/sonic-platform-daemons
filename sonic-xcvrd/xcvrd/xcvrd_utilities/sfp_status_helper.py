@@ -32,7 +32,6 @@ def detect_port_in_error_status(logical_port_name, status_tbl):
     if rec:
         status_dict = dict(fvp)
         error = status_dict.get('error')
-        if SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING in error:
-            return True
+        return SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING in error
     return False
 
