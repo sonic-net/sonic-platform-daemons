@@ -21,6 +21,7 @@ class MockDevice:
 class MockModule(MockDevice):
     def __init__(self, module_index, module_name, module_desc, module_type, module_slot,
                  asic_list=[]):
+        self.module_index = module_index
         self.module_name = module_name
         self.module_desc = module_desc
         self.module_type = module_type
