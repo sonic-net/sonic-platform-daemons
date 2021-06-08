@@ -28,8 +28,6 @@ PCIE_RESULT_REGEX = "PCIe Device Checking All Test"
 PCIE_DEVICE_TABLE_NAME = "PCIE_DEVICE"
 PCIE_STATUS_TABLE_NAME = "PCIE_DEVICES"
 
-PCIE_CONF_FILE = 'pcie.yaml'
-
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
 
 PCIEUTIL_CONF_FILE_ERROR = 1
@@ -40,21 +38,19 @@ platform_pcieutil = None
 exit_code = 0
 
 # wrapper functions to call the platform api
-def _wrapper_get_pcie_check():
-    return platform_pcieutil.get_pcie_check()
-
-def _wrapper_get_pcie_aer_stats(bus, dev, func):
-    return platform_pcieutil.get_pcie_aer_stats(bus=bus, device=dev, func=func)
-
 def load_platform_pcieutil():
     _platform_pcieutil = None
     (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
-    pciefilePath = os.path.join(platform_path, PCIE_CONF_FILE)
     try:
-        from sonic_platform_base.sonic_pcie.pcie_common import PcieUtil
-        _platform_pcieutil = PcieUtil(platform_path)
+        from sonic_platform.pcie import Pcie
+        _platform_pcieutil = Pcie(platform_path)
     except ImportError as e:
-        self.log_error("Failed to load default PcieUtil module. Error : {}".format(str(e)), True)
+        self.log_error("Failed to load platform Pcie module. Error : {}".format(str(e)), True)
+        try:
+            from sonic_platform_base.sonic_pcie.pcie_common import PcieUtil
+            _platform_pcieutil = PcieUtil(platform_path)
+        except ImportError as e:
+            self.log_error("Failed to load default PcieUtil module. Error : {}".format(str(e)), True)
     return _platform_pcieutil
 
 def read_id_file(device_name):
@@ -134,7 +130,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         self.aer_stats = {}
         if Id is not None:
             self.device_table.set(self.device_name, [('id', Id)])
-            self.aer_stats = _wrapper_get_pcie_aer_stats(bus=Bus, dev=Dev, func=Fn)
+            self.aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, dev=Dev, func=Fn)
             self.update_aer_to_statedb()
 
 
@@ -154,7 +150,7 @@ class DaemonPcied(daemon_base.DaemonBase):
 
     # Check the PCIe devices
     def check_pcie_devices(self):
-        self.resultInfo = _wrapper_get_pcie_check()
+        self.resultInfo = platform_pcieutil.get_pcie_check()
         err = 0
         if self.resultInfo is None:
             return

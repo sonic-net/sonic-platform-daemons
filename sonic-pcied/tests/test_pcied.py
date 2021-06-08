@@ -34,19 +34,6 @@ SYSLOG_IDENTIFIER = 'pcied_test'
 NOT_AVAILABLE = 'N/A'
 
 
-@mock.patch('pcied.platform_pcieutil', mock.MagicMock())
-def test_wrapper_get_pcie_check():
-    # Test new platform API is available and implemented
-    pcied._wrapper_get_pcie_check()
-    assert pcied.platform_pcieutil.get_pcie_check.call_count == 1
-
-
-@mock.patch('pcied.platform_pcieutil', mock.MagicMock())
-def test_wrapper_get_pcie_aer_stats():
-    pcied._wrapper_get_pcie_aer_stats(0,0,0)
-    assert pcied.platform_pcieutil.get_pcie_aer_stats.call_count == 1
-
-
 @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
 @mock.patch('pcied.DaemonPcied.run')
 def test_main(mock_run):

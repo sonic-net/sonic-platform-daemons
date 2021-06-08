@@ -146,11 +146,11 @@ class TestDaemonPcied(object):
         assert daemon_pcied.check_pcie_devices.call_count == 1
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
-    @mock.patch('pcied._wrapper_get_pcie_check', mock.MagicMock())
     def test_check_pcie_devices(self):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
         daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
+        platform_pcieutil.get_pcie_check = mock.MagicMock()
 
         daemon_pcied.check_pcie_devices()
         assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
@@ -181,22 +181,24 @@ class TestDaemonPcied(object):
 
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
-    @mock.patch('pcied._wrapper_get_pcie_aer_stats', mock.MagicMock())
     @mock.patch('pcied.read_id_file')
     def test_check_n_update_pcie_aer_stats(self, mock_read):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.device_table = mock.MagicMock()
         daemon_pcied.update_aer_to_statedb = mock.MagicMock()
+        platform_pcieutil.get_pcie_aer_stats = mock.MagicMock()
 
         mock_read.return_value = None
         daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 0
         assert daemon_pcied.device_table.set.call_count == 0
+        assert platform_pcieutil.get_pcie_aer_stats.call_count == 0
 
         mock_read.return_value = '1714'
         daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 1
         assert daemon_pcied.device_table.set.call_count == 1
+        assert platform_pcieutil.get_pcie_aer_stats.call_count == 1
 
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
