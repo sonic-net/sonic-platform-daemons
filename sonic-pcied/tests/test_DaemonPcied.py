@@ -150,7 +150,7 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
         daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
-        platform_pcieutil.get_pcie_check = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_check = mock.MagicMock()
 
         daemon_pcied.check_pcie_devices()
         assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
@@ -186,7 +186,7 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.device_table = mock.MagicMock()
         daemon_pcied.update_aer_to_statedb = mock.MagicMock()
-        platform_pcieutil.get_pcie_aer_stats = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock()
 
         mock_read.return_value = None
         daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
