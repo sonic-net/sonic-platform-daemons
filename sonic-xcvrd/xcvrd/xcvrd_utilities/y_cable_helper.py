@@ -3,8 +3,8 @@
     helper utlities configuring y_cable for xcvrd daemon
 """
 
+import datetime
 import threading
-import time
 
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
@@ -282,9 +282,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
     else:
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
-        if "mux_cable" in mux_table_dict:
-            val = mux_table_dict.get("mux_cable", None)
-            if val == "true":
+        if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val in ["active", "auto"]:
 
                 y_cable_asic_table = y_cable_tbl.get(asic_index, None)
                 mux_asic_table = mux_tbl.get(asic_index, None)
@@ -314,6 +314,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                         logical_port_name, y_cable_tbl[asic_index])
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
                     post_port_mux_static_info_to_db(logical_port_name,  static_tbl[asic_index])
+            else:
+                helper_logger.log_warning(
+                    "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
@@ -373,7 +376,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable
@@ -414,7 +417,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
@@ -518,9 +521,9 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
     else:
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
-        if "mux_cable" in mux_table_dict:
-            val = mux_table_dict.get("mux_cable", None)
-            if val == "true":
+        if "state" in mux_table_dict:
+            val = mux_table_dict.get("state", None)
+            if val in ["active", "auto"]:
 
                 if mux_tbl.get(asic_index, None) is not None:
                     # fill in the newly found entry
@@ -535,6 +538,9 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                     # fill the newly found entry
                     post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+            else:
+                helper_logger.log_warning(
+                    "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
 def get_firmware_dict(physical_port, target, side, mux_info_dict):
@@ -1005,6 +1011,7 @@ class YCableTableUpdateTask(object):
         appl_db, state_db, status_tbl, y_cable_tbl = {}, {}, {}, {}
         y_cable_tbl_keys = {}
         mux_cable_command_tbl, y_cable_command_tbl = {}, {}
+        mux_metrics_tbl = {}
 
         sel = swsscommon.Select()
 
@@ -1023,6 +1030,8 @@ class YCableTableUpdateTask(object):
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             y_cable_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            mux_metrics_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
             y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
             sel.addSelectable(status_tbl[asic_id])
             sel.addSelectable(mux_cable_command_tbl[asic_id])
@@ -1031,11 +1040,6 @@ class YCableTableUpdateTask(object):
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-
-            # A brief sleep appears necessary in this loop or any spawned
-            # update threads will get stuck. Appears to be due to the sel.select() call.
-            # TODO: Eliminate the need for this sleep.
-            time.sleep(0.1)
 
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
@@ -1058,6 +1062,10 @@ class YCableTableUpdateTask(object):
                 (port, op, fvp) = status_tbl[asic_index].pop()
                 if not port:
                     break
+
+                # entering this section signifies a start for xcvrd state
+                # change request from swss so initiate recording in mux_metrics table
+                time_start = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                 if fvp:
                     # This check might be redundant, to check, the presence of this Port in keys
                     # in logical_port_list but keep for now for coherency
@@ -1091,6 +1099,10 @@ class YCableTableUpdateTask(object):
                         y_cable_tbl[asic_index].set(port, fvs_updated)
                         helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
                             port, old_status, new_status))
+                        time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+                        fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
+                                                                  ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
+                        mux_metrics_tbl[asic_index].set(port, fvs_metrics)
                     else:
                         helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
                             port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))

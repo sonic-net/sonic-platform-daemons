@@ -10,20 +10,21 @@ if sys.version_info.major == 3:
     from unittest import mock
 else:
     import mock
-from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockFan, MockPsu
 
 SYSLOG_IDENTIFIER = 'psud_test'
 NOT_AVAILABLE = 'N/A'
 
-daemon_base.db_connect = mock.MagicMock()
 
 tests_path = os.path.dirname(os.path.abspath(__file__))
 
 # Add mocked_libs path so that the file under test can load mocked modules from there
 mocked_libs_path = os.path.join(tests_path, "mocked_libs")
 sys.path.insert(0, mocked_libs_path)
+
+from sonic_py_common import daemon_base
+daemon_base.db_connect = mock.MagicMock()
 
 # Add path to the file under test so that we can load it
 modules_path = os.path.dirname(tests_path)
@@ -148,13 +149,14 @@ class TestDaemonPsud(object):
         psud._wrapper_get_psu_presence.return_value = True
         psud._wrapper_get_psu_status.return_value = True
 
-        psu1 = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678')
+        psu1 = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678', '1234')
         psud.platform_chassis = MockChassis()
         psud.platform_chassis._psu_list.append(psu1)
 
         expected_fvp = psud.swsscommon.FieldValuePairs(
             [(psud.PSU_INFO_MODEL_FIELD, 'Fake Model'),
              (psud.PSU_INFO_SERIAL_FIELD, '12345678'),
+             (psud.PSU_INFO_REV_FIELD, '1234'),
              (psud.PSU_INFO_TEMP_FIELD, '30.0'),
              (psud.PSU_INFO_TEMP_TH_FIELD, '50.0'),
              (psud.PSU_INFO_VOLTAGE_FIELD, '12.0'),
