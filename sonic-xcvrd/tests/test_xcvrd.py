@@ -9,6 +9,7 @@ else:
 
 from sonic_py_common import daemon_base
 from swsscommon import swsscommon
+from sonic_platform_base.sfp_base import SfpBase
 from .mock_swsscommon import Table
 
 
@@ -315,46 +316,6 @@ class TestXcvrdScript(object):
         assert result == ['MOLEX-1064141421', 'QSFP+']
         # TODO: Ensure that error message was logged
 
-    def test_update_port_transceiver_status_table(self):
-        logical_port_name = "Ethernet0"
-        status_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
-        update_port_transceiver_status_table(logical_port_name, status_tbl, SFP_STATUS_INSERTED)
-        entry = status_tbl.get(logical_port_name)
-        print(entry[1])
-        print(entry[0][0])
-        assert status_tbl.get(logical_port_name)[0][1] == SFP_STATUS_INSERTED
-        assert status_tbl.get(logical_port_name)[1][1] == 'N/A'
-
-        update_port_transceiver_status_table(logical_port_name, status_tbl, SFP_STATUS_REMOVED)
-        assert status_tbl.get(logical_port_name)[0][1] == SFP_STATUS_REMOVED
-        assert status_tbl.get(logical_port_name)[1][1] == 'N/A'
-
-        error_dict = {
-            '3': 'SFP_STATUS_ERR_I2C_STUCK',
-            '5': 'SFP_STATUS_ERR_BAD_EEPROM',
-            '9': 'SFP_STATUS_ERR_UNSUPPORTED_CABLE',
-            '17': 'SFP_STATUS_ERR_HIGH_TEMP',
-            '33': 'SFP_STATUS_ERR_BAD_CABLE'
-        }
-
-        # Test single errors
-        for error_value, error_msg in error_dict.items():
-            update_port_transceiver_status_table(logical_port_name, status_tbl, error_value, True)
-            assert status_tbl.get(logical_port_name)[0][1] == SFP_STATUS_INSERTED
-            assert status_tbl.get(logical_port_name)[1][1] == error_msg
-
-        # Test multiple errors
-        update_port_transceiver_status_table(logical_port_name, status_tbl, '63', True)
-        assert status_tbl.get(logical_port_name)[0][1] == SFP_STATUS_INSERTED
-        error = status_tbl.get(logical_port_name)[1][1]
-        for error_msg in error_dict.values():
-            assert error_msg in error
-
-        # Test unsupported errors
-        status_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
-        update_port_transceiver_status_table(logical_port_name, status_tbl, '1024', True)
-        assert status_tbl.get(logical_port_name) is None
-
     def test_detect_port_in_error_status(self):
         class MockTable:
             def get(self, key):
@@ -364,13 +325,13 @@ class TestXcvrdScript(object):
         status_tbl.get = MagicMock(return_value=(True, {'error': 'N/A'}))
         assert not detect_port_in_error_status(None, status_tbl)
 
-        status_tbl.get = MagicMock(return_value=(True, {'error': 'SFP_STATUS_ERR_I2C_STUCK'}))
+        status_tbl.get = MagicMock(return_value=(True, {'error': SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING}))
         assert detect_port_in_error_status(None, status_tbl)
 
     def test_is_error_sfp_status(self):
-        error_values = ['3', '5', '9', '17', '33']
+        error_values = [7, 11, 19, 35]
         for error_value in error_values:
             assert is_error_block_eeprom_reading(error_value)
 
-        assert not is_error_block_eeprom_reading(SFP_STATUS_INSERTED)
-        assert not is_error_block_eeprom_reading(SFP_STATUS_REMOVED)
+        assert not is_error_block_eeprom_reading(int(SFP_STATUS_INSERTED))
+        assert not is_error_block_eeprom_reading(int(SFP_STATUS_REMOVED))
