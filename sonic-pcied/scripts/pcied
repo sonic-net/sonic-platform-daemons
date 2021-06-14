@@ -130,7 +130,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         self.aer_stats = {}
         if Id is not None:
             self.device_table.set(self.device_name, [('id', Id)])
-            self.aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, device=Dev, func=Fn)
+            self.aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, dev=Dev, func=Fn)
             self.update_aer_to_statedb()
 
 
