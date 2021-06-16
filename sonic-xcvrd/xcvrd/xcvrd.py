@@ -1336,7 +1336,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
     # Deinitialize daemon
     def deinit(self):
-        global platform_chassis
         self.log_info("Start daemon deinit...")
 
         # Delete all the information from DB and then exit
@@ -1354,7 +1353,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if self.y_cable_presence[0] is True:
             y_cable_helper.delete_ports_status_for_y_cable()
 
-        del platform_chassis
+        del globals()['platform_chassis']
 
     # Run daemon
 
