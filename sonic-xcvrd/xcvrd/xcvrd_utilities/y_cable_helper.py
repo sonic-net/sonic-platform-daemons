@@ -21,7 +21,6 @@ SYSLOG_IDENTIFIER = "y_cable_helper"
 
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
-XCVRD_DEBUG_LOGS = False
 
 # SFP status definition, shall be aligned with the definition in get_change_event() of ChassisBase
 SFP_STATUS_REMOVED = '0'
@@ -89,8 +88,7 @@ def update_table_mux_status_for_response_tbl(table_name, status, logical_port_na
     fvs = swsscommon.FieldValuePairs([('response', status)])
     table_name.set(logical_port_name, fvs)
 
-    if XCVRD_DEBUG_LOGS == True:
-        helper_logger.log_notice("Y_CABLE_DEBUG: Successful in returning probe port status {}".format(logical_port_name))
+    helper_logger.log_debug("Y_CABLE_DEBUG: Successful in returning probe port status {}".format(logical_port_name))
 
 
 def update_table_mux_status_for_statedb_port_tbl(table_name, status, read_side, active_side, logical_port_name):
@@ -103,8 +101,7 @@ def update_table_mux_status_for_statedb_port_tbl(table_name, status, read_side, 
 def y_cable_toggle_mux_torA(physical_port):
     update_status = y_cable.toggle_mux_to_torA(physical_port)
     if update_status is True:
-        if XCVRD_DEBUG_LOGS == True:
-            helper_logger.log_notice("Y_CABLE_DEBUG: Successful in toggling mux to ToR A for port {}".format(physical_port))
+        helper_logger.log_debug("Y_CABLE_DEBUG: Successful in toggling mux to ToR A for port {}".format(physical_port))
 
         return 1
     else:
@@ -116,8 +113,7 @@ def y_cable_toggle_mux_torA(physical_port):
 def y_cable_toggle_mux_torB(physical_port):
     update_status = y_cable.toggle_mux_to_torB(physical_port)
     if update_status is True:
-        if XCVRD_DEBUG_LOGS == True:
-            helper_logger.log_notice("Y_CABLE_DEBUG: Successful in toggling mux to ToR B for port {}".format(physical_port))
+        helper_logger.log_debug("Y_CABLE_DEBUG: Successful in toggling mux to ToR B for port {}".format(physical_port))
 
         return 2
     else:
@@ -203,8 +199,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
                 helper_logger.log_warning(
                     "Error: Could not get state for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
 
-            if XCVRD_DEBUG_LOGS == True:
-                helper_logger.log_notice("Y_CABLE_DEBUG: notifying a probe for port status {} {}".format(logical_port_name, status))
+            helper_logger.log_debug("Y_CABLE_DEBUG: notifying a probe for port status {} {}".format(logical_port_name, status))
 
             update_table_mux_status_for_response_tbl(y_cable_response_tbl[asic_index], status, logical_port_name)
 
@@ -1023,7 +1018,6 @@ class YCableTableUpdateTask(object):
             swsscommon.SonicDBConfig.initializeGlobalConfig()
 
     def task_worker(self):
-        global XCVRD_DEBUG_LOGS
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, state_db, config_db, status_tbl, y_cable_tbl = {}, {}, {}, {}, {}
@@ -1087,8 +1081,7 @@ class YCableTableUpdateTask(object):
                 if not port:
                     break
 
-                if XCVRD_DEBUG_LOGS == True:
-                    helper_logger.log_notice("Y_CABLE_DEBUG: received an event for port transition {}".format(port))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received an event for port transition {}".format(port))
 
                 # entering this section signifies a start for xcvrd state
                 # change request from swss so initiate recording in mux_metrics table
@@ -1114,8 +1107,7 @@ class YCableTableUpdateTask(object):
                         old_status = mux_port_dict.get("state")
                         read_side = mux_port_dict.get("read_side")
                         # Now whatever is the state requested, toggle the mux appropriately
-                        if XCVRD_DEBUG_LOGS == True:
-                            helper_logger.log_notice("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {}".format(port, old_status, new_status))
+                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {}".format(port, old_status, new_status))
                         active_side = update_tor_active_side(read_side, new_status, port)
                         if active_side == -1:
                             helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(
@@ -1126,8 +1118,7 @@ class YCableTableUpdateTask(object):
                                                                   ('read_side', read_side),
                                                                   ('active_side', str(active_side))])
                         y_cable_tbl[asic_index].set(port, fvs_updated)
-                        if XCVRD_DEBUG_LOGS == True:
-                            helper_logger.log_notice("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB".format(port, old_status, new_status))
+                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB".format(port, old_status, new_status))
                         helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
                             port, old_status, new_status))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
@@ -1143,8 +1134,7 @@ class YCableTableUpdateTask(object):
 
                 if not port_m:
                     break
-                if XCVRD_DEBUG_LOGS == True:
-                    helper_logger.log_notice("Y_CABLE_DEBUG: received a probe for port status {}".format(port_m))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for port status {}".format(port_m))
 
                 if fvp_m:
 
@@ -1185,10 +1175,10 @@ class YCableTableUpdateTask(object):
                         probe_identifier = fvp_dict["enable_log"]
 
                         if probe_identifier == "true":
-                            XCVRD_DEBUG_LOGS = True
+                            helper_logger.set_min_log_priority_debug()
 
                         elif probe_identifier == "false":
-                            XCVRD_DEBUG_LOGS = False
+                            helper_logger.set_min_log_priority_notice()
 
 
     def task_run(self):
