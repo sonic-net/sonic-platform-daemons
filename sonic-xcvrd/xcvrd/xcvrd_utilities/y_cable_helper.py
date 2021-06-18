@@ -389,7 +389,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
         xcvrd_log_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "XCVRD_LOG")
-        xcvrd_log_tbl[asic_id].set("Y_CABLE",fvs_updated )
+        xcvrd_log_tbl[asic_id].set("Y_CABLE", fvs_updated )
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
