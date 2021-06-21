@@ -100,9 +100,9 @@ def update_table_mux_status_for_statedb_port_tbl(table_name, status, read_side, 
 
 def y_cable_toggle_mux_torA(physical_port):
     update_status = y_cable.toggle_mux_to_torA(physical_port)
-    if update_status is True:
-        helper_logger.log_debug("Y_CABLE_DEBUG: Successful in toggling mux to ToR A for port {}".format(physical_port))
 
+    helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR A for port {} {}".format(physical_port, update_status))
+    if update_status is True:
         return 1
     else:
         helper_logger.log_warning(
@@ -112,9 +112,9 @@ def y_cable_toggle_mux_torA(physical_port):
 
 def y_cable_toggle_mux_torB(physical_port):
     update_status = y_cable.toggle_mux_to_torB(physical_port)
-    if update_status is True:
-        helper_logger.log_debug("Y_CABLE_DEBUG: Successful in toggling mux to ToR B for port {}".format(physical_port))
 
+    helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR B for port {} {}".format(physical_port, update_status))
+    if update_status is True:
         return 2
     else:
         helper_logger.log_warning(
@@ -1172,12 +1172,12 @@ class YCableTableUpdateTask(object):
                     fvp_dict = dict(fvp_m)
                     if "enable_log" in fvp_dict:
                         # check if xcvrd got a probe command
-                        probe_identifier = fvp_dict["enable_log"]
+                        probe_identifier = fvp_dict["log_verbosity"]
 
-                        if probe_identifier == "true":
+                        if probe_identifier == "debug":
                             helper_logger.set_min_log_priority_debug()
 
-                        elif probe_identifier == "false":
+                        elif probe_identifier == "notice":
                             helper_logger.set_min_log_priority_notice()
 
 
