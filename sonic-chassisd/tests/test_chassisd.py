@@ -416,14 +416,14 @@ def test_asic_presence():
     fabric_asic_table = module_updater.asic_table
     assert len(fabric_asic_table.getKeys()) == 2
 
-    def test_fabric_asic(asic_name, asic_pci_address, module_name, asic_id_in_module):
+    def verify_fabric_asic(asic_name, asic_pci_address, module_name, asic_id_in_module):
         fvs = fabric_asic_table.get(asic_name)
         assert fvs[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
         assert fvs[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
         assert fvs[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
 
-    test_fabric_asic("asic4", "0000:04:00.0", name, "0")
-    test_fabric_asic("asic5", "0000:05:00.0", name, "1")
+    verify_fabric_asic("asic4", "0000:04:00.0", name, "0")
+    verify_fabric_asic("asic5", "0000:05:00.0", name, "1")
 
     #Card goes down and asics should be gone
     fabric.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
