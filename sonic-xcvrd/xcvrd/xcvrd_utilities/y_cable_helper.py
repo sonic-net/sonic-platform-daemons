@@ -1170,7 +1170,7 @@ class YCableTableUpdateTask(object):
                         continue
 
                     fvp_dict = dict(fvp_m)
-                    if "enable_log" in fvp_dict:
+                    if "log_verbosity" in fvp_dict:
                         # check if xcvrd got a probe command
                         probe_identifier = fvp_dict["log_verbosity"]
 
