@@ -5,7 +5,6 @@
 
 import datetime
 import threading
-import time
 
 from importlib import import_module
 
@@ -312,7 +311,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
     global y_cable_port_instances
     global y_cable_port_locks
-    y_cable_port = {}
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
         helper_logger.log_warning(
@@ -452,7 +450,6 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                 physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
                 if len(physical_port_list) == 1:
-
                     physical_port = physical_port_list[0]
                     y_cable_port_instances.pop(physical_port)
                     y_cable_port_locks.pop(physical_port)
@@ -617,7 +614,6 @@ def delete_ports_status_for_y_cable():
             physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
             if len(physical_port_list) == 1:
-
                 physical_port = physical_port_list[0]
                 y_cable_port_instances.pop(physical_port)
                 y_cable_port_locks.pop(physical_port)
@@ -744,8 +740,6 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     mux_info_dict["mux_direction"] = mux_direction
 
-    manual_switch_cnt = "N/A"
-    auto_switch_cnt = "N/A"
     with y_cable_port_locks[physical_port]:
         manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
         auto_switch_cnt = port_instance.get_switch_count_total(y_cable.SWITCH_COUNT_AUTO)
@@ -1268,7 +1262,7 @@ class YCableTableUpdateTask(object):
                             new_status = 'unknown'
 
                         fvs_updated = swsscommon.FieldValuePairs([('state', new_status),
-                                                                  ('read_side',read_side),
+                                                                  ('read_side', read_side),
                                                                   ('active_side', str(active_side))])
                         y_cable_tbl[asic_index].set(port, fvs_updated)
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB".format(port, old_status, new_status))
