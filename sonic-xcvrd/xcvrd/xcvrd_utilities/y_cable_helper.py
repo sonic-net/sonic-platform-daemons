@@ -4,6 +4,7 @@
 """
 
 import datetime
+import re
 import threading
 
 from importlib import import_module
@@ -41,6 +42,25 @@ y_cable_switch_state_values = {
 
 MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
 MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
+
+def format_the_string(string):
+    """
+    Takes an arbitrary string and creates a valid entity for port mapping file.
+    The input could contain trailing and leading spaces, upper cases etc.
+    Convert them to what is defined in the y_cable vendor_mapping file.
+
+    """
+
+    # create a working copy (and make it lowercase, while we're at it)
+    s = string.lower()
+
+    # remove leading and trailing whitespace
+    s = s.strip()
+
+    # Make spaces into underscores
+    s = re.sub('[\\s\\t\\n]+', '_', s)
+
+    return s
 
 # Find out the underneath physical port list by logical name
 
@@ -337,10 +357,22 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                         port_info_dict = _wrapper_get_transceiver_info(
                             physical_port)
                         if port_info_dict is not None:
-                            vendor = port_info_dict['manufacturer'].rstrip()
-                            model = port_info_dict['model'].rstrip()
-                            module_dir = y_cable_vendor_mapping.mapping.get(
-                                vendor)
+                            vendor = port_info_dict.get('manufacturer')
+
+                            if vendor is None:
+                                helper_logger.log_warning(
+                                    "Error: Unable to find Vendor name for Transceiver {}".format(logical_port_name))
+
+                            model = port_info_dict.get('model')
+
+                            if vendor is None:
+                                helper_logger.log_warning(
+                                    "Error: Unable to find model name for Transceiver {}".format(logical_port_name))
+
+                            vendor = format_the_string(vendor)
+                            model = format_the_string(model)
+                            module_dir = y_cable_vendor_mapping.mapping.get(vendor)
+
                             if module_dir is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find module dir name from vendor {}".format(logical_port_name))
@@ -353,13 +385,13 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 return
 
                             attr_name = 'sonic_y_cable.' + module
-                            yc = getattr(import_module(attr_name), 'YCable')
-                            y_cable_port_instances[physical_port] = yc(physical_port, "y-cable_%d" % physical_port, helper_logger)
+                            y_cable_attribute = getattr(import_module(attr_name), 'YCable')
+                            y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
-                                vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor().rstrip()
+                                vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor()
 
-                            if vendor_name_api != vendor:
+                            if format_the_string(vendor_name_api) != vendor:
                                 y_cable_port_instances.pop(physical_port)
                                 y_cable_port_locks.pop(physical_port)
                                 helper_logger.log_warning("Error: Y Cable api does not work for {}, {} actual vendor name {}".format(
@@ -450,6 +482,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                 physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
                 if len(physical_port_list) == 1:
+
                     physical_port = physical_port_list[0]
                     y_cable_port_instances.pop(physical_port)
                     y_cable_port_locks.pop(physical_port)
@@ -614,6 +647,7 @@ def delete_ports_status_for_y_cable():
             physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
             if len(physical_port_list) == 1:
+
                 physical_port = physical_port_list[0]
                 y_cable_port_instances.pop(physical_port)
                 y_cable_port_locks.pop(physical_port)
