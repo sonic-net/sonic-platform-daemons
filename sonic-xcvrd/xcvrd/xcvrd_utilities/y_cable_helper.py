@@ -43,7 +43,7 @@ y_cable_switch_state_values = {
 MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
 MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
 
-def format_the_string(string):
+def format_mapping_identifier(string):
     """
     Takes an arbitrary string and creates a valid entity for port mapping file.
     The input could contain trailing and leading spaces, upper cases etc.
@@ -57,8 +57,9 @@ def format_the_string(string):
     # remove leading and trailing whitespace
     s = s.strip()
 
+    # Replace whitespace with underscores
     # Make spaces into underscores
-    s = re.sub('[\\s\\t\\n]+', '_', s)
+    s = re.sub(r'\s+', '_', s)
 
     return s
 
@@ -361,27 +362,27 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
                             if vendor is None:
                                 helper_logger.log_warning(
-                                    "Error: Unable to find Vendor name for Transceiver {}".format(logical_port_name))
+                                    "Error: Unable to find Vendor name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
 
                             model = port_info_dict.get('model')
 
                             if vendor is None:
                                 helper_logger.log_warning(
-                                    "Error: Unable to find model name for Transceiver {}".format(logical_port_name))
+                                    "Error: Unable to find model name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
 
-                            vendor = format_the_string(vendor)
-                            model = format_the_string(model)
+                            vendor = format_mapping_identifier(vendor)
+                            model = format_mapping_identifier(model)
                             module_dir = y_cable_vendor_mapping.mapping.get(vendor)
 
                             if module_dir is None:
                                 helper_logger.log_warning(
-                                    "Error: Unable to find module dir name from vendor {}".format(logical_port_name))
+                                    "Error: Unable to find module dir name from vendor for Y-Cable initiation {}".format(logical_port_name))
                                 return
 
                             module = module_dir.get(model)
                             if module is None:
                                 helper_logger.log_warning(
-                                    "Error: Unable to find module name from model {}".format(logical_port_name))
+                                    "Error: Unable to find module name from model for Y-Cable initiation {}".format(logical_port_name))
                                 return
 
                             attr_name = 'sonic_y_cable.' + module
@@ -391,7 +392,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             with y_cable_port_locks[physical_port]:
                                 vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor()
 
-                            if format_the_string(vendor_name_api) != vendor:
+                            if format_mapping_identifier(vendor_name_api) != vendor:
                                 y_cable_port_instances.pop(physical_port)
                                 y_cable_port_locks.pop(physical_port)
                                 helper_logger.log_warning("Error: Y Cable api does not work for {}, {} actual vendor name {}".format(
