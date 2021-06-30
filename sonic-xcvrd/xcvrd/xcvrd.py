@@ -15,11 +15,11 @@ try:
     import threading
     import time
 
-    from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 
+    from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import y_cable_helper
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -42,18 +42,6 @@ SELECT_TIMEOUT_MSECS = 1000
 DOM_INFO_UPDATE_PERIOD_SECS = 60
 TIME_FOR_SFP_READY_SECS = 1
 XCVRD_MAIN_THREAD_SLEEP_SECS = 60
-
-# SFP status definition, shall be aligned with the definition in get_change_event() of ChassisBase
-SFP_STATUS_REMOVED = '0'
-SFP_STATUS_INSERTED = '1'
-
-# SFP error code enum, new elements can be added to the enum if new errors need to be supported.
-SFP_STATUS_ERR_ENUM = Enum('SFP_STATUS_ERR_ENUM', ['SFP_STATUS_ERR_I2C_STUCK', 'SFP_STATUS_ERR_BAD_EEPROM',
-                                                   'SFP_STATUS_ERR_UNSUPPORTED_CABLE', 'SFP_STATUS_ERR_HIGH_TEMP',
-                                                   'SFP_STATUS_ERR_BAD_CABLE'], start=2)
-
-# Convert the error code to string and store them in a set for convenience
-errors_block_eeprom_reading = set(str(error_code.value) for error_code in SFP_STATUS_ERR_ENUM)
 
 EVENT_ON_ALL_SFP = '-1'
 # events definition
@@ -188,11 +176,13 @@ def _wrapper_get_transceiver_change_event(timeout):
     if platform_chassis is not None:
         try:
             status, events = platform_chassis.get_change_event(timeout)
-            sfp_events = events['sfp']
-            return status, sfp_events
+            sfp_events = events.get('sfp')
+            sfp_errors = events.get('sfp_error')
+            return status, sfp_events, sfp_errors
         except NotImplementedError:
             pass
-    return platform_sfputil.get_transceiver_change_event(timeout)
+    status, events = platform_sfputil.get_transceiver_change_event(timeout)
+    return status, events, None
 
 
 def _wrapper_get_sfp_type(physical_port):
@@ -203,10 +193,18 @@ def _wrapper_get_sfp_type(physical_port):
             pass
     return None
 
+
+def _wrapper_get_sfp_error_description(physical_port):
+    if platform_chassis:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_error_description()
+        except NotImplementedError:
+            pass
+    return None
 # Remove unnecessary unit from the raw data
 
 
-def beautify_dom_info_dict(dom_info_dict):
+def beautify_dom_info_dict(dom_info_dict, physical_port):
     dom_info_dict['temperature'] = strip_unit_and_beautify(dom_info_dict['temperature'], TEMP_UNIT)
     dom_info_dict['voltage'] = strip_unit_and_beautify(dom_info_dict['voltage'], VOLT_UNIT)
     dom_info_dict['rx1power'] = strip_unit_and_beautify(dom_info_dict['rx1power'], POWER_UNIT)
@@ -221,6 +219,19 @@ def beautify_dom_info_dict(dom_info_dict):
     dom_info_dict['tx2power'] = strip_unit_and_beautify(dom_info_dict['tx2power'], POWER_UNIT)
     dom_info_dict['tx3power'] = strip_unit_and_beautify(dom_info_dict['tx3power'], POWER_UNIT)
     dom_info_dict['tx4power'] = strip_unit_and_beautify(dom_info_dict['tx4power'], POWER_UNIT)
+    if _wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+        dom_info_dict['rx5power'] = strip_unit_and_beautify(dom_info_dict['rx5power'], POWER_UNIT)
+        dom_info_dict['rx6power'] = strip_unit_and_beautify(dom_info_dict['rx6power'], POWER_UNIT)
+        dom_info_dict['rx7power'] = strip_unit_and_beautify(dom_info_dict['rx7power'], POWER_UNIT)
+        dom_info_dict['rx8power'] = strip_unit_and_beautify(dom_info_dict['rx8power'], POWER_UNIT)
+        dom_info_dict['tx5bias'] = strip_unit_and_beautify(dom_info_dict['tx5bias'], BIAS_UNIT)
+        dom_info_dict['tx6bias'] = strip_unit_and_beautify(dom_info_dict['tx6bias'], BIAS_UNIT)
+        dom_info_dict['tx7bias'] = strip_unit_and_beautify(dom_info_dict['tx7bias'], BIAS_UNIT)
+        dom_info_dict['tx8bias'] = strip_unit_and_beautify(dom_info_dict['tx8bias'], BIAS_UNIT)
+        dom_info_dict['tx5power'] = strip_unit_and_beautify(dom_info_dict['tx5power'], POWER_UNIT)
+        dom_info_dict['tx6power'] = strip_unit_and_beautify(dom_info_dict['tx6power'], POWER_UNIT)
+        dom_info_dict['tx7power'] = strip_unit_and_beautify(dom_info_dict['tx7power'], POWER_UNIT)
+        dom_info_dict['tx8power'] = strip_unit_and_beautify(dom_info_dict['tx8power'], POWER_UNIT)
 
 
 def beautify_dom_threshold_info_dict(dom_info_dict):
@@ -399,7 +410,7 @@ def post_port_dom_info_to_db(logical_port_name, table, stop_event=threading.Even
         try:
             dom_info_dict = _wrapper_get_transceiver_dom_info(physical_port)
             if dom_info_dict is not None:
-                beautify_dom_info_dict(dom_info_dict)
+                beautify_dom_info_dict(dom_info_dict, physical_port)
                 if _wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
                     fvs = swsscommon.FieldValuePairs(
                         [('temperature', dom_info_dict['temperature']),
@@ -540,7 +551,7 @@ def recover_missing_sfp_table_entries(sfp_util, int_tbl, status_tbl, stop_event)
             continue
 
         keys = int_tbl[asic_index].getKeys()
-        if logical_port_name not in keys and not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
+        if logical_port_name not in keys and not sfp_status_helper.detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
             post_port_sfp_info_to_db(logical_port_name, int_tbl[asic_index], transceiver_dict, stop_event)
 
 
@@ -638,29 +649,36 @@ def get_media_settings_key(physical_port, transceiver_dict):
         media_len = transceiver_dict[physical_port]['cable_length']
 
     media_compliance_dict_str = transceiver_dict[physical_port]['specification_compliance']
-
+    media_compliance_code = ''
+    media_type = ''
+    media_key = ''
     media_compliance_dict = {}
+
     try:
-        media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
+        if _wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+            media_compliance_code = media_compliance_dict_str
+        else:
+            media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
+            if sup_compliance_str in media_compliance_dict:
+                media_compliance_code = media_compliance_dict[sup_compliance_str]
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
-    media_compliance_code = ''
-    media_type = ''
-
-    if sup_compliance_str in media_compliance_dict:
-        media_compliance_code = media_compliance_dict[sup_compliance_str]
-
     media_type = transceiver_dict[physical_port]['type_abbrv_name']
-
-    media_key = ''
 
     if len(media_type) != 0:
         media_key += media_type
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
-        if len(media_len) != 0:
-            media_key += '-' + media_len + 'M'
+        if _wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+            if media_compliance_code == "passive_copper_media_interface":
+                if len(media_len) != 0:
+                    media_key += '-' + media_len + 'M'
+        else:
+            if len(media_len) != 0:
+                media_key += '-' + media_len + 'M'
+    else:
+        media_key += '-' + '*'
 
     return [vendor_key, media_key]
 
@@ -742,8 +760,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         key = get_media_settings_key(physical_port, transceiver_dict)
         media_dict = get_media_settings_value(physical_port, key)
 
-        if(len(media_dict) == 0):
-            helper_logger.log_error("Error in obtaining media setting")
+        if len(media_dict) == 0:
+            helper_logger.log_error("Error in obtaining media setting for {}".format(logical_port_name))
             return
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
@@ -771,29 +789,16 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 # Update port SFP status table on receiving SFP change event
 
 
-def update_port_transceiver_status_table(logical_port_name, status_tbl, status):
-    fvs = swsscommon.FieldValuePairs([('status', status)])
+def update_port_transceiver_status_table(logical_port_name, status_tbl, status, error_descriptions='N/A'):
+    fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_tbl.set(logical_port_name, fvs)
+
 
 # Delete port from SFP status table
 
 
 def delete_port_from_status_table(logical_port_name, status_tbl):
     status_tbl._del(logical_port_name)
-
-# Check whether port in error status
-
-
-def detect_port_in_error_status(logical_port_name, status_tbl):
-    rec, fvp = status_tbl.get(logical_port_name)
-    if rec:
-        status_dict = dict(fvp)
-        if status_dict['status'] in errors_block_eeprom_reading:
-            return True
-        else:
-            return False
-    else:
-        return False
 
 # Init TRANSCEIVER_STATUS table
 
@@ -824,16 +829,16 @@ def init_port_sfp_status_tbl(stop_event=threading.Event()):
         physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
         if physical_port_list is None:
             helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-            update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], SFP_STATUS_REMOVED)
+            update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_REMOVED)
 
         for physical_port in physical_port_list:
             if stop_event.is_set():
                 break
 
             if not _wrapper_get_presence(physical_port):
-                update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], SFP_STATUS_REMOVED)
+                update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_REMOVED)
             else:
-                update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], SFP_STATUS_INSERTED)
+                update_port_transceiver_status_table(logical_port_name, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_INSERTED)
 
 #
 # Helper classes ===============================================================
@@ -872,7 +877,7 @@ class DomInfoUpdateTask(object):
                     logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                if not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
+                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
                     post_port_dom_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
                     post_port_dom_threshold_info_to_db(logical_port_name, dom_tbl[asic_index], self.task_stopping_event)
                     if y_cable_presence[0] is True:
@@ -1015,7 +1020,7 @@ class SfpStateUpdateTask(object):
         while not stopping_event.is_set():
             next_state = state
             time_start = time.time()
-            status, port_dict = _wrapper_get_transceiver_change_event(timeout)
+            status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
             if not port_dict:
                 continue
             helper_logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
@@ -1075,11 +1080,11 @@ class SfpStateUpdateTask(object):
                                 logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port))
                                 continue
 
-                            if value == SFP_STATUS_INSERTED:
+                            if value == sfp_status_helper.SFP_STATUS_INSERTED:
                                 helper_logger.log_info("Got SFP inserted event")
                                 # A plugin event will clear the error state.
                                 update_port_transceiver_status_table(
-                                    logical_port, status_tbl[asic_index], SFP_STATUS_INSERTED)
+                                    logical_port, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_INSERTED)
                                 helper_logger.log_info("receive plug in and update port sfp status table.")
                                 rc = post_port_sfp_info_to_db(logical_port, int_tbl[asic_index], transceiver_dict)
                                 # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
@@ -1091,28 +1096,36 @@ class SfpStateUpdateTask(object):
                                 post_port_dom_threshold_info_to_db(logical_port, dom_tbl[asic_index])
                                 notify_media_setting(logical_port, transceiver_dict, app_port_tbl[asic_index])
                                 transceiver_dict.clear()
-                            elif value == SFP_STATUS_REMOVED:
+                            elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 helper_logger.log_info("Got SFP removed event")
                                 update_port_transceiver_status_table(
-                                    logical_port, status_tbl[asic_index], SFP_STATUS_REMOVED)
-                                helper_logger.log_info("receive plug out and pdate port sfp status table.")
+                                    logical_port, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_REMOVED)
+                                helper_logger.log_info("receive plug out and update port sfp status table.")
                                 del_port_sfp_dom_info_from_db(logical_port, int_tbl[asic_index], dom_tbl[asic_index])
-                            elif value in errors_block_eeprom_reading:
-                                helper_logger.log_info("Got SFP Error event")
-                                # Add port to error table to stop accessing eeprom of it
-                                # If the port already in the error table, the stored error code will
-                                # be updated to the new one.
-                                update_port_transceiver_status_table(logical_port, status_tbl[asic_index], value)
-                                helper_logger.log_info("receive error update port sfp status table.")
-                                # In this case EEPROM is not accessible, so remove the DOM info
-                                # since it will be outdated if long time no update.
-                                # but will keep the interface info in the DB since it static.
-                                del_port_sfp_dom_info_from_db(logical_port, None, dom_tbl[asic_index])
-
                             else:
-                                # SFP return unkown event, just ignore for now.
-                                helper_logger.log_warning("Got unknown event {}, ignored".format(value))
-                                continue
+                                try:
+                                    error_bits = int(value)
+                                    helper_logger.log_info("Got SFP error event {}".format(value))
+
+                                    error_descriptions = sfp_status_helper.fetch_generic_error_description(error_bits)
+
+                                    if sfp_status_helper.has_vendor_specific_error(error_bits):
+                                        if error_dict:
+                                            vendor_specific_error_description = error_dict.get(key)
+                                        else:
+                                            vendor_specific_error_description = _wrapper_get_sfp_error_description(key)
+                                        error_descriptions.append(vendor_specific_error_description)
+
+                                    # Add error info to database
+                                    # Any existing error will be replaced by the new one.
+                                    update_port_transceiver_status_table(logical_port, status_tbl[asic_index], value, '|'.join(error_descriptions))
+                                    helper_logger.log_info("Receive error update port sfp status table.")
+                                    # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
+                                    # The interface info remains in the DB since it is static.
+                                    if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
+                                        del_port_sfp_dom_info_from_db(logical_port, None, dom_tbl[asic_index])
+                                except (TypeError, ValueError) as e:
+                                    logger.log_error("Got unrecognized event {}, ignored".format(value))
 
                     # Since ports could be connected to a mux cable, if there is a change event process the change for being on a Y cable Port
                     y_cable_helper.change_ports_status_for_y_cable_change_event(
@@ -1332,6 +1345,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         if self.y_cable_presence[0] is True:
             y_cable_helper.delete_ports_status_for_y_cable()
+
+        del globals()['platform_chassis']
 
     # Run daemon
 

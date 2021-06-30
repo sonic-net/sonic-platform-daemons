@@ -1,5 +1,6 @@
 import os
 import sys
+import multiprocessing
 from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
@@ -9,17 +10,23 @@ else:
     import mock
 
 import pytest
-from sonic_py_common import daemon_base
-
-from .mock_platform import MockChassis, MockFan, MockPsu, MockSfp, MockThermal
-
-daemon_base.db_connect = mock.MagicMock()
-
 tests_path = os.path.dirname(os.path.abspath(__file__))
 
 # Add mocked_libs path so that the file under test can load mocked modules from there
 mocked_libs_path = os.path.join(tests_path, 'mocked_libs')
 sys.path.insert(0, mocked_libs_path)
+
+
+import swsscommon
+# Check we are using the mocked package
+assert len(swsscommon.__path__) == 1
+assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, 'swsscommon')))
+
+from sonic_py_common import daemon_base
+
+from .mock_platform import MockChassis, MockFan, MockPsu, MockSfp, MockThermal
+
+daemon_base.db_connect = mock.MagicMock()
 
 # Add path to the file under test so that we can load it
 modules_path = os.path.dirname(tests_path)
@@ -148,7 +155,7 @@ class TestFanUpdater(object):
     Test cases to cover functionality in FanUpdater class
     """
     def test_deinit(self):
-        fan_updater = thermalctld.FanUpdater(MockChassis())
+        fan_updater = thermalctld.FanUpdater(MockChassis(), multiprocessing.Event())
         fan_updater.fan_status_dict = {'key1': 'value1', 'key2': 'value2'}
         fan_updater.table._del = mock.MagicMock()
 
@@ -161,7 +168,7 @@ class TestFanUpdater(object):
     @mock.patch('thermalctld.update_entity_info', mock.MagicMock())
     def test_refresh_fan_drawer_status_fan_drawer_get_name_not_impl(self):
         # Test case where fan_drawer.get_name is not implemented
-        fan_updater = thermalctld.FanUpdater(MockChassis())
+        fan_updater = thermalctld.FanUpdater(MockChassis(), multiprocessing.Event())
         mock_fan_drawer = mock.MagicMock()
         fan_updater._refresh_fan_drawer_status(mock_fan_drawer, 1)
         assert thermalctld.update_entity_info.call_count == 0
@@ -175,7 +182,7 @@ class TestFanUpdater(object):
         fan.make_over_speed()
         chassis.get_all_fans().append(fan)
 
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
@@ -192,7 +199,7 @@ class TestFanUpdater(object):
         mock_fan = MockFan()
         mock_fan.set_status_led = mock.MagicMock(side_effect=NotImplementedError)
 
-        fan_updater = thermalctld.FanUpdater(MockChassis())
+        fan_updater = thermalctld.FanUpdater(MockChassis(), multiprocessing.Event())
         fan_updater._set_fan_led(mock_fan_drawer, mock_fan, 'Test Fan', fan_status)
         assert fan_updater.log_warning.call_count == 1
         fan_updater.log_warning.assert_called_with('Failed to set status LED for fan Test Fan, set_status_led not implemented')
@@ -200,7 +207,7 @@ class TestFanUpdater(object):
     def test_fan_absent(self):
         chassis = MockChassis()
         chassis.make_absent_fan()
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -224,7 +231,7 @@ class TestFanUpdater(object):
     def test_fan_faulty(self):
         chassis = MockChassis()
         chassis.make_faulty_fan()
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -248,7 +255,7 @@ class TestFanUpdater(object):
     def test_fan_under_speed(self):
         chassis = MockChassis()
         chassis.make_under_speed_fan()
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -264,7 +271,7 @@ class TestFanUpdater(object):
     def test_fan_over_speed(self):
         chassis = MockChassis()
         chassis.make_over_speed_fan()
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -283,7 +290,7 @@ class TestFanUpdater(object):
         mock_fan = MockFan()
         psu._fan_list.append(mock_fan)
         chassis._psu_list.append(psu)
-        fan_updater = thermalctld.FanUpdater(chassis)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
         fan_updater.update()
         assert fan_updater.log_warning.call_count == 0
 
@@ -331,7 +338,7 @@ def test_insufficient_fan_number():
     chassis = MockChassis()
     chassis.make_absent_fan()
     chassis.make_faulty_fan()
-    fan_updater = thermalctld.FanUpdater(chassis)
+    fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3
     expected_calls = [
@@ -415,7 +422,7 @@ class TestTemperatureUpdater(object):
     """
     def test_deinit(self):
         chassis = MockChassis()
-        temp_updater = thermalctld.TemperatureUpdater(chassis)
+        temp_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
         temp_updater.table._del = mock.MagicMock()
 
@@ -423,11 +430,12 @@ class TestTemperatureUpdater(object):
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        
 
     def test_over_temper(self):
         chassis = MockChassis()
         chassis.make_over_temper_thermal()
-        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -441,7 +449,7 @@ class TestTemperatureUpdater(object):
     def test_under_temper(self):
         chassis = MockChassis()
         chassis.make_under_temper_thermal()
-        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -458,7 +466,7 @@ class TestTemperatureUpdater(object):
         mock_thermal = MockThermal()
         psu._thermal_list.append(mock_thermal)
         chassis._psu_list.append(psu)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -478,7 +486,7 @@ class TestTemperatureUpdater(object):
         mock_thermal = MockThermal()
         sfp._thermal_list.append(mock_thermal)
         chassis._sfp_list.append(sfp)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -499,7 +507,7 @@ class TestTemperatureUpdater(object):
         thermal.make_over_temper()
         chassis.get_all_thermals().append(thermal)
 
-        temperature_updater = thermalctld.TemperatureUpdater(chassis)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 2
 
@@ -524,17 +532,17 @@ def test_updater_thermal_check_modular_chassis():
     chassis = MockChassis()
     assert chassis.is_modular_chassis() == False
 
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
     assert temperature_updater.chassis_table == None
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(-1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
     assert temperature_updater.chassis_table == None
 
     my_slot = 1
     chassis.set_my_slot(my_slot)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
     assert temperature_updater.chassis_table != None
     assert temperature_updater.chassis_table.table_name == '{}_{}'.format(TEMPER_INFO_TABLE_NAME, str(my_slot))
 
@@ -547,7 +555,7 @@ def test_updater_thermal_check_chassis_table():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
 
     temperature_updater.update()
     assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
@@ -566,7 +574,7 @@ def test_updater_thermal_check_min_max():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
 
     temperature_updater.update()
     slot_dict = temperature_updater.chassis_table.get(thermal.get_name())
@@ -580,12 +588,14 @@ def test_signal_handler():
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
+    daemon_thermalctld.thermal_manager.stop = mock.MagicMock()
     daemon_thermalctld.signal_handler(thermalctld.signal.SIGHUP, None)
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_info.call_count == 1
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 0
+    assert daemon_thermalctld.thermal_manager.stop.call_count == 0
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
     # Test SIGINT
@@ -593,6 +603,7 @@ def test_signal_handler():
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
+    daemon_thermalctld.thermal_manager.stop = mock.MagicMock()
     test_signal = thermalctld.signal.SIGINT
     daemon_thermalctld.signal_handler(test_signal, None)
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
@@ -600,6 +611,7 @@ def test_signal_handler():
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGINT' - exiting...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 1
+    assert daemon_thermalctld.thermal_manager.stop.call_count == 1
     assert thermalctld.exit_code == (128 + test_signal)
 
     # Test SIGTERM
@@ -608,6 +620,7 @@ def test_signal_handler():
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
+    daemon_thermalctld.thermal_manager.stop = mock.MagicMock()
     test_signal = thermalctld.signal.SIGTERM
     daemon_thermalctld.signal_handler(test_signal, None)
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
@@ -615,6 +628,7 @@ def test_signal_handler():
     daemon_thermalctld.log_info.assert_called_with("Caught signal 'SIGTERM' - exiting...")
     assert daemon_thermalctld.log_warning.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 1
+    assert daemon_thermalctld.thermal_manager.stop.call_count == 1
     assert thermalctld.exit_code == (128 + test_signal)
 
     # Test an unhandled signal
@@ -623,12 +637,14 @@ def test_signal_handler():
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
+    daemon_thermalctld.thermal_manager.stop = mock.MagicMock()
     daemon_thermalctld.signal_handler(thermalctld.signal.SIGUSR1, None)
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.log_warning.call_count == 1
     daemon_thermalctld.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
     assert daemon_thermalctld.log_info.call_count == 0
     assert daemon_thermalctld.stop_event.set.call_count == 0
+    assert daemon_thermalctld.thermal_manager.stop.call_count == 0
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
 
