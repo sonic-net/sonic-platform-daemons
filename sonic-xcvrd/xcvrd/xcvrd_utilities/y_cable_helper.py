@@ -51,6 +51,12 @@ def format_mapping_identifier(string):
 
     """
 
+    if not isinstance(string, str):
+        helper_logger.log_warning(
+            "Error: mapping identifier is not a string {}".format(string))
+        return
+
+
     # create a working copy (and make it lowercase, while we're at it)
     s = string.lower()
 
@@ -387,6 +393,11 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
                             attr_name = 'sonic_y_cable.' + module
                             y_cable_attribute = getattr(import_module(attr_name), 'YCable')
+                            if y_cable_attribute is None:
+                                helper_logger.log_warning(
+                                    "Error: Unable to import attr name for Y-Cable initiation {}".format(logical_port_name))
+                                return
+ 
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
@@ -749,7 +760,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         active_side = port_instance.get_active_linked_tor_side()
 
-    if active_side is None or active_side == y_cable.EEPROM_ERROR:
+    if active_side is None or active_side == port_instance.EEPROM_ERROR:
         tor_active = 'unknown'
     elif read_side == active_side and (active_side == 1 or active_side == 2):
         tor_active = 'active'
@@ -764,7 +775,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         mux_dir_val = port_instance.get_mux_direction()
 
-    if mux_dir_val is None or mux_dir_val == y_cable.EEPROM_ERROR:
+    if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR:
         mux_direction = 'unknown'
     elif read_side == mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'self'
@@ -779,19 +790,19 @@ def get_muxcable_info(physical_port, logical_port_name):
         manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
         auto_switch_cnt = port_instance.get_switch_count_total(y_cable.SWITCH_COUNT_AUTO)
 
-    if manual_switch_cnt is not y_cable.EEPROM_ERROR:
+    if manual_switch_cnt is not port_instance.EEPROM_ERROR:
         mux_info_dict["manual_switch_count"] = manual_switch_cnt
     else:
         mux_info_dict["manual_switch_count"] = "N/A"
 
-    if auto_switch_cnt is not y_cable.EEPROM_ERROR:
+    if auto_switch_cnt is not port_instance.EEPROM_ERROR:
         mux_info_dict["auto_switch_count"] = auto_switch_cnt
     else:
         mux_info_dict["auto_switch_count"] = "N/A"
 
     lane_active = y_cable.check_if_nic_lanes_active(physical_port)
 
-    if lane_active is not y_cable.EEPROM_ERROR:
+    if lane_active is not port_instance.EEPROM_ERROR:
         if (lane_active & 0x1):
             mux_info_dict["nic_lane1_active"] = "True"
         else:
@@ -829,21 +840,21 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         eye_result_nic = port_instance.get_eye_heights(port_instance.TARGET_NIC)
 
-    if eye_result_self is not None and eye_result_self is not y_cable.EEPROM_ERROR and isinstance(eye_result_self, list):
+    if eye_result_self is not None and eye_result_self is not port_instance.EEPROM_ERROR and isinstance(eye_result_self, list):
         mux_info_dict["self_eye_height_lane1"] = eye_result_self[0]
         mux_info_dict["self_eye_height_lane2"] = eye_result_self[1]
     else:
         mux_info_dict["self_eye_height_lane1"] = "N/A"
         mux_info_dict["self_eye_height_lane2"] = "N/A"
 
-    if eye_result_peer is not None and eye_result_peer is not y_cable.EEPROM_ERROR and isinstance(eye_result_peer, list):
+    if eye_result_peer is not None and eye_result_peer is not port_instance.EEPROM_ERROR and isinstance(eye_result_peer, list):
         mux_info_dict["peer_eye_height_lane1"] = eye_result_peer[0]
         mux_info_dict["peer_eye_height_lane2"] = eye_result_peer[1]
     else:
         mux_info_dict["peer_eye_height_lane1"] = "N/A"
         mux_info_dict["peer_eye_height_lane2"] = "N/A"
 
-    if eye_result_nic is not None and eye_result_nic is not y_cable.EEPROM_ERROR and isinstance(eye_result_nic, list):
+    if eye_result_nic is not None and eye_result_nic is not port_instance.EEPROM_ERROR and isinstance(eye_result_nic, list):
         mux_info_dict["nic_eye_height_lane1"] = eye_result_nic[0]
         mux_info_dict["nic_eye_height_lane2"] = eye_result_nic[1]
     else:
@@ -894,7 +905,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_local_temperature()
 
-    if res is not y_cable.EEPROM_ERROR and isinstance(res, int):
+    if res is not port_instance.EEPROM_ERROR and isinstance(res, int):
         mux_info_dict["internal_temperature"] = res
     else:
         mux_info_dict["internal_temperature"] = "N/A"
@@ -902,7 +913,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_local_voltage()
 
-    if res is not y_cable.EEPROM_ERROR and isinstance(res, float):
+    if res is not port_instance.EEPROM_ERROR and isinstance(res, float):
         mux_info_dict["internal_voltage"] = res
     else:
         mux_info_dict["internal_voltage"] = "N/A"
@@ -910,7 +921,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_nic_voltage()
 
-    if res is not y_cable.EEPROM_ERROR and isinstance(res, float):
+    if res is not port_instance.EEPROM_ERROR and isinstance(res, float) and res is not None:
         mux_info_dict["nic_voltage"] = res
     else:
         mux_info_dict["nic_voltage"] = "N/A"
@@ -918,7 +929,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_nic_temperature()
 
-    if res is not y_cable.EEPROM_ERROR and isinstance(res, int):
+    if res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res is not None:
         mux_info_dict["nic_temperature"] = res
     else:
         mux_info_dict["nic_temperature"] = "N/A"
@@ -930,6 +941,11 @@ def get_muxcable_static_info(physical_port, logical_port_name):
 
     mux_static_info_dict = {}
     y_cable_tbl, state_db = {}, {}
+
+    port_instance = y_cable_port_instances.get(physical_port)
+    if port_instance is None:
+        helper_logger.log_error("Error: Could not get port instance for muxcable info for Y cable port {}".format(logical_port_name))
+        return -1
 
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -963,19 +979,19 @@ def get_muxcable_static_info(physical_port, logical_port_name):
     cursor_tor1_values = []
     cursor_tor2_values = []
     for i in range(1, 3):
-        cursor_values_nic = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_NIC)
-        if cursor_values_nic is not None and cursor_values_nic is not y_cable.EEPROM_ERROR and isinstance(cursor_values_nic, list):
+        cursor_values_nic = port_instance.get_target_cursor_values(i, port_instance.TARGET_NIC)
+        if cursor_values_nic is not None and cursor_values_nic is not port_instance.EEPROM_ERROR and isinstance(cursor_values_nic, list):
             cursor_nic_values.append(cursor_values_nic)
         else:
             cursor_nic_values.append(dummy_list)
-        cursor_values_tor1 = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR1)
-        if cursor_values_tor1 is not None and cursor_values_tor1 is not y_cable.EEPROM_ERROR and isinstance(cursor_values_tor1, list):
+        cursor_values_tor1 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_A)
+        if cursor_values_tor1 is not None and cursor_values_tor1 is not port_instance.EEPROM_ERROR and isinstance(cursor_values_tor1, list):
             cursor_tor1_values.append(cursor_values_tor1)
         else:
             cursor_tor1_values.append(dummy_list)
 
-        cursor_values_tor2 = y_cable.get_target_cursor_values(physical_port, i, y_cable.TARGET_TOR2)
-        if cursor_values_tor2 is not None and cursor_values_tor2 is not y_cable.EEPROM_ERROR and isinstance(cursor_values_tor2, list):
+        cursor_values_tor2 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_B)
+        if cursor_values_tor2 is not None and cursor_values_tor2 is not port_instance.EEPROM_ERROR and isinstance(cursor_values_tor2, list):
             cursor_tor2_values.append(cursor_values_tor2)
         else:
             cursor_tor2_values.append(dummy_list)
