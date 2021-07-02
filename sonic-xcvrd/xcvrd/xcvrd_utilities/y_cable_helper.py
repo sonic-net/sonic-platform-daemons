@@ -11,7 +11,6 @@ from importlib import import_module
 
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
-from sonic_y_cable import y_cable
 from sonic_y_cable import y_cable_vendor_mapping
 from swsscommon import swsscommon
 from . import sfp_status_helper
@@ -788,7 +787,7 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     with y_cable_port_locks[physical_port]:
         manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
-        auto_switch_cnt = port_instance.get_switch_count_total(y_cable.SWITCH_COUNT_AUTO)
+        auto_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_AUTO)
 
     if manual_switch_cnt is not port_instance.EEPROM_ERROR:
         mux_info_dict["manual_switch_count"] = manual_switch_cnt
@@ -800,33 +799,6 @@ def get_muxcable_info(physical_port, logical_port_name):
     else:
         mux_info_dict["auto_switch_count"] = "N/A"
 
-    lane_active = y_cable.check_if_nic_lanes_active(physical_port)
-
-    if lane_active is not port_instance.EEPROM_ERROR:
-        if (lane_active & 0x1):
-            mux_info_dict["nic_lane1_active"] = "True"
-        else:
-            mux_info_dict["nic_lane1_active"] = "False"
-
-        if ((lane_active >> 1) & 0x1):
-            mux_info_dict["nic_lane2_active"] = "True"
-        else:
-            mux_info_dict["nic_lane2_active"] = "False"
-
-        if ((lane_active >> 2) & 0x1):
-            mux_info_dict["nic_lane3_active"] = "True"
-        else:
-            mux_info_dict["nic_lane3_active"] = "False"
-
-        if ((lane_active >> 3) & 0x1):
-            mux_info_dict["nic_lane4_active"] = "True"
-        else:
-            mux_info_dict["nic_lane4_active"] = "False"
-    else:
-        mux_info_dict["nic_lane1_active"] = "N/A"
-        mux_info_dict["nic_lane2_active"] = "N/A"
-        mux_info_dict["nic_lane3_active"] = "N/A"
-        mux_info_dict["nic_lane4_active"] = "N/A"
 
     if read_side == 1:
         with y_cable_port_locks[physical_port]:
@@ -1063,10 +1035,6 @@ def post_port_mux_info_to_db(logical_port_name, table):
                  ('link_status_self', mux_info_dict["link_status_self"]),
                  ('link_status_peer', mux_info_dict["link_status_peer"]),
                  ('link_status_nic', mux_info_dict["link_status_nic"]),
-                 ('nic_lane1_active', mux_info_dict["nic_lane1_active"]),
-                 ('nic_lane2_active', mux_info_dict["nic_lane2_active"]),
-                 ('nic_lane3_active', mux_info_dict["nic_lane3_active"]),
-                 ('nic_lane4_active', mux_info_dict["nic_lane4_active"]),
                  ('self_eye_height_lane1', str(mux_info_dict["self_eye_height_lane1"])),
                  ('self_eye_height_lane2', str(mux_info_dict["self_eye_height_lane2"])),
                  ('peer_eye_height_lane1', str(mux_info_dict["peer_eye_height_lane1"])),
