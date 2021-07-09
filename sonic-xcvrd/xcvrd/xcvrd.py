@@ -205,14 +205,6 @@ def _wrapper_get_sfp_error_description(physical_port):
             pass
     return None
 
-def _wrapper_reset_transceiver(physical_port):
-    if platform_chassis:
-        try:
-            return platform_chassis.get_sfp(physical_port).reset()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.reset(physical_port)
-
 # Remove unnecessary unit from the raw data
 
 def beautify_dom_info_dict(dom_info_dict, physical_port):
@@ -270,18 +262,6 @@ def beautify_dom_threshold_info_dict(dom_info_dict):
     dom_info_dict['txbiaslowalarm'] = strip_unit_and_beautify(dom_info_dict['txbiaslowalarm'], BIAS_UNIT)
     dom_info_dict['txbiashighwarning'] = strip_unit_and_beautify(dom_info_dict['txbiashighwarning'], BIAS_UNIT)
     dom_info_dict['txbiaslowwarning'] = strip_unit_and_beautify(dom_info_dict['txbiaslowwarning'], BIAS_UNIT)
-
-# Reset/re-initialize the transciever to its default state
-
-def reset_transceiver(logical_port_name):
-    physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-        return
-
-    for physical_port in physical_port_list:
-        if _wrapper_reset_transceiver(physical_port):
-            time.sleep(MGMT_INIT_TIME_DELAY_SECS)
 
 # Update port sfp info in db
 
@@ -1104,7 +1084,8 @@ class SfpStateUpdateTask(object):
 
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
                                 helper_logger.log_info("Got SFP inserted event")
-                                reset_transceiver(logical_port)
+                                # Delay for I2C MgmtInit to complete
+                                time.sleep(MGMT_INIT_TIME_DELAY_SECS)
                                 # A plugin event will clear the error state.
                                 update_port_transceiver_status_table(
                                     logical_port, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_INSERTED)
