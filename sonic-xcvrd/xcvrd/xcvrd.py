@@ -905,6 +905,7 @@ class SfpStateUpdateTask(object):
     def __init__(self):
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
+        self.sfp_insert_events = {}
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -929,6 +930,22 @@ class SfpStateUpdateTask(object):
 
         helper_logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
         return event
+
+    # Soak SFP insert event until management init completes
+    def _soak_sfp_insert_event(self, port_dict):
+        self.sfp_insert_events = {}
+        for key, value in list(port_dict.items()):
+            if value == sfp_status_helper.SFP_STATUS_INSERTED:
+                self.sfp_insert_events[key] = time.time()
+                del port_dict[key]
+            elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+                del self.sfp_insert_events[key]
+
+        # Soak SFP insert event for 2 seconds
+        for key, itime in list(self.sfp_insert_events.items()):
+            if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
+                port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
+                del self.sfp_insert_events[key]
 
     def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
         helper_logger.log_info("Start SFP monitoring loop")
@@ -1022,7 +1039,12 @@ class SfpStateUpdateTask(object):
         while not stopping_event.is_set():
             next_state = state
             time_start = time.time()
+            # Ensure not to block for any event if sfp insert event is pending
+            if self.sfp_insert_events:
+                timeout = 1
             status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
+            # Soak SFP insert events across various ports (updates port_dict)
+            self._soak_sfp_insert_event(port_dict)
             if not port_dict:
                 continue
             helper_logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
