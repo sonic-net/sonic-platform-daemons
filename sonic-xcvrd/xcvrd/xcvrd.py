@@ -42,6 +42,9 @@ SELECT_TIMEOUT_MSECS = 1000
 # Mgminit time required as per CMIS spec
 MGMT_INIT_TIME_DELAY_SECS = 2
 
+# SFP insert event poll duration
+SFP_INSERT_EVENT_POLL_PERIOD_MSECS = 1000
+
 DOM_INFO_UPDATE_PERIOD_SECS = 60
 TIME_FOR_SFP_READY_SECS = 1
 XCVRD_MAIN_THREAD_SLEEP_SECS = 60
@@ -174,6 +177,20 @@ def _wrapper_get_transceiver_dom_threshold_info(physical_port):
             pass
     return platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
 
+# Soak SFP insert event until management init completes
+def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
+    for key, value in list(port_dict.items()):
+        if value == sfp_status_helper.SFP_STATUS_INSERTED:
+            sfp_insert_events[key] = time.time()
+            del port_dict[key]
+        elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+            if key in sfp_insert_events:
+                del sfp_insert_events[key]
+
+    for key, itime in list(sfp_insert_events.items()):
+        if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
+            port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
+            del sfp_insert_events[key]
 
 def _wrapper_get_transceiver_change_event(timeout):
     if platform_chassis is not None:
@@ -931,22 +948,6 @@ class SfpStateUpdateTask(object):
         helper_logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
         return event
 
-    # Soak SFP insert event until management init completes
-    def _soak_sfp_insert_event(self, port_dict):
-        self.sfp_insert_events = {}
-        for key, value in list(port_dict.items()):
-            if value == sfp_status_helper.SFP_STATUS_INSERTED:
-                self.sfp_insert_events[key] = time.time()
-                del port_dict[key]
-            elif value == sfp_status_helper.SFP_STATUS_REMOVED:
-                del self.sfp_insert_events[key]
-
-        # Soak SFP insert event for 2 seconds
-        for key, itime in list(self.sfp_insert_events.items()):
-            if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
-                port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
-                del self.sfp_insert_events[key]
-
     def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
         helper_logger.log_info("Start SFP monitoring loop")
 
@@ -1041,10 +1042,11 @@ class SfpStateUpdateTask(object):
             time_start = time.time()
             # Ensure not to block for any event if sfp insert event is pending
             if self.sfp_insert_events:
-                timeout = 1
+                timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
             status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
-            # Soak SFP insert events across various ports (updates port_dict)
-            self._soak_sfp_insert_event(port_dict)
+            if status:
+                # Soak SFP insert events across various ports (updates port_dict)
+                _wrapper_soak_sfp_insert_event(self.sfp_insert_events, port_dict)
             if not port_dict:
                 continue
             helper_logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
