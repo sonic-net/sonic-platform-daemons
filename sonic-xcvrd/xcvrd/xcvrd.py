@@ -1106,8 +1106,6 @@ class SfpStateUpdateTask(object):
 
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
                                 helper_logger.log_info("Got SFP inserted event")
-                                # Delay for I2C MgmtInit to complete
-                                time.sleep(MGMT_INIT_TIME_DELAY_SECS)
                                 # A plugin event will clear the error state.
                                 update_port_transceiver_status_table(
                                     logical_port, status_tbl[asic_index], sfp_status_helper.SFP_STATUS_INSERTED)
