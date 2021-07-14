@@ -192,10 +192,10 @@ def _wrapper_get_transceiver_dom_threshold_info(physical_port):
 # Soak SFP insert event until management init completes
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
     for key, value in list(port_dict.items()):
-        if value == sfp_status_helper.SFP_STATUS_INSERTED:
+        if value == SFP_STATUS_INSERTED:
             sfp_insert_events[key] = time.time()
             del port_dict[key]
-        elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+        elif value == SFP_STATUS_REMOVED:
             if key in sfp_insert_events:
                 del sfp_insert_events[key]
 
