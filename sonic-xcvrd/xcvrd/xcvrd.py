@@ -201,7 +201,7 @@ def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
 
     for key, itime in list(sfp_insert_events.items()):
         if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
-            port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
+            port_dict[key] = SFP_STATUS_INSERTED
             del sfp_insert_events[key]
 
 def _wrapper_get_transceiver_change_event(timeout):
