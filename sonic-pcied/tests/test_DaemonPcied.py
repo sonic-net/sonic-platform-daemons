@@ -192,13 +192,13 @@ class TestDaemonPcied(object):
         daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 0
         assert daemon_pcied.device_table.set.call_count == 0
-        assert platform_pcieutil.get_pcie_aer_stats.call_count == 0
+        assert pcied.platform_pcieutil.get_pcie_aer_stats.call_count == 0
 
         mock_read.return_value = '1714'
         daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
         assert daemon_pcied.update_aer_to_statedb.call_count == 1
         assert daemon_pcied.device_table.set.call_count == 1
-        assert platform_pcieutil.get_pcie_aer_stats.call_count == 1
+        assert pcied.platform_pcieutil.get_pcie_aer_stats.call_count == 1
 
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
