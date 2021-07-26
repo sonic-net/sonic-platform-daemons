@@ -167,4 +167,4 @@ stages:
       - task: PublishCodeCoverageResults@1
         inputs:
           codeCoverageTool: 'Cobertura'
-          summaryFileLocation: '**.testresult/coverage.xml'
+          summaryFileLocation: '$(System.DefaultWorkingDirectory)/**testresult/coverage.xml'
