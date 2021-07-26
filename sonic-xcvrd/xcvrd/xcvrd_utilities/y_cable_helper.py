@@ -1274,7 +1274,6 @@ class YCableTableUpdateTask(object):
         y_cable_tbl_keys = {}
         mux_cable_command_tbl, y_cable_command_tbl = {}, {}
         mux_metrics_tbl = {}
-        xcvrd_log_tbl = {}
 
         sel = swsscommon.Select()
 
@@ -1406,10 +1405,8 @@ class YCableTableUpdateTask(object):
 
     def task_download_firmware_worker(self, port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
         helper_logger.log_info("worker thread for downloading physical port {} path {}".format(physical_port, file_full_path))
-        status = -1
         with y_cable_port_locks[physical_port]:
             status = port_instance.download_firmware(file_full_path)
-        fvs = swsscommon.FieldValuePairs([('status', str(status))])
         set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, port)
         helper_logger.log_warning(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
         rc[0] = status
@@ -1420,7 +1417,6 @@ class YCableTableUpdateTask(object):
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, config_db , state_db, y_cable_tbl = {}, {}, {}, {}
-        y_cable_tbl_keys = {}
         xcvrd_log_tbl = {}
         xcvrd_down_fw_cmd_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
         xcvrd_down_fw_status_cmd_tbl, xcvrd_down_fw_status_rsp_tbl, xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
@@ -1568,35 +1564,33 @@ class YCableTableUpdateTask(object):
                     fvp_dict = dict(fvp)
 
                     if "state" in fvp_dict:
-                        probe = fvp_dict["state"]
 
-                        state = 'unknown'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port == None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             state = 'cable not present'
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for cli show hwmode dir cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli show hwmode muxdirection cmd  Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance == None or port_instance in port_mapping_error_values:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             state = 'not Y-Cable port'
                             helper_logger.log_error(
-                                "Error: Could not get port instance for cli show hwmode dir cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli show hwmode muxdirection cmd  Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
                         read_side = None
                         with y_cable_port_locks[physical_port]:
                             read_side = port_instance.get_read_side()
-                        if read_side == None or read_side == port_instance.EEPROM_ERROR:
+                        if read_side is None or read_side == port_instance.EEPROM_ERROR:
 
                             state = 'unknown'
                             helper_logger.log_warning(
-                                "Error: Could not get read side for cli show hwmode dir cmd logical port {} and physical port {}".format(port, physical_port))
+                                "Error: Could not get read side for cli show hwmode muxdirection cmd logical port {} and physical port {}".format(port, physical_port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
@@ -1604,10 +1598,10 @@ class YCableTableUpdateTask(object):
                         with y_cable_port_locks[physical_port]:
                             active_side = port_instance.get_mux_direction()
 
-                        if active_side == None or read_side == port_instance.EEPROM_ERROR:
+                        if active_side is None or read_side == port_instance.EEPROM_ERROR:
 
                             state = 'unknown'
-                            helper_logger.log_warning("Error: Could not get active side for cli show hwmode dir cmd logical port {} and physical port {}".format(port, physical_port))
+                            helper_logger.log_warning("Error: Could not get active side for cli show hwmode muxdirection cmd logical port {} and physical port {}".format(port, physical_port))
 
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
@@ -1618,13 +1612,13 @@ class YCableTableUpdateTask(object):
                             state = 'standby'
                         else:
                             state = 'unknown'
-                            helper_logger.log_warning("Error: Could not get state for cli show hwmode dir logical port {} and physical port {}".format(port, physical_port))
+                            helper_logger.log_warning("Error: Could not get state for cli show hwmode muxdirection logical port {} and physical port {}".format(port, physical_port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
                         set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_warning("Error: Wrong input param for cli show hwmode dir logical port {}".format(port))
+                        helper_logger.log_warning("Error: Wrong input param for cli show hwmode muxdirection logical port {}".format(port))
                         set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
 
             while True:
@@ -1643,7 +1637,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for  cli config hwmode state cmd  Y cable port {}".format(port))
@@ -1651,7 +1645,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance == None or port_instance in port_mapping_error_values:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get port instance for  cli config hwmode state cmd  Y cable port {}".format(port))
@@ -1703,23 +1697,22 @@ class YCableTableUpdateTask(object):
                     fvp_dict = dict(fvp)
 
                     if "state" in fvp_dict:
-                        config_mode = str(fvp_dict["state"])
 
                         state = 'unknown'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port == None or physical_port == PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for hwmode cli state cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for hwmode cli switchingmode cmd  Y cable port {}".format(port))
                             state = 'cable not present'
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance == None or port_instance in port_mapping_error_values:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get port instance for hwmode cli state cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for hwmode cli switchingmode cmd  Y cable port {}".format(port))
                             state = 'not Y-Cable port'
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
@@ -1727,10 +1720,10 @@ class YCableTableUpdateTask(object):
                         result = None
                         with y_cable_port_locks[physical_port]:
                             result = port_instance.get_switching_mode()
-                            if result == None or result == port_instance.EEPROM_ERROR:
+                            if result is None or result == port_instance.EEPROM_ERROR:
 
                                 helper_logger.log_warning(
-                                    "Error: Could not get read side for mux cable cli hwmode cmd logical port {} and physical port {}".format(port, physical_port))
+                                    "Error: Could not get read side for hwmode cli switchingmode cmd logical port {} and physical port {}".format(port, physical_port))
                                 set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                                 break
 
@@ -1743,7 +1736,7 @@ class YCableTableUpdateTask(object):
 
                         set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_warning("Error: Incorrect input param for mux cable cli hwmode swmode logical port {}".format(port))
+                        helper_logger.log_warning("Error: Incorrect input param for mux cable cli hwmode switchingmode logical port {}".format(port))
                         set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
 
 
@@ -1764,7 +1757,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for hwmode cli state cmd  Y cable port {}".format(port))
@@ -1839,10 +1832,10 @@ class YCableTableUpdateTask(object):
 
                         status = -1
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for down fw cli cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for down fw cli cmd Y cable port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                             break
 
@@ -1884,9 +1877,6 @@ class YCableTableUpdateTask(object):
                         mux_info_dict['version_nic_active'] = 'N/A'
                         mux_info_dict['version_nic_inactive'] = 'N/A'
                         mux_info_dict['version_nic_next'] = 'N/A'
-
-                        version = fvp_dict["firmware_version"]
-
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
