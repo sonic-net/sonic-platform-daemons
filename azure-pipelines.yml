@@ -159,6 +159,7 @@ stages:
     steps:
       - ${{ each project in parameters.project_list }}:
         - task: DownloadPipelineArtifact@2
+          displayName: '${{ project.root_dir }}'
           inputs:
             buildType: 'current'
             artifactName: '${{ project.root_dir }}.testresult'
