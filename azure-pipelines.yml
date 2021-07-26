@@ -117,13 +117,6 @@ jobs:
           condition: succeededOrFailed()
           displayName: 'Publish ${{ project.name }} (Python 2) test results'
 
-        - task: PublishCodeCoverageResults@1
-          inputs:
-            codeCoverageTool: Cobertura
-            summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
-            reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-          displayName: 'Publish ${{ project.name }} (Python 2) test coverage'
-
         - script: |
             set -e
             python2 setup.py bdist_wheel
@@ -145,13 +138,6 @@ jobs:
           condition: succeededOrFailed()
           displayName: 'Publish ${{ project.name }} (Python 3) test results'
 
-        - task: PublishCodeCoverageResults@1
-          inputs:
-            codeCoverageTool: Cobertura
-            summaryFileLocation: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/coverage.xml'
-            reportDirectory: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/htmlcov/'
-          displayName: 'Publish ${{ project.name }} (Python 3) test coverage'
-
         - script: |
             set -e
             python3 setup.py bdist_wheel
@@ -161,3 +147,20 @@ jobs:
       - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
         artifact: ${{ project.root_dir }}
         displayName: "Publish ${{ project.name }} wheels"
+      - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/'
+        artifact: ${{ project.root_dir }}.testresult
+        displayName: "Publish ${{ project.name }} test result"
+
+  - job:
+    displayName: Collect test result
+    steps:
+      - ${{ each project in parameters.project_list }}:
+        - task: DownloadPipelineArtifact@2
+          inputs:
+            buildType: 'current'
+            artifactName: '${{ project.root_dir }}.testresult'
+            targetPath: '$(Pipeline.Workspace)'
+      - task: PublishCodeCoverageResults@1
+        inputs:
+          codeCoverageTool: 'Cobertura'
+          summaryFileLocation: '**/coverage.xml'
