@@ -15,8 +15,6 @@ from . import sfp_status_helper
 
 SELECT_TIMEOUT = 1000
 
-Y_CABLE_DIRECTION_SYNC = 3
-
 y_cable_platform_sfputil = None
 y_cable_platform_chassis = None
 
@@ -114,25 +112,16 @@ def update_tor_active_side(read_side, state, logical_port_name):
         if _wrapper_get_presence(physical_port):
             if int(read_side) == 1:
                 if state == "active":
-                    y_cable_toggle_mux_torA(physical_port)
+                    return y_cable_toggle_mux_torA(physical_port)
                 elif state == "standby":
-                    y_cable_toggle_mux_torB(physical_port)
+                    return y_cable_toggle_mux_torB(physical_port)
             elif int(read_side) == 2:
                 if state == "active":
-                    y_cable_toggle_mux_torB(physical_port)
+                    return y_cable_toggle_mux_torB(physical_port)
                 elif state == "standby":
-                    y_cable_toggle_mux_torA(physical_port)
+                    return y_cable_toggle_mux_torA(physical_port)
 
             # TODO: Should we confirm that the mux was indeed toggled?
-            # attempt to read the cable direction in 3 attempts and if still the direction is not in sync
-            # return unknown
-            for i in range(Y_CABLE_DIRECTION_SYNC):
-                active_side = y_cable.check_mux_direction(physical_port)
-                if active_side == int(read_side):
-                    return active_side
-                else:
-                    continue
-            return -1
 
         else:
             helper_logger.log_warning(
