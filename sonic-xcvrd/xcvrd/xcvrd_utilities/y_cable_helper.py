@@ -114,14 +114,14 @@ def update_tor_active_side(read_side, state, logical_port_name):
         if _wrapper_get_presence(physical_port):
             if int(read_side) == 1:
                 if state == "active":
-                    return y_cable_toggle_mux_torA(physical_port)
+                    y_cable_toggle_mux_torA(physical_port)
                 elif state == "standby":
-                    return y_cable_toggle_mux_torB(physical_port)
+                    y_cable_toggle_mux_torB(physical_port)
             elif int(read_side) == 2:
                 if state == "active":
-                    return y_cable_toggle_mux_torB(physical_port)
+                    y_cable_toggle_mux_torB(physical_port)
                 elif state == "standby":
-                    return y_cable_toggle_mux_torA(physical_port)
+                    y_cable_toggle_mux_torA(physical_port)
 
             # TODO: Should we confirm that the mux was indeed toggled?
             # attempt to read the cable direction in 3 attempts and if still the direction is not in sync
