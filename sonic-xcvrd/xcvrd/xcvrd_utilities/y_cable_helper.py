@@ -144,12 +144,12 @@ def get_ycable_port_instance_from_logical_port(logical_port_name):
             if port_instance is None:
                 helper_logger.log_error(
                     "Error: Could not get port instance from the dict for Y cable port {}".format(logical_port_name))
-                return -1
+                return PORT_INSTANCE_ERROR
             return port_instance
         else:
             helper_logger.log_warning(
                 "Error: Could not establish presence for  Y cable port {} while trying to toggle the mux".format(logical_port_name))
-            return -1
+            return PORT_INSTANCE_ERROR
 
     else:
         # Y cable ports should always have
@@ -1479,11 +1479,11 @@ class YCableTableUpdateTask(object):
             xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
             xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_STATE_CMD")
+                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
             xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_STATE_CMD")
+                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
             xcvrd_config_hwmode_state_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_HWMODE_STATE_RSP")
+                state_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_RSP")
             xcvrd_config_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
             xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
@@ -1656,7 +1656,7 @@ class YCableTableUpdateTask(object):
                             read_side = port_instance.get_read_side()
                         if read_side is None or read_side is port_instance.EEPROM_ERROR:
 
-                            status = 'false'
+                            status = 'False'
                             helper_logger.log_error(
                                 "Error: Could not get read side for  cli config hwmode state cmd  Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
@@ -1757,7 +1757,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for hwmode cli state cmd  Y cable port {}".format(port))
@@ -1765,7 +1765,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance is port_instance.EEPROM_ERROR:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get port instance for hwmode cli state cmd  Y cable port {}".format(port))
@@ -1774,7 +1774,7 @@ class YCableTableUpdateTask(object):
 
                         if config_mode == "auto":
                             with y_cable_port_locks[physical_port]:
-                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
+                                status = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
                             if result is None or result is port_instance.EEPROM_ERROR:
 
                                 status = 'False'
@@ -1785,7 +1785,7 @@ class YCableTableUpdateTask(object):
 
                         elif config_mode == "manual":
                             with y_cable_port_locks[physical_port]:
-                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
+                                status = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
                             if result is None or result is port_instance.EEPROM_ERROR:
 
                                 status = 'False'
@@ -1840,7 +1840,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance is port_instance.EEPROM_ERROR:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get port instance for cmd down firmware Y cable port {}".format(port))
@@ -1888,7 +1888,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance is port_instance.EEPROM_ERROR:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get port instance for mux cable down fw command port {}".format(port))
                             set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
@@ -1913,7 +1913,6 @@ class YCableTableUpdateTask(object):
                         else:
                             get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "peer", mux_info_dict)
                             get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict)
-                        helper_logger.log_warning("Y_CABLE_DEBUG: 8.4 cli cmd {} file name".format(port))
 
                         status = 'True'
                         set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
@@ -1955,7 +1954,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance is port_instance.EEPROM_ERROR:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             helper_logger.log_warning("Error: Could not get port instance for mux cable acti fw command port {}".format(port))
                             # error scenario update table accordingly
                             set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
@@ -2003,7 +2002,7 @@ class YCableTableUpdateTask(object):
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance is port_instance.EEPROM_ERROR:
+                        if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get port instance for mux cable roll fw command port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
