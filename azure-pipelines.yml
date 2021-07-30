@@ -161,23 +161,12 @@ stages:
     steps:
       - checkout: none
       - ${{ each project in parameters.project_list }}:
-        - ${{ if eq(project.python2, true) }}:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'download test.py2.${{ project.root_dir }}'
-            inputs:
-              buildType: 'current'
-              artifactName: 'test.py2.${{ project.root_dir }}'
-              targetPath: '$(System.DefaultWorkingDirectory)/test.py2.${{ project.root_dir }}'
         - task: DownloadPipelineArtifact@2
           displayName: 'download test.py3.${{ project.root_dir }}'
           inputs:
             buildType: 'current'
             artifactName: 'test.py3.${{ project.root_dir }}'
-            targetPath: '$(System.DefaultWorkingDirectory)/test.py3.${{ project.root_dir }}'
-      - script: |
-          set -ex
-          ls $(System.DefaultWorkingDirectory)
-          find $(System.DefaultWorkingDirectory) -name coverage.xml
+            targetPath: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}'
       - task: PublishCodeCoverageResults@1
         inputs:
           codeCoverageTool: 'Cobertura'
