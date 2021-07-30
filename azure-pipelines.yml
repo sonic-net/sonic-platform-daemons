@@ -167,6 +167,8 @@ stages:
             buildType: 'current'
             artifactName: 'test.py3.${{ project.root_dir }}'
             targetPath: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}'
+      - script: |
+          find ./
       - task: PublishCodeCoverageResults@1
         inputs:
           codeCoverageTool: 'Cobertura'
