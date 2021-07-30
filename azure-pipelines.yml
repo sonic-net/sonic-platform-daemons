@@ -157,14 +157,19 @@ stages:
   - job:
     displayName: Collect test result
     steps:
+      - checkout:none
       - ${{ each project in parameters.project_list }}:
         - task: DownloadPipelineArtifact@2
           displayName: '${{ project.root_dir }}'
           inputs:
             buildType: 'current'
             artifactName: '${{ project.root_dir }}.testresult'
-            targetPath: '$(Pipeline.Workspace)'
+            targetPath: '$(System.DefaultWorkingDirectory)'
+      - script: |
+          set -ex
+          ls $(System.DefaultWorkingDirectory)
+          find $(System.DefaultWorkingDirectory) -name coverage.xml
       - task: PublishCodeCoverageResults@1
         inputs:
           codeCoverageTool: 'Cobertura'
-          summaryFileLocation: '$(System.DefaultWorkingDirectory)/**testresult/coverage.xml'
+          summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
