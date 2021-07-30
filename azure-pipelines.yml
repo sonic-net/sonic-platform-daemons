@@ -171,5 +171,4 @@ stages:
         inputs:
           codeCoverageTool: 'Cobertura'
           summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
-          mergeTestResults: true
-          pathToSources: $(System.DefaultWorkingDirectory)/**
+          pathToSources: $(System.DefaultWorkingDirectory)/
