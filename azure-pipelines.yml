@@ -169,10 +169,10 @@ stages:
               artifactName: 'test.py2.${{ project.root_dir }}'
               targetPath: '$(System.DefaultWorkingDirectory)/test.py2.${{ project.root_dir }}'
         - task: DownloadPipelineArtifact@2
-          displayName: 'test.py3.${{ project.root_dir }}'
+          displayName: 'download test.py3.${{ project.root_dir }}'
           inputs:
             buildType: 'current'
-            artifactName: 'download test.py3.${{ project.root_dir }}'
+            artifactName: 'test.py3.${{ project.root_dir }}'
             targetPath: '$(System.DefaultWorkingDirectory)/test.py3.${{ project.root_dir }}'
       - script: |
           set -ex
