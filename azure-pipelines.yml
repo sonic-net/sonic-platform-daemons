@@ -157,7 +157,7 @@ stages:
   - job:
     displayName: Collect test result
     steps:
-      - checkout:none
+      - checkout: none
       - ${{ each project in parameters.project_list }}:
         - task: DownloadPipelineArtifact@2
           displayName: '${{ project.root_dir }}'
