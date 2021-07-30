@@ -118,7 +118,9 @@ stages:
               failTaskOnFailedTests: true
             condition: succeededOrFailed()
             displayName: 'Publish ${{ project.name }} (Python 2) test results'
-
+          - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/'
+            artifact: test.py2.${{ project.root_dir }}
+            displayName: "Publish ${{ project.name }} py2 test result"
           - script: |
               set -e
               python2 setup.py bdist_wheel
@@ -150,8 +152,8 @@ stages:
           artifact: ${{ project.root_dir }}
           displayName: "Publish ${{ project.name }} wheels"
         - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/'
-          artifact: ${{ project.root_dir }}.testresult
-          displayName: "Publish ${{ project.name }} test result"
+          artifact: test.py3.${{ project.root_dir }}
+          displayName: "Publish ${{ project.name }} py3 test result"
 - stage: collect
   jobs:
   - job:
@@ -159,12 +161,19 @@ stages:
     steps:
       - checkout: none
       - ${{ each project in parameters.project_list }}:
+        - ${{ if eq(project.python2, true) }}:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'download test.py2.${{ project.root_dir }}'
+            inputs:
+              buildType: 'current'
+              artifactName: 'test.py2.${{ project.root_dir }}'
+              targetPath: '$(System.DefaultWorkingDirectory)/test.py2.${{ project.root_dir }}'
         - task: DownloadPipelineArtifact@2
-          displayName: '${{ project.root_dir }}'
+          displayName: 'test.py3.${{ project.root_dir }}'
           inputs:
             buildType: 'current'
-            artifactName: '${{ project.root_dir }}.testresult'
-            targetPath: '$(System.DefaultWorkingDirectory)'
+            artifactName: 'download test.py3.${{ project.root_dir }}'
+            targetPath: '$(System.DefaultWorkingDirectory)/test.py3.${{ project.root_dir }}'
       - script: |
           set -ex
           ls $(System.DefaultWorkingDirectory)
