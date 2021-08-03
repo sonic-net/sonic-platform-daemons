@@ -53,13 +53,13 @@ jobs:
   - job: build_test
     container: sonic-slave-buster
     variables:
-      sourceBranch: master
+      sourceBranch: "$(Build.SourceBranch)"
     steps:
     - checkout: self
       clean: true
     - script: |
-        if [[ $(Build.Reason) == "BatchedCI" ]] || [[ $(Build.Reason) == "Schedule" ]];then
-          sourceBranch=$(Build.SourceBranch)
+        if [[ $(Build.Reason) == "Manual" ]];then
+          sourceBranch=master
           echo '##vso[task.setvariable variable=sourceBranch]$sourceBranch'
         fi
     - script: echo $(sourceBranch)
@@ -70,7 +70,7 @@ jobs:
         pipeline: 142
         artifact: 'sonic-buildimage.vs'
         runVersion: 'latestFromBranch'
-        runBranch: "refs/heads/$(sourceBranch)"
+        runBranch: "$(sourceBranch)"
       displayName: "Download artifacts from latest sonic-buildimage build"
 
     - script: |
