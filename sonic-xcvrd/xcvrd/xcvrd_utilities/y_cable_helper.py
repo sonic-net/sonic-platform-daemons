@@ -91,7 +91,7 @@ def logical_port_name_to_physical_port_list(port_name):
         return [int(port_name)]
 
 
-def _wrapper_get_presence(physical_port):
+def y_cable_wrapper_get_presence(physical_port):
     if y_cable_platform_chassis is not None:
         try:
             return y_cable_platform_chassis.get_sfp(physical_port).get_presence()
@@ -100,7 +100,7 @@ def _wrapper_get_presence(physical_port):
     return y_cable_platform_sfputil.get_presence(physical_port)
 
 
-def _wrapper_get_transceiver_info(physical_port):
+def y_cable_wrapper_get_transceiver_info(physical_port):
     if y_cable_platform_chassis is not None:
         try:
             return y_cable_platform_chassis.get_sfp(physical_port).get_transceiver_info()
@@ -115,7 +115,7 @@ def get_ycable_physical_port_from_logical_port(logical_port_name):
     if len(physical_port_list) == 1:
 
         physical_port = physical_port_list[0]
-        if _wrapper_get_presence(physical_port):
+        if y_cable_wrapper_get_presence(physical_port):
 
             return physical_port
         else:
@@ -138,7 +138,7 @@ def get_ycable_port_instance_from_logical_port(logical_port_name):
     if len(physical_port_list) == 1:
 
         physical_port = physical_port_list[0]
-        if _wrapper_get_presence(physical_port):
+        if y_cable_wrapper_get_presence(physical_port):
 
             port_instance = y_cable_port_instances.get(physical_port)
             if port_instance is None:
@@ -243,7 +243,7 @@ def update_tor_active_side(read_side, state, logical_port_name):
     if len(physical_port_list) == 1:
 
         physical_port = physical_port_list[0]
-        if _wrapper_get_presence(physical_port):
+        if y_cable_wrapper_get_presence(physical_port):
             if int(read_side) == 1:
                 if state == "active":
                     return y_cable_toggle_mux_torA(physical_port)
@@ -284,7 +284,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
     if len(physical_port_list) == 1:
 
         physical_port = physical_port_list[0]
-        if _wrapper_get_presence(physical_port):
+        if y_cable_wrapper_get_presence(physical_port):
 
             port_instance = y_cable_port_instances.get(physical_port)
             if port_instance is None:
@@ -352,7 +352,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
     if len(physical_port_list) == 1:
 
         physical_port = physical_port_list[0]
-        if _wrapper_get_presence(physical_port):
+        if y_cable_wrapper_get_presence(physical_port):
 
             port_instance = y_cable_port_instances.get(physical_port)
             if port_instance is None:
@@ -438,8 +438,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                 if len(physical_port_list) == 1:
 
                     physical_port = physical_port_list[0]
-                    if _wrapper_get_presence(physical_port):
-                        port_info_dict = _wrapper_get_transceiver_info(
+                    if y_cable_wrapper_get_presence(physical_port):
+                        port_info_dict = y_cable_wrapper_get_transceiver_info(
                             physical_port)
                         if port_info_dict is not None:
                             vendor = port_info_dict.get('manufacturer')
@@ -450,7 +450,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
                             model = port_info_dict.get('model')
 
-                            if vendor is None:
+                            if model is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find model name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
 
@@ -1099,7 +1099,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
 
     for physical_port in physical_port_list:
 
-        if not _wrapper_get_presence(physical_port):
+        if not y_cable_wrapper_get_presence(physical_port):
             helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))
             continue
 
@@ -1154,7 +1154,7 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
 
     for physical_port in physical_port_list:
 
-        if not _wrapper_get_presence(physical_port):
+        if not y_cable_wrapper_get_presence(physical_port):
             continue
 
         mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
@@ -1637,7 +1637,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for  cli config hwmode state cmd  Y cable port {}".format(port))
@@ -1832,7 +1832,7 @@ class YCableTableUpdateTask(object):
 
                         status = -1
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR:
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for down fw cli cmd Y cable port {}".format(port))
@@ -1880,7 +1880,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get physical port for mux cable down fw command port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
@@ -1947,7 +1947,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get physical port for mux cable acti fw command port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
@@ -1995,7 +1995,7 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port is PHYSICAL_PORT_MAPPING_ERROR: 
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get physical port for mux cable roll fw command port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
