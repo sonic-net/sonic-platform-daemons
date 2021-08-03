@@ -162,9 +162,6 @@ jobs:
         - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
           artifact: ${{ project.root_dir }}
           displayName: "Publish ${{ project.name }} (Python 3) wheels"
-    - publish: '$(System.DefaultWorkingDirectory)/'
-      artifact: root
-      displayName: "Publish root"
     - task: reportgenerator@4
       inputs:
         reports: '$(Build.SourcesDirectory)/**/coverage.xml'
