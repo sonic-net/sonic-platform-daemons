@@ -64,7 +64,7 @@ jobs:
     - script: echo $(sourceBranch)
     - script: |
         if [[ $(Build.Reason) == "Manual" ]];then
-          echo "##vso[task.setvariable variable=sourceBranch]master"
+          echo "##vso[task.setvariable variable=sourceBranch]refs/heads/$master"
         fi
         if [[ $(Build.Reason) == "PullRequest" ]];then
           echo "##vso[task.setvariable variable=sourceBranch]refs/heads/$(System.PullRequest.TargetBranch)"
