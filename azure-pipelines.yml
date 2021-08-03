@@ -168,7 +168,6 @@ jobs:
       inputs:
         reports: '$(Build.SourcesDirectory)/**/coverage.xml'
         targetdir: '$(Build.SourcesDirectory)/'
-        sourcedirs: '$(Build.SourcesDirectory)/sonic-chassisd,$(Build.SourcesDirectory)/sonic-ledd,$(Build.SourcesDirectory)/sonic-pcied,$(Build.SourcesDirectory)/sonic-psud,$(Build.SourcesDirectory)/sonic-syseepromd,$(Build.SourcesDirectory)/sonic-thermalctld,$(Build.SourcesDirectory)/sonic-xcvrd'
     - task: PublishCodeCoverageResults@1
       inputs:
         codeCoverageTool: 'Cobertura'
