@@ -65,12 +65,12 @@ jobs:
     - script: echo $(sourceBranch)
     - task: DownloadPipelineArtifact@2
       inputs:
-        source: specific
-        project: build
+        source: 'specific'
+        project: 'build'
         pipeline: 142
-        artifact: sonic-buildimage.vs
+        artifact: 'sonic-buildimage.vs'
         runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/$(Build.SourceBranch)'
+        runBranch: "refs/heads/$(sourceBranch)"
       displayName: "Download artifacts from latest sonic-buildimage build"
 
     - script: |
