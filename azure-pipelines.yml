@@ -167,8 +167,12 @@ stages:
             buildType: 'current'
             artifactName: 'test.py3.${{ project.root_dir }}'
             targetPath: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}'
+      - task: reportgenerator@4
+        inputs:
+          reports: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+          targetdir: '$(System.DefaultWorkingDirectory)/'
       - task: PublishCodeCoverageResults@1
         inputs:
           codeCoverageTool: 'Cobertura'
-          summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+          summaryFileLocation: '$(System.DefaultWorkingDirectory)/Cobertura.xml'
           pathToSources: $(System.DefaultWorkingDirectory)/
