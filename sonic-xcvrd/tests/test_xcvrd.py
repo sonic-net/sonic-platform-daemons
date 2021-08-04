@@ -354,7 +354,9 @@ class TestXcvrdScript(object):
         mux_info_dict['version_nic_active'] = '0.8'
         mux_info_dict['version_nic_inactive'] = '0.7'
         mux_info_dict['version_nic_next'] = '0.7'
-        set_show_firmware_fields("Ethernet0", mux_info_dict, xcvrd_show_fw_res_tbl)
+        rc = set_show_firmware_fields("Ethernet0", mux_info_dict, xcvrd_show_fw_res_tbl)
+
+        assert(rc == 0)
 
     def test_get_media_settings_key(self):
         xcvr_info_dict = {

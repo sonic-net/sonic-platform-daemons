@@ -173,6 +173,8 @@ def set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_rsp_tbl):
         ])
     xcvrd_show_fw_rsp_tbl.set(port, fvs)
 
+    return 0
+
 
 def set_result_and_delete_port(result, actual_result, command_table, response_table, port):
     fvs = swsscommon.FieldValuePairs([(result, str(actual_result))])
