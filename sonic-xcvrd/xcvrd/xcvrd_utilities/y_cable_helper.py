@@ -205,7 +205,7 @@ def y_cable_toggle_mux_torA(physical_port):
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error(
-            "Error: Could not get port instance for read side for  Y cable port {}".format(logical_port_name))
+            "Error: Could not get port instance for read side for  Y cable port {}".format(physical_port))
         return -1
 
     with y_cable_port_locks[physical_port]:
@@ -223,7 +223,7 @@ def y_cable_toggle_mux_torA(physical_port):
 def y_cable_toggle_mux_torB(physical_port):
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
-        helper_logger.log_error("Error: Could not get port instance for read side for  Y cable port {}".format(logical_port_name))
+        helper_logger.log_error("Error: Could not get port instance for read side for  Y cable port {}".format(physical_port))
         return -1
 
     with y_cable_port_locks[physical_port]:
@@ -306,7 +306,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             with y_cable_port_locks[physical_port]:
                 active_side = port_instance.get_mux_direction()
 
-            if active_side is None:
+            if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0 :
 
                 status = 'unknown'
                 update_table_mux_status_for_response_tbl(y_cable_response_tbl[asic_index], status, logical_port_name)
@@ -365,7 +365,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
             with y_cable_port_locks[physical_port]:
                 read_side = port_instance.get_read_side()
 
-            if read_side is None:
+            if read_side is None or read_side < 0 or read_side == port_instance.EEPROM_ERROR:
                 read_side = active_side = -1
                 update_table_mux_status_for_statedb_port_tbl(
                     mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
@@ -449,12 +449,14 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             if vendor is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find Vendor name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
+                                return
 
                             model = port_info_dict.get('model')
 
                             if model is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find model name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
+                                return
 
                             vendor = format_mapping_identifier(vendor)
                             model = format_mapping_identifier(model)
@@ -596,7 +598,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
 
-    fvs_updated = swsscommon.FieldValuePairs([('enable_log', 'false')])
+    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'debug')])
     # Get the namespaces in the platform
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -629,7 +631,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             # logical_ports after loading the port_mappings from port_config_file
             # This should not happen
             helper_logger.log_warning(
-                "Could not retreive port inside config_db PORT table ".format(logical_port_name))
+                "Could not retreive port inside config_db PORT table {}".format(logical_port_name))
 
 
 def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, stop_event=threading.Event()):
@@ -703,7 +705,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
 
 def delete_ports_status_for_y_cable():
 
-    state_db, port_tbl, y_cable_tbl = {}, {}, {}
+    state_db, config_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
     y_cable_tbl_keys = {}
     static_tbl, mux_tbl = {}, {}
     namespaces = multi_asic.get_front_end_namespaces()
@@ -840,7 +842,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         active_side = port_instance.get_active_linked_tor_side()
 
-    if active_side is None or active_side == port_instance.EEPROM_ERROR:
+    if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0:
         tor_active = 'unknown'
     elif read_side == active_side and (active_side == 1 or active_side == 2):
         tor_active = 'active'
@@ -855,7 +857,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         mux_dir_val = port_instance.get_mux_direction()
 
-    if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR:
+    if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR or mux_dir_val < 0:
         mux_direction = 'unknown'
     elif read_side == mux_dir_val and (active_side == 1 or active_side == 2):
         mux_direction = 'self'
@@ -870,15 +872,15 @@ def get_muxcable_info(physical_port, logical_port_name):
         manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
         auto_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_AUTO)
 
-    if manual_switch_cnt is not port_instance.EEPROM_ERROR:
-        mux_info_dict["manual_switch_count"] = manual_switch_cnt
-    else:
+    if manual_switch_cnt is None or manual_switch_cnt == port_instance.EEPROM_ERROR or manual_switch_cnt < 0:
         mux_info_dict["manual_switch_count"] = "N/A"
-
-    if auto_switch_cnt is not port_instance.EEPROM_ERROR:
-        mux_info_dict["auto_switch_count"] = auto_switch_cnt
     else:
+        mux_info_dict["manual_switch_count"] = manual_switch_cnt
+
+    if auto_switch_cnt is None or auto_switch_cnt == port_instance.EEPROM_ERROR or auto_switch_cnt < 0:
         mux_info_dict["auto_switch_count"] = "N/A"
+    else:
+        mux_info_dict["auto_switch_count"] = auto_switch_cnt
 
 
     if read_side == 1:
@@ -958,7 +960,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_local_temperature()
 
-    if res is not port_instance.EEPROM_ERROR and isinstance(res, int):
+    if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res >= 0:
         mux_info_dict["internal_temperature"] = res
     else:
         mux_info_dict["internal_temperature"] = "N/A"
@@ -966,7 +968,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_local_voltage()
 
-    if res is not port_instance.EEPROM_ERROR and isinstance(res, float):
+    if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, float):
         mux_info_dict["internal_voltage"] = res
     else:
         mux_info_dict["internal_voltage"] = "N/A"
@@ -974,7 +976,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_nic_voltage()
 
-    if res is not port_instance.EEPROM_ERROR and isinstance(res, float) and res is not None:
+    if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, float):
         mux_info_dict["nic_voltage"] = res
     else:
         mux_info_dict["nic_voltage"] = "N/A"
@@ -982,7 +984,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     with y_cable_port_locks[physical_port]:
         res = port_instance.get_nic_temperature()
 
-    if res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res is not None:
+    if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res >= 0:
         mux_info_dict["nic_temperature"] = res
     else:
         mux_info_dict["nic_temperature"] = "N/A"
@@ -1256,6 +1258,14 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
         post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
 
+def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
+    helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
+    with y_cable_port_locks[physical_port]:
+        status = port_instance.download_firmware(file_full_path)
+    set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, port)
+    helper_logger.log_debug(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
+    rc[0] = status
+    helper_logger.log_debug("download thread finished port {} physical_port {}".format(port, physical_port))
 
 
 # Thread wrapper class to update y_cable status periodically
@@ -1403,16 +1413,6 @@ class YCableTableUpdateTask(object):
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
                             update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
-
-
-    def task_download_firmware_worker(self, port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
-        helper_logger.log_info("worker thread for downloading physical port {} path {}".format(physical_port, file_full_path))
-        with y_cable_port_locks[physical_port]:
-            status = port_instance.download_firmware(file_full_path)
-        set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, port)
-        helper_logger.log_warning(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
-        rc[0] = status
-        helper_logger.log_info("download thread finished port {} physical_port {}".format(port, physical_port))
 
 
     def task_cli_worker(self):
@@ -1572,7 +1572,7 @@ class YCableTableUpdateTask(object):
                             state = 'cable not present'
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for cli show hwmode muxdirection cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli command show mux hwmode muxdirection Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
@@ -1581,18 +1581,18 @@ class YCableTableUpdateTask(object):
                             # error scenario update table accordingly
                             state = 'not Y-Cable port'
                             helper_logger.log_error(
-                                "Error: Could not get port instance for cli show hwmode muxdirection cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli command show mux hwmode muxdirection Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
                         read_side = None
                         with y_cable_port_locks[physical_port]:
                             read_side = port_instance.get_read_side()
-                        if read_side is None or read_side == port_instance.EEPROM_ERROR:
+                        if read_side is None or read_side == port_instance.EEPROM_ERROR or read_side < 0:
 
                             state = 'unknown'
                             helper_logger.log_warning(
-                                "Error: Could not get read side for cli show hwmode muxdirection cmd logical port {} and physical port {}".format(port, physical_port))
+                                "Error: Could not get read side for cli command show mux hwmode muxdirection logical port {} and physical port {}".format(port, physical_port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
@@ -1600,10 +1600,10 @@ class YCableTableUpdateTask(object):
                         with y_cable_port_locks[physical_port]:
                             active_side = port_instance.get_mux_direction()
 
-                        if active_side is None or read_side == port_instance.EEPROM_ERROR:
+                        if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0:
 
                             state = 'unknown'
-                            helper_logger.log_warning("Error: Could not get active side for cli show hwmode muxdirection cmd logical port {} and physical port {}".format(port, physical_port))
+                            helper_logger.log_warning("Error: Could not get active side for cli command show mux hwmode muxdirection logical port {} and physical port {}".format(port, physical_port))
 
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
@@ -1614,13 +1614,13 @@ class YCableTableUpdateTask(object):
                             state = 'standby'
                         else:
                             state = 'unknown'
-                            helper_logger.log_warning("Error: Could not get state for cli show hwmode muxdirection logical port {} and physical port {}".format(port, physical_port))
+                            helper_logger.log_warning("Error: Could not get valid state for cli command show mux hwmode muxdirection logical port {} and physical port {}".format(port, physical_port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
                         set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_warning("Error: Wrong input param for cli show hwmode muxdirection logical port {}".format(port))
+                        helper_logger.log_warning("Error: Wrong input param for cli command show mux hwmode muxdirection logical port {}".format(port))
                         set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
 
             while True:
@@ -1642,7 +1642,7 @@ class YCableTableUpdateTask(object):
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for  cli config hwmode state cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli command config mux hwmode state active/standby Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                             break
 
@@ -1650,17 +1650,17 @@ class YCableTableUpdateTask(object):
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get port instance for  cli config hwmode state cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli command config mux hwmode state active/standby Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                             break
 
                         with y_cable_port_locks[physical_port]:
                             read_side = port_instance.get_read_side()
-                        if read_side is None or read_side is port_instance.EEPROM_ERROR:
+                        if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
 
                             status = 'False'
                             helper_logger.log_error(
-                                "Error: Could not get read side for  cli config hwmode state cmd  Y cable port {}".format(port))
+                                "Error: Could not get read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                             break
 
@@ -1680,11 +1680,13 @@ class YCableTableUpdateTask(object):
                                     status = port_instance.toggle_mux_to_tor_a()
                         else:
                             set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                            helper_logger.log_error(
+                                "Error: Could not get valid config read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
                             break
 
                         set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_warning("Error: Wrong input param for cli config hwmode state logical port {}".format(port))
+                        helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
                         set_result_and_delete_port('result', 'False', xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                         
             while True:
@@ -1705,7 +1707,7 @@ class YCableTableUpdateTask(object):
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for hwmode cli switchingmode cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli cmd show mux hwmode switchmode Y cable port {}".format(port))
                             state = 'cable not present'
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
@@ -1714,7 +1716,7 @@ class YCableTableUpdateTask(object):
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get port instance for hwmode cli switchingmode cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli cmd show mux hwmode switchmode Y cable port {}".format(port))
                             state = 'not Y-Cable port'
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
@@ -1722,10 +1724,10 @@ class YCableTableUpdateTask(object):
                         result = None
                         with y_cable_port_locks[physical_port]:
                             result = port_instance.get_switching_mode()
-                            if result is None or result == port_instance.EEPROM_ERROR:
+                            if result is None or result == port_instance.EEPROM_ERROR or result < 0:
 
-                                helper_logger.log_warning(
-                                    "Error: Could not get read side for hwmode cli switchingmode cmd logical port {} and physical port {}".format(port, physical_port))
+                                helper_logger.log_error(
+                                    "Error: Could not get read side for cli cmd show mux hwmode switchmode logical port {} and physical port {}".format(port, physical_port))
                                 set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                                 break
 
@@ -1738,8 +1740,8 @@ class YCableTableUpdateTask(object):
 
                         set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_warning("Error: Incorrect input param for mux cable cli hwmode switchingmode logical port {}".format(port))
-                        set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
+                        helper_logger.log_error("Error: Incorrect input param for cli cmd show mux hwmode switchmode logical port {}".format(port))
+                        set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
 
 
 
@@ -1762,7 +1764,7 @@ class YCableTableUpdateTask(object):
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for hwmode cli state cmd  Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli cmd config mux hwmode setswitchmode Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
 
@@ -1770,41 +1772,42 @@ class YCableTableUpdateTask(object):
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get port instance for hwmode cli state cmd  Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli cmd config mux hwmode setswitchmode Y cable port {}".format(port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
 
                         if config_mode == "auto":
                             with y_cable_port_locks[physical_port]:
-                                status = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
-                            if result is None or result is port_instance.EEPROM_ERROR:
+                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
+                            if result is None or result == port_instance.EEPROM_ERROR or result < 0:
 
                                 status = 'False'
-                                helper_logger.log_warning(
-                                    "Error: Could not get read side for mux cable cli hwmode cmd logical port {} and physical port {}".format(port, physical_port))
+                                helper_logger.log_error(
+                                    "Error: Could not get read side for cli cmd config mux hwmode setswitchmode logical port {} and physical port {}".format(port, physical_port))
                                 set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
                                 break
 
                         elif config_mode == "manual":
                             with y_cable_port_locks[physical_port]:
-                                status = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
-                            if result is None or result is port_instance.EEPROM_ERROR:
+                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
+                            if result is None or result is port_instance.EEPROM_ERROR or result < 0:
 
                                 status = 'False'
-                                helper_logger.log_warning(
-                                    "Error: Could not get read side for mux cable cli hwmode cmd logical port {} and physical port {}".format(port, physical_port))
+                                helper_logger.log_error(
+                                    "Error: Could not get read side for cli cmd config mux hwmode setswitchmode logical port {} and physical port {}".format(port, physical_port))
                                 set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
                                 break
                         else:
-                            helper_logger.log_warning(
-                                "Error: Incorrect Config state for mux cable cli hwmode swmode logical port {} and physical port {}".format(port, physical_port))
+                            helper_logger.log_error(
+                                "Error: Incorrect Config state for cli cmd config mux hwmode setswitchmode logical port {} and physical port {}".format(port, physical_port))
                             set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
 
 
-                        set_result_and_delete_port('result', status, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
+                        set_result_and_delete_port('result', result, xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
+
                     else:
-                        helper_logger.log_warning("Error: Incorrect input param for mux cable cli hwmode swmode logical port {}".format(port))
+                        helper_logger.log_error("Error: Incorrect input param for cli cmd config mux hwmode setswitchmode logical port {}".format(port))
                         set_result_and_delete_port('result', 'False', xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
 
 
@@ -1825,19 +1828,20 @@ class YCableTableUpdateTask(object):
                     if "download_firmware" in fvp_dict:
 
                         file_name = fvp_dict["download_firmware"]
-                        file_full_path = '/usr/share/sonic/platform/{}'.format(file_name)
+                        file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
+
+                        status = -1
 
                         if not os.path.isfile(file_full_path):
-                            helper_logger.log_warning("Y_CABLE_WARNING: cli cmd down firmware file does not exist".format(port, file_name))
+                            helper_logger.log_error("Error: cli cmd download firmware file does not exist port {} file {}".format(port, file_name))
                             set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                             break
 
-                        status = -1
                         physical_port = get_ycable_physical_port_from_logical_port(port)
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get physical port for down fw cli cmd Y cable port {}".format(port))
+                                "Error: Could not get physical port for cli cmd download firmware cli Y cable port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                             break
 
@@ -1845,17 +1849,17 @@ class YCableTableUpdateTask(object):
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
                             helper_logger.log_error(
-                                "Error: Could not get port instance for cmd down firmware Y cable port {}".format(port))
+                                "Error: Could not get port instance for cli cmd download firmware Y cable port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                             break
 
                         rc = {}
-                        self.task_download_firmware_thread[physical_port] = threading.Thread(target=self.task_download_firmware_worker, args=(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl[asic_index], xcvrd_down_fw_cmd_sts_tbl[asic_index], rc,))
+                        self.task_download_firmware_thread[physical_port] = threading.Thread(target=task_download_firmware_worker, args=(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl[asic_index], xcvrd_down_fw_cmd_sts_tbl[asic_index], rc,))
                         self.task_download_firmware_thread[physical_port].start()
                     else:
                         helper_logger.log_error(
-                            "Error: Wrong input parameter get for mux down fw cli cmd  Y cable port {}".format(port))
-                        set_result_and_delete_port('status', 'False', xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+                            "Error: Wrong input parameter get for cli cmd download firmware Y cable port {}".format(port))
+                        set_result_and_delete_port('status', '-1', xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
 
             while True:
                 (port, op, fvp) = xcvrd_show_fw_cmd_tbl[asic_index].pop()
@@ -1867,24 +1871,25 @@ class YCableTableUpdateTask(object):
 
                     fvp_dict = dict(fvp)
 
+                    mux_info_dict = {}
+                    mux_info_dict['version_self_active'] = 'N/A'
+                    mux_info_dict['version_self_inactive'] = 'N/A'
+                    mux_info_dict['version_self_next'] = 'N/A'
+                    mux_info_dict['version_peer_active'] = 'N/A'
+                    mux_info_dict['version_peer_inactive'] = 'N/A'
+                    mux_info_dict['version_peer_next'] = 'N/A'
+                    mux_info_dict['version_nic_active'] = 'N/A'
+                    mux_info_dict['version_nic_inactive'] = 'N/A'
+                    mux_info_dict['version_nic_next'] = 'N/A'
+
                     if "firmware_version" in fvp_dict:
 
-                        mux_info_dict = {}
-                        mux_info_dict['version_self_active'] = 'N/A'
-                        mux_info_dict['version_self_inactive'] = 'N/A'
-                        mux_info_dict['version_self_next'] = 'N/A'
-                        mux_info_dict['version_peer_active'] = 'N/A'
-                        mux_info_dict['version_peer_inactive'] = 'N/A'
-                        mux_info_dict['version_peer_next'] = 'N/A'
-                        mux_info_dict['version_nic_active'] = 'N/A'
-                        mux_info_dict['version_nic_inactive'] = 'N/A'
-                        mux_info_dict['version_nic_next'] = 'N/A'
 
                         status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port for mux cable down fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get physical port for cli cmd show firmware port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
                             set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
                             break
@@ -1892,17 +1897,17 @@ class YCableTableUpdateTask(object):
                         port_instance = get_ycable_port_instance_from_logical_port(port)
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for mux cable down fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get port instance for cli cmd show firmware command port {}".format(port))
                             set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
                             set_result_and_delete_port('status', status, xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
                             break
 
                         with y_cable_port_locks[physical_port]:
                             read_side = port_instance.get_read_side()
-                        if read_side is None or read_side is port_instance.EEPROM_ERROR:
+                        if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
 
                             status = 'False'
-                            helper_logger.log_warning("Error: Could not get read side for mux cable down fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get read side for cli cmd show firmware port {}".format(port))
                             set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
                             set_result_and_delete_port('status', status, xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
                             break
@@ -1920,7 +1925,8 @@ class YCableTableUpdateTask(object):
                         set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
                         set_result_and_delete_port('status', status, xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_error("Wrong param for mux cable down fw command port {}".format(port))
+                        helper_logger.log_error("Wrong param for cli cmd show firmware port {}".format(port))
+                        set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
                         set_result_and_delete_port('status', 'False', xcvrd_show_fw_cmd_sts_tbl[asic_index], xcvrd_show_fw_rsp_tbl[asic_index], port)
 
 
@@ -1937,38 +1943,39 @@ class YCableTableUpdateTask(object):
 
                     if "activate_firmware" in fvp_dict:
                         file_name = fvp_dict["activate_firmware"]
+                        status = 'False'
+
                         if file_name == 'null':
                             file_full_path = None
                         else:
-                            file_full_path = '/usr/share/sonic/platform/{}'.format(file_name)
+                            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
                             if not os.path.isfile(file_full_path):
-                                helper_logger.log_warning("Y_CABLE_WARNING: cli cmd acti fw file does not exist".format(port, file_name))
+                                helper_logger.log_error("ERROR: cli cmd mux activate firmware file does not exist port {} file {}".format(port, file_name))
                                 set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                                 break
 
 
-                        status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port for mux cable acti fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get physical port for cli cmd mux activate firmware port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
                         if port_instance is None or port_instance in port_mapping_error_values:
-                            helper_logger.log_warning("Error: Could not get port instance for mux cable acti fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get port instance for cli cmd mux activate firmware port {}".format(port))
                             # error scenario update table accordingly
                             set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
                             break
 
 
                         with y_cable_port_locks[physical_port]:
-                            status = port_instance.activate_firmware(file_full_path)
+                            status = port_instance.activate_firmware(file_full_path, True)
 
                         set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_error("Wrong param for mux cable acti fw command port {}".format(port))
+                        helper_logger.log_error("Wrong param for cli cmd mux activate firmware port {}".format(port))
                         set_result_and_delete_port('status', 'False', xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
 
             while True:
@@ -1984,36 +1991,37 @@ class YCableTableUpdateTask(object):
 
                     if "rollback_firmware" in fvp_dict:
                         file_name = fvp_dict["rollback_firmware"]
+                        status = 'False'
+
                         if file_name == 'null':
                             file_full_path = None
                         else:
-                            file_full_path = '/usr/share/sonic/platform/{}'.format(file_name)
+                            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
                             if not os.path.isfile(file_full_path):
-                                helper_logger.log_warning("Y_CABLE_WARNING: cli cmd roll fw file does not exist".format(port, file_name))
+                                helper_logger.log_error("Error: cli cmd mux rollback firmware file does not exist port {} file {}".format(port, file_name))
                                 set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
                                 break
 
 
 
-                        status = 'False'
                         physical_port = get_ycable_physical_port_from_logical_port(port)
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                             # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port for mux cable roll fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get physical port for cli cmd mux rollback firmware port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
                             break
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
                         if port_instance is None or port_instance in port_mapping_error_values:
                             # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for mux cable roll fw command port {}".format(port))
+                            helper_logger.log_warning("Error: Could not get port instance for cli cmd mux rollback firmware port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
 
                         with y_cable_port_locks[physical_port]:
                             status = port_instance.rollback_firmware(file_full_path)
                         set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
                     else:
-                        helper_logger.log_error("Wrong param for mux cable roll fw command port {}".format(port))
+                        helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
                         set_result_and_delete_port('status', 'False', xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
 
 
