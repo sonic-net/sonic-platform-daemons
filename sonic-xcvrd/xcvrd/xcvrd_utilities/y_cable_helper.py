@@ -289,9 +289,11 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
         if y_cable_wrapper_get_presence(physical_port):
 
             port_instance = y_cable_port_instances.get(physical_port)
-            if port_instance is None:
+            if port_instance is None or port_instance == -1:
+                status = 'unknown'
+                update_table_mux_status_for_response_tbl(y_cable_response_tbl[asic_index], status, logical_port_name)
                 helper_logger.log_error(
-                    "Error: Could not get port instance for read side for  Y cable port {}".format(logical_port_name))
+                    "Error: Could not get port instance to perform update appdb for read side for Y cable port {}".format(logical_port_name))
                 return
 
             if read_side is None:
@@ -299,7 +301,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
                 status = 'unknown'
                 update_table_mux_status_for_response_tbl(y_cable_response_tbl[asic_index], status, logical_port_name)
                 helper_logger.log_warning(
-                    "Error: Could not get read side for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
+                    "Error: Could not get read side to perform update appdb for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
                 return
 
             active_side = None
@@ -311,7 +313,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
                 status = 'unknown'
                 update_table_mux_status_for_response_tbl(y_cable_response_tbl[asic_index], status, logical_port_name)
                 helper_logger.log_warning(
-                    "Error: Could not get active side for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
+                    "Error: Could not get active side to perform update appdb for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
                 return
 
             if read_side == active_side and (active_side == 1 or active_side == 2):
@@ -321,7 +323,7 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
             else:
                 status = 'unknown'
                 helper_logger.log_warning(
-                    "Error: Could not get state for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
+                    "Error: Could not get state to perform update appdb for mux cable port probe command logical port {} and physical port {}".format(logical_port_name, physical_port))
 
             helper_logger.log_debug("Y_CABLE_DEBUG: notifying a probe for port status {} {}".format(logical_port_name, status))
 
@@ -357,9 +359,9 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
         if y_cable_wrapper_get_presence(physical_port):
 
             port_instance = y_cable_port_instances.get(physical_port)
-            if port_instance is None:
+            if port_instance is None or port_instance == -1:
                 helper_logger.log_error(
-                    "Error: Could not get port instance for read side for  Y cable port {}".format(logical_port_name))
+                    "Error: Could not get port instance to perform read_y_cable update state db for read side for  Y cable port {}".format(logical_port_name))
                 return
 
             with y_cable_port_locks[physical_port]:
@@ -370,7 +372,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
                 update_table_mux_status_for_statedb_port_tbl(
                     mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
                 helper_logger.log_error(
-                    "Error: Could not establish the read side for  Y cable port {}".format(logical_port_name))
+                    "Error: Could not establish the read side for Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
                 return
 
             with y_cable_port_locks[physical_port]:
@@ -381,7 +383,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
                 update_table_mux_status_for_statedb_port_tbl(
                     mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
                 helper_logger.log_error(
-                    "Error: Could not establish the active side for  Y cable port {}".format(logical_port_name))
+                    "Error: Could not establish the active side for  Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
                 return
 
             if read_side == active_side and (active_side == 1 or active_side == 2):
@@ -391,7 +393,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
             else:
                 status = 'unknown'
                 helper_logger.log_warning(
-                    "Error: Could not establish the active status for  Y cable port {}".format(logical_port_name))
+                    "Error: Could not establish the active status for Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
 
             update_table_mux_status_for_statedb_port_tbl(
                 mux_config_tbl, status, read_side, active_side, logical_port_name)
@@ -402,7 +404,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
             update_table_mux_status_for_statedb_port_tbl(
                 mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
             helper_logger.log_warning(
-                "Error: Could not establish presence for  Y cable port {}".format(logical_port_name))
+                "Error: Could not establish presence for  Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
     else:
         # Y cable ports should always have
         # one to one mapping of physical-to-logical
@@ -411,7 +413,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
         update_table_mux_status_for_statedb_port_tbl(
             mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
         helper_logger.log_warning(
-            "Error: Retreived multiple ports for a Y cable port {}".format(logical_port_name))
+            "Error: Retreived multiple ports for a Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
 
 
 def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence):
@@ -421,7 +423,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
         helper_logger.log_warning(
-            "Could not retreive fieldvalue pairs for {}, inside config_db".format(logical_port_name))
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name), port_tbl[asic_index].getTableName())
         return
 
     else:
@@ -528,6 +530,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                     logical_port_name,  mux_tbl[asic_index])
                                 post_port_mux_static_info_to_db(
                                     logical_port_name,  static_tbl[asic_index])
+                        else:
+                            helper_logger.log_warning(
+                                "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
                     else:
                         helper_logger.log_warning(
                             "Error: Could not establish transceiver presence for a Y cable port {} while inserting entries".format(logical_port_name))
@@ -537,6 +542,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
             else:
                 helper_logger.log_warning(
                     "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
+        else:
+            helper_logger.log_warning(
+                "Could not retreive state value inside mux_info_dict for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
 def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
@@ -551,7 +559,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
         helper_logger.log_warning(
-            "Could not retreive fieldvalue pairs for {}, inside config_db".format(logical_port_name))
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
     else:
@@ -598,7 +606,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
 
-    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'debug')])
+    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
     # Get the namespaces in the platform
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -631,7 +639,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             # logical_ports after loading the port_mappings from port_config_file
             # This should not happen
             helper_logger.log_warning(
-                "Could not retreive port inside config_db PORT table {}".format(logical_port_name))
+                "Could not retreive port inside config_db PORT table {} for Y-Cable initiation".format(logical_port_name))
 
 
 def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, stop_event=threading.Event()):
@@ -758,12 +766,12 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "PORT")
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
 
     if status is False:
-        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside config_db".format(logical_port_name))
+        helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
     else:
@@ -831,7 +839,7 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index]))
+        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
 
     mux_port_dict = dict(fvs)
@@ -1019,7 +1027,7 @@ def get_muxcable_static_info(physical_port, logical_port_name):
     (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
     if status is False:
         helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-            logical_port_name, y_cable_tbl[asic_index]))
+            logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
     mux_port_dict = dict(fvs)
     read_side = int(mux_port_dict.get("read_side"))
@@ -1358,7 +1366,7 @@ class YCableTableUpdateTask(object):
                         (status, fvs) = y_cable_tbl[asic_index].get(port)
                         if status is False:
                             helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                port, y_cable_tbl[asic_index]))
+                                port, y_cable_tbl[asic_index].getTableName()))
                             continue
                         mux_port_dict = dict(fvs)
                         old_status = mux_port_dict.get("state")
@@ -1408,7 +1416,7 @@ class YCableTableUpdateTask(object):
                             (status, fv) = y_cable_tbl[asic_index].get(port_m)
                             if status is False:
                                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                    port_m, y_cable_tbl[asic_index]))
+                                    port_m, y_cable_tbl[asic_index].getTableName()))
                                 continue
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
