@@ -423,7 +423,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
         helper_logger.log_warning(
-            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name), port_tbl[asic_index].getTableName())
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
     else:
