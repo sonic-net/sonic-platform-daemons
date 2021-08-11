@@ -209,7 +209,11 @@ def y_cable_toggle_mux_torA(physical_port):
         return -1
 
     with y_cable_port_locks[physical_port]:
-        update_status = port_instance.toggle_mux_to_tor_a()
+        try:
+            update_status = port_instance.toggle_mux_to_tor_a()
+        except Exception as e:
+            update_status = -1
+            helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
 
     helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR A for port {} {}".format(physical_port, update_status))
     if update_status is True:
@@ -227,7 +231,11 @@ def y_cable_toggle_mux_torB(physical_port):
         return -1
 
     with y_cable_port_locks[physical_port]:
-        update_status = port_instance.toggle_mux_to_tor_b()
+        try:
+            update_status = port_instance.toggle_mux_to_tor_b()
+        except Exception as e:
+            update_status = -1
+            helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
 
     helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR B for port {} {}".format(physical_port, update_status))
     if update_status is True:
@@ -306,7 +314,11 @@ def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, ap
 
             active_side = None
             with y_cable_port_locks[physical_port]:
-                active_side = port_instance.get_mux_direction()
+                try:
+                    active_side = port_instance.get_mux_direction()
+                except Exception as e:
+                    active_side = -1
+                    helper_logger.log_warning("Failed to execute the get_mux_direction for port {} due to {}".format(physical_port,repr(e)))
 
             if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0 :
 
@@ -365,7 +377,11 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
                 return
 
             with y_cable_port_locks[physical_port]:
-                read_side = port_instance.get_read_side()
+                try:
+                    read_side = port_instance.get_read_side()
+                except Exception as e:
+                    read_side = None
+                    helper_logger.log_warning("Failed to execute the get_read_side for port {} due to {}".format(physical_port,repr(e)))
 
             if read_side is None or read_side < 0 or read_side == port_instance.EEPROM_ERROR:
                 read_side = active_side = -1
@@ -376,7 +392,11 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
                 return
 
             with y_cable_port_locks[physical_port]:
-                active_side = port_instance.get_mux_direction()
+                try:
+                    active_side = port_instance.get_mux_direction()
+                except Exception as e:
+                    active_side = None
+                    helper_logger.log_warning("Failed to execute the get_mux_direction for port {} due to {}".format(physical_port,repr(e)))
 
             if active_side is None or active_side not in y_cable_switch_state_values:
                 read_side = active_side = -1
@@ -476,7 +496,11 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 return
 
                             attr_name = 'sonic_y_cable.' + module
-                            y_cable_attribute = getattr(import_module(attr_name), 'YCable')
+                            try:
+                                y_cable_attribute = getattr(import_module(attr_name), 'YCable')
+                            except Exception as e:
+                                helper_logger.log_warning("Failed to load the attr due to {}".format(repr(e)))
+                                return
                             if y_cable_attribute is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to import attr name for Y-Cable initiation {}".format(logical_port_name))
@@ -485,7 +509,11 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
-                                vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor()
+                                try:
+                                    vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor()
+                                except Exception as e:
+                                    helper_logger.log_warning("Failed to call the get_vendor API for port {} due to {}".format(physical_port,repr(e)))
+                                    return
 
                             if format_mapping_identifier(vendor_name_api) != vendor:
                                 y_cable_port_instances.pop(physical_port)
@@ -802,7 +830,11 @@ def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict)
 
     result = {}
     with y_cable_port_locks[physical_port]:
-        result = port_instance.get_firmware_version(target)
+        try:
+            result = port_instance.get_firmware_version(target)
+        except Exception as e:
+            result = None
+            helper_logger.log_warning("Failed to execute the get_firmware_version API for port {} side {} due to {}".format(physical_port,side,repr(e)))
 
     if result is not None and isinstance(result, dict):
         mux_info_dict[("version_{}_active".format(side))] = result.get("version_active", None)
@@ -848,7 +880,10 @@ def get_muxcable_info(physical_port, logical_port_name):
     active_side = None
 
     with y_cable_port_locks[physical_port]:
-        active_side = port_instance.get_active_linked_tor_side()
+        try:
+            active_side = port_instance.get_active_linked_tor_side()
+        except Exception as e:
+            helper_logger.log_warning("Failed to execute the get_active_side API for port {} due to {}".format(physical_port,repr(e)))
 
     if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0:
         tor_active = 'unknown'
@@ -863,7 +898,10 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     mux_dir_val = None
     with y_cable_port_locks[physical_port]:
-        mux_dir_val = port_instance.get_mux_direction()
+        try:
+            mux_dir_val = port_instance.get_mux_direction()
+        except Exception as e:
+            helper_logger.log_warning("Failed to execute the get_mux_direction API for port {} due to {}".format(physical_port,repr(e)))
 
     if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR or mux_dir_val < 0:
         mux_direction = 'unknown'
@@ -877,8 +915,13 @@ def get_muxcable_info(physical_port, logical_port_name):
     mux_info_dict["mux_direction"] = mux_direction
 
     with y_cable_port_locks[physical_port]:
-        manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
-        auto_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_AUTO)
+        try:
+            manual_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_MANUAL)
+            auto_switch_cnt = port_instance.get_switch_count_total(port_instance.SWITCH_COUNT_AUTO)
+        except Exception as e:
+            manual_switch_cnt = None
+            auto_switch_cnt = None
+            helper_logger.log_warning("Failed to execute the get_switch_cnt API for port {} due to {}".format(physical_port,repr(e)))
 
     if manual_switch_cnt is None or manual_switch_cnt == port_instance.EEPROM_ERROR or manual_switch_cnt < 0:
         mux_info_dict["manual_switch_count"] = "N/A"
@@ -893,15 +936,29 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     if read_side == 1:
         with y_cable_port_locks[physical_port]:
-            eye_result_self = port_instance.get_eye_heights(port_instance.TARGET_TOR_A)
-            eye_result_peer = port_instance.get_eye_heights(port_instance.TARGET_TOR_B)
+            try:
+                eye_result_self = port_instance.get_eye_heights(port_instance.TARGET_TOR_A)
+                eye_result_peer = port_instance.get_eye_heights(port_instance.TARGET_TOR_B)
+            except Exception as e:
+                eye_result_self = None
+                eye_result_peer = None
+                helper_logger.log_warning("Failed to execute the get_eye_heights API for port {} due to {}".format(physical_port,repr(e)))
     else:
         with y_cable_port_locks[physical_port]:
-            eye_result_self = port_instance.get_eye_heights(port_instance.TARGET_TOR_B)
-            eye_result_peer = port_instance.get_eye_heights(port_instance.TARGET_TOR_A)
+            try:
+                eye_result_self = port_instance.get_eye_heights(port_instance.TARGET_TOR_B)
+                eye_result_peer = port_instance.get_eye_heights(port_instance.TARGET_TOR_A)
+            except Exception as e:
+                eye_result_self = None
+                eye_result_peer = None
+                helper_logger.log_warning("Failed to execute the get_eye_heights API for port {} due to {}".format(physical_port,repr(e)))
 
     with y_cable_port_locks[physical_port]:
-        eye_result_nic = port_instance.get_eye_heights(port_instance.TARGET_NIC)
+        try:
+            eye_result_nic = port_instance.get_eye_heights(port_instance.TARGET_NIC)
+        except Exception as e:
+            eye_result_nic = None
+            helper_logger.log_warning("Failed to execute the get_eye_heights nic side API for port {} due to {}".format(physical_port,repr(e)))
 
     if eye_result_self is not None and eye_result_self is not port_instance.EEPROM_ERROR and isinstance(eye_result_self, list):
         mux_info_dict["self_eye_height_lane1"] = eye_result_self[0]
@@ -926,26 +983,46 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     if read_side == 1:
         with y_cable_port_locks[physical_port]:
-            link_state_tor_a = port_instance.is_link_active(port_instance.TARGET_TOR_A)
+            try:
+                link_state_tor_a = port_instance.is_link_active(port_instance.TARGET_TOR_A)
+            except Exception as e:
+                link_state_tor_a = False
+                helper_logger.log_warning("Failed to execute the is_link_active TOR A side API for port {} due to {}".format(physical_port,repr(e)))
+
             if link_state_tor_a:
                 mux_info_dict["link_status_self"] = "up"
             else:
                 mux_info_dict["link_status_self"] = "down"
         with y_cable_port_locks[physical_port]:
-            link_state_tor_b = port_instance.is_link_active(port_instance.TARGET_TOR_B)
+            try:
+                link_state_tor_b = port_instance.is_link_active(port_instance.TARGET_TOR_B)
+            except Exception as e:
+                link_state_tor_b = False
+                helper_logger.log_warning("Failed to execute the is_link_active TOR B side API for port {} due to {}".format(physical_port,repr(e)))
+
             if link_state_tor_b:
                 mux_info_dict["link_status_peer"] = "up"
             else:
                 mux_info_dict["link_status_peer"] = "down"
     else:
         with y_cable_port_locks[physical_port]:
-            link_state_tor_b = port_instance.is_link_active(port_instance.TARGET_TOR_B)
+            try:
+                link_state_tor_b = port_instance.is_link_active(port_instance.TARGET_TOR_B)
+            except Exception as e:
+                link_state_tor_b = False
+                helper_logger.log_warning("Failed to execute the is_link_active TOR B side API for port {} due to {}".format(physical_port,repr(e)))
+
             if link_state_tor_b:
                 mux_info_dict["link_status_self"] = "up"
             else:
                 mux_info_dict["link_status_self"] = "down"
         with y_cable_port_locks[physical_port]:
-            link_state_tor_a = port_instance.is_link_active(port_instance.TARGET_TOR_A)
+            try:
+                link_state_tor_a = port_instance.is_link_active(port_instance.TARGET_TOR_A)
+            except Exception as e:
+                link_state_tor_a = False
+                helper_logger.log_warning("Failed to execute the is_link_active TOR A side API for port {} due to {}".format(physical_port,repr(e)))
+
             if link_state_tor_a:
                 mux_info_dict["link_status_peer"] = "up"
             else:
@@ -966,7 +1043,11 @@ def get_muxcable_info(physical_port, logical_port_name):
         get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict)
 
     with y_cable_port_locks[physical_port]:
-        res = port_instance.get_local_temperature()
+        try:
+            res = port_instance.get_local_temperature()
+        except Exception as e:
+            res = None
+            helper_logger.log_warning("Failed to execute the get_local_temperature for port {} due to {}".format(physical_port,repr(e)))
 
     if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res >= 0:
         mux_info_dict["internal_temperature"] = res
@@ -974,7 +1055,11 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["internal_temperature"] = "N/A"
 
     with y_cable_port_locks[physical_port]:
-        res = port_instance.get_local_voltage()
+        try:
+            res = port_instance.get_local_voltage()
+        except Exception as e:
+            res = None
+            helper_logger.log_warning("Failed to execute the get_local_voltage for port {} due to {}".format(physical_port,repr(e)))
 
     if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, float):
         mux_info_dict["internal_voltage"] = res
@@ -982,7 +1067,11 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["internal_voltage"] = "N/A"
 
     with y_cable_port_locks[physical_port]:
-        res = port_instance.get_nic_voltage()
+        try:
+            res = port_instance.get_nic_voltage()
+        except Exception as e:
+            res = None
+            helper_logger.log_warning("Failed to execute the get_nic_voltage for port {} due to {}".format(physical_port,repr(e)))
 
     if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, float):
         mux_info_dict["nic_voltage"] = res
@@ -990,7 +1079,11 @@ def get_muxcable_info(physical_port, logical_port_name):
         mux_info_dict["nic_voltage"] = "N/A"
 
     with y_cable_port_locks[physical_port]:
-        res = port_instance.get_nic_temperature()
+        try:
+            res = port_instance.get_nic_temperature()
+        except Exception as e:
+            res = None
+            helper_logger.log_warning("Failed to execute the get_nic_temperature for port {} due to {}".format(physical_port,repr(e)))
 
     if res is not None and res is not port_instance.EEPROM_ERROR and isinstance(res, int) and res >= 0:
         mux_info_dict["nic_temperature"] = res
@@ -1042,18 +1135,34 @@ def get_muxcable_static_info(physical_port, logical_port_name):
     cursor_tor1_values = []
     cursor_tor2_values = []
     for i in range(1, 3):
-        cursor_values_nic = port_instance.get_target_cursor_values(i, port_instance.TARGET_NIC)
+        try:
+            cursor_values_nic = port_instance.get_target_cursor_values(i, port_instance.TARGET_NIC)
+        except Exception as e:
+            cursor_values_nic = None
+            helper_logger.log_warning("Failed to execute the get_target_cursor_value NIC for port {} due to {}".format(physical_port,repr(e)))
+
         if cursor_values_nic is not None and cursor_values_nic is not port_instance.EEPROM_ERROR and isinstance(cursor_values_nic, list):
             cursor_nic_values.append(cursor_values_nic)
         else:
             cursor_nic_values.append(dummy_list)
-        cursor_values_tor1 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_A)
+
+        try:
+            cursor_values_tor1 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_A)
+        except Exception as e:
+            cursor_values_tor1 = None
+            helper_logger.log_warning("Failed to execute the get_target_cursor_value ToR 1 for port {} due to {}".format(physical_port,repr(e)))
+
         if cursor_values_tor1 is not None and cursor_values_tor1 is not port_instance.EEPROM_ERROR and isinstance(cursor_values_tor1, list):
             cursor_tor1_values.append(cursor_values_tor1)
         else:
             cursor_tor1_values.append(dummy_list)
 
-        cursor_values_tor2 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_B)
+        try:
+            cursor_values_tor2 = port_instance.get_target_cursor_values(i, port_instance.TARGET_TOR_B)
+        except Exception as e:
+            cursor_values_tor2 = None
+            helper_logger.log_warning("Failed to execute the get_target_cursor_value ToR 2 for port {} due to {}".format(physical_port,repr(e)))
+
         if cursor_values_tor2 is not None and cursor_values_tor2 is not port_instance.EEPROM_ERROR and isinstance(cursor_values_tor2, list):
             cursor_tor2_values.append(cursor_values_tor2)
         else:
@@ -1269,7 +1378,12 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
 def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
     helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
     with y_cable_port_locks[physical_port]:
-        status = port_instance.download_firmware(file_full_path)
+        try:
+            status = port_instance.download_firmware(file_full_path)
+        except Exception as e:
+            status = -1
+            helper_logger.log_warning("Failed to execute the download firmware API for port {} due to {}".format(physical_port,repr(e)))
+
     set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, port)
     helper_logger.log_debug(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
     rc[0] = status
@@ -1593,9 +1707,13 @@ class YCableTableUpdateTask(object):
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
-                        read_side = None
                         with y_cable_port_locks[physical_port]:
-                            read_side = port_instance.get_read_side()
+                            try:
+                                read_side = port_instance.get_read_side()
+                            except Exception as e:
+                                read_side = None
+                                helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {}".format(physical_port,repr(e)))
+
                         if read_side is None or read_side == port_instance.EEPROM_ERROR or read_side < 0:
 
                             state = 'unknown'
@@ -1604,9 +1722,12 @@ class YCableTableUpdateTask(object):
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
 
-                        active_side = None
                         with y_cable_port_locks[physical_port]:
-                            active_side = port_instance.get_mux_direction()
+                            try:
+                                active_side = port_instance.get_mux_direction()
+                            except Exception as e:
+                                active_side = None
+                                helper_logger.log_warning("Failed to execute the get_mux_direction API for port {} due to {}".format(physical_port,repr(e)))
 
                         if active_side is None or active_side == port_instance.EEPROM_ERROR or active_side < 0:
 
@@ -1663,7 +1784,12 @@ class YCableTableUpdateTask(object):
                             break
 
                         with y_cable_port_locks[physical_port]:
-                            read_side = port_instance.get_read_side()
+                            try:
+                                read_side = port_instance.get_read_side()
+                            except Exception as e:
+                                read_side = None
+                                helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {}".format(physical_port,repr(e)))
+
                         if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
 
                             status = 'False'
@@ -1675,17 +1801,33 @@ class YCableTableUpdateTask(object):
                         if read_side is port_instance.TARGET_TOR_A:
                             if config_state == "active":
                                 with y_cable_port_locks[physical_port]:
-                                    status = port_instance.toggle_mux_to_tor_a()
+                                    try:
+                                        status = port_instance.toggle_mux_to_tor_a()
+                                    except Exception as e:
+                                        status = -1
+                                        helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
                             elif config_state == "standby":
                                 with y_cable_port_locks[physical_port]:
-                                    status = port_instance.toggle_mux_to_tor_b()
+                                    try:
+                                        status = port_instance.toggle_mux_to_tor_b()
+                                    except Exception as e:
+                                        status = -1
+                                        helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
                         elif read_side is port_instance.TARGET_TOR_B:
                             if config_state == 'active':
                                 with y_cable_port_locks[physical_port]:
-                                    status = port_instance.toggle_mux_to_tor_b()
+                                    try:
+                                        status = port_instance.toggle_mux_to_tor_b()
+                                    except Exception as e:
+                                        status = -1
+                                        helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
                             elif config_state == "standby":
                                 with y_cable_port_locks[physical_port]:
-                                    status = port_instance.toggle_mux_to_tor_a()
+                                    try:
+                                        status = port_instance.toggle_mux_to_tor_a()
+                                    except Exception as e:
+                                        status = -1
+                                        helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
                         else:
                             set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
                             helper_logger.log_error(
@@ -1729,9 +1871,13 @@ class YCableTableUpdateTask(object):
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
                             break
 
-                        result = None
                         with y_cable_port_locks[physical_port]:
-                            result = port_instance.get_switching_mode()
+                            try:
+                                result = port_instance.get_switching_mode()
+                            except Exception as e:
+                                result = None
+                                helper_logger.log_warning("Failed to execute the get_switching_mode for port {} due to {}".format(physical_port,repr(e)))
+
                             if result is None or result == port_instance.EEPROM_ERROR or result < 0:
 
                                 helper_logger.log_error(
@@ -1786,7 +1932,12 @@ class YCableTableUpdateTask(object):
 
                         if config_mode == "auto":
                             with y_cable_port_locks[physical_port]:
-                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
+                                try:
+                                    result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_AUTO)
+                                except Exception as e:
+                                    result = None
+                                    helper_logger.log_warning("Failed to execute the set_switching_mode auto for port {} due to {}".format(physical_port,repr(e)))
+
                             if result is None or result == port_instance.EEPROM_ERROR or result < 0:
 
                                 status = 'False'
@@ -1797,7 +1948,11 @@ class YCableTableUpdateTask(object):
 
                         elif config_mode == "manual":
                             with y_cable_port_locks[physical_port]:
-                                result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
+                                try:
+                                    result = port_instance.set_switching_mode(port_instance.SWITCHING_MODE_MANUAL)
+                                except Exception as e:
+                                    result = None
+                                    helper_logger.log_warning("Failed to execute the set_switching_mode manual for port {} due to {}".format(physical_port,repr(e)))
                             if result is None or result is port_instance.EEPROM_ERROR or result < 0:
 
                                 status = 'False'
@@ -1911,7 +2066,11 @@ class YCableTableUpdateTask(object):
                             break
 
                         with y_cable_port_locks[physical_port]:
-                            read_side = port_instance.get_read_side()
+                            try:
+                                read_side = port_instance.get_read_side()
+                            except Exception as e:
+                                read_side = None
+                                helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {}".format(physical_port,repr(e)))
                         if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
 
                             status = 'False'
@@ -1979,7 +2138,11 @@ class YCableTableUpdateTask(object):
 
 
                         with y_cable_port_locks[physical_port]:
-                            status = port_instance.activate_firmware(file_full_path, True)
+                            try:
+                                status = port_instance.activate_firmware(file_full_path, True)
+                            except Exception as e:
+                                status = -1
+                                helper_logger.log_warning("Failed to execute the activate_firmware API for port {} due to {}".format(physical_port,repr(e)))
 
                         set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
                     else:
@@ -2026,7 +2189,11 @@ class YCableTableUpdateTask(object):
                             set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
 
                         with y_cable_port_locks[physical_port]:
-                            status = port_instance.rollback_firmware(file_full_path)
+                            try:
+                                status = port_instance.rollback_firmware(file_full_path)
+                            except Exception as e:
+                                status = -1
+                                helper_logger.log_warning("Failed to execute the rollback_firmware API for port {} due to {}".format(physical_port,repr(e)))
                         set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
                     else:
                         helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
