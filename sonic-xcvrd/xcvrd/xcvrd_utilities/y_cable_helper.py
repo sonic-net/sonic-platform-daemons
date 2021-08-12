@@ -17,7 +17,6 @@ from sonic_py_common import multi_asic
 from sonic_y_cable import y_cable_vendor_mapping
 from swsscommon import swsscommon
 from . import sfp_status_helper
-from .port_mapping import PortMapping
 
 
 SELECT_TIMEOUT = 1000

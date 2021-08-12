@@ -1476,7 +1476,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                                 self.notify_port_change_event(port_change_event)
                     elif op == swsscommon.DEL_COMMAND:
                         if self.port_mapping.is_logical_port(key):
-                            fvp = dict(fvp)
                             port_change_event = PortChangeEvent(key, 
                                                                 self.port_mapping.get_logical_to_physical(key)[0], 
                                                                 asic_context[sst], 
