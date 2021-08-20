@@ -100,6 +100,39 @@ def y_cable_wrapper_get_presence(physical_port):
     return y_cable_platform_sfputil.get_presence(physical_port)
 
 
+
+def hook_y_cable_simulated(target):
+    """
+    Decorator to add hook for using the simulated y_cable driver.
+    This decorator checks existence of the configuration file required by the simulated y_cable driver. If the
+    configuration file is found, then override the "manufacturer" and "model" fields with value "microsoft" and
+    "simulated" in the collected transceiver info dict. Consequently, instance of the simulated y_cable driver
+    class will be initialized.
+    When the configuration file is not found on system, then just return the original transceiver info to initialize
+    instance of y_cable driver class of whatever actually plugged physical y_cable.
+    For test systems using simulated y_cable, we can just inject the simulated y_cable driver config file then
+    restart the pmon service before testing starts.
+
+    Args:
+        target (function): The function collecting transceiver info.
+    """
+
+    MUX_SIMULATOR_CONFIG_FILE = "/etc/sonic/mux_simulator.json"
+    VENDOR = "microsoft"
+    MODEL = "simulated"
+
+    def wrapper(*args, **kwargs):
+        res = target(*args, **kwargs)
+        if os.path.exists(MUX_SIMULATOR_CONFIG_FILE):
+            res["manufacturer"] = VENDOR
+            res["model"] = MODEL
+        return res
+
+    wrapper.__name__ = target.__name__
+
+    return wrapper
+
+@hook_y_cable_simulated
 def y_cable_wrapper_get_transceiver_info(physical_port):
     if y_cable_platform_chassis is not None:
         try:
@@ -435,6 +468,23 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
 
+def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name):
+
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(
+            namespace)
+        state_db[asic_id] = daemon_base.db_connect(
+            "STATE_DB", namespace)
+        y_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        static_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_INFO_TABLE)
+    # fill the newly found entry
+    read_y_cable_and_update_statedb_port_tbl(
+        logical_port_name, y_cable_tbl[asic_index])
 
 def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence):
 
@@ -561,15 +611,22 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
+                            create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+
                     else:
                         helper_logger.log_warning(
                             "Error: Could not establish transceiver presence for a Y cable port {} while inserting entries".format(logical_port_name))
+                        create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+
                 else:
                     helper_logger.log_warning(
                         "Error: Retreived multiple ports for a Y cable port {} while inserting entries".format(logical_port_name))
+                    create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+
             else:
                 helper_logger.log_warning(
                     "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
+
         else:
             helper_logger.log_warning(
                 "Could not retreive state value inside mux_info_dict for {}, inside MUX_CABLE table".format(logical_port_name))
@@ -766,7 +823,7 @@ def delete_ports_status_for_y_cable():
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
         if asic_index is None:
-            logger.log_warning(
+            helper_logger.log_warning(
                 "Got invalid asic index for {}, ignored".format(logical_port_name))
 
         if logical_port_name in y_cable_tbl_keys[asic_index]:
@@ -905,9 +962,9 @@ def get_muxcable_info(physical_port, logical_port_name):
 
     if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR or mux_dir_val < 0:
         mux_direction = 'unknown'
-    elif read_side == mux_dir_val and (active_side == 1 or active_side == 2):
+    elif read_side == mux_dir_val:
         mux_direction = 'self'
-    elif read_side != mux_dir_val and (active_side == 1 or active_side == 2):
+    elif read_side != mux_dir_val:
         mux_direction = 'peer'
     else:
         mux_direction = 'unknown'
@@ -999,7 +1056,6 @@ def get_muxcable_info(physical_port, logical_port_name):
             except Exception as e:
                 link_state_tor_b = False
                 helper_logger.log_warning("Failed to execute the is_link_active TOR B side API for port {} due to {}".format(physical_port,repr(e)))
-
             if link_state_tor_b:
                 mux_info_dict["link_status_peer"] = "up"
             else:
@@ -1016,6 +1072,7 @@ def get_muxcable_info(physical_port, logical_port_name):
                 mux_info_dict["link_status_self"] = "up"
             else:
                 mux_info_dict["link_status_self"] = "down"
+
         with y_cable_port_locks[physical_port]:
             try:
                 link_state_tor_a = port_instance.is_link_active(port_instance.TARGET_TOR_A)
@@ -1342,7 +1399,7 @@ def post_mux_static_info_to_db(is_warm_start, stop_event=threading.Event()):
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
         if asic_index is None:
-            logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+            helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
             continue
         post_port_mux_static_info_to_db(logical_port_name, mux_tbl[asic_index])
 
@@ -1369,7 +1426,7 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
         if asic_index is None:
-            logger.log_warning(
+            helper_logger.log_warning(
                 "Got invalid asic index for {}, ignored".format(logical_port_name))
             continue
         post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
@@ -1396,6 +1453,7 @@ class YCableTableUpdateTask(object):
         self.task_thread = None
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
+        self.task_stopping_event = threading.Event()
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
@@ -1437,6 +1495,9 @@ class YCableTableUpdateTask(object):
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+
+            if self.task_stopping_event.is_set():
+                break
 
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
@@ -1631,10 +1692,13 @@ class YCableTableUpdateTask(object):
             sel.addSelectable(xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
 
-        # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
+        # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+
+            if self.task_stopping_event.is_set():
+                break
 
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
 
@@ -2207,10 +2271,12 @@ class YCableTableUpdateTask(object):
         self.task_cli_thread.start()
 
     def task_stop(self):
+
+        self.task_stopping_event.set()
+        helper_logger.log_info("stopping the cli and probing task threads xcvrd")
         self.task_thread.join()
         self.task_cli_thread.join()
         
-        helper_logger.log_warning("stopping the task")
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
-        helper_logger.log_warning("stopped")
+        helper_logger.log_info("stopped all thread")
