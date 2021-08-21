@@ -960,14 +960,13 @@ def get_muxcable_info(physical_port, logical_port_name):
         except Exception as e:
             helper_logger.log_warning("Failed to execute the get_mux_direction API for port {} due to {}".format(physical_port,repr(e)))
 
-    if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR or mux_dir_val < 0:
+    if mux_dir_val is None or mux_dir_val == port_instance.EEPROM_ERROR or mux_dir_val < 0 or read_side == -1:
         mux_direction = 'unknown'
-    elif read_side == mux_dir_val:
-        mux_direction = 'self'
-    elif read_side != mux_dir_val:
-        mux_direction = 'peer'
     else:
-        mux_direction = 'unknown'
+        if read_side == mux_dir_val:
+            mux_direction = 'self'
+        else:
+            mux_direction = 'peer'
 
     mux_info_dict["mux_direction"] = mux_direction
 
