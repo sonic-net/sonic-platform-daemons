@@ -338,7 +338,7 @@ class TestXcvrdScript(object):
     @patch('y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_port_instance_from_logical_port(self):
 
-        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+        with patch('y_cable_helper.y_cable_port_instances') as patched_util:
             patched_util.get.return_value = 0
             instance = get_ycable_port_instance_from_logical_port("Ethernet0")
 
