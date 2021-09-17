@@ -429,11 +429,12 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.stop_event.is_set = MagicMock(side_effect=[False, True])
         mock_observer = MagicMock()
-        mock_observer.notify_port_change_event = MagicMock()
+        mock_observer.enque_port_change_event = MagicMock()
         xcvrd.subscribe_port_change_event(mock_observer)
 
-        xcvrd.handle_port_config_change()
-        assert mock_observer.notify_port_change_event.call_count == 1
+        sel, asic_context = xcvrd.subscribe_port_config_change()
+        xcvrd.handle_port_config_change(sel, asic_context)
+        assert mock_observer.enque_port_change_event.call_count == 1
         assert xcvrd.port_mapping.logical_port_list.count('Ethernet0')
         assert xcvrd.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert xcvrd.port_mapping.get_physical_to_logical(1) == ['Ethernet0']
@@ -441,8 +442,8 @@ class TestXcvrdScript(object):
 
         xcvrd.stop_event.is_set = MagicMock(side_effect=[False, True])
         mock_selectable.pop = MagicMock(side_effect=[('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )), (None, None, None)])
-        xcvrd.handle_port_config_change()
-        assert mock_observer.notify_port_change_event.call_count == 2
+        xcvrd.handle_port_config_change(sel, asic_context)
+        assert mock_observer.enque_port_change_event.call_count == 2
         assert not xcvrd.port_mapping.logical_port_list
         assert not xcvrd.port_mapping.logical_to_physical
         assert not xcvrd.port_mapping.physical_to_logical
@@ -479,6 +480,7 @@ class TestXcvrdScript(object):
     
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
     @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
+    @patch('xcvrd.xcvrd.DaemonXcvrd.subscribe_port_config_change', MagicMock(return_value=(0, 0)))
     @patch('xcvrd.xcvrd.DaemonXcvrd.handle_port_config_change')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.task_run')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.task_run')
@@ -486,6 +488,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.task_stop')
     def test_DaemonXcvrd_run(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_handle_port_config_change, mock_deinit, mock_init):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.stop_event.is_set = MagicMock(side_effect=[False, True])
         xcvrd.run()
         # TODO: more check
         assert mock_task_stop1.call_count == 1
@@ -501,7 +504,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         task = DomInfoUpdateTask(port_mapping)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        task.notify_port_change_event(port_change_event)
+        task.enque_port_change_event(port_change_event)
         task.handle_port_change_event()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
         assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
@@ -509,7 +512,7 @@ class TestXcvrdScript(object):
         assert task.port_mapping.get_logical_to_physical('Ethernet0') == [1]
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
-        task.notify_port_change_event(port_change_event)
+        task.enque_port_change_event(port_change_event)
         task.handle_port_change_event()
         assert not task.port_mapping.logical_port_list
         assert not task.port_mapping.logical_to_physical
@@ -532,7 +535,7 @@ class TestXcvrdScript(object):
         task = DomInfoUpdateTask(port_mapping)
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        task.notify_port_change_event(port_change_event)
+        task.enque_port_change_event(port_change_event)
         mock_detect_error.return_value = True
         task.task_worker([False])
         assert task.port_mapping.logical_port_list.count('Ethernet0')
@@ -559,7 +562,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         task = SfpStateUpdateTask(port_mapping)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        task.notify_port_change_event(port_change_event)
+        task.enque_port_change_event(port_change_event)
         wait_time = 5
         while wait_time > 0:
             task.handle_port_change_event(task.event_queue, stopping_event, [False])
@@ -573,7 +576,7 @@ class TestXcvrdScript(object):
         assert task.port_mapping.get_logical_to_physical('Ethernet0') == [1]
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
-        task.notify_port_change_event(port_change_event)
+        task.enque_port_change_event(port_change_event)
         wait_time = 5
         while wait_time > 0:
             task.handle_port_change_event(task.event_queue, stopping_event, [False])
@@ -752,7 +755,7 @@ class TestXcvrdScript(object):
         dom_tbl.get = MagicMock(return_value=(True, (('key3', 'value3'),)))
         dom_tbl.set = MagicMock()
         mock_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
-        mock_table_helper.get_int_tbl = MagicMock(return_value=int_tbl)
+        mock_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
         mock_table_helper.get_dom_tbl = MagicMock(return_value=dom_tbl)
 
         port_mapping = PortMapping()
