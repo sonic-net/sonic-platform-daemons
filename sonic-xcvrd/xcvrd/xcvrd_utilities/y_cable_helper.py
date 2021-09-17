@@ -17,6 +17,7 @@ from sonic_py_common import multi_asic
 from sonic_y_cable import y_cable_vendor_mapping
 from swsscommon import swsscommon
 from . import sfp_status_helper
+from .port_mapping import read_port_config_change
 
 
 SELECT_TIMEOUT = 1000
@@ -1436,15 +1437,11 @@ class YCableTableUpdateTask(object):
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
-        self.event_queue = queue.Queue()
         self.port_mapping = copy.deepcopy(port_mapping)
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
-
-    def notify_port_change_event(self, port_change_event):
-        self.event_queue.put_nowait(port_change_event)
 
     def handle_port_change_event(self):
         while True:
@@ -1461,6 +1458,7 @@ class YCableTableUpdateTask(object):
         y_cable_tbl_keys = {}
         mux_cable_command_tbl, y_cable_command_tbl = {}, {}
         mux_metrics_tbl = {}
+        asic_context = {}
 
         sel = swsscommon.Select()
 
@@ -1483,8 +1481,11 @@ class YCableTableUpdateTask(object):
             mux_metrics_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
             y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
+            port_tbl = swsscommon.SubscriberStateTable(config_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
+            asic_context[port_tbl] = asic_id
             sel.addSelectable(status_tbl[asic_id])
             sel.addSelectable(mux_cable_command_tbl[asic_id])
+            sel.addSelectable(port_tbl)
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
         while True:
@@ -1510,7 +1511,7 @@ class YCableTableUpdateTask(object):
             # Get the corresponding namespace from redisselect db connector object
             namespace = redisSelectObj.getDbConnector().getNamespace()
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
-            self.handle_port_change_event()
+            read_port_config_change(asic_context, self.port_mapping, helper_logger, self.port_mapping.handle_port_change_event)
 
             while True:
                 (port, op, fvp) = status_tbl[asic_index].pop()
