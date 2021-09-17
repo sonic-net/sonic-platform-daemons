@@ -1636,6 +1636,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         y_cable_state_update = None
         if self.y_cable_presence[0] is True:
             y_cable_state_update = y_cable_helper.YCableTableUpdateTask(self.port_mapping)
+            self.subscribe_port_change_event(y_cable_state_update)
             y_cable_state_update.task_run()
 
         # Start main loop
