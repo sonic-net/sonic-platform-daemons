@@ -512,7 +512,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             if vendor is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find Vendor name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
 
                             model = port_info_dict.get('model')
@@ -520,7 +520,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             if model is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find model name for Transceiver for Y-Cable initiation {}".format(logical_port_name))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
 
                             vendor = format_mapping_identifier(vendor)
@@ -530,14 +530,14 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             if module_dir is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find module dir name from vendor for Y-Cable initiation {}".format(logical_port_name))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
 
                             module = module_dir.get(model)
                             if module is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to find module name from model for Y-Cable initiation {}".format(logical_port_name))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
 
                             attr_name = 'sonic_y_cable.' + module
@@ -545,12 +545,12 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 y_cable_attribute = getattr(import_module(attr_name), 'YCable')
                             except Exception as e:
                                 helper_logger.log_warning("Failed to load the attr due to {}".format(repr(e)))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
                             if y_cable_attribute is None:
                                 helper_logger.log_warning(
                                     "Error: Unable to import attr name for Y-Cable initiation {}".format(logical_port_name))
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 return
  
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
@@ -560,13 +560,13 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                     vendor_name_api = y_cable_port_instances.get(physical_port).get_vendor()
                                 except Exception as e:
                                     helper_logger.log_warning("Failed to call the get_vendor API for port {} due to {}".format(physical_port,repr(e)))
-                                    create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                    create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                     return
 
                             if format_mapping_identifier(vendor_name_api) != vendor:
                                 y_cable_port_instances.pop(physical_port)
                                 y_cable_port_locks.pop(physical_port)
-                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
+                                create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping)
                                 helper_logger.log_warning("Error: Y Cable api does not work for {}, {} actual vendor name {}".format(
                                     logical_port_name, vendor_name_api, vendor))
                                 return
