@@ -1,3 +1,10 @@
+from sonic_py_common import daemon_base
+from sonic_py_common import multi_asic
+from swsscommon import swsscommon
+
+SELECT_TIMEOUT_MSECS = 1000
+
+
 class PortChangeEvent:
     PORT_ADD = 0
     PORT_REMOVE = 1
@@ -75,3 +82,85 @@ class PortMapping:
                 return self.get_logical_to_physical(port_name)
             else:
                 return None
+
+
+def subscribe_port_config_change():
+    sel = swsscommon.Select()
+    asic_context = {}
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        config_db = daemon_base.db_connect("CONFIG_DB", namespace=namespace)
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        port_tbl = swsscommon.SubscriberStateTable(config_db, swsscommon.CFG_PORT_TABLE_NAME)
+        asic_context[port_tbl] = asic_id
+        sel.addSelectable(port_tbl)
+    return sel, asic_context
+
+
+def handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_change_event_handler):
+    """Select CONFIG_DB PORT table changes, once there is a port configuration add/remove, notify observers
+    """
+    if not stop_event.is_set():
+        (state, _) = sel.select(SELECT_TIMEOUT_MSECS)
+        if state == swsscommon.Select.TIMEOUT:
+            return
+        if state != swsscommon.Select.OBJECT:
+            logger.log_warning('sel.select() did not return swsscommon.Select.OBJECT')
+            return
+        
+        read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler)
+        
+
+def read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler):
+    for port_tbl in asic_context.keys():
+        while True:
+            (key, op, fvp) = port_tbl.pop()
+            if not key:
+                break
+            if op == swsscommon.SET_COMMAND:
+                fvp = dict(fvp)
+                if 'index' not in fvp:
+                    continue
+
+                new_physical_index = int(fvp['index'])
+                if not port_mapping.is_logical_port(key):
+                    # New logical port created
+                    port_change_event = PortChangeEvent(key, new_physical_index, asic_context[port_tbl], PortChangeEvent.PORT_ADD)
+                    port_change_event_handler(port_change_event)
+                else:
+                    current_physical_index = port_mapping.get_logical_to_physical(key)[0]
+                    if current_physical_index != new_physical_index:
+                        port_change_event = PortChangeEvent(key, 
+                                                            current_physical_index, 
+                                                            asic_context[port_tbl], 
+                                                            PortChangeEvent.PORT_REMOVE)
+                        port_change_event_handler(port_change_event)
+
+                        port_change_event = PortChangeEvent(key, new_physical_index, asic_context[port_tbl], PortChangeEvent.PORT_ADD)
+                        port_change_event_handler(port_change_event)
+            elif op == swsscommon.DEL_COMMAND:
+                if port_mapping.is_logical_port(key):
+                    port_change_event = PortChangeEvent(key, 
+                                                        port_mapping.get_logical_to_physical(key)[0], 
+                                                        asic_context[port_tbl], 
+                                                        PortChangeEvent.PORT_REMOVE)
+                    port_change_event_handler(port_change_event)
+            else:
+                logger.log_warning('Invalid DB operation: {}'.format(op))
+
+
+def get_port_mapping():
+    """Get port mapping from CONFIG_DB
+    """
+    port_mapping = PortMapping()
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db = daemon_base.db_connect("CONFIG_DB", namespace=namespace)
+        port_table = swsscommon.Table(config_db, swsscommon.CFG_PORT_TABLE_NAME)
+        for key in port_table.getKeys():
+            _, port_config = port_table.get(key)
+            port_config_dict = dict(port_config)
+            port_change_event = PortChangeEvent(key, port_config_dict['index'], asic_id, PortChangeEvent.PORT_ADD)
+            port_mapping.handle_port_change_event(port_change_event)
+    return port_mapping
