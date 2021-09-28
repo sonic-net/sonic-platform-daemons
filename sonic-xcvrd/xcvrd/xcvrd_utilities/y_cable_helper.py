@@ -1461,7 +1461,7 @@ def task_download_firmware_worker(port, physical_port, port_instance, file_full_
     rc[0] = status
     helper_logger.log_debug("download thread finished port {} physical_port {}".format(port, physical_port))
 
-
+# Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
     def __init__(self):
         self.task_thread = None
@@ -2295,4 +2295,3 @@ class YCableTableUpdateTask(object):
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")
-
