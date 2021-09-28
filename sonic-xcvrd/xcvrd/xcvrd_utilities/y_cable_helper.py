@@ -1462,11 +1462,9 @@ def task_download_firmware_worker(port, physical_port, port_instance, file_full_
     helper_logger.log_debug("download thread finished port {} physical_port {}".format(port, physical_port))
 
 
-# Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
     def __init__(self):
-        self.task_mux_toggle_thread = None
-        self.task_mux_probe_thread = None
+        self.task_thread = None
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
@@ -1475,11 +1473,12 @@ class YCableTableUpdateTask(object):
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
 
-    def task_mux_toggle_worker(self):
+    def task_worker(self):
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, state_db, status_tbl, y_cable_tbl = {}, {}, {}, {}
+        appl_db, state_db, config_db, status_tbl, y_cable_tbl = {}, {}, {}, {}, {}
         y_cable_tbl_keys = {}
+        mux_cable_command_tbl, y_cable_command_tbl = {}, {}
         mux_metrics_tbl = {}
 
         sel = swsscommon.Select()
@@ -1490,8 +1489,13 @@ class YCableTableUpdateTask(object):
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
+            mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
+            y_cable_command_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             y_cable_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
@@ -1499,6 +1503,7 @@ class YCableTableUpdateTask(object):
                 state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
             y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
             sel.addSelectable(status_tbl[asic_id])
+            sel.addSelectable(mux_cable_command_tbl[asic_id])
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
         while True:
@@ -1530,7 +1535,7 @@ class YCableTableUpdateTask(object):
                 if not port:
                     break
 
-                helper_logger.log_debug("Y_CABLE_DEBUG: received an event for port transition {} {}".format(port, threading.currentThread().getName()))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received an event for port transition {}".format(port))
 
                 # entering this section signifies a start for xcvrd state
                 # change request from swss so initiate recording in mux_metrics table
@@ -1556,14 +1561,14 @@ class YCableTableUpdateTask(object):
                         old_status = mux_port_dict.get("state")
                         read_side = mux_port_dict.get("read_side")
                         # Now whatever is the state requested, toggle the mux appropriately
-                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {} {}".format(port, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {}".format(port, old_status, new_status))
                         active_side = update_tor_active_side(read_side, new_status, port)
                         if active_side == -1:
-                            helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown {}".format(
-                                port, old_status, new_status, threading.currentThread().getName()))
+                            helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(
+                                port, old_status, new_status))
                             new_status = 'unknown'
 
-                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB".format(port, old_status, new_status))
                         helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
                             port, old_status, new_status))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
@@ -1576,65 +1581,15 @@ class YCableTableUpdateTask(object):
                                                                   ('active_side', str(active_side))])
                         y_cable_tbl[asic_index].set(port, fvs_updated)
                     else:
-                        helper_logger.log_info("Got a change event on port {} of table {} that does not contain state {}".format(
-                            port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME, threading.currentThread().getName()))
-
-    def task_mux_probe_worker(self):
-
-        # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, state_db, y_cable_tbl = {}, {}, {}
-        y_cable_tbl_keys = {}
-        mux_cable_command_tbl, y_cable_command_tbl = {}, {}
-
-        sel = swsscommon.Select()
-
-        # Get the namespaces in the platform
-        namespaces = multi_asic.get_front_end_namespaces()
-        for namespace in namespaces:
-            # Open a handle to the Application database, in all namespaces
-            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            y_cable_command_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            y_cable_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
-            sel.addSelectable(mux_cable_command_tbl[asic_id])
-
-        # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
-        while True:
-            # Use timeout to prevent ignoring the signals we want to handle
-            # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-
-            if self.task_stopping_event.is_set():
-                break
-
-            (state, selectableObj) = sel.select(SELECT_TIMEOUT)
-
-            if state == swsscommon.Select.TIMEOUT:
-                # Do not flood log when select times out
-                continue
-            if state != swsscommon.Select.OBJECT:
-                helper_logger.log_warning(
-                    "sel.select() did not  return swsscommon.Select.OBJECT for sonic_y_cable updates")
-                continue
-
-            # Get the redisselect object  from selectable object
-            redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(
-                selectableObj)
-            # Get the corresponding namespace from redisselect db connector object
-            namespace = redisSelectObj.getDbConnector().getNamespace()
-            asic_index = multi_asic.get_asic_index_from_namespace(namespace)
+                        helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
+                            port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
 
             while True:
                 (port_m, op_m, fvp_m) = mux_cable_command_tbl[asic_index].pop()
 
                 if not port_m:
                     break
-                helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for port status {} {}".format(port_m, threading.currentThread().getName()))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for port status {}".format(port_m))
 
                 if fvp_m:
 
@@ -1657,12 +1612,6 @@ class YCableTableUpdateTask(object):
                             read_side = mux_port_dict.get("read_side")
                             update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
 
-                    else:
-                        helper_logger.log_error("Got a probe event on port {} of table {} that does not contain command".format(
-                            port_m, mux_cable_command_tbl[asic_index].getTableName()))
-                else:
-                    helper_logger.log_error("Could not retreive fvp for port_m {} table {} while trying to process mux probe".format(
-                        port_m, mux_cable_command_tbl[asic_index].getTableName()))
 
     def task_cli_worker(self):
 
@@ -2331,21 +2280,19 @@ class YCableTableUpdateTask(object):
 
 
     def task_run(self):
-        self.task_mux_toggle_thread = threading.Thread(target=self.task_mux_toggle_worker)
-        self.task_mux_probe_thread = threading.Thread(target=self.task_mux_probe_worker)
+        self.task_thread = threading.Thread(target=self.task_worker)
         self.task_cli_thread = threading.Thread(target=self.task_cli_worker)
-        self.task_mux_toggle_thread.start()
-        self.task_mux_probe_thread.start()
+        self.task_thread.start()
         self.task_cli_thread.start()
 
     def task_stop(self):
 
         self.task_stopping_event.set()
         helper_logger.log_info("stopping the cli and probing task threads xcvrd")
-        self.task_mux_toggle_thread.join()
-        self.task_mux_probe_thread.join()
+        self.task_thread.join()
         self.task_cli_thread.join()
         
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")
+
