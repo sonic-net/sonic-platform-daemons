@@ -1535,7 +1535,7 @@ class YCableTableUpdateTask(object):
                 if not port:
                     break
 
-                helper_logger.log_debug("Y_CABLE_DEBUG: received an event for port transition {}".format(port))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received an event for port transition {} {}".format(port, threading.currentThread().getName()))
 
                 # entering this section signifies a start for xcvrd state
                 # change request from swss so initiate recording in mux_metrics table
@@ -1568,9 +1568,9 @@ class YCableTableUpdateTask(object):
                                 port, old_status, new_status))
                             new_status = 'unknown'
 
-                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB".format(port, old_status, new_status))
-                        helper_logger.log_info("Got a change event for toggle the mux-direction active side for port {} state from {} to {}".format(
-                            port, old_status, new_status))
+                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state from {} to {} {}".format(
+                            port, old_status, new_status, threading.currentThread().getName()))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                         fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                   ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
@@ -1589,7 +1589,7 @@ class YCableTableUpdateTask(object):
 
                 if not port_m:
                     break
-                helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for port status {}".format(port_m))
+                helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for port status {} {}".format(port_m, threading.currentThread().getName()))
 
                 if fvp_m:
 
