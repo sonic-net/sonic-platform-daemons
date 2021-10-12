@@ -1255,9 +1255,12 @@ class SfpStateUpdateTask(object):
         #  1. SFP information is already in DB, which means that a logical port with the same physical index is in DB before.
         #     Need copy the data from existing logical port and insert it into TRANSCEIVER_DOM_INFO, TRANSCEIVER_STATUS_INFO 
         #     and TRANSCEIVER_INFO table.
-        #  2. SFP information is not in DB and SFP is present. Need query the SFP status by platform API and insert the
-        #     data to DB.
-        #  3. SFP information is not in DB and SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
+        #  2. SFP information is not in DB and SFP is present with no SFP error. Need query the SFP status by platform API and 
+        #     insert the data to DB.
+        #  3. SFP information is not in DB and SFP is present with SFP error. If the SFP error does not block EEPROM reading, 
+        #     just query transceiver information and DOM sensor information via platform API and update the data to DB; otherwise, 
+        #     just update TRANSCEIVER_STATUS table with the error.
+        #  4. SFP information is not in DB and SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
         logical_port_event_dict = {}
         sfp_status = None
         sibling_port = None
@@ -1284,7 +1287,7 @@ class SfpStateUpdateTask(object):
         if sfp_status:
             # SFP information is in DB
             status_tbl.set(port_change_event.port_name, sfp_status)
-            logical_port_event_dict[port_change_event.port_name] = dict(sfp_status)['status'] # TODO
+            logical_port_event_dict[port_change_event.port_name] = dict(sfp_status)['status']
             found, sfp_info = int_tbl.get(sibling_port)
             if found:
                 int_tbl.set(port_change_event.port_name, sfp_info)

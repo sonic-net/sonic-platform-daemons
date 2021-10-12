@@ -749,32 +749,26 @@ def change_ports_status_for_y_cable_change_event(logical_port_dict, port_mapping
                 "Got invalid asic index for {}, ignored".format(logical_port_name))
             continue
 
-            # Get the asic to which this port belongs
-            asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
-            if asic_index is None:
-                helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+        if logical_port_name in port_table_keys[asic_index]:
+            if value == sfp_status_helper.SFP_STATUS_INSERTED:
+                helper_logger.log_info("Got SFP inserted event")
+                check_identifier_presence_and_update_mux_table_entry(
+                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping, y_cable_presence)
+            elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+                check_identifier_presence_and_delete_mux_table_entry(
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, port_mapping, delete_change_event)
+            else:
+                try:
+                    # Now that the value is in bitmap format, let's convert it to number
+                    event_bits = int(value)
+                    if sfp_status_helper.is_error_block_eeprom_reading(event_bits):
+                        check_identifier_presence_and_delete_mux_table_entry(
+                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, port_mapping, delete_change_event)
+                except:
+                    pass
+                # SFP return unkown event, just ignore for now.
+                helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                 continue
-
-            if logical_port_name in port_table_keys[asic_index]:
-                if value == sfp_status_helper.SFP_STATUS_INSERTED:
-                    helper_logger.log_info("Got SFP inserted event")
-                    check_identifier_presence_and_update_mux_table_entry(
-                        state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, port_mapping, y_cable_presence)
-                elif value == sfp_status_helper.SFP_STATUS_REMOVED:
-                    check_identifier_presence_and_delete_mux_table_entry(
-                        state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, port_mapping, delete_change_event)
-                else:
-                    try:
-                        # Now that the value is in bitmap format, let's convert it to number
-                        event_bits = int(value)
-                        if sfp_status_helper.is_error_block_eeprom_reading(event_bits):
-                            check_identifier_presence_and_delete_mux_table_entry(
-                                state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, port_mapping, delete_change_event)
-                    except:
-                        pass
-                    # SFP return unkown event, just ignore for now.
-                    helper_logger.log_warning("Got unknown event {}, ignored".format(value))
-                    continue
 
     # If there was a delete event and y_cable_presence was true, reaccess the y_cable presence
     if y_cable_presence[0] is True and delete_change_event[0] is True:
@@ -1457,14 +1451,6 @@ class YCableTableUpdateTask(object):
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
-
-    def handle_port_change_event(self):
-        while True:
-            try:
-                port_change_event = self.event_queue.get_nowait()
-                self.port_mapping.handle_port_change_event(port_change_event)
-            except queue.Empty:
-                break
 
     def task_worker(self):
 
