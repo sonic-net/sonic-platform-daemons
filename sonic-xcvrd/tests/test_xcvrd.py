@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import time
@@ -36,6 +37,10 @@ from xcvrd.xcvrd_utilities.port_mapping import *
 
 with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
     media_settings_dict = json.load(f)
+
+media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
+global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
+media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
 class TestXcvrdScript(object):
     def test_xcvrd_helper_class_run(self):
@@ -401,9 +406,18 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_notify_media_setting(self):
+        self._check_notify_media_setting(1)
+
+    @patch('xcvrd.xcvrd.g_dict', media_settings_with_comma_dict)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_notify_media_setting_with_comma(self):
+        self._check_notify_media_setting(1)
+        self._check_notify_media_setting(6)
+
+    def _check_notify_media_setting(self, index):
         logical_port_name = 'Ethernet0'
         xcvr_info_dict = {
-            1: {
+            index: {
                 'manufacturer': 'Molex',
                 'model': '1064141421',
                 'cable_type': 'Length Cable Assembly(m)',
@@ -414,7 +428,7 @@ class TestXcvrdScript(object):
         }
         app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
         port_mapping = PortMapping()
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
+        port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
         notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
 
