@@ -14,6 +14,7 @@ setup(
     entry_points={
         'console_scripts': [
             'xcvrd = xcvrd.xcvrd:main',
+            'y_cable = y_cable.y_cable:main',
         ]
     },
     install_requires=[
