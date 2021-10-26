@@ -492,7 +492,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
             val = mux_table_dict.get("state", None)
 
-            if val in ["active", "auto", "manual"]:
+            if val in ["active", "auto", "manual", "standby"]:
 
                 # import the module and load the port instance
                 physical_port_list = port_mapping.logical_port_name_to_physical_port_list(
@@ -853,7 +853,7 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
             val = mux_table_dict.get("state", None)
-            if val in ["active", "auto", "manual"]:
+            if val in ["active", "auto", "manual", "standby"]:
 
                 if mux_tbl.get(asic_index, None) is not None:
                     # fill in the newly found entry
