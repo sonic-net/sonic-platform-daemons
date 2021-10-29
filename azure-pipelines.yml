@@ -52,6 +52,10 @@ parameters:
       root_dir: sonic-xcvrd
       python2: true
       python3: true
+    - name: ycable
+      root_dir: sonic-ycable
+      python2: true
+      python3: true
 - name: artifactBranch
   type: string
   default: 'refs/heads/master'

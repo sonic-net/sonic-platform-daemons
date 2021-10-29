@@ -1,19 +1,19 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='sonic-xcvrd',
+    name='sonic-ycable',
     version='1.0',
-    description='Transceiver monitoring daemon for SONiC',
+    description='Y-cable configuration daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Kebo Liu',
-    maintainer_email='kebol@mellanox.com',
+    maintainer='Vaibhav Dahiya',
+    maintainer_email='vdahiya@microsoft.com',
     packages=find_packages(),
     entry_points={
         'console_scripts': [
-            'xcvrd = xcvrd.xcvrd:main',
+            'ycable = ycable.ycable:main',
         ]
     },
     install_requires=[
@@ -41,5 +41,5 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC TRANSCEIVER transceiver daemon XCVRD xcvrd',
+    keywords='sonic SONiC TRANSCEIVER transceiver daemon YCABLE ycable',
 )
