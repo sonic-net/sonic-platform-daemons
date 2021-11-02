@@ -10,3 +10,14 @@
 
 # Compiled code which doesn't end in '.pyc'
 sonic-thermalctld/scripts/thermalctldc
+sonic-chassisd/scripts/chassisdc
+sonic-psud/scripts/psudc
+
+# Unit test / coverage reports
+coverage.xml
+.coverage
+htmlcov/
+test-results.xml
+leddc
+pciedc
+syseepromdc

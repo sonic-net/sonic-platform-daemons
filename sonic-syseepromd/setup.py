@@ -13,8 +13,14 @@ setup(
     scripts=[
         'scripts/syseepromd',
     ],
-    setup_requires= [
+    setup_requires=[
         'wheel'
+    ],
+    tests_require=[
+        'mock>=2.0.0; python_version < "3.3"',
+        'pytest',
+        'pytest-cov',
+        'sonic_platform_common'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -26,6 +32,7 @@ setup(
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC SYSEEPROM syseeprom SYSEEPROMD syseepromd',
