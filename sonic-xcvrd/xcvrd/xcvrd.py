@@ -1464,8 +1464,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         xcvr_table_helper = XcvrTableHelper()
 
-        output = subprocess.check_output("cat /proc/cmdline", shell=True, universal_newlines=True)
-        if "fast-reboot" in output:
+        output = subprocess.check_output("sonic-db-cli STATE_DB GET 'FAST_REBOOT|system'", shell=True, universal_newlines=True)
+        if "1" in output:
             self.log_info("Skip loading media settings for fast-reboot case")
         else:
             self.load_media_settings()
