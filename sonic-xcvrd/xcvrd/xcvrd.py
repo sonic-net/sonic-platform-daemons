@@ -16,6 +16,7 @@ try:
     import sys
     import threading
     import time
+    import subprocess
 
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
@@ -1463,7 +1464,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         xcvr_table_helper = XcvrTableHelper()
 
-        self.load_media_settings()
+        output = subprocess.check_output("cat /proc/cmdline", shell=True, universal_newlines=True)
+        if "fast-reboot" in output:
+            self.log_info("Skip loading media settings for fast-reboot case")
+        else:
+            self.load_media_settings()
+
         warmstart = swsscommon.WarmStart()
         warmstart.initialize("xcvrd", "pmon")
         warmstart.checkWarmStart("xcvrd", "pmon", False)
