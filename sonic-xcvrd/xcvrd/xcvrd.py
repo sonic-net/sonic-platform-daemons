@@ -1336,7 +1336,15 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.dom_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_DOM_SENSOR_TABLE)
             self.status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
 
-        self.load_media_settings()
+        state_db_host = daemon_base.db_connect("STATE_DB")
+        fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
+        keys = fastboot_tbl.getKeys()
+
+        if "system" in keys:
+            self.log_info("Skip loading media_settings.json in case of fast-reboot")
+        else:
+            self.load_media_settings()
+
         warmstart = swsscommon.WarmStart()
         warmstart.initialize("xcvrd", "pmon")
         warmstart.checkWarmStart("xcvrd", "pmon", False)
