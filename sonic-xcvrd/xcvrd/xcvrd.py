@@ -16,7 +16,6 @@ try:
     import sys
     import threading
     import time
-    import subprocess
 
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
@@ -1464,9 +1463,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         xcvr_table_helper = XcvrTableHelper()
 
-        output = subprocess.check_output("sonic-db-cli STATE_DB GET 'FAST_REBOOT|system'", shell=True, universal_newlines=True)
-        if "1" in output:
-            self.log_info("Skip loading media settings for fast-reboot case")
+        fastboot_tbl = swsscommon.Table(xcvr_table_helper.state_db_host, 'FAST_REBOOT')
+        keys = fastboot_tbl.getKeys()
+
+        if "system" in keys:
+            self.log_info("Skip loading media_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
 
@@ -1572,6 +1573,7 @@ class XcvrTableHelper:
         self.int_tbl, self.dom_tbl, self.status_tbl, self.app_port_tbl = {}, {}, {}, {}
         self.state_db = {}
         self.namespaces = multi_asic.get_front_end_namespaces()
+        self.state_db_host =  daemon_base.db_connect("STATE_DB")
         for namespace in self.namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
