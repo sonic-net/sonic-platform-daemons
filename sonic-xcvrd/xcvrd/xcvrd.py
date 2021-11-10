@@ -827,6 +827,18 @@ def init_port_sfp_status_tbl(port_mapping, stop_event=threading.Event()):
             else:
                 update_port_transceiver_status_table(logical_port_name, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
 
+def is_fast_reboot_enabled():
+    fastboot_enabled = False
+    state_db_host =  daemon_base.db_connect("STATE_DB")
+    fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
+    keys = fastboot_tbl.getKeys()
+
+    if "system" in keys:
+        output = subprocess.check_output('sonic-db-cli STATE_DB get "FAST_REBOOT|system"', shell=True, universal_newlines=True)
+        if "1" in output:
+            fastboot_enabled = True
+
+    return fastboot_enabled
 #
 # Helper classes ===============================================================
 #
@@ -1464,16 +1476,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         xcvr_table_helper = XcvrTableHelper()
 
-        fastboot_enabled = False
-        fastboot_tbl = swsscommon.Table(xcvr_table_helper.state_db_host, 'FAST_REBOOT')
-        keys = fastboot_tbl.getKeys()
-
-        if "system" in keys:
-            output = subprocess.check_output('sonic-db-cli STATE_DB get "FAST_REBOOT|system"', shell=True, universal_newlines=True)
-            if "1" in output:
-                fastboot_enabled = True
-
-        if fastboot_enabled == True:
+        if is_fast_reboot_enabled():
             self.log_info("Skip loading media_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
@@ -1580,7 +1583,6 @@ class XcvrTableHelper:
         self.int_tbl, self.dom_tbl, self.status_tbl, self.app_port_tbl = {}, {}, {}, {}
         self.state_db = {}
         self.namespaces = multi_asic.get_front_end_namespaces()
-        self.state_db_host =  daemon_base.db_connect("STATE_DB")
         for namespace in self.namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
