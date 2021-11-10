@@ -14,6 +14,7 @@ try:
     import sys
     import threading
     import time
+    import subprocess
 
     from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
@@ -1339,8 +1340,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         state_db_host = daemon_base.db_connect("STATE_DB")
         fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
         keys = fastboot_tbl.getKeys()
+        fastboot_enabled = False
 
         if "system" in keys:
+            output = subprocess.check_output('sonic-db-cli STATE_DB get "FAST_REBOOT|system"', shell=True, universal_newlines=True)
+            if "1" in output:
+                fastboot_enabled = True
+
+        if fastboot_enabled == True:
             self.log_info("Skip loading media_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
