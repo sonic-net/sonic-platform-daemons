@@ -840,7 +840,6 @@ class DomInfoUpdateTask(object):
 
     def task_worker(self):
         helper_logger.log_info("Start DOM monitoring loop")
-        mux_tbl = {}
         dom_info_cache = {}
         dom_th_info_cache = {}
         sel, asic_context = port_mapping.subscribe_port_config_change()

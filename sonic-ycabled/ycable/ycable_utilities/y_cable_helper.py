@@ -1666,7 +1666,6 @@ class YCableTableUpdateTask(object):
         xcvrd_config_hwmode_swmode_cmd_tbl, xcvrd_config_hwmode_swmode_rsp_tbl , xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
         xcvrd_config_prbs_cmd_tbl, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_rsp_tbl , xcvrd_config_prbs_cmd_sts_tbl= {}, {}, {}, {}
         xcvrd_config_loop_cmd_tbl, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_rsp_tbl , xcvrd_config_loop_cmd_sts_tbl= {}, {}, {}, {}
-        xcvrd_show_counters_cmd_tbl, xcvrd_show_counters_rsp_tbl , xcvrd_show_counters_cmd_sts_tbl= {}, {}, {}
         xcvrd_show_event_cmd_tbl, xcvrd_show_event_rsp_tbl , xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_res_tbl= {}, {}, {}, {}
         xcvrd_show_fec_cmd_tbl, xcvrd_show_fec_rsp_tbl , xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl= {}, {}, {}, {}
         xcvrd_show_ber_cmd_tbl, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl , xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
@@ -1799,7 +1798,6 @@ class YCableTableUpdateTask(object):
             sel.addSelectable(xcvrd_show_event_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_show_fec_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_show_ber_cmd_tbl[asic_id])
-            #sel.addSelectable(xcvrd_show_counters_cmd_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
