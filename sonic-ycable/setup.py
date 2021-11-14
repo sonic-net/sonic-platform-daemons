@@ -13,7 +13,7 @@ setup(
     packages=find_packages(),
     entry_points={
         'console_scripts': [
-            'ycable = ycable.ycable:main',
+            'ycabled = ycable.ycable:main',
         ]
     },
     install_requires=[

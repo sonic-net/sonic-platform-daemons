@@ -178,6 +178,7 @@ class YcableInfoUpdateTask(object):
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
 
         # Start loop to update dom info in DB periodically
         while not self.task_stopping_event.wait(YCABLE_INFO_UPDATE_PERIOD_SECS):
@@ -241,10 +242,8 @@ class YcableStateUpdateTask(object):
                 _wrapper_soak_sfp_insert_event(self.sfp_insert_events, port_dict)
             if not port_dict:
                 continue
-            helper_logger.log_debug("Got event {} {} in state {}".format(status, port_dict, state))
             y_cable_helper.change_ports_status_for_y_cable_change_event(
                 port_dict, y_cable_presence, stopping_event)
-            helper_logger.log_info("Stop SFP monitoring loop")
 
     def task_run(self, sfp_error_event, y_cable_presence):
         if self.task_stopping_event.is_set():
