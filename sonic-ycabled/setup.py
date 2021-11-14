@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='sonic-ycable',
+    name='sonic-ycabled',
     version='1.0',
     description='Y-cable configuration daemon for SONiC',
     license='Apache 2.0',

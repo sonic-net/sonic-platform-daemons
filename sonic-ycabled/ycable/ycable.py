@@ -6,8 +6,6 @@
 """
 
 try:
-    import ast
-    import json
     import multiprocessing
     import os
     import signal
@@ -219,7 +217,6 @@ class YcableStateUpdateTask(object):
     def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
         helper_logger.log_info("Start Ycable monitoring loop")
 
-        transceiver_dict = {}
         # Connect to STATE_DB and create transceiver dom/sfp info tables
         state_db, appl_db, int_tbl, dom_tbl, status_tbl, app_port_tbl = {}, {}, {}, {}, {}, {}
 
@@ -229,10 +226,9 @@ class YcableStateUpdateTask(object):
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
 
-        retry = 0
         timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
         while not stopping_event.is_set():
-            time_start = time.time()
+
             # Ensure not to block for any event if sfp insert event is pending
             if self.sfp_insert_events:
                 timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
@@ -364,10 +360,13 @@ class DaemonYcable(daemon_base.DaemonBase):
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
 
+        """
+        #TODO need to decide if we need warm start capability in this ycabled daemon
         warmstart = swsscommon.WarmStart()
-        warmstart.initialize("ycable", "pmon")
-        warmstart.checkWarmStart("ycable", "pmon", False)
+        warmstart.initialize("ycabled", "pmon")
+        warmstart.checkWarmStart("ycabled", "pmon", False)
         is_warm_start = warmstart.isWarmStart()
+        """
 
         # Make sure this daemon started after all port configured
         self.log_info("Wait for port config is done")
