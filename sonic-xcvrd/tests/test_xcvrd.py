@@ -42,6 +42,17 @@ media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
+class helper_logger:
+    mock_arg = MagicMock()
+    def log_error(self, mock_arg):
+        return True
+    
+    def log_warning(self, mock_arg):
+        return True
+    
+    def log_debug(self, mock_arg):
+        return True
+
 class TestXcvrdScript(object):
     def test_xcvrd_helper_class_run(self):
         Y_cable_task = YCableTableUpdateTask(None)
@@ -324,7 +335,7 @@ class TestXcvrdScript(object):
     def test_y_cable_helper_format_mapping_identifier1(self):
         rc = format_mapping_identifier("ABC        ")
         assert(rc == "abc")
-
+    
     def test_y_cable_wrapper_get_transceiver_info(self):
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
             patched_util.get_transceiver_info_dict.return_value = {'manufacturer': 'Microsoft',
@@ -337,6 +348,37 @@ class TestXcvrdScript(object):
         assert(vendor == "Microsoft")
         assert(model == "model1")
 
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_chassis')
+    def test_y_cable_wrapper_get_transceiver_info_with_platform_chassis(self, mock_chassis):
+
+        mock_object = MagicMock()
+        mock_object.get_transceiver_info.return_value = { 'type': '1000_BASE_SX_SFP',
+                            'hardware_rev': '5',
+                            'serial' : 'PEP3L5D',
+                            'manufacturer' : 'FINISAR',
+                            'model' : 'ABC',
+                            'connector' : 'LC',
+                            'encoding' : '8B10B',
+                            'ext_identifier' : 'SFP',
+                            'ext_rateselect_compliance' : 'DEF',
+                            'cable_length' : '850',
+                            'nominal_bit_rate' : '100',
+                            'specification_compliance' : 'GHI',
+                            'vendor_date' : '2021-01-01',
+                            'vendor_oui' : '00:90:65' }
+
+        mock_chassis.get_sfp = MagicMock(return_value = mock_object)
+        received_xcvr_info = y_cable_wrapper_get_transceiver_info(1)
+
+        type = received_xcvr_info.get('type')
+        model = received_xcvr_info.get('model')
+        vendor_date = received_xcvr_info.get('vendor_date')
+
+        assert(type == "1000_BASE_SX_SFP")
+        assert(model == "ABC")
+        assert(vendor_date == "2021-01-01")
+
+
     def test_y_cable_wrapper_get_presence(self):
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
             patched_util.get_presence.return_value = True
@@ -344,6 +386,61 @@ class TestXcvrdScript(object):
             presence = y_cable_wrapper_get_presence(1)
 
         assert(presence == True)
+
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_chassis')
+    def test_y_cable_wrapper_get_presence_with_platform_chassis(self, mock_chassis):
+
+        mock_object = MagicMock()
+        mock_object.get_presence = MagicMock(return_value = True)
+        mock_chassis.get_sfp = MagicMock(return_value = mock_object)
+        presence = y_cable_wrapper_get_presence(1)
+
+        assert(presence == True)
+
+    def test_y_cable_toggle_mux_torA_no_port_instance(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
+            
+            port_instance.get.return_value=None
+            rc = y_cable_toggle_mux_torA(1)
+        
+        assert(rc == -1)
+
+
+    def test_y_cable_toggle_mux_torA_update_status_exception(self):
+
+        # Maybe I should instantiate a port_instance mock object, give it the toggle_..._tor_a method as an attribute or something?
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
+            
+            port_instance.get.return_value = "simulated_port"
+            port_instance.toggle_mux_to_tor_a.return_value = Exception(NotImplementedError)
+
+            rc = y_cable_toggle_mux_torA(1)
+        
+        assert(rc == -1)
+    
+    def test_y_cable_toggle_mux_torB_no_port_instance(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
+            
+            port_instance.get.return_value=None
+            rc = y_cable_toggle_mux_torB(1)
+        
+        assert(rc == -1)
+
+
+    def test_y_cable_toggle_mux_torB_update_status_exception(self):
+
+        # Maybe I should instantiate a port_instance mock object, give it the toggle_..._tor_a method as an attribute or something?
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
+            
+            port_instance.get.return_value = "simulated_port"
+            port_instance.toggle_mux_to_tor_a.return_value = Exception(NotImplementedError)
+
+            rc = y_cable_toggle_mux_torB(1)
+        
+        assert(rc == -1)
+
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
