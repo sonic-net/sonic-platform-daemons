@@ -54,7 +54,6 @@ parameters:
       python3: true
     - name: ycabled
       root_dir: sonic-ycabled
-      python2: true
       python3: true
 - name: artifactBranch
   type: string

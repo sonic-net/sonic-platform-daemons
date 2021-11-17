@@ -54,6 +54,8 @@ STATE_INIT = 0
 STATE_NORMAL = 1
 STATE_EXIT = 2
 
+TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
+
 PHYSICAL_PORT_NOT_EXIST = -1
 SFP_EEPROM_NOT_READY = -2
 
@@ -170,6 +172,7 @@ class YcableInfoUpdateTask(object):
         # Connect to STATE_DB and create transceiver dom info table
         state_db = {}
         mux_tbl = {}
+        status_tbl = {}
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
