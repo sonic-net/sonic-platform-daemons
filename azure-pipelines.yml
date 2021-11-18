@@ -15,6 +15,11 @@ pr:
 pool:
   vmImage: 'ubuntu-20.04'
 
+variables:
+  DIFF_COVER_CHECK_THRESHOLD: 10
+  DIFF_COVER_ENABLE: 'true'
+  DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)
+
 resources:
   containers:
   - container: sonic-slave-buster
@@ -61,8 +66,6 @@ jobs:
     container: sonic-slave-buster
     variables:
       sourceBranch: "$(Build.SourceBranch)"
-      DIFF_COVER_CHECK_THRESHOLD: 10
-      DIFF_COVER_ENABLE: 'true'
 
     steps:
     - checkout: self
