@@ -61,7 +61,7 @@ jobs:
     container: sonic-slave-buster
     variables:
       sourceBranch: "$(Build.SourceBranch)"
-      DIFF_COVER_CHECK_THRESHOLD: 0
+      DIFF_COVER_CHECK_THRESHOLD: 10
       DIFF_COVER_ENABLE: 'true'
 
     steps:
