@@ -32,7 +32,6 @@ sys.path.insert(0, modules_path)
 os.environ["YCABLE_UNIT_TESTING"] = "1"
 from ycable.ycable import *
 from ycable.ycable_utilities.y_cable_helper import *
-from ycable.ycable_utilities.sfp_status_helper import *
 
 class TestYcableScript(object):
     def test_ycable_helper_class_run(self):

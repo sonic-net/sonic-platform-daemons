@@ -12,12 +12,12 @@ try:
     import sys
     import threading
     import time
-
+    
+    from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 
-    from .ycable_utilities import sfp_status_helper
     from .ycable_utilities import y_cable_helper
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -53,6 +53,18 @@ NORMAL_EVENT = 'normal'
 STATE_INIT = 0
 STATE_NORMAL = 1
 STATE_EXIT = 2
+
+
+SFP_STATUS_REMOVED = '0'
+SFP_STATUS_INSERTED = '1'
+
+# SFP error code enum, new elements can be added to the enum if new errors need to be supported.
+SFP_STATUS_ERR_ENUM = Enum('SFP_STATUS_ERR_ENUM', ['SFP_STATUS_ERR_I2C_STUCK', 'SFP_STATUS_ERR_BAD_EEPROM',
+                                                   'SFP_STATUS_ERR_UNSUPPORTED_CABLE', 'SFP_STATUS_ERR_HIGH_TEMP',
+                                                   'SFP_STATUS_ERR_BAD_CABLE'], start=2)
+
+# Convert the error code to string and store them in a set for convenience
+errors_block_eeprom_reading = set(str(error_code.value) for error_code in SFP_STATUS_ERR_ENUM)
 
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
 
@@ -129,16 +141,16 @@ def _wrapper_get_transceiver_info(physical_port):
 # Soak SFP insert event until management init completes
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
     for key, value in list(port_dict.items()):
-        if value == sfp_status_helper.SFP_STATUS_INSERTED:
+        if value == SFP_STATUS_INSERTED:
             sfp_insert_events[key] = time.time()
             del port_dict[key]
-        elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+        elif value == SFP_STATUS_REMOVED:
             if key in sfp_insert_events:
                 del sfp_insert_events[key]
 
     for key, itime in list(sfp_insert_events.items()):
         if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
-            port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
+            port_dict[key] = SFP_STATUS_INSERTED
             del sfp_insert_events[key]
 
 def _wrapper_get_transceiver_change_event(timeout):
@@ -153,6 +165,16 @@ def _wrapper_get_transceiver_change_event(timeout):
     status, events = platform_sfputil.get_transceiver_change_event(timeout)
     return status, events, None
 
+def detect_port_in_error_status(logical_port_name, status_tbl):
+    rec, fvp = status_tbl.get(logical_port_name)
+    if rec:
+        status_dict = dict(fvp)
+        if status_dict['status'] in errors_block_eeprom_reading:
+            return True
+        else:
+            return False
+    else:
+        return False
 
 #
 # Helper classes ===============================================================
@@ -191,7 +213,7 @@ class YcableInfoUpdateTask(object):
                     logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
+                if not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
                     if y_cable_presence[0] is True:
                         y_cable_helper.check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name)
 
