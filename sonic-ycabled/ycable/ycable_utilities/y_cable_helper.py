@@ -2307,7 +2307,6 @@ class YCableTableUpdateTask(object):
                         res_dir = dict(fvp_s)
 
                         hitless = res_dir.get("hitless", None)
-                        helper_logger.log_warning("hitless value recorded port {} {}".format(port, hitless))
                         if hitless is not None:
                             hitless = False
                         else:
@@ -2492,6 +2491,18 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute the set_anlt API for port {} due to {}".format(physical_port,repr(e)))
+                        elif config_prbs_mode == "fec":
+                            mode = res_dir.get("mode", None)
+                            if mode is None:
+                                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set fec port {}".format(port))
+                                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                                break
+                            mode = int(mode)
+                            with y_cable_port_locks[physical_port]:
+                                try:
+                                    status = port_instance.set_anlt(mode, target)
+                                except Exception as e:
+                                    status = -1
                         set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
                     else:
                         helper_logger.log_error("Wrong param for cli cmd enable/disable prbs anlt/reset API port {}".format(port))
