@@ -893,13 +893,6 @@ class CmisManagerTask:
         if not lport.startswith('Ethernet'):
             return
 
-        if port_change_event.port_dict is None:
-            speed = "0"
-            lanes = ""
-        else:
-            speed = port_change_event.port_dict.get('speed', "0")
-            lanes = port_change_event.port_dict.get('lanes', "")
-
         if pport is None:
             return
 
