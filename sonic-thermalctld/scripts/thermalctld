@@ -214,6 +214,20 @@ class FanUpdater(logger.Logger):
         for name in self.fan_status_dict.keys():
             self.table._del(name)
 
+    def __del__(self):
+        if self.table:
+            table_keys = self.table.getKeys()
+            for tk in table_keys:
+                self.table._del(tk)
+        if self.drawer_table:
+            drawer_keys = self.drawer_table.getKeys()
+            for dtk in drawer_keys:
+                self.drawer_table._del(dtk)
+        if self.phy_entity_table:
+            phy_entity_keys = self.phy_entity_table.getKeys()
+            for pek in phy_entity_keys:
+                self.phy_entity_table._del(pek)
+
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
         Log when any status changed
@@ -549,6 +563,16 @@ class TemperatureUpdater(logger.Logger):
                     self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
                 except Exception as e:
                     self.chassis_table = None
+
+    def __del__(self):
+        if self.table:
+            table_keys = self.table.getKeys()
+            for tk in table_keys:
+                self.table._del(tk)
+        if self.phy_entity_table:
+            phy_entity_keys = self.phy_entity_table.getKeys()
+            for pek in phy_entity_keys:
+                self.phy_entity_table._del(pek)
 
     def deinit(self):
         """
