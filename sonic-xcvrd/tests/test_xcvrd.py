@@ -531,6 +531,88 @@ class TestXcvrdScript(object):
         assert mock_init.call_count == 1
 
     @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    def test_CmisManagerTask_handle_port_change_event(self):
+        port_mapping = PortMapping()
+        task = CmisManagerTask(port_mapping)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
+        task.on_port_config_change(port_change_event)
+        assert task.task_queue.empty()
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
+        task.on_port_config_change(port_change_event)
+        assert task.task_queue.empty()
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL)
+        task.on_port_config_change(port_change_event)
+        assert task.task_queue.empty()
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_config_change(port_change_event)
+        assert not task.task_queue.empty()
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_config_change', MagicMock())
+    def test_CmisManagerTask_task_run_stop(self, mock_chassis):
+        mock_object = MagicMock()
+        mock_object.get_presence = MagicMock(return_value=True)
+        mock_object.get_port_type = MagicMock(return_value="QSFP_DD")
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_object, mock_object])
+
+        port_mapping = PortMapping()
+        task = CmisManagerTask(port_mapping)
+        task.task_run([False])
+        task.task_stop()
+        for worker in task.task_workers:
+            assert not worker.is_alive()
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_config_change', MagicMock())
+    def test_CmisManagerTask_task_worker(self, mock_chassis):
+        mock_object = MagicMock()
+        mock_object.get_presence = MagicMock(return_value=True)
+        mock_object.get_port_type = MagicMock(return_value="QSFP_DD")
+        mock_object.set_cmis_application = MagicMock()
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_object])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_object)
+
+        port_mapping = PortMapping()
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
+
+        # Case 1: Both port speed and lanes are unset
+        task = CmisManagerTask(port_mapping)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        task.on_port_config_change(port_change_event)
+        task.task_worker(False)
+        assert mock_object.set_cmis_application.call_count == 0
+
+        # Case 2: Invalid port speed while lanes is valid
+        port_change_event.port_dict = {'speed': 0, 'lanes': "1,2,3,4,5,6,7,8"}
+        task = CmisManagerTask(port_mapping)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        task.on_port_config_change(port_change_event)
+        task.task_worker(False)
+        assert mock_object.set_cmis_application.call_count == 0
+
+        # Case 3: Valid port speed with invalid lanes
+        port_change_event.port_dict = {'speed': 400000, 'lanes': None}
+        task = CmisManagerTask(port_mapping)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        task.on_port_config_change(port_change_event)
+        task.task_worker(False)
+        assert mock_object.set_cmis_application.call_count == 0
+
+        # Case 4: valid port speed and lanes
+        port_change_event.port_dict = {'speed': 400000, 'lanes': "1,2,3,4,5,6,7,8"}
+        task = CmisManagerTask(port_mapping)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        task.on_port_config_change(port_change_event)
+        task.task_worker(False)
+        assert mock_object.set_cmis_application.call_count == 1
+
+    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
     def test_DomInfoUpdateTask_handle_port_change_event(self):
         port_mapping = PortMapping()
         task = DomInfoUpdateTask(port_mapping)
