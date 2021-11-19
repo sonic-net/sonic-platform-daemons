@@ -7,6 +7,12 @@ trigger:
   branches:
     include:
       - '*'
+
+variables:
+  DIFF_COVER_CHECK_THRESHOLD: 50
+  DIFF_COVER_ENABLE: 'true'
+  DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)
+
 pr:
   branches:
     include:
@@ -14,11 +20,6 @@ pr:
 
 pool:
   vmImage: 'ubuntu-20.04'
-
-variables:
-  DIFF_COVER_CHECK_THRESHOLD: 10
-  DIFF_COVER_ENABLE: 'true'
-  DIFF_COVER_WORKING_DIRECTORY: $(System.DefaultWorkingDirectory)
 
 resources:
   containers:
@@ -172,12 +173,10 @@ jobs:
         - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
           artifact: ${{ project.root_dir }}
           displayName: "${{ project.name }}(Py3) Publish wheels"
-    - task: reportgenerator@4
-      inputs:
-        reports: '$(Build.SourcesDirectory)/**/coverage.xml'
-        targetdir: '$(Build.SourcesDirectory)/'
+
     - task: PublishCodeCoverageResults@1
       inputs:
-        codeCoverageTool: 'Cobertura'
-        summaryFileLocation: '$(Build.SourcesDirectory)/Cobertura.xml'
-        pathToSources: $(System.DefaultWorkingDirectory)/
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
+        reportDirectory: '$(System.DefaultWorkingDirectory)/htmlcov/'
+      displayName: 'Publish Python test coverage'
