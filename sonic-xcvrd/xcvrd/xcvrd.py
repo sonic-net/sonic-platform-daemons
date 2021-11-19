@@ -854,6 +854,7 @@ def is_fast_reboot_enabled():
 
 class CmisManagerTask:
 
+    CMIS_STATE_UNKNOWN   = 'UNKNOWN'
     CMIS_STATE_INSERTED  = 'INSERTED'
     CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
     CMIS_STATE_AP_CONF   = 'AP_CONFIGURED'
@@ -946,8 +947,11 @@ class CmisManagerTask:
                 if lport not in self.port_dict:
                     continue
 
-                state = self.port_dict[lport].get('cmis_state', self.CMIS_STATE_REMOVED)
-                if state in [self.CMIS_STATE_FAILED, self.CMIS_STATE_READY, self.CMIS_STATE_REMOVED]:
+                state = self.port_dict[lport].get('cmis_state', self.CMIS_STATE_UNKNOWN)
+                if state in [self.CMIS_STATE_UNKNOWN,
+                             self.CMIS_STATE_FAILED,
+                             self.CMIS_STATE_READY,
+                             self.CMIS_STATE_REMOVED]:
                     continue
 
                 pport = int(info.get('index', "-1"))
