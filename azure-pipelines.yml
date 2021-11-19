@@ -67,7 +67,6 @@ jobs:
     container: sonic-slave-buster
     variables:
       sourceBranch: "$(Build.SourceBranch)"
-
     steps:
     - checkout: self
       clean: true
@@ -173,10 +172,12 @@ jobs:
         - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
           artifact: ${{ project.root_dir }}
           displayName: "${{ project.name }}(Py3) Publish wheels"
-
+    - task: reportgenerator@4
+      inputs:
+        reports: '$(Build.SourcesDirectory)/**/coverage.xml'
+        targetdir: '$(Build.SourcesDirectory)/'
     - task: PublishCodeCoverageResults@1
       inputs:
-        codeCoverageTool: Cobertura
-        summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
-        reportDirectory: '$(System.DefaultWorkingDirectory)/htmlcov/'
-      displayName: 'Publish Python test coverage'
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Build.SourcesDirectory)/Cobertura.xml'
+        pathToSources: $(System.DefaultWorkingDirectory)/
