@@ -987,7 +987,10 @@ class CmisManagerTask:
                         (flag, appl) = sfp.get_cmis_application_update(host_lanes, host_speed)
                         if not flag:
                             # No application updates
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                            state = self.CMIS_STATE_READY
+                            self.dbg_print("{}: {}G, {}-lanes, state={}".format(
+                                           lport, int(speed/1000), len(host_lanes), state))
+                            self.port_dict[lport]['cmis_state'] = state
                             continue
                         self.port_dict[lport]['cmis_apsel'] = appl
                         sfp.set_cmis_application_stop(host_lanes)
