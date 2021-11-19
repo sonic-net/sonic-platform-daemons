@@ -32,10 +32,6 @@ parameters:
       root_dir: sonic-ledd
       python2: true
       python3: true
-    - name: pcied
-      root_dir: sonic-pcied
-      python2: true
-      python3: true
     - name: psud
       root_dir: sonic-psud
       python2: true
