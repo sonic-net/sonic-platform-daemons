@@ -890,9 +890,11 @@ class CmisManagerTask:
             self.isPortConfigDone = True
             return
 
+        # Skip if it's not a physical port
         if not lport.startswith('Ethernet'):
             return
 
+        # Skip if the physical index is not available
         if pport is None:
             return
 
@@ -919,16 +921,14 @@ class CmisManagerTask:
         self.dbg_print("Starting...")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
-        sel, asic_context = port_mapping.subscribe_port_config_change(['APPL_DB', 'STATE_DB'])
+        sel, asic_context = port_mapping.subscribe_port_update_event(['APPL_DB', 'STATE_DB'])
         while not self.task_stopping_event.is_set():
             # Handle port change event from main thread
-            port_mapping.handle_port_config_change(sel,
-                                                   asic_context,
-                                                   self.task_stopping_event,
-                                                   self.port_mapping,
-                                                   helper_logger,
-                                                   self.on_port_config_change,
-                                                   True)
+            port_mapping.handle_port_update_event(sel,
+                                                  asic_context,
+                                                  self.task_stopping_event,
+                                                  helper_logger,
+                                                  self.on_port_config_change)
 
             if not self.isPortConfigDone:
                 continue
@@ -963,6 +963,7 @@ class CmisManagerTask:
                 host_lanes = lanes_new
                 host_speed = speed
 
+                # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
                 if not sfp.get_presence():
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
@@ -976,7 +977,7 @@ class CmisManagerTask:
                         continue
 
                     # Skip if the memory type is flat
-                    if info.get('memory_type', 'flat') in ['flat', 'FLAT']:
+                    if info.get('memory_type', 'flat') in ['flat', 'FLAT', 'Flat']:
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
@@ -1046,6 +1047,20 @@ class CmisManagerTask:
         self.dbg_print("Stopped")
 
     def task_run(self, y_cable_presence):
+        # Stop the service if it's disabled in pmon_daemon_control.json
+        try:
+            (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+            pmon_daemon_control_file_path = os.path.join(platform_path, "pmon_daemon_control.json")
+            if os.path.isfile(pmon_daemon_control_file_path):
+                ctrl = {}
+                with open(pmon_daemon_control_file_path, "r") as f:
+                    ctrl = json.load(f)
+                if ctrl.get('skip_xcvrd_cmis_manager', False):
+                    self.dbg_print("service stopped administratively")
+                    return
+        except AttributeError:
+            pass
+
         if platform_chassis is None:
             self.dbg_print("Platform chassis is not available, stopping...")
             return

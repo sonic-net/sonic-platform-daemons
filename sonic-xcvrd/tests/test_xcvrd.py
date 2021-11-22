@@ -557,8 +557,8 @@ class TestXcvrdScript(object):
         assert len(task.port_dict) == 1
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_config_change', MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_config_change', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
     def test_CmisManagerTask_task_run_stop(self, mock_chassis):
         mock_object = MagicMock()
         mock_object.get_presence = MagicMock(return_value=True)
@@ -573,8 +573,8 @@ class TestXcvrdScript(object):
         assert not task.task_process.is_alive()
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_config_change', MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_config_change', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_task_worker(self, mock_chassis):
         mock_sfp = MagicMock()
