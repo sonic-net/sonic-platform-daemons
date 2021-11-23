@@ -875,7 +875,7 @@ class CmisManagerTask:
     def dbg_print(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
 
-    def on_port_config_change(self, port_change_event):
+    def on_port_update_event(self, port_change_event):
         if port_change_event.event_type not in [port_change_event.PORT_SET, port_change_event.PORT_DEL]:
             return
 
@@ -928,7 +928,7 @@ class CmisManagerTask:
                                                   asic_context,
                                                   self.task_stopping_event,
                                                   helper_logger,
-                                                  self.on_port_config_change)
+                                                  self.on_port_update_event)
 
             if not self.isPortConfigDone:
                 continue
@@ -985,7 +985,7 @@ class CmisManagerTask:
                                    lport, int(speed/1000), len(host_lanes), state))
 
                     if state == self.CMIS_STATE_INSERTED:
-                        (flag, appl) = sfp.get_cmis_application_update(host_lanes, host_speed)
+                        (flag, appl) = sfp.has_cmis_application_update(host_speed, host_lanes)
                         if not flag:
                             # No application updates
                             state = self.CMIS_STATE_READY
@@ -1087,7 +1087,7 @@ class CmisManagerTask:
         self.task_stopping_event.set()
         if self.task_process is not None:
             self.task_process.join()
-
+            self.task_process = None
 
 # Thread wrapper class to update dom info periodically
 

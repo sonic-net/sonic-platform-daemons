@@ -537,23 +537,23 @@ class TestXcvrdScript(object):
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert task.isPortConfigDone
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
 
     @patch('xcvrd.xcvrd.platform_chassis')
@@ -569,9 +569,7 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(port_mapping)
         task.task_run([False])
         task.task_stop()
-        # task.task_process could be none if the feature is disabled in pmon_daemon_control.json
-        if task.task_process is not None:
-            assert not task.task_process.is_alive()
+        assert task.task_process is None
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
@@ -605,7 +603,7 @@ class TestXcvrdScript(object):
                 'DP8State': 'DataPathInitialized'
             }
         })
-        mock_sfp.get_cmis_application_update = MagicMock(return_value=(True, 1))
+        mock_sfp.has_cmis_application_update = MagicMock(return_value=(True, 1))
         mock_sfp.set_cmis_application_stop = MagicMock(return_value=True)
         mock_sfp.set_cmis_application_apsel = MagicMock(return_value=True)
         mock_sfp.set_cmis_application_start = MagicMock(return_value=True)
@@ -618,18 +616,18 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(port_mapping)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert task.isPortConfigDone
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
                                             {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
-        task.on_port_config_change(port_change_event)
+        task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
 
         # Case 1: Module Inserted --> DP_DEINIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.get_cmis_application_update.call_count > 0
+        assert mock_sfp.has_cmis_application_update.call_count > 0
         assert mock_sfp.set_cmis_application_stop.call_count > 0
 
         # Case 2: DP_DEINIT --> AP Configured
