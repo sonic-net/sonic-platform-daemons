@@ -569,8 +569,9 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(port_mapping)
         task.task_run([False])
         task.task_stop()
-        assert task.task_process is not None
-        assert not task.task_process.is_alive()
+        # task.task_process could be none if the feature is disabled in pmon_daemon_control.json
+        if task.task_process is not None:
+            assert not task.task_process.is_alive()
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))

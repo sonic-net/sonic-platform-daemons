@@ -1058,7 +1058,7 @@ class CmisManagerTask:
                 if ctrl.get('skip_xcvrd_cmis_manager', False):
                     self.dbg_print("service stopped administratively")
                     return
-        except AttributeError:
+        except (AttributeError, TypeError):
             pass
 
         if platform_chassis is None:
