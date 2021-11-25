@@ -863,15 +863,37 @@ class TestXcvrdScript(object):
     def test_sfp_insert_events(self):
         from xcvrd.xcvrd import _wrapper_soak_sfp_insert_event
         sfp_insert_events = {}
-        insert = port_dict = {1:'1', 2:'1', 3:'1', 4:'1', 5:'1'}
-        start = time.time()
-        while True:
-            _wrapper_soak_sfp_insert_event(sfp_insert_events, insert)
-            if time.time() - start > MGMT_INIT_TIME_DELAY_SECS:
-                break
-            assert not bool(insert)
-        assert insert == port_dict
+        port_dict = {1:'1', 2:'1', 3:'1', 4:'1', 5:'1'}
 
+        # Define the time to sleep for simulating the xcvrd polling thread.
+        # key: The count to notify sfp_insert_events.
+        #      1 is the first time and expected that port_dict will be added to sfp_insert_events
+        #      2 is the second time which will wait for MGMT_INIT_TIME_DELAY_SECS and expected that the port
+        #        should be added from sfp_insert_events to read_eeprom_port_dict.
+        #      3 is the last time and port will also be added to read_eeprom_port_dict from sfp_insert_events
+        #      4 is expected that the port inserted event should be removed after polling for 3 times
+        # field: A list contains 3 different value.
+        #     The value of index 0 indicates that the time need to wait before calling _wrapper_soak_sfp_insert_event().
+        #     Ex:
+        #         The value of index 0 is MGMT_INIT_TIME_DELAY_SECS,
+        #         it is used to simulate the qsfp's management init delay time.
+        #     The value of index 1 indicates that ports has been detected with sfp presence.
+        #     Therefore, except for the first round, the port dict will be empty.
+        #     The value of index 2 indicates that xcvrd should read eeprom from these ports.
+        read_eeprom_state = {1:[0, port_dict, port_dict],
+                             2:[MGMT_INIT_TIME_DELAY_SECS, {}, port_dict],
+                             3:[3, {}, port_dict],
+                             4:[0, {}, {}]
+                            }
+
+        for cnt in range(1,4):
+            time_wait = read_eeprom_state[cnt][0]
+            read_eeprom_port_dict = read_eeprom_state[cnt][1]
+            expected_port_dict = read_eeprom_state[cnt][2]
+
+            time.sleep(time_wait)
+            _wrapper_soak_sfp_insert_event(sfp_insert_events, read_eeprom_port_dict)
+            assert expected_port_dict == read_eeprom_port_dict
 
     def test_sfp_remove_events(self):
         from xcvrd.xcvrd import _wrapper_soak_sfp_insert_event
