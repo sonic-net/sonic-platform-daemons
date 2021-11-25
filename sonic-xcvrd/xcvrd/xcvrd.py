@@ -9,6 +9,7 @@ try:
     import ast
     import copy
     import functools
+    import hashlib
     import json
     import multiprocessing
     import os
@@ -17,7 +18,8 @@ try:
     import threading
     import time
     import subprocess
- 
+
+    from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
@@ -46,6 +48,16 @@ MGMT_INIT_TIME_DELAY_SECS = 2
 
 # SFP insert event poll duration
 SFP_INSERT_EVENT_POLL_PERIOD_MSECS = 1000
+
+# state of read sfp eeprom
+READ_EEPROM_STATE_INSERTED = 0
+READ_EEPROM_STATE_SECOND_TRY = 1
+READ_EEPROM_STATE_LAST_TRY = 2
+
+class insert_event_field(Enum):
+    STATE = 0
+    TIMESTAMP = 1
+    CHECKSUM = 2
 
 DOM_INFO_UPDATE_PERIOD_SECS = 60
 STATE_MACHINE_UPDATE_PERIOD_MSECS = 60000
@@ -165,19 +177,47 @@ def _wrapper_get_transceiver_dom_threshold_info(physical_port):
             pass
     return platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
 
-# Soak SFP insert event until management init completes
+# Soak SFP insert event until the sfp eeprom has been read for third times or the transceiver is not
+# present.
+# Parameter:
+#     sfp_insert_events: A dictionary maintains the state of reading sfp eeprom which includes
+#                        the count of reading eeprom, timestamp and checksum for the last read.
+#     port_dict        : A dictionary indicates that the sfp is inserted(removed) into(from)
+#                        the specified port. When SFP_STATUS_INSERTED is set, xcvrd will regard that
+#                        a port inserted event occurred and try to read data from eeprom.
+# Functionality:
+# 1.Keep the port in sfp_insert_events and let xcvrd to read eeprom when the transceiver is detected
+#   at the first time. Expected to get correct eeprom data for those sfp transceivers which require
+#   shorter warm up time.
+# 2.If transceiver has been inserted for 2 seconds, read eeprom data again.
+#   This compensates for the incorrect eeprom data got at the first time if QSFP's Management init
+#   has not been completed at that time.
+# 3.The last try to read eeprom data will be applied when the transceiver has been inserted for 5
+#   seconds.
+#   i.e. 3 seconds after the second try. Aim to compensate for those transceivers which requires
+#        longer warm up time.
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
     for key, value in list(port_dict.items()):
         if value == sfp_status_helper.SFP_STATUS_INSERTED:
-            sfp_insert_events[key] = time.time()
-            del port_dict[key]
+            # Init the state of port which indicated that the state of reading eeprom, last read time and the checksum of sfp info
+            sfp_insert_events[key] = [READ_EEPROM_STATE_INSERTED , time.time(), 0]
+
         elif value == sfp_status_helper.SFP_STATUS_REMOVED:
             if key in sfp_insert_events:
                 del sfp_insert_events[key]
 
-    for key, itime in list(sfp_insert_events.items()):
-        if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
+    for key, value in list(sfp_insert_events.items()):
+        last_read_eeprom_state = sfp_insert_events[key][insert_event_field.STATE.value]
+        last_read_eeprom_time = sfp_insert_events[key][insert_event_field.TIMESTAMP.value]
+        current_time = time.time()
+
+        if ((last_read_eeprom_state == READ_EEPROM_STATE_INSERTED and (current_time - last_read_eeprom_time) >= 2)
+            or (last_read_eeprom_state == READ_EEPROM_STATE_SECOND_TRY and (current_time - last_read_eeprom_time) >= 3)):
+            sfp_insert_events[key][insert_event_field.STATE.value] = last_read_eeprom_state + 1
+            sfp_insert_events[key][insert_event_field.TIMESTAMP.value] = current_time
             port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
+        elif last_read_eeprom_state == READ_EEPROM_STATE_LAST_TRY:
+            # Delete the port if it has tried to read eeprom for last try
             del sfp_insert_events[key]
 
 def _wrapper_get_transceiver_change_event(timeout):
@@ -272,7 +312,7 @@ def beautify_dom_threshold_info_dict(dom_info_dict):
 
 
 def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver_dict,
-                             stop_event=threading.Event()):
+                             stop_event=threading.Event(), sfp_insert_events=None):
     ganged_port = False
     ganged_member_num = 1
 
@@ -294,34 +334,56 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
         port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
         ganged_member_num += 1
 
+        write_to_db = False
         try:
             port_info_dict = _wrapper_get_transceiver_info(physical_port)
             if port_info_dict is not None:
                 is_replaceable = _wrapper_is_replaceable(physical_port)
                 transceiver_dict[physical_port] = port_info_dict
-                fvs = swsscommon.FieldValuePairs(
-                    [('type', port_info_dict['type']),
-                     ('hardware_rev', port_info_dict['hardware_rev']),
-                     ('serial', port_info_dict['serial']),
-                     ('manufacturer', port_info_dict['manufacturer']),
-                     ('model', port_info_dict['model']),
-                     ('vendor_oui', port_info_dict['vendor_oui']),
-                     ('vendor_date', port_info_dict['vendor_date']),
-                     ('connector', port_info_dict['connector']),
-                     ('encoding', port_info_dict['encoding']),
-                     ('ext_identifier', port_info_dict['ext_identifier']),
-                     ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
-                     ('cable_type', port_info_dict['cable_type']),
-                     ('cable_length', str(port_info_dict['cable_length'])),
-                     ('specification_compliance', port_info_dict['specification_compliance']),
-                     ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
-                     ('application_advertisement', port_info_dict['application_advertisement']
-                      if 'application_advertisement' in port_info_dict else 'N/A'),
-                     ('is_replaceable', str(is_replaceable)),
-                     ('dom_capability', port_info_dict['dom_capability']
-                      if 'dom_capability' in port_info_dict else 'N/A'),
-                     ])
-                table.set(port_name, fvs)
+
+                # When 'sfp_insert_events' is specified, it is in one of the transition states.
+                # The eeprom data is read on these transition states and it is only required to
+                # write the data to db when a change is detected.
+                if sfp_insert_events is None:
+                    # Write sfp info to db directly if this function is not called by sfp inserted
+                    # event monitor thread(i.e. will not pass 'sfp_insert_events')
+                    write_to_db = True
+                else:
+                    # Calculate the checksum after reading eeprom data
+                    m = hashlib.md5()
+                    m.update(str(port_info_dict).encode('utf-8'))
+                    current_sfp_info_checksum = m.hexdigest()
+                    last_read_eeprom_checksum = sfp_insert_events[physical_port][insert_event_field.CHECKSUM.value]
+                    # Update the checksum and set the flag to indicate that the data need to be written to db
+                    if current_sfp_info_checksum != last_read_eeprom_checksum:
+                        helper_logger.log_debug("Port {} sfp info is updated due to the different checksum of sfp info has been detected".format(physical_port))
+                        sfp_insert_events[physical_port][insert_event_field.CHECKSUM.value] = current_sfp_info_checksum
+                        write_to_db = True
+
+                if write_to_db is True:
+                    fvs = swsscommon.FieldValuePairs(
+                        [('type', port_info_dict['type']),
+                        ('hardware_rev', port_info_dict['hardware_rev']),
+                        ('serial', port_info_dict['serial']),
+                        ('manufacturer', port_info_dict['manufacturer']),
+                        ('model', port_info_dict['model']),
+                        ('vendor_oui', port_info_dict['vendor_oui']),
+                        ('vendor_date', port_info_dict['vendor_date']),
+                        ('connector', port_info_dict['connector']),
+                        ('encoding', port_info_dict['encoding']),
+                        ('ext_identifier', port_info_dict['ext_identifier']),
+                        ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
+                        ('cable_type', port_info_dict['cable_type']),
+                        ('cable_length', str(port_info_dict['cable_length'])),
+                        ('specification_compliance', port_info_dict['specification_compliance']),
+                        ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
+                        ('application_advertisement', port_info_dict['application_advertisement']
+                        if 'application_advertisement' in port_info_dict else 'N/A'),
+                        ('is_replaceable', str(is_replaceable)),
+                        ('dom_capability', port_info_dict['dom_capability']
+                        if 'dom_capability' in port_info_dict else 'N/A'),
+                        ])
+                    table.set(port_name, fvs)
             else:
                 return SFP_EEPROM_NOT_READY
 
@@ -1112,12 +1174,15 @@ class SfpStateUpdateTask(object):
                                 continue
 
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
-                                helper_logger.log_info("Got SFP inserted event")
-                                # A plugin event will clear the error state.
-                                update_port_transceiver_status_table(
-                                    logical_port, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
+                                read_eeprom_state = self.sfp_insert_events[key][insert_event_field.STATE.value]
+                                # Log the information and update status when the transceiver is detected at the first time.
+                                if read_eeprom_state == READ_EEPROM_STATE_INSERTED:
+                                    helper_logger.log_info("Got SFP inserted event")
+                                    # A plugin event will clear the error state.
+                                    update_port_transceiver_status_table(
+                                        logical_port, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
                                 helper_logger.log_info("receive plug in and update port sfp status table.")
-                                rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
+                                rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, threading.Event(), self.sfp_insert_events)
                                 # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                                 if rc == SFP_EEPROM_NOT_READY:
                                     helper_logger.log_warning("SFP EEPROM is not ready. One more try...")
