@@ -1174,14 +1174,15 @@ class SfpStateUpdateTask(object):
                                 continue
 
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
-                                read_eeprom_state = self.sfp_insert_events[key][insert_event_field.STATE.value]
-                                # Log the information and update status when the transceiver is detected at the first time.
-                                if read_eeprom_state == READ_EEPROM_STATE_INSERTED:
-                                    helper_logger.log_info("Got SFP inserted event")
-                                    # A plugin event will clear the error state.
-                                    update_port_transceiver_status_table(
-                                        logical_port, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
-                                helper_logger.log_info("receive plug in and update port sfp status table.")
+                                if key in self.sfp_insert_events:
+                                    read_eeprom_state = self.sfp_insert_events[key][insert_event_field.STATE.value]
+                                    # Log the information and update status when the transceiver is detected at the first time.
+                                    if read_eeprom_state == READ_EEPROM_STATE_INSERTED:
+                                        helper_logger.log_info("Got SFP inserted event")
+                                        # A plugin event will clear the error state.
+                                        update_port_transceiver_status_table(
+                                            logical_port, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
+                                        helper_logger.log_info("receive plug in and update port sfp status table.")
                                 rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, threading.Event(), self.sfp_insert_events)
                                 # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                                 if rc == SFP_EEPROM_NOT_READY:
