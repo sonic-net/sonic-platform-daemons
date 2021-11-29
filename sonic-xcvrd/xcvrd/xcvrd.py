@@ -1047,24 +1047,13 @@ class CmisManagerTask:
         self.dbg_print("Stopped")
 
     def task_run(self, y_cable_presence):
-        # Stop the service if it's disabled in pmon_daemon_control.json
-        try:
-            (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
-            pmon_daemon_control_file_path = os.path.join(platform_path, "pmon_daemon_control.json")
-            if os.path.isfile(pmon_daemon_control_file_path):
-                ctrl = {}
-                with open(pmon_daemon_control_file_path, "r") as f:
-                    ctrl = json.load(f)
-                if ctrl.get('skip_xcvrd_cmis_manager', False):
-                    self.dbg_print("service stopped administratively")
-                    return
-        except (AttributeError, TypeError):
-            pass
-
         if platform_chassis is None:
             self.dbg_print("Platform chassis is not available, stopping...")
             return
 
+        # Deactivate the service if none of the QSFPDD cages/ports are available
+        # Please note this check has nothing to do with the module type fetched
+        # from byte 0 or 128 of the transceiver EEPROM.
         has_cmis = False
         for sfp in platform_chassis.get_all_sfps():
             try:
