@@ -336,6 +336,10 @@ class TestXcvrdScript(object):
         rc = format_mapping_identifier("ABC        ")
         assert(rc == "abc")
     
+    def test_y_cable_helper_format_mapping_identifier_no_instance(self):
+        rc = format_mapping_identifier(None)
+        assert(rc == None)
+
     def test_y_cable_wrapper_get_transceiver_info(self):
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
             patched_util.get_transceiver_info_dict.return_value = {'manufacturer': 'Microsoft',
@@ -379,6 +383,25 @@ class TestXcvrdScript(object):
         assert(vendor_date == "2021-01-01")
 
 
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_chassis')
+    def test_y_cable_wrapper_get_transceiver_info_with_platform_chassis_not_implemented(self, mock_chassis):
+
+        mock_object = MagicMock()
+        mock_object.get_transceiver_info.side_effect = NotImplementedError
+        mock_chassis.get_sfp = MagicMock(return_value = mock_object)
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+            patched_util.get_transceiver_info_dict.return_value = {'manufacturer': 'microsoft',
+                                                                              'model': 'simulated'}
+
+            transceiver_dict = y_cable_wrapper_get_transceiver_info(1)
+            vendor = transceiver_dict.get('manufacturer')
+            model = transceiver_dict.get('model')
+
+        assert(vendor == "microsoft")
+        assert(model == "simulated")
+
+
     def test_y_cable_wrapper_get_presence(self):
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
             patched_util.get_presence.return_value = True
@@ -397,6 +420,29 @@ class TestXcvrdScript(object):
 
         assert(presence == True)
 
+
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_chassis')
+    def test_y_cable_wrapper_get_presence_with_platform_chassis_raise_exception(self, mock_chassis):
+
+        mock_object = MagicMock(spec=SfpBase)
+        mock_object.get_presence = MagicMock(side_effect = NotImplementedError)
+        mock_chassis.get_sfp = MagicMock(return_value = mock_object)
+
+        class mock_sfp_util:
+            def get_presence():
+                return True
+
+        y_cable_platform_sfputil = mock_sfp_util()
+
+        #ASHWIN: TODO: How can I override the local y_cable_platform_sfputil 'NoneType' class object with my mock object containing get_presence method? 
+        try:
+            presence = y_cable_wrapper_get_presence(1)
+        except Exception as e:
+            return
+
+        assert(presence == True)
+
+
     def test_y_cable_toggle_mux_torA_no_port_instance(self):
 
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
@@ -409,7 +455,7 @@ class TestXcvrdScript(object):
 
     def test_y_cable_toggle_mux_torA_update_status_exception(self):
 
-        # Maybe I should instantiate a port_instance mock object, give it the toggle_..._tor_a method as an attribute or something?
+        #ASHWIN: TODO: Maybe I should instantiate a port_instance mock object, give it the toggle_..._tor_a method as an attribute or something?
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
             
             port_instance.get.return_value = "simulated_port"
@@ -430,8 +476,6 @@ class TestXcvrdScript(object):
 
 
     def test_y_cable_toggle_mux_torB_update_status_exception(self):
-
-        # Maybe I should instantiate a port_instance mock object, give it the toggle_..._tor_a method as an attribute or something?
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
             
             port_instance.get.return_value = "simulated_port"
@@ -450,6 +494,25 @@ class TestXcvrdScript(object):
 
         assert(instance == 0)
 
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_get_ycable_physical_port_from_logical_port_physical_port_not_present(self):
+        port_mapping = PortMapping()
+        instance = get_ycable_physical_port_from_logical_port("Ethernet0", port_mapping)
+
+        assert(instance == -1)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value={}))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_get_ycable_physical_port_from_logical_port_physical_port_list_empty(self):
+        
+        port_mapping = PortMapping()
+        instance = get_ycable_physical_port_from_logical_port("Ethernet0", port_mapping)
+
+        assert(instance == -1)
+
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_port_instance_from_logical_port(self):
@@ -460,6 +523,45 @@ class TestXcvrdScript(object):
             instance = get_ycable_port_instance_from_logical_port("Ethernet0", port_mapping)
 
         assert(instance == 0)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_get_ycable_port_instance_from_logical_port_no_presence(self):
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            patched_util.get.return_value = 0
+            port_mapping = PortMapping()
+            instance = get_ycable_port_instance_from_logical_port("Ethernet0", port_mapping)
+
+        assert(instance == PORT_INSTANCE_ERROR )
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_get_ycable_port_instance_from_logical_port_no_port_instance(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            def mock_get():
+                pass
+
+            patched_util.get.return_value = mock_get()
+            port_mapping = PortMapping()
+            instance = get_ycable_port_instance_from_logical_port("E", port_mapping)
+
+        assert(instance == PORT_INSTANCE_ERROR )
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_get_ycable_port_instance_from_logical_port_multiple_mapping(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            patched_util.get.return_value = 0
+            port_mapping = PortMapping()
+            instance = get_ycable_port_instance_from_logical_port("Ethernet0", port_mapping)
+
+        assert(instance == -1)
+
 
     def test_set_show_firmware_fields(self):
 
