@@ -1051,23 +1051,6 @@ class CmisManagerTask:
             self.dbg_print("Platform chassis is not available, stopping...")
             return
 
-        # Deactivate the service if none of the QSFPDD cages/ports are available
-        # Please note this check has nothing to do with the module type fetched
-        # from byte 0 or 128 of the transceiver EEPROM.
-        has_cmis = False
-        for sfp in platform_chassis.get_all_sfps():
-            try:
-                ptype = sfp.get_port_type()
-            except (NotImplementedError, ValueError):
-                ptype = 'Unknown'
-            if ptype in ['QSFP_DD', 'QSFP-DD']:
-                has_cmis = True
-                break
-
-        if not has_cmis:
-            self.dbg_print("None of QSFP-DD cages are detected, stopping...")
-            return
-
         self.task_process = multiprocessing.Process(target=self.task_worker)
         if self.task_process is not None:
             self.task_process.start()
