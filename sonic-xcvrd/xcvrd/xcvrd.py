@@ -203,10 +203,6 @@ def _wrapper_get_sfp_type(physical_port):
             return sfp.sfp_type
         except (NotImplementedError, AttributeError):
             pass
-        try:
-            return sfp.get_port_type()
-        except (NotImplementedError, AttributeError):
-            pass
     return None
 
 
@@ -854,6 +850,8 @@ def is_fast_reboot_enabled():
 
 class CmisManagerTask:
 
+    NUM_CHANNELS = 8
+
     CMIS_STATE_UNKNOWN   = 'UNKNOWN'
     CMIS_STATE_INSERTED  = 'INSERTED'
     CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
@@ -873,6 +871,7 @@ class CmisManagerTask:
         self.isPortConfigDone = False
 
     def dbg_print(self, message):
+        print("CMIS: {}".format(message))
         helper_logger.log_notice("CMIS: {}".format(message))
 
     def on_port_update_event(self, port_change_event):
@@ -953,15 +952,16 @@ class CmisManagerTask:
                 if pport < 0 or speed == 0 or len(lanes) < 1:
                     continue
 
-                # Replace the physical lane id with logical lane index
-                #
-                # TODO: Add dynamic port breakout support
-                lanes_new = []
-                lanes_old = lanes.split(',')
-                for i in range(len(lanes_old)):
-                    lanes_new.append(i)
-                host_lanes = lanes_new
+                # Desired port speed on the host side
                 host_speed = speed
+
+                # Convert the physical lane id into logical lanemask
+                #
+                # TODO: Add dynamic port breakout support by checking the physical lane offset
+                host_lanes = 0
+                phys_lanes = lanes.split(',')
+                for i in range(len(phys_lanes)):
+                    host_lanes |= (1 << i)
 
                 # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
@@ -976,28 +976,34 @@ class CmisManagerTask:
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                         continue
 
-                    # Skip if the memory type is flat
-                    if info.get('memory_type', 'flat') in ['flat', 'FLAT', 'Flat']:
+                    # Skip if it's a flat memory device
+                    if sfp.is_flat_memory():
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    self.dbg_print("{}: {}G, {}-lanes, state={}".format(
-                                   lport, int(speed/1000), len(host_lanes), state))
+                    self.dbg_print("{}: {}G, lanemask=0x{:x}, state={}".format(
+                                   lport, int(speed/1000), host_lanes, state))
 
                     if state == self.CMIS_STATE_INSERTED:
                         (flag, appl) = sfp.has_cmis_application_update(host_speed, host_lanes)
                         if not flag:
                             # No application updates
                             state = self.CMIS_STATE_READY
-                            self.dbg_print("{}: {}G, {}-lanes, state={}".format(
-                                           lport, int(speed/1000), len(host_lanes), state))
+                            self.dbg_print("{}: state={}".format(lport, state))
                             self.port_dict[lport]['cmis_state'] = state
                             continue
                         self.port_dict[lport]['cmis_apsel'] = appl
-                        sfp.set_cmis_application_stop(host_lanes)
+
+                        # D.2.2 Software Deinitialization
+                        sfp.set_cmis_datapath_deinit(host_lanes)
+                        sfp.set_lpmode(True)
+                        # D.1.3 Software Configuration and Initialization
+                        sfp.tx_disable_channel(host_lanes, True)
+                        sfp.set_lpmode(False)
+
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
-                        if sfp.get_module_state() != 'ModuleReady':
+                        if sfp.get_cmis_state().get('module_state') != 'ModuleReady':
                             continue
                         appl = self.port_dict[lport]['cmis_apsel']
                         sfp.set_cmis_application_apsel(host_lanes, appl)
@@ -1005,31 +1011,41 @@ class CmisManagerTask:
                     elif state == self.CMIS_STATE_AP_CONF:
                         st = sfp.get_cmis_state()['config_state']
                         done = True
-                        for lane in host_lanes:
+                        for lane in range(self.NUM_CHANNELS):
+                            if (1 << lane) & host_lanes == 0:
+                                continue
                             name = "ConfigStatusLane{}".format(lane + 1)
                             if st[name] != 'ConfigSuccess':
                                 done = False
                                 continue
                         if not done:
                             continue
-                        sfp.set_cmis_application_start(host_lanes)
+
+                        sfp.set_cmis_datapath_init(host_lanes)
+
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
                         st = sfp.get_cmis_state()['datapath_state']
                         done = True
-                        for lane in host_lanes:
+                        for lane in range(self.NUM_CHANNELS):
+                            if (1 << lane) & host_lanes == 0:
+                                continue
                             name = "DP{}State".format(lane + 1)
                             if st[name] != 'DataPathInitialized':
                                 done = False
                                 continue
                         if not done:
                             continue
-                        sfp.set_cmis_application_txon(host_lanes)
+
+                        sfp.tx_disable_channel(host_lanes, False)
+
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
                         st = sfp.get_cmis_state()['datapath_state']
                         done = True
-                        for lane in host_lanes:
+                        for lane in range(self.NUM_CHANNELS):
+                            if (1 << lane) & host_lanes == 0:
+                                continue
                             name = "DP{}State".format(lane + 1)
                             if st[name] != 'DataPathActivated':
                                 done = False
@@ -1037,8 +1053,7 @@ class CmisManagerTask:
                         if not done:
                             continue
                         state = self.CMIS_STATE_READY
-                        self.dbg_print("{}: {}G, {}-lanes, state={}".format(
-                                       lport, int(speed/1000), len(host_lanes), state))
+                        self.dbg_print("{}: state={}".format(lport, state))
                         self.port_dict[lport]['cmis_state'] = state
 
                 except (NotImplementedError, AttributeError):
@@ -1046,7 +1061,7 @@ class CmisManagerTask:
 
         self.dbg_print("Stopped")
 
-    def task_run(self, y_cable_presence):
+    def task_run(self):
         if platform_chassis is None:
             self.dbg_print("Platform chassis is not available, stopping...")
             return
@@ -1758,7 +1773,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start the CMIS manager
         cmis_manager = CmisManagerTask(port_mapping_data)
-        cmis_manager.task_run(self.y_cable_presence)
+        cmis_manager.task_run()
 
         # Start the dom sensor info update thread
         dom_info_update = DomInfoUpdateTask(port_mapping_data)

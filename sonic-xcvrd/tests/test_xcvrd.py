@@ -562,12 +562,11 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_task_run_stop(self, mock_chassis):
         mock_object = MagicMock()
         mock_object.get_presence = MagicMock(return_value=True)
-        mock_object.get_port_type = MagicMock(return_value="QSFP_DD")
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_object, mock_object])
 
         port_mapping = PortMapping()
         task = CmisManagerTask(port_mapping)
-        task.task_run([False])
+        task.task_run()
         task.task_stop()
         assert task.task_process is None
 
@@ -578,10 +577,9 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_task_worker(self, mock_chassis):
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
-        mock_sfp.get_port_type = MagicMock(return_value="QSFP_DD")
-        mock_sfp.get_transceiver_info = MagicMock(return_value={'type_abbrv_name':'QSFP_DD', 'memory_type':'paged'})
-        mock_sfp.get_module_state = MagicMock(return_value="ModuleReady")
+        mock_sfp.get_transceiver_info = MagicMock(return_value={'type_abbrv_name':'QSFP_DD'})
         mock_sfp.get_cmis_state = MagicMock(return_value={
+            'module_state': 'ModuleReady',
             'config_state': {
                 'ConfigStatusLane1': 'ConfigSuccess',
                 'ConfigStatusLane2': 'ConfigSuccess',
@@ -604,10 +602,12 @@ class TestXcvrdScript(object):
             }
         })
         mock_sfp.has_cmis_application_update = MagicMock(return_value=(True, 1))
-        mock_sfp.set_cmis_application_stop = MagicMock(return_value=True)
+        mock_sfp.set_cmis_datapath_deinit = MagicMock(return_value=True)
+        mock_sfp.set_cmis_datapath_init = MagicMock(return_value=True)
+        mock_sfp.tx_disable_channel = MagicMock(return_value=True)
+        mock_sfp.set_lpmode = MagicMock(return_value=True)
         mock_sfp.set_cmis_application_apsel = MagicMock(return_value=True)
-        mock_sfp.set_cmis_application_start = MagicMock(return_value=True)
-        mock_sfp.set_cmis_application_txon = MagicMock(return_value=True)
+        mock_sfp.is_flat_memory = MagicMock(return_value=False)
 
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
@@ -627,23 +627,25 @@ class TestXcvrdScript(object):
         # Case 1: Module Inserted --> DP_DEINIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.has_cmis_application_update.call_count > 0
-        assert mock_sfp.set_cmis_application_stop.call_count > 0
+        assert mock_sfp.has_cmis_application_update.call_count == 1
+        assert mock_sfp.set_cmis_datapath_deinit.call_count == 1
+        assert mock_sfp.tx_disable_channel.call_count == 1
+        assert mock_sfp.set_lpmode.call_count == 2
 
         # Case 2: DP_DEINIT --> AP Configured
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.set_cmis_application_apsel.call_count > 0
+        assert mock_sfp.set_cmis_application_apsel.call_count == 1
 
         # Case 3: AP Configured --> DP_INIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.set_cmis_application_start.call_count > 0
+        assert mock_sfp.set_cmis_datapath_init.call_count == 1
 
         # Case 4: DP_INIT --> DP_TXON
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.set_cmis_application_txon.call_count > 0
+        assert mock_sfp.tx_disable_channel.call_count == 2
 
     @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
     def test_DomInfoUpdateTask_handle_port_change_event(self):
