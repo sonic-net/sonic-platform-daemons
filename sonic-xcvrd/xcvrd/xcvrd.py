@@ -871,7 +871,6 @@ class CmisManagerTask:
         self.isPortConfigDone = False
 
     def dbg_print(self, message):
-        print("CMIS: {}".format(message))
         helper_logger.log_notice("CMIS: {}".format(message))
 
     def on_port_update_event(self, port_change_event):
