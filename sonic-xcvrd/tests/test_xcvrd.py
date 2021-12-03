@@ -575,39 +575,55 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_task_worker(self, mock_chassis):
-        mock_sfp = MagicMock()
-        mock_sfp.get_presence = MagicMock(return_value=True)
-        mock_sfp.get_transceiver_info = MagicMock(return_value={'type_abbrv_name':'QSFP_DD'})
-        mock_sfp.get_cmis_state = MagicMock(return_value={
-            'module_state': 'ModuleReady',
-            'config_state': {
-                'ConfigStatusLane1': 'ConfigSuccess',
-                'ConfigStatusLane2': 'ConfigSuccess',
-                'ConfigStatusLane3': 'ConfigSuccess',
-                'ConfigStatusLane4': 'ConfigSuccess',
-                'ConfigStatusLane5': 'ConfigSuccess',
-                'ConfigStatusLane6': 'ConfigSuccess',
-                'ConfigStatusLane7': 'ConfigSuccess',
-                'ConfigStatusLane8': 'ConfigSuccess'
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
+        mock_xcvr_api.set_datapath_init = MagicMock(return_value=True)
+        mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
+        mock_xcvr_api.set_application = MagicMock(return_value=True)
+        mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={
+            1: {
+                'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
+                'module_media_interface_id': '400GBASE-DR4 (Cl 124)',
+                'media_lane_count': 4,
+                'host_lane_count': 8,
+                'host_lane_assignment_options': 1
             },
-            'datapath_state': {
-                'DP1State': 'DataPathInitialized',
-                'DP2State': 'DataPathInitialized',
-                'DP3State': 'DataPathInitialized',
-                'DP4State': 'DataPathInitialized',
-                'DP5State': 'DataPathInitialized',
-                'DP6State': 'DataPathInitialized',
-                'DP7State': 'DataPathInitialized',
-                'DP8State': 'DataPathInitialized'
+            2: {
+                'host_electrical_interface_id': '100GAUI-2 C2M (Annex 135G)',
+                'module_media_interface_id': '100G-FR/100GBASE-FR1 (Cl 140)',
+                'media_lane_count': 1,
+                'host_lane_count': 2,
+                'host_lane_assignment_options': 85
             }
         })
-        mock_sfp.has_cmis_application_update = MagicMock(return_value=(True, 1))
-        mock_sfp.set_cmis_datapath_deinit = MagicMock(return_value=True)
-        mock_sfp.set_cmis_datapath_init = MagicMock(return_value=True)
-        mock_sfp.tx_disable_channel = MagicMock(return_value=True)
-        mock_sfp.set_lpmode = MagicMock(return_value=True)
-        mock_sfp.set_cmis_application_apsel = MagicMock(return_value=True)
-        mock_sfp.is_flat_memory = MagicMock(return_value=False)
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_config_datapath_hostlane_status = MagicMock(return_value={
+            'ConfigStatusLane1': 'ConfigSuccess',
+            'ConfigStatusLane2': 'ConfigSuccess',
+            'ConfigStatusLane3': 'ConfigSuccess',
+            'ConfigStatusLane4': 'ConfigSuccess',
+            'ConfigStatusLane5': 'ConfigSuccess',
+            'ConfigStatusLane6': 'ConfigSuccess',
+            'ConfigStatusLane7': 'ConfigSuccess',
+            'ConfigStatusLane8': 'ConfigSuccess'
+        })
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathInitialized',
+            'DP2State': 'DataPathInitialized',
+            'DP3State': 'DataPathInitialized',
+            'DP4State': 'DataPathInitialized',
+            'DP5State': 'DataPathInitialized',
+            'DP6State': 'DataPathInitialized',
+            'DP7State': 'DataPathInitialized',
+            'DP8State': 'DataPathInitialized'
+        })
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
 
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
@@ -627,25 +643,24 @@ class TestXcvrdScript(object):
         # Case 1: Module Inserted --> DP_DEINIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.has_cmis_application_update.call_count == 1
-        assert mock_sfp.set_cmis_datapath_deinit.call_count == 1
-        assert mock_sfp.tx_disable_channel.call_count == 1
-        assert mock_sfp.set_lpmode.call_count == 2
+        assert mock_xcvr_api.set_datapath_deinit.call_count == 1
+        assert mock_xcvr_api.tx_disable_channel.call_count == 1
+        assert mock_xcvr_api.set_lpmode.call_count == 2
 
         # Case 2: DP_DEINIT --> AP Configured
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.set_cmis_application_apsel.call_count == 1
+        assert mock_xcvr_api.set_application.call_count == 1
 
         # Case 3: AP Configured --> DP_INIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.set_cmis_datapath_init.call_count == 1
+        assert mock_xcvr_api.set_datapath_init.call_count == 1
 
         # Case 4: DP_INIT --> DP_TXON
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_sfp.tx_disable_channel.call_count == 2
+        assert mock_xcvr_api.tx_disable_channel.call_count == 2
 
     @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
     def test_DomInfoUpdateTask_handle_port_change_event(self):

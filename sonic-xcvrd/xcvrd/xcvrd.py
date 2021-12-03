@@ -870,8 +870,11 @@ class CmisManagerTask:
         self.isPortInitDone = False
         self.isPortConfigDone = False
 
-    def dbg_print(self, message):
+    def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
+
+    def log_error(self, message):
+        helper_logger.log_error("CMIS: {}".format(message))
 
     def on_port_update_event(self, port_change_event):
         if port_change_event.event_type not in [port_change_event.PORT_SET, port_change_event.PORT_DEL]:
@@ -915,8 +918,130 @@ class CmisManagerTask:
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
+    def get_interface_speed(self, ifname):
+        """
+        Get the port speed from the host interface name
+
+        Args:
+            ifname: String, interface name
+
+        Returns:
+            Integer, the port speed if success otherwise 0
+        """
+        # see HOST_ELECTRICAL_INTERFACE of sff8024.py
+        speed = 0
+        if '400G' in ifname:
+            speed = 400000
+        elif '200G' in ifname:
+            speed = 200000
+        elif '100G' in ifname or 'CAUI-4' in ifname:
+            speed = 100000
+        elif '50G' in ifname or 'LAUI-2' in ifname:
+            speed = 50000
+        elif '40G' in ifname or 'XLAUI' in ifname or 'XLPPI' in ifname:
+            speed = 40000
+        elif '25G' in ifname:
+            speed = 25000
+        elif '10G' in ifname or 'SFI' in ifname or 'XFI' in ifname:
+            speed = 10000
+        elif '1000BASE' in ifname:
+            speed = 1000
+        return speed
+
+    def get_cmis_application_desired(self, api, channel, speed):
+        """
+        Get the CMIS application code that matches the specified host side configurations
+
+        Args:
+            api:
+                XcvrApi object
+            channel:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+            speed:
+                Integer, the port speed of the host interface
+
+        Returns:
+            Integer, the transceiver-specific application code
+        """
+        if speed == 0 or channel == 0:
+            return 0
+
+        host_lane_count = 0
+        for lane in range(self.NUM_CHANNELS):
+            if ((1 << lane) & channel) == 0:
+                continue
+            host_lane_count += 1
+
+        appl_code = 0
+        appl_dict = api.get_application_advertisement()
+        for c in appl_dict.keys():
+            d = appl_dict[c]
+            if d.get('host_lane_count') != host_lane_count:
+                continue
+            if self.get_interface_speed(d.get('host_electrical_interface_id')) != speed:
+                continue
+            appl_code = c
+            break
+
+        return (appl_code & 0xf)
+
+    def is_cmis_application_update_required(self, api, channel, speed):
+        """
+        Check if the CMIS application update is required
+
+        Args:
+            api:
+                XcvrApi object
+            channel:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+            speed:
+                Integer, the port speed of the host interface
+
+        Returns:
+            Boolean, true if application update is required otherwise false
+        """
+        if speed == 0 or channel == 0 or api.is_flat_memory():
+            return False
+
+        app_new = self.get_cmis_application_desired(api, channel, speed)
+        if app_new != 1:
+            self.log_notice("Non-default application is not supported")
+            return False
+
+        app_old = 0
+        for lane in range(api.NUM_CHANNELS):
+            if ((1 << lane) & channel) == 0:
+                continue
+            if app_old == 0:
+                app_old = api.get_application(lane)
+            elif app_old != api.get_application(lane):
+                self.log_notice("Not all the lanes are in the same application mode")
+                self.log_notice("Forcing application update...")
+                return True
+
+        if app_old == app_new:
+            skip = True
+            dp_state = api.get_datapath_state()
+            conf_state = api.get_config_datapath_hostlane_status()
+            for lane in range(api.NUM_CHANNELS):
+                if ((1 << lane) & channel) == 0:
+                    continue
+                name = "DP{}State".format(lane + 1)
+                if dp_state[name] != 'DataPathActivated':
+                    skip = False
+                    break
+                name = "ConfigStatusLane{}".format(lane + 1)
+                if conf_state[name] != 'ConfigSuccess':
+                    skip = False
+                    break
+            return (not skip)
+
+        return True
+
     def task_worker(self):
-        self.dbg_print("Starting...")
+        self.log_notice("Starting...")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(['APPL_DB', 'STATE_DB'])
@@ -954,7 +1079,7 @@ class CmisManagerTask:
                 # Desired port speed on the host side
                 host_speed = speed
 
-                # Convert the physical lane id into logical lanemask
+                # Convert the physical lane list into a logical lanemask
                 #
                 # TODO: Add dynamic port breakout support by checking the physical lane offset
                 host_lanes = 0
@@ -969,49 +1094,63 @@ class CmisManagerTask:
                     continue
 
                 try:
-                    # Skip if the xcvr type is not QSFP-DD
-                    info = sfp.get_transceiver_info()
-                    if info.get('type_abbrv_name', None) not in ['QSFP-DD', 'QSFP_DD']:
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                        continue
-
-                    # Skip if it's a flat memory device
-                    if sfp.is_flat_memory():
+                    # Skip if XcvrApi is not supported
+                    api = sfp.get_xcvr_api()
+                    if api is None:
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    self.dbg_print("{}: {}G, lanemask=0x{:x}, state={}".format(
-                                   lport, int(speed/1000), host_lanes, state))
+                    # Skip if it's not a paged memory device
+                    if api.is_flat_memory():
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        continue
 
+                    # Skip if it's not a QSFP-DD
+                    type = api.get_module_type_abbreviation()
+                    if (type is None) or (type not in ['QSFP-DD', 'QSFP_DD']):
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        continue
+                except AttributeError:
+                    # Skip if these essential routines are not available
+                    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                    continue
+
+                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}".format(
+                                lport, int(speed/1000), host_lanes, state))
+
+                try:
                     if state == self.CMIS_STATE_INSERTED:
-                        (flag, appl) = sfp.has_cmis_application_update(host_speed, host_lanes)
-                        if not flag:
+                        has_update = self.is_cmis_application_update_required(api, host_lanes, host_speed)
+                        if not has_update:
                             # No application updates
                             state = self.CMIS_STATE_READY
-                            self.dbg_print("{}: state={}".format(lport, state))
+                            self.log_notice("{}: state={}".format(lport, state))
                             self.port_dict[lport]['cmis_state'] = state
                             continue
+                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
                         self.port_dict[lport]['cmis_apsel'] = appl
 
                         # D.2.2 Software Deinitialization
-                        sfp.set_cmis_datapath_deinit(host_lanes)
-                        sfp.set_lpmode(True)
+                        api.set_datapath_deinit(host_lanes)
+                        api.set_lpmode(True)
                         # D.1.3 Software Configuration and Initialization
-                        sfp.tx_disable_channel(host_lanes, True)
-                        sfp.set_lpmode(False)
+                        api.tx_disable_channel(host_lanes, True)
+                        api.set_lpmode(False)
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
-                        if sfp.get_cmis_state().get('module_state') != 'ModuleReady':
+                        if api.get_module_state() != 'ModuleReady':
                             continue
-                        appl = self.port_dict[lport]['cmis_apsel']
-                        sfp.set_cmis_application_apsel(host_lanes, appl)
+
+                        # D.1.3 Software Configuration and Initialization
+                        api.set_application(host_lanes, self.port_dict[lport]['cmis_apsel'])
+
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
                     elif state == self.CMIS_STATE_AP_CONF:
-                        st = sfp.get_cmis_state()['config_state']
+                        st = api.get_config_datapath_hostlane_status()
                         done = True
                         for lane in range(self.NUM_CHANNELS):
-                            if (1 << lane) & host_lanes == 0:
+                            if ((1 << lane) & host_lanes) == 0:
                                 continue
                             name = "ConfigStatusLane{}".format(lane + 1)
                             if st[name] != 'ConfigSuccess':
@@ -1020,14 +1159,15 @@ class CmisManagerTask:
                         if not done:
                             continue
 
-                        sfp.set_cmis_datapath_init(host_lanes)
+                        # D.1.3 Software Configuration and Initialization
+                        api.set_datapath_init(host_lanes)
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
-                        st = sfp.get_cmis_state()['datapath_state']
+                        st = api.get_datapath_state()
                         done = True
                         for lane in range(self.NUM_CHANNELS):
-                            if (1 << lane) & host_lanes == 0:
+                            if ((1 << lane) & host_lanes) == 0:
                                 continue
                             name = "DP{}State".format(lane + 1)
                             if st[name] != 'DataPathInitialized':
@@ -1036,14 +1176,15 @@ class CmisManagerTask:
                         if not done:
                             continue
 
-                        sfp.tx_disable_channel(host_lanes, False)
+                        # D.1.3 Software Configuration and Initialization
+                        api.tx_disable_channel(host_lanes, False)
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        st = sfp.get_cmis_state()['datapath_state']
+                        st = api.get_datapath_state()
                         done = True
                         for lane in range(self.NUM_CHANNELS):
-                            if (1 << lane) & host_lanes == 0:
+                            if ((1 << lane) & host_lanes) == 0:
                                 continue
                             name = "DP{}State".format(lane + 1)
                             if st[name] != 'DataPathActivated':
@@ -1052,17 +1193,17 @@ class CmisManagerTask:
                         if not done:
                             continue
                         state = self.CMIS_STATE_READY
-                        self.dbg_print("{}: state={}".format(lport, state))
+                        self.log_notice("{}: state={}".format(lport, state))
                         self.port_dict[lport]['cmis_state'] = state
 
                 except (NotImplementedError, AttributeError):
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
 
-        self.dbg_print("Stopped")
+        self.log_notice("Stopped")
 
     def task_run(self):
         if platform_chassis is None:
-            self.dbg_print("Platform chassis is not available, stopping...")
+            self.log_notice("Platform chassis is not available, stopping...")
             return
 
         self.task_process = multiprocessing.Process(target=self.task_worker)
