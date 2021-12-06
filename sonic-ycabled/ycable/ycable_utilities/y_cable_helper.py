@@ -609,10 +609,11 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill in the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
-                                post_port_mux_info_to_db(
+                                """post_port_mux_info_to_db(
                                     logical_port_name,  mux_tbl[asic_index])
                                 post_port_mux_static_info_to_db(
                                     logical_port_name,  static_tbl[asic_index])
+                                """
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
@@ -632,10 +633,11 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
-                                post_port_mux_info_to_db(
+                                """post_port_mux_info_to_db(
                                     logical_port_name,  mux_tbl[asic_index])
                                 post_port_mux_static_info_to_db(
                                     logical_port_name,  static_tbl[asic_index])
+                                """
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
@@ -699,8 +701,10 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                 if len(physical_port_list) == 1:
 
                     physical_port = physical_port_list[0]
-                    y_cable_port_instances.pop(physical_port)
-                    y_cable_port_locks.pop(physical_port)
+                    if y_cable_port_instances.get(physical_port) is not None:
+                        y_cable_port_instances.pop(physical_port)
+                    if y_cable_port_instances.get(physical_port) is not None:
+                        y_cable_port_locks.pop(physical_port)
                 else:
                     helper_logger.log_warning(
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
@@ -772,43 +776,38 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
-    for key, value in port_dict.items():
+    for logical_port_name, value in port_dict.items():
         if stop_event.is_set():
             break
-        logical_port_list = y_cable_platform_sfputil.get_physical_to_logical(int(key))
-        if logical_port_list is None:
-            helper_logger.log_warning("Got unknown FP port index {}, ignored".format(key))
+        
+        # Get the asic to which this port belongs
+        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
+        if asic_index is None:
+            helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
             continue
-        for logical_port_name in logical_port_list:
 
-            # Get the asic to which this port belongs
-            asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
-            if asic_index is None:
-                helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+        if logical_port_name in port_table_keys[asic_index]:
+            if value == SFP_STATUS_INSERTED:
+                helper_logger.log_warning("Got SFP inserted ycable event")
+                check_identifier_presence_and_update_mux_table_entry(
+                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            elif value == SFP_STATUS_REMOVED:
+                helper_logger.log_info("Got SFP deleted ycable event")
+                check_identifier_presence_and_delete_mux_table_entry(
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+            else:
+                try:
+                    # Now that the value is in bitmap format, let's convert it to number
+                    event_bits = int(value)
+                    if is_error_block_eeprom_reading(event_bits):
+                        check_identifier_presence_and_delete_mux_table_entry(
+                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                except (TypeError, ValueError) as e:
+                    helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
+
+                # SFP return unkown event, just ignore for now.
+                helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                 continue
-
-            if logical_port_name in port_table_keys[asic_index]:
-                if value == SFP_STATUS_INSERTED:
-                    helper_logger.log_info("Got SFP inserted ycable event")
-                    check_identifier_presence_and_update_mux_table_entry(
-                        state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
-                elif value == SFP_STATUS_REMOVED:
-                    helper_logger.log_info("Got SFP deleted ycable event")
-                    check_identifier_presence_and_delete_mux_table_entry(
-                        state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
-                else:
-                    try:
-                        # Now that the value is in bitmap format, let's convert it to number
-                        event_bits = int(value)
-                        if is_error_block_eeprom_reading(event_bits):
-                            check_identifier_presence_and_delete_mux_table_entry(
-                                state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
-                    except (TypeError, ValueError) as e:
-                        helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
-
-                    # SFP return unkown event, just ignore for now.
-                    helper_logger.log_warning("Got unknown event {}, ignored".format(value))
-                    continue
 
     # If there was a delete event and y_cable_presence was true, reaccess the y_cable presence
     if y_cable_presence[0] is True and delete_change_event[0] is True:
@@ -867,6 +866,7 @@ def delete_ports_status_for_y_cable():
                 physical_port = physical_port_list[0]
                 if y_cable_port_instances.get(physical_port) is not None:
                     y_cable_port_instances.pop(physical_port)
+                if y_cable_port_locks.get(physical_port) is not None:
                     y_cable_port_locks.pop(physical_port)
             else:
                 helper_logger.log_warning(
@@ -1679,7 +1679,7 @@ class YCableTableUpdateTask(object):
         xcvrd_acti_fw_cmd_tbl, xcvrd_acti_fw_cmd_arg_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
         xcvrd_roll_fw_cmd_tbl, xcvrd_roll_fw_rsp_tbl, xcvrd_roll_fw_cmd_sts_tbl = {}, {}, {}
         xcvrd_show_fw_cmd_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_res_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}
+        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}, {}
         xcvrd_show_hwmode_swmode_cmd_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, xcvrd_show_hwmode_swmode_cmd_sts_tbl = {}, {}, {}
         xcvrd_config_hwmode_state_cmd_tbl, xcvrd_config_hwmode_state_rsp_tbl , xcvrd_config_hwmode_state_cmd_sts_tbl= {}, {}, {}
         xcvrd_config_hwmode_swmode_cmd_tbl, xcvrd_config_hwmode_swmode_rsp_tbl , xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
@@ -1742,6 +1742,8 @@ class YCableTableUpdateTask(object):
                 appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
             xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
+            xcvrd_show_hwmode_dir_res_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RES")
             xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
             xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
@@ -1879,14 +1881,23 @@ class YCableTableUpdateTask(object):
 
                     if "state" in fvp_dict:
 
+                        presence = "False"
+
                         physical_port = get_ycable_physical_port_from_logical_port(port)
+                        if physical_port is not None and y_cable_wrapper_get_presence(physical_port):
+                            presence = "True"
+
+                        fvs_log = swsscommon.FieldValuePairs([(str("presence"), str(presence))])
+                        xcvrd_show_hwmode_dir_res_tbl[asic_index].set(port, fvs_log)
+
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            state = 'cable not present'
+                            state = 'unknown'
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for cli command show mux hwmode muxdirection Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
+
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
                         if port_instance is None or port_instance in port_mapping_error_values:

@@ -6,7 +6,6 @@
 """
 
 try:
-    import multiprocessing
     import os
     import signal
     import sys
@@ -26,15 +25,14 @@ except ImportError as e:
 # Constants ====================================================================
 #
 
-SYSLOG_IDENTIFIER = "y_cable"
+SYSLOG_IDENTIFIER = "ycable"
 
 PLATFORM_SPECIFIC_MODULE_NAME = "sfputil"
 PLATFORM_SPECIFIC_CLASS_NAME = "SfpUtil"
 
 SELECT_TIMEOUT_MSECS = 1000
+SELECT_TIMEOUT = 100
 
-# Mgminit time required as per CMIS spec
-MGMT_INIT_TIME_DELAY_SECS = 2
 
 # SFP insert event poll duration
 SFP_INSERT_EVENT_POLL_PERIOD_MSECS = 1000
@@ -97,45 +95,6 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 
 # Find out the underneath physical port list by logical name
-
-
-def logical_port_name_to_physical_port_list(port_name):
-    try:
-        return [int(port_name)]
-    except ValueError:
-        if platform_sfputil.is_logical_port(port_name):
-            return platform_sfputil.get_logical_to_physical(port_name)
-        else:
-            helper_logger.log_error("Invalid port '{}'".format(port_name))
-            return None
-
-
-def get_physical_port_name(logical_port, physical_port, ganged):
-    if logical_port == physical_port:
-        return logical_port
-    elif ganged:
-        return logical_port + ":{} (ganged)".format(physical_port)
-    else:
-        return logical_port
-
-# Strip units and beautify
-
-def _wrapper_get_presence(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_presence()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.get_presence(physical_port)
-
-
-def _wrapper_get_transceiver_info(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.get_transceiver_info_dict(physical_port)
 
 
 # Soak SFP insert event until management init completes
@@ -236,7 +195,7 @@ class YcableInfoUpdateTask(object):
 class YcableStateUpdateTask(object):
     def __init__(self):
         self.task_process = None
-        self.task_stopping_event = multiprocessing.Event()
+        self.task_stopping_event = threading.Event()
         self.sfp_insert_events = {}
 
     def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
@@ -244,39 +203,70 @@ class YcableStateUpdateTask(object):
 
         # Connect to STATE_DB and create transceiver dom/sfp info tables
         state_db, appl_db, int_tbl, dom_tbl, status_tbl, app_port_tbl = {}, {}, {}, {}, {}, {}
+        port_dict = {}
+
+        sel = swsscommon.Select()
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            status_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            sel.addSelectable(status_tbl[asic_id])
 
-        timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
-        while not stopping_event.is_set():
+        while True:
 
-            # Ensure not to block for any event if sfp insert event is pending
-            if self.sfp_insert_events:
-                timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
-            status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
-            if status:
-                # Soak SFP insert events across various ports (updates port_dict)
-                _wrapper_soak_sfp_insert_event(self.sfp_insert_events, port_dict)
-            if not port_dict:
+            if self.task_stopping_event.is_set():
+                break
+
+            (state, selectableObj) = sel.select(SELECT_TIMEOUT)
+
+            if state == swsscommon.Select.TIMEOUT:
+                # Do not flood log when select times out
                 continue
-            y_cable_helper.change_ports_status_for_y_cable_change_event(
-                port_dict, y_cable_presence, stopping_event)
+            if state != swsscommon.Select.OBJECT:
+                helper_logger.log_warning(
+                    "sel.select() did not  return swsscommon.Select.OBJECT for sonic_y_cable updates")
+                continue
+
+            # Get the redisselect object  from selectable object
+            redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(
+                selectableObj)
+            # Get the corresponding namespace from redisselect db connector object
+            namespace = redisSelectObj.getDbConnector().getNamespace()
+            asic_index = multi_asic.get_asic_index_from_namespace(namespace)
+
+            while True:
+                (port, op, fvp) = status_tbl[asic_index].pop()
+                if not port:
+                    break
+
+                if fvp:
+                    fvp_dict = dict(fvp)
+
+                if not fvp_dict:
+                    continue
+
+                port_dict[port] = fvp_dict.get('status', None)
+
+                helper_logger.log_warning("port and status {} {}".format(port, port_dict[port]))
+
+                y_cable_helper.change_ports_status_for_y_cable_change_event(
+                    port_dict, y_cable_presence, stopping_event)
 
     def task_run(self, sfp_error_event, y_cable_presence):
         if self.task_stopping_event.is_set():
             return
 
-        self.task_process = multiprocessing.Process(target=self.task_worker, args=(
+        self.task_process = threading.Thread(target=self.task_worker, args=(
             self.task_stopping_event, sfp_error_event, y_cable_presence))
         self.task_process.start()
 
     def task_stop(self):
         self.task_stopping_event.set()
-        os.kill(self.task_process.pid, signal.SIGKILL)
+        self.task_process.join()
 
 #
 # Daemon =======================================================================
@@ -290,7 +280,7 @@ class DaemonYcable(daemon_base.DaemonBase):
         self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
         self.num_asics = multi_asic.get_num_asics()
         self.stop_event = threading.Event()
-        self.sfp_error_event = multiprocessing.Event()
+        self.sfp_error_event = threading.Event()
         self.y_cable_presence = [False]
 
     # Signal handler
