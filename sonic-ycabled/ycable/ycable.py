@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 """
     ycable
@@ -93,36 +93,6 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 # Helper functions =============================================================
 #
-
-# Find out the underneath physical port list by logical name
-
-
-# Soak SFP insert event until management init completes
-def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
-    for key, value in list(port_dict.items()):
-        if value == SFP_STATUS_INSERTED:
-            sfp_insert_events[key] = time.time()
-            del port_dict[key]
-        elif value == SFP_STATUS_REMOVED:
-            if key in sfp_insert_events:
-                del sfp_insert_events[key]
-
-    for key, itime in list(sfp_insert_events.items()):
-        if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
-            port_dict[key] = SFP_STATUS_INSERTED
-            del sfp_insert_events[key]
-
-def _wrapper_get_transceiver_change_event(timeout):
-    if platform_chassis is not None:
-        try:
-            status, events = platform_chassis.get_change_event(timeout)
-            sfp_events = events.get('sfp')
-            sfp_errors = events.get('sfp_error')
-            return status, sfp_events, sfp_errors
-        except NotImplementedError:
-            pass
-    status, events = platform_sfputil.get_transceiver_change_event(timeout)
-    return status, events, None
 
 def detect_port_in_error_status(logical_port_name, status_tbl):
     rec, fvp = status_tbl.get(logical_port_name)
