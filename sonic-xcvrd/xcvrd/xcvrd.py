@@ -1196,7 +1196,7 @@ class SfpStateUpdateTask(object):
         self.task_stopping_event.set()
         os.kill(self.task_process.pid, signal.SIGKILL)
 
-    def on_port_config_change(self, stopping_event, port_change_event):
+    def on_port_config_change(self , port_change_event):
         if port_change_event.event_type == port_mapping.PortChangeEvent.PORT_REMOVE:
             self.on_remove_logical_port(port_change_event)
             self.port_mapping.handle_port_change_event(port_change_event)
