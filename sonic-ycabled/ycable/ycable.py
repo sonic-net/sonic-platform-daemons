@@ -6,11 +6,9 @@
 """
 
 try:
-    import os
     import signal
     import sys
     import threading
-    import time
     
     from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
@@ -346,7 +344,7 @@ class DaemonYcable(daemon_base.DaemonBase):
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
 
         """
-        #TODO need to decide if we need warm start capability in this ycabled daemon
+        # TODO need to decide if we need warm start capability in this ycabled daemon
         warmstart = swsscommon.WarmStart()
         warmstart.initialize("ycabled", "pmon")
         warmstart.checkWarmStart("ycabled", "pmon", False)
