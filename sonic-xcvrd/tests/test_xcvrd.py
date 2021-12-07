@@ -455,7 +455,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(stopping_event, port_change_event)
+            task.on_port_config_change(port_change_event)
             if task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
@@ -468,7 +468,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(stopping_event , port_change_event)
+            task.on_port_config_change(port_change_event)
             if not task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
