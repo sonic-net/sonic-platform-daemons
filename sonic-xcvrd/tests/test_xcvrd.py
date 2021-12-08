@@ -465,6 +465,20 @@ class TestXcvrdScript(object):
         
         assert(rc == -1)
     
+
+    def test_y_cable_toggle_mux_torA_update_status_true(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_a.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+
+            rc = y_cable_toggle_mux_torA(1)
+        
+        assert(rc == 1)
+
+
     def test_y_cable_toggle_mux_torB_no_port_instance(self):
 
         with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
@@ -483,6 +497,127 @@ class TestXcvrdScript(object):
 
             rc = y_cable_toggle_mux_torB(1)
         
+        assert(rc == -1)
+
+
+    def test_y_cable_toggle_mux_torB_update_status_true(self):
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_b.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+
+            rc = y_cable_toggle_mux_torB(1)
+        
+        assert(rc == 2)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_tor_active_side_1_active(self):
+        read_side = 1
+        state = "active"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_a.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
+        assert(rc == 1)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_tor_active_side_2_active(self):
+        read_side = 2
+        state = "active"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_b.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
+        assert(rc == 2)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_tor_active_side_1_standby(self):
+        read_side = 1
+        state = "standby"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_b.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
+        assert(rc == 2)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_tor_active_side_2_standby(self):
+        read_side = 2
+        state = "standby"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_a.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
+        assert(rc == 1)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_update_tor_active_side_no_cable_presence(self):
+        read_side = 1
+        state = "active"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_a.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
+        assert(rc == -1)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0,1,2]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_update_tor_active_side_multiple_mappings(self):
+        read_side = 1
+        state = "active"
+        logical_port_name = "Ethernet0"
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            mock_toggle_object = MagicMock()
+            mock_toggle_object.toggle_mux_to_tor_a.return_value = True
+            patched_util.get.return_value = mock_toggle_object
+            port_mapping = PortMapping()
+
+            rc = update_tor_active_side(read_side, state, logical_port_name, port_mapping)
+
         assert(rc == -1)
 
 
@@ -561,6 +696,197 @@ class TestXcvrdScript(object):
             instance = get_ycable_port_instance_from_logical_port("Ethernet0", port_mapping)
 
         assert(instance == -1)
+
+
+    def test_update_table_mux_status_for_response_tbl(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        status = "standby"
+
+        test_table = swsscommon.Table(appl_db[asic_index], "XCVRD_TEST_TABLE")
+        update_table_mux_status_for_response_tbl(test_table, status, logical_port_name)
+
+        rc = test_table.get(logical_port_name)
+
+        #Since the table class is mocked, the most we can test for is that get doesn't return None
+        assert(type(rc) != None)
+    
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_port_instance_none(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            def mock_get():
+                pass
+
+            patched_util.get.return_value = mock_get()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_read_side_none(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            def mock_read_side():
+                pass
+            
+            read_side = mock_read_side()
+
+            patched_util.get.return_value = 0
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_active_side_none(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                # Defining function without self argument creates an exception,
+                # which is what we want for this test.
+                def get_mux_direction():
+                    pass
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_active_side_is_read_side(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                def get_mux_direction(self):
+                    return 1
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_active_side_not_read_side(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 2
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                def get_mux_direction(self):
+                    return 1
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_active_side_status_unknown(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                def get_mux_direction(self):
+                    return 4
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    def test_update_appdb_port_mux_cable_response_table_no_presence_status_unknown(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                def get_mux_direction(self):
+                    return 4
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0,1,2]))
+    #@patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_appdb_port_mux_cable_response_table_invalid_ycable_mapping(self):
+        asic_index = 0
+        appl_db = "TEST_DB"
+        logical_port_name = "Ethernet0"
+        read_side = 1
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                def get_mux_direction(self):
+                    return 4
+
+            patched_util.get.return_value = PortInstanceHelper()
+            port_mapping = PortMapping()
+
+            update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
+
 
 
     def test_set_show_firmware_fields(self):
