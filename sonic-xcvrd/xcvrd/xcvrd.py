@@ -16,6 +16,7 @@ try:
     import sys
     import threading
     import time
+    import datetime
     import subprocess
  
     from sonic_py_common import daemon_base, device_info, logger
@@ -850,7 +851,10 @@ def is_fast_reboot_enabled():
 
 class CmisManagerTask:
 
-    NUM_CHANNELS = 8
+    CMIS_MAX_RETRIES     = 3
+    CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
+    CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP']
+    CMIS_NUM_CHANNELS    = 8
 
     CMIS_STATE_UNKNOWN   = 'UNKNOWN'
     CMIS_STATE_INSERTED  = 'INSERTED'
@@ -899,9 +903,9 @@ class CmisManagerTask:
         if pport is None:
             return
 
-        # Skip if the port/cage type is not QSFP-DD
+        # Skip if the port/cage type is not a CMIS
         ptype = _wrapper_get_sfp_type(pport)
-        if ptype not in ['QSFP-DD', 'QSFP_DD']:
+        if ptype not in self.CMIS_MODULE_TYPES:
             return
 
         if lport not in self.port_dict:
@@ -915,6 +919,7 @@ class CmisManagerTask:
             if port_change_event.port_dict is not None and 'lanes' in port_change_event.port_dict:
                 self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_INSERTED
+            self.reset_cmis_init(lport, 0)
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
@@ -968,7 +973,7 @@ class CmisManagerTask:
             return 0
 
         host_lane_count = 0
-        for lane in range(self.NUM_CHANNELS):
+        for lane in range(self.CMIS_NUM_CHANNELS):
             if ((1 << lane) & channel) == 0:
                 continue
             host_lane_count += 1
@@ -1011,7 +1016,7 @@ class CmisManagerTask:
             return False
 
         app_old = 0
-        for lane in range(api.NUM_CHANNELS):
+        for lane in range(self.CMIS_NUM_CHANNELS):
             if ((1 << lane) & channel) == 0:
                 continue
             if app_old == 0:
@@ -1025,7 +1030,7 @@ class CmisManagerTask:
             skip = True
             dp_state = api.get_datapath_state()
             conf_state = api.get_config_datapath_hostlane_status()
-            for lane in range(api.NUM_CHANNELS):
+            for lane in range(self.CMIS_NUM_CHANNELS):
                 if ((1 << lane) & channel) == 0:
                     continue
                 name = "DP{}State".format(lane + 1)
@@ -1039,6 +1044,82 @@ class CmisManagerTask:
             return (not skip)
 
         return True
+
+    def reset_cmis_init(self, lport, retries=0):
+        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_INSERTED
+        self.port_dict[lport]['cmis_retries'] = retries
+        self.port_dict[lport]['cmis_expired'] = None # No expiration
+
+    def test_module_state(self, api, states):
+        """
+        Check if the CMIS module is in the specified state
+
+        Args:
+            api:
+                XcvrApi object
+            states:
+                List, a string list of states
+
+        Returns:
+            Boolean, true if it's in the specified state, otherwise false
+        """
+        return api.get_module_state() in states
+
+    def test_config_error(self, api, channel, states):
+        """
+        Check if the CMIS configuration states are in the specified state
+
+        Args:
+            api:
+                XcvrApi object
+            channel:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+            states:
+                List, a string list of states
+
+        Returns:
+            Boolean, true if all lanes are in the specified state, otherwise false
+        """
+        done = True
+        cerr = api.get_config_datapath_hostlane_status()
+        for lane in range(self.CMIS_NUM_CHANNELS):
+            if ((1 << lane) & channel) == 0:
+                continue
+            key = "ConfigStatusLane{}".format(lane + 1)
+            if cerr[key] not in states:
+                done = False
+                break
+
+        return done
+
+    def test_datapath_state(self, api, channel, states):
+        """
+        Check if the CMIS datapath states are in the specified state
+
+        Args:
+            api:
+                XcvrApi object
+            channel:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+            states:
+                List, a string list of states
+
+        Returns:
+            Boolean, true if all lanes are in the specified state, otherwise false
+        """
+        done = True
+        dpstate = api.get_datapath_state()
+        for lane in range(self.CMIS_NUM_CHANNELS):
+            if ((1 << lane) & channel) == 0:
+                continue
+            key = "DP{}State".format(lane + 1)
+            if dpstate[key] not in states:
+                done = False
+                break
+
+        return done
 
     def task_worker(self):
         self.log_notice("Starting...")
@@ -1105,9 +1186,9 @@ class CmisManagerTask:
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    # Skip if it's not a QSFP-DD
+                    # Skip if it's not a CMIS module
                     type = api.get_module_type_abbreviation()
-                    if (type is None) or (type not in ['QSFP-DD', 'QSFP_DD']):
+                    if (type is None) or (type not in self.CMIS_MODULE_TYPES):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
                 except AttributeError:
@@ -1115,88 +1196,123 @@ class CmisManagerTask:
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                     continue
 
-                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}".format(
-                                lport, int(speed/1000), host_lanes, state))
+                # CMIS expiration and retries
+                #
+                # A retry should always start over at INSETRTED state, while the
+                # expiration will reset the state to INSETRTED and advance the
+                # retry counter
+                now = datetime.datetime.now()
+                expired = self.port_dict[lport].get('cmis_expired')
+                retries = self.port_dict[lport].get('cmis_retries', 0)
+                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, retries={}".format(
+                                lport, int(speed/1000), host_lanes, state, retries))
+                if retries > self.CMIS_MAX_RETRIES:
+                    self.log_error("{}: FAILED".format(lport))
+                    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                    continue
 
                 try:
+                    # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
+
+                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
+                        if appl < 1:
+                            self.log_error("{}: no suitable app for the port".format(lport))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+
                         has_update = self.is_cmis_application_update_required(api, host_lanes, host_speed)
                         if not has_update:
                             # No application updates
-                            state = self.CMIS_STATE_READY
-                            self.log_notice("{}: state={}".format(lport, state))
-                            self.port_dict[lport]['cmis_state'] = state
+                            self.log_notice("{}: READY".format(lport))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                             continue
-                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
-                        self.port_dict[lport]['cmis_apsel'] = appl
 
                         # D.2.2 Software Deinitialization
                         api.set_datapath_deinit(host_lanes)
                         api.set_lpmode(True)
-                        # D.1.3 Software Configuration and Initialization
-                        api.tx_disable_channel(host_lanes, True)
-                        api.set_lpmode(False)
-
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
-                    elif state == self.CMIS_STATE_DP_DEINIT:
-                        if api.get_module_state() != 'ModuleReady':
+                        if not self.test_module_state(api, ['ModuleReady', 'ModuleLowPwr']):
+                            self.log_notice("{}: unable to enter low-power mode".format(lport))
+                            self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
 
                         # D.1.3 Software Configuration and Initialization
-                        api.set_application(host_lanes, self.port_dict[lport]['cmis_apsel'])
+                        if not api.tx_disable_channel(host_lanes, True):
+                            self.log_notice("{}: unable to turn off tx power".format(lport))
+                            self.port_dict[lport]['cmis_retries'] = retries + 1
+                            continue
+                        api.set_lpmode(False)
 
+                        # TODO: Use fine grained time when the CMIS memory map is available
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
+                    elif state == self.CMIS_STATE_DP_DEINIT:
+                        if not self.test_module_state(api, ['ModuleReady']):
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
+                                self.reset_cmis_init(lport, retries + 1)
+                            continue
+                        if not self.test_datapath_state(api, host_lanes, ['DataPathDeinit', 'DataPathDeactivated']):
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for 'DataPathDeinit'".format(lport))
+                                self.reset_cmis_init(lport, retries + 1)
+                            continue
+
+                        # D.1.3 Software Configuration and Initialization
+                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
+                        if appl < 1:
+                            self.log_error("{}: no suitable app for the port".format(lport))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+
+                        if not api.set_application(host_lanes, appl):
+                            self.log_notice("{}: unable to set application".format(lport))
+                            self.reset_cmis_init(lport, retries + 1)
+                            continue
+
+                        # TODO: Use fine grained time when the CMIS memory map is available
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
                     elif state == self.CMIS_STATE_AP_CONF:
-                        st = api.get_config_datapath_hostlane_status()
-                        done = True
-                        for lane in range(self.NUM_CHANNELS):
-                            if ((1 << lane) & host_lanes) == 0:
-                                continue
-                            name = "ConfigStatusLane{}".format(lane + 1)
-                            if st[name] != 'ConfigSuccess':
-                                done = False
-                                continue
-                        if not done:
+                        if not self.test_config_error(api, host_lanes, ['ConfigSuccess']):
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
+                                self.reset_cmis_init(lport, retries + 1)
                             continue
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
 
+                        # TODO: Use fine grained time when the CMIS memory map is available
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
-                        st = api.get_datapath_state()
-                        done = True
-                        for lane in range(self.NUM_CHANNELS):
-                            if ((1 << lane) & host_lanes) == 0:
-                                continue
-                            name = "DP{}State".format(lane + 1)
-                            if st[name] != 'DataPathInitialized':
-                                done = False
-                                continue
-                        if not done:
+                        if not self.test_datapath_state(api, host_lanes, ['DataPathInitialized']):
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
+                                self.reset_cmis_init(lport, retries + 1)
                             continue
 
                         # D.1.3 Software Configuration and Initialization
-                        api.tx_disable_channel(host_lanes, False)
+                        if not api.tx_disable_channel(host_lanes, False):
+                            self.log_notice("{}: unable to turn on tx power".format(lport))
+                            self.reset_cmis_init(lport, retries + 1)
+                            continue
 
+                        # TODO: Use fine grained timeout when the CMIS memory map is available
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        st = api.get_datapath_state()
-                        done = True
-                        for lane in range(self.NUM_CHANNELS):
-                            if ((1 << lane) & host_lanes) == 0:
-                                continue
-                            name = "DP{}State".format(lane + 1)
-                            if st[name] != 'DataPathActivated':
-                                done = False
-                                continue
-                        if not done:
+                        if not self.test_datapath_state(api, host_lanes, ['DataPathActivated']):
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
+                                self.reset_cmis_init(lport, retries + 1)
                             continue
-                        state = self.CMIS_STATE_READY
-                        self.log_notice("{}: state={}".format(lport, state))
-                        self.port_dict[lport]['cmis_state'] = state
+                        self.log_notice("{}: READY".format(lport))
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
 
                 except (NotImplementedError, AttributeError):
+                    self.log_error("{}: internal errors".format(lport))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
 
         self.log_notice("Stopped")
