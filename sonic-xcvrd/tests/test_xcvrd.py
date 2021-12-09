@@ -610,16 +610,38 @@ class TestXcvrdScript(object):
             'ConfigStatusLane7': 'ConfigSuccess',
             'ConfigStatusLane8': 'ConfigSuccess'
         })
-        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
-            'DP1State': 'DataPathInitialized',
-            'DP2State': 'DataPathInitialized',
-            'DP3State': 'DataPathInitialized',
-            'DP4State': 'DataPathInitialized',
-            'DP5State': 'DataPathInitialized',
-            'DP6State': 'DataPathInitialized',
-            'DP7State': 'DataPathInitialized',
-            'DP8State': 'DataPathInitialized'
-        })
+        mock_xcvr_api.get_datapath_state = MagicMock(side_effect=[
+            {
+                'DP1State': 'DataPathDeactivated',
+                'DP2State': 'DataPathDeactivated',
+                'DP3State': 'DataPathDeactivated',
+                'DP4State': 'DataPathDeactivated',
+                'DP5State': 'DataPathDeactivated',
+                'DP6State': 'DataPathDeactivated',
+                'DP7State': 'DataPathDeactivated',
+                'DP8State': 'DataPathDeactivated'
+            },
+            {
+                'DP1State': 'DataPathInitialized',
+                'DP2State': 'DataPathInitialized',
+                'DP3State': 'DataPathInitialized',
+                'DP4State': 'DataPathInitialized',
+                'DP5State': 'DataPathInitialized',
+                'DP6State': 'DataPathInitialized',
+                'DP7State': 'DataPathInitialized',
+                'DP8State': 'DataPathInitialized'
+            },
+            {
+                'DP1State': 'DataPathActivated',
+                'DP2State': 'DataPathActivated',
+                'DP3State': 'DataPathActivated',
+                'DP4State': 'DataPathActivated',
+                'DP5State': 'DataPathActivated',
+                'DP6State': 'DataPathActivated',
+                'DP7State': 'DataPathActivated',
+                'DP8State': 'DataPathActivated'
+            }
+        ])
 
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
