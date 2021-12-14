@@ -888,6 +888,215 @@ class TestXcvrdScript(object):
             update_appdb_port_mux_cable_response_table(logical_port_name, port_mapping, asic_index, appl_db, read_side)
 
 
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0,1,2]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    def test_read_y_cable_and_update_statedb_port_tbl_invalid_ycable_mapping(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+
+        read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_none(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            def mock_get():
+                pass
+
+            patched_util.get.return_value = mock_get()
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_get_presence_false(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            def mock_get():
+                pass
+
+            patched_util.get.return_value = mock_get()
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_get_read_side_exception(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                # Defining function without self argument creates an exception,
+                # which is what we want for this test.
+                def get_read_side():
+                    pass
+
+            patched_util.get.return_value = PortInstanceHelper()  
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_get_mux_dir_exception(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                def get_read_side(self):
+                    return 1
+                
+                # Defining function without self argument creates an exception,
+                # which is what we want for this test.
+                def get_mux_direction():
+                    pass
+
+            patched_util.get.return_value = PortInstanceHelper()  
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_active(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                def get_read_side(self):
+                    return 1
+                
+                def get_mux_direction(self):
+                    return 1
+
+            patched_util.get.return_value = PortInstanceHelper()  
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_standby(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                def get_read_side(self):
+                    return 1
+                
+                def get_mux_direction(self):
+                    return 2
+
+            patched_util.get.return_value = PortInstanceHelper()  
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
+
+
+    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_unknown(self):
+        
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        statedb_port_tbl = {}
+        asic_index = 0
+        appl_db = "TEST_DB"
+
+        statedb_port_tbl[asic_index] = swsscommon.Table(
+            appl_db[asic_index], "STATEDB_PORT_TABLE")
+
+        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                
+                def get_read_side(self):
+                    return 1
+                
+                def get_mux_direction(self):
+                    return 0
+
+            patched_util.get.return_value = PortInstanceHelper()  
+            read_y_cable_and_update_statedb_port_tbl(logical_port_name, port_mapping, statedb_port_tbl[asic_index])
+
 
     def test_set_show_firmware_fields(self):
 
