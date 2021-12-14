@@ -32,27 +32,11 @@ SELECT_TIMEOUT_MSECS = 1000
 SELECT_TIMEOUT = 100
 
 
-# SFP insert event poll duration
-SFP_INSERT_EVENT_POLL_PERIOD_MSECS = 1000
+# YCABLE insert/delete event poll duration
 
 YCABLE_INFO_UPDATE_PERIOD_SECS = 60
-TIME_FOR_SFP_READY_SECS = 1
-XCVRD_MAIN_THREAD_SLEEP_SECS = 60
+YCABLE_MAIN_THREAD_SLEEP_SECS = 60
 
-EVENT_ON_ALL_SFP = '-1'
-# events definition
-SYSTEM_NOT_READY = 'system_not_ready'
-SYSTEM_BECOME_READY = 'system_become_ready'
-SYSTEM_FAIL = 'system_fail'
-NORMAL_EVENT = 'normal'
-# states definition
-STATE_INIT = 0
-STATE_NORMAL = 1
-STATE_EXIT = 2
-
-
-SFP_STATUS_REMOVED = '0'
-SFP_STATUS_INSERTED = '1'
 
 # SFP error code enum, new elements can be added to the enum if new errors need to be supported.
 SFP_STATUS_ERR_ENUM = Enum('SFP_STATUS_ERR_ENUM', ['SFP_STATUS_ERR_I2C_STUCK', 'SFP_STATUS_ERR_BAD_EEPROM',
@@ -64,19 +48,11 @@ errors_block_eeprom_reading = set(str(error_code.value) for error_code in SFP_ST
 
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
 
-PHYSICAL_PORT_NOT_EXIST = -1
-SFP_EEPROM_NOT_READY = -2
-
 SFPUTIL_LOAD_ERROR = 1
 PORT_CONFIG_LOAD_ERROR = 2
 NOT_IMPLEMENTED_ERROR = 3
 SFP_SYSTEM_ERROR = 4
 
-RETRY_TIMES_FOR_SYSTEM_READY = 24
-RETRY_PERIOD_FOR_SYSTEM_READY_MSECS = 5000
-
-RETRY_TIMES_FOR_SYSTEM_FAIL = 24
-RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS = 5000
 
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -107,7 +83,7 @@ def detect_port_in_error_status(logical_port_name, status_tbl):
 # Helper classes ===============================================================
 #
 
-# Thread wrapper class to update dom info periodically
+# Thread wrapper class to update ycable info periodically
 
 
 class YcableInfoUpdateTask(object):
@@ -118,7 +94,7 @@ class YcableInfoUpdateTask(object):
     def task_worker(self, y_cable_presence):
         helper_logger.log_info("Start Ycable monitoring loop")
 
-        # Connect to STATE_DB and create transceiver dom info table
+        # Connect to STATE_DB and create transceiver ycable config table
         state_db = {}
         mux_tbl = {}
         status_tbl = {}
@@ -130,7 +106,7 @@ class YcableInfoUpdateTask(object):
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
 
-        # Start loop to update dom info in DB periodically
+        # Start loop to update ycable info in DB periodically
         while not self.task_stopping_event.wait(YCABLE_INFO_UPDATE_PERIOD_SECS):
             logical_port_list = platform_sfputil.logical
             for logical_port_name in logical_port_list:
@@ -169,8 +145,8 @@ class YcableStateUpdateTask(object):
     def task_worker(self, stopping_event, sfp_error_event, y_cable_presence):
         helper_logger.log_info("Start Ycable monitoring loop")
 
-        # Connect to STATE_DB and create transceiver dom/sfp info tables
-        state_db, appl_db, int_tbl, dom_tbl, status_tbl, app_port_tbl = {}, {}, {}, {}, {}, {}
+        # Connect to STATE_DB and listen to ycable transceiver status update tables
+        state_db, status_tbl= {}, {}
         port_dict = {}
 
         sel = swsscommon.Select()
@@ -219,8 +195,6 @@ class YcableStateUpdateTask(object):
 
                 port_dict[port] = fvp_dict.get('status', None)
 
-                helper_logger.log_warning("port and status {} {}".format(port, port_dict[port]))
-
                 y_cable_helper.change_ports_status_for_y_cable_change_event(
                     port_dict, y_cable_presence, stopping_event)
 
@@ -245,7 +219,7 @@ class DaemonYcable(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonYcable, self).__init__(log_identifier)
 
-        self.timeout = XCVRD_MAIN_THREAD_SLEEP_SECS
+        self.timeout = YCABLE_MAIN_THREAD_SLEEP_SECS
         self.num_asics = multi_asic.get_num_asics()
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
@@ -334,8 +308,8 @@ class DaemonYcable(daemon_base.DaemonBase):
             self.log_error("Failed to read port info: {}".format(str(e)), True)
             sys.exit(PORT_CONFIG_LOAD_ERROR)
 
-        # Connect to STATE_DB and create transceiver dom/sfp info tables
-        state_db, self.int_tbl, self.dom_tbl, self.status_tbl = {}, {}, {}, {}
+        # Connect to STATE_DB and create ycable tables
+        state_db = {}
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
@@ -387,7 +361,7 @@ class DaemonYcable(daemon_base.DaemonBase):
         # Start daemon initialization sequence
         self.init()
 
-        # Start the dom sensor info update thread
+        # Start the ycable task update thread
         ycable_info_update = YcableInfoUpdateTask()
         ycable_info_update.task_run(self.y_cable_presence)
 

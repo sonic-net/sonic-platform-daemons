@@ -788,7 +788,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
 
         if logical_port_name in port_table_keys[asic_index]:
             if value == SFP_STATUS_INSERTED:
-                helper_logger.log_warning("Got SFP inserted ycable event")
+                helper_logger.log_info("Got SFP inserted ycable event")
                 check_identifier_presence_and_update_mux_table_entry(
                     state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             elif value == SFP_STATUS_REMOVED:
