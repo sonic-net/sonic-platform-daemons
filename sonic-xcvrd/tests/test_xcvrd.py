@@ -38,20 +38,6 @@ media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
-
-class helper_logger:
-    mock_arg = MagicMock()
-
-    def log_error(self, mock_arg):
-        return True
-
-    def log_warning(self, mock_arg):
-        return True
-
-    def log_debug(self, mock_arg):
-        return True
-
-
 class TestXcvrdScript(object):
     def test_xcvrd_helper_class_run(self):
         Y_cable_task = YCableTableUpdateTask(None)
