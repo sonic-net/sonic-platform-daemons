@@ -141,7 +141,7 @@ class TestYCableScript(object):
 
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.get_muxcable_info', MagicMock(return_value={'tor_active': 'self',
                                                                                              'mux_direction': 'self',
                                                                                              'manual_switch_count': '7',
@@ -180,7 +180,7 @@ class TestYCableScript(object):
 
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.get_muxcable_static_info', MagicMock(return_value={'read_side': 'self',
                                                                                                     'nic_lane1_precursor1': '1',
                                                                                                     'nic_lane1_precursor2': '-7',
@@ -379,7 +379,7 @@ class TestYCableScript(object):
 
         assert(rc == 2)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_tor_active_side_1_active(self):
         read_side = 1
@@ -395,7 +395,7 @@ class TestYCableScript(object):
 
         assert(rc == 1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_tor_active_side_2_active(self):
         read_side = 2
@@ -411,7 +411,7 @@ class TestYCableScript(object):
 
         assert(rc == 2)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_tor_active_side_1_standby(self):
         read_side = 1
@@ -427,7 +427,7 @@ class TestYCableScript(object):
 
         assert(rc == 2)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_tor_active_side_2_standby(self):
         read_side = 2
@@ -443,7 +443,7 @@ class TestYCableScript(object):
 
         assert(rc == 1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_update_tor_active_side_no_cable_presence(self):
         read_side = 1
@@ -459,7 +459,7 @@ class TestYCableScript(object):
 
         assert(rc == -1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_update_tor_active_side_multiple_mappings(self):
         read_side = 1
@@ -475,21 +475,21 @@ class TestYCableScript(object):
 
         assert(rc == -1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_physical_port_from_logical_port(self):
         instance = get_ycable_physical_port_from_logical_port("Ethernet0")
 
         assert(instance == 0)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_get_ycable_physical_port_from_logical_port_physical_port_not_present(self):
         instance = get_ycable_physical_port_from_logical_port("Ethernet0")
 
         assert(instance == -1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value={}))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value={}))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_get_ycable_physical_port_from_logical_port_physical_port_list_empty(self):
 
@@ -497,7 +497,7 @@ class TestYCableScript(object):
 
         assert(instance == -1)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_port_instance_from_logical_port(self):
 
@@ -516,7 +516,7 @@ class TestYCableScript(object):
 
         assert(instance == PORT_INSTANCE_ERROR)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_port_instance_from_logical_port_no_port_instance(self):
 
@@ -529,7 +529,7 @@ class TestYCableScript(object):
 
         assert(instance == PORT_INSTANCE_ERROR)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_port_instance_from_logical_port_multiple_mapping(self):
 
@@ -574,7 +574,7 @@ class TestYCableScript(object):
         rc = delete_port_from_y_cable_table(logical_port_name, y_cable_tbl)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_port_instance_none(self):
         asic_index = 0
@@ -592,7 +592,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_read_side_none(self):
         asic_index = 0
@@ -611,7 +611,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_active_side_none(self):
         asic_index = 0
@@ -636,7 +636,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_active_side_is_read_side(self):
         asic_index = 0
@@ -659,7 +659,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_active_side_not_read_side(self):
         asic_index = 0
@@ -682,7 +682,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_update_appdb_port_mux_cable_response_table_active_side_status_unknown(self):
         asic_index = 0
@@ -705,7 +705,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_update_appdb_port_mux_cable_response_table_no_presence_status_unknown(self):
         asic_index = 0
@@ -728,7 +728,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     def test_update_appdb_port_mux_cable_response_table_invalid_ycable_mapping(self):
         asic_index = 0
         appl_db = "TEST_DB"
@@ -750,7 +750,7 @@ class TestYCableScript(object):
                 logical_port_name, asic_index, appl_db, read_side)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_read_y_cable_and_update_statedb_port_tbl_invalid_ycable_mapping(self):
 
@@ -765,7 +765,7 @@ class TestYCableScript(object):
         rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_none(self):
@@ -786,7 +786,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_get_presence_false(self):
@@ -807,7 +807,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_get_read_side_exception(self):
@@ -834,7 +834,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_get_mux_dir_exception(self):
@@ -864,7 +864,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_active(self):
@@ -892,7 +892,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_standby(self):
@@ -920,7 +920,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_read_y_cable_and_update_statedb_port_tbl_port_instance_status_unknown(self):
@@ -948,7 +948,7 @@ class TestYCableScript(object):
             rc = read_y_cable_and_update_statedb_port_tbl(logical_port_name, statedb_port_tbl[asic_index])
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_create_tables_and_insert_mux_unknown_entries(self):
@@ -965,7 +965,7 @@ class TestYCableScript(object):
             state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_status_false(self):
@@ -996,7 +996,7 @@ class TestYCableScript(object):
             state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_state_absent(self):
@@ -1027,7 +1027,7 @@ class TestYCableScript(object):
             state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_bad_state_value(self):
@@ -1058,7 +1058,7 @@ class TestYCableScript(object):
             state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_no_presence(self):
@@ -1089,7 +1089,7 @@ class TestYCableScript(object):
             state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_no_port_info(self):
@@ -1123,7 +1123,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_multiple_port_instances(self):
@@ -1157,7 +1157,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_no_vendor_port_info(self):
@@ -1192,7 +1192,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_no_model_port_info(self):
@@ -1227,7 +1227,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_invalid_vendor_port_info(self):
@@ -1262,7 +1262,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_invalid_model_port_info(self):
@@ -1297,7 +1297,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_module_dir_none(self):
@@ -1336,7 +1336,7 @@ class TestYCableScript(object):
                     state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
                 assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('sonic_y_cable.y_cable_vendor_mapping.mapping.get', MagicMock(return_value={"Microsoft": {"module": "test_module"}}))
@@ -1372,7 +1372,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('sonic_y_cable.y_cable_vendor_mapping.mapping.get', MagicMock(return_value={"simulated": "microsoft.y_cable_simulated"}))
@@ -1409,7 +1409,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('sonic_y_cable.y_cable_vendor_mapping.mapping.get', MagicMock(return_value={"simulated": "microsoft.y_cable_simulated"}))
@@ -1440,7 +1440,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_delete_mux_table_entry(self):
 
@@ -1493,7 +1493,7 @@ class TestYCableScript(object):
 
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event(self, mock_swsscommon_table):
@@ -1518,7 +1518,7 @@ class TestYCableScript(object):
 
         mock_swsscommon_table.assert_called()
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event_sfp_removed(self, mock_swsscommon_table):
@@ -1543,7 +1543,7 @@ class TestYCableScript(object):
 
         mock_swsscommon_table.assert_called()
 
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event_sfp_unknown(self, mock_swsscommon_table):
@@ -1570,7 +1570,7 @@ class TestYCableScript(object):
 
     @patch('swsscommon.swsscommon.Table')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
-    @patch('ycable.ycable_utilities.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     def test_delete_ports_status_for_y_cable(self, mock_swsscommon_table):
 
         mock_table = MagicMock()
