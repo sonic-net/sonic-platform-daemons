@@ -1,6 +1,5 @@
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
-from xcvrd.xcvrd_utilities.y_cable_helper import *
 from xcvrd.xcvrd import *
 import copy
 import os
