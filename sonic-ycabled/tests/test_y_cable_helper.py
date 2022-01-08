@@ -1693,7 +1693,7 @@ class TestYCableScript(object):
             assert(mux_info_dict['version_a_inactive'] == "2020")
             assert(mux_info_dict['version_a_next'] == "2022")
 
-    @patch('ycable.ycable_utilities.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_get_muxcable_info(self):
         physical_port = 20
@@ -1751,7 +1751,7 @@ class TestYCableScript(object):
                 assert(rc['mux_direction'] == 'self')
                 assert(rc['internal_voltage'] == 0.5)
 
-    @patch('ycable.ycable_utilities.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_get_muxcable_info_exceptions(self):
         physical_port = 20
@@ -1809,7 +1809,7 @@ class TestYCableScript(object):
                 assert(rc['mux_direction'] == 'unknown')
                 assert(rc['self_eye_height_lane1'] == 'N/A')
 
-    @patch('ycable.ycable_utilities.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_get_muxcable_static_info(self):
         physical_port = 0
@@ -1877,7 +1877,7 @@ class TestYCableScript(object):
             assert (rc['tor_peer_lane2_postcursor1'] == -17)
             assert (rc['tor_peer_lane2_postcursor2'] == -17)
 
-    @patch('ycable.ycable_utilities.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     def test_post_mux_static_info_to_db(self):
         is_warm_start = True
 
@@ -1893,7 +1893,7 @@ class TestYCableScript(object):
         rc = post_mux_static_info_to_db(is_warm_start,  stop_event)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     def test_post_mux_info_to_db(self):
         is_warm_start = True
 
