@@ -1,6 +1,5 @@
 from ycable.ycable_utilities.sfp_status_helper import *
 from ycable.ycable_utilities.y_cable_helper import *
-from xcvrd.xcvrd import *
 import copy
 import os
 import sys
