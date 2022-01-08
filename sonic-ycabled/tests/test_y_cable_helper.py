@@ -39,7 +39,7 @@ class helper_logger:
 
 class TestYCableScript(object):
     def test_xcvrd_helper_class_run(self):
-        Y_cable_task = YCableTableUpdateTask(None)
+        Y_cable_task = YCableTableUpdateTask()
 
     def test_y_cable_helper_format_mapping_identifier1(self):
         rc = format_mapping_identifier("ABC        ")
@@ -174,7 +174,7 @@ class TestYCableScript(object):
                                                                                              'version_peer_next': '1.7MS'}))
     def test_post_port_mux_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_INFO_TABLE)
+        mux_tbl = Table("STATE_DB", y_cable.ycable_utilities.y_cable_helper.MUX_CABLE_INFO_TABLE)
         rc = post_port_mux_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
 
@@ -214,7 +214,7 @@ class TestYCableScript(object):
                                                                                                     'tor_peer_lane2_postcursor2': '17'}))
     def test_post_port_mux_static_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl = Table("STATE_DB", ycable.ycable_utilities.y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
         rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
 
@@ -507,7 +507,7 @@ class TestYCableScript(object):
 
         assert(instance == 0)
 
-    @patch('ycable.ycable_utilitieslogical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
     def test_get_ycable_port_instance_from_logical_port_no_presence(self):
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
