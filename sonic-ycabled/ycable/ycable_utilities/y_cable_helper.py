@@ -21,6 +21,7 @@ SELECT_TIMEOUT = 1000
 
 y_cable_platform_sfputil = None
 y_cable_platform_chassis = None
+y_cable_is_platform_vs = None
 
 SYSLOG_IDENTIFIER = "y_cable_helper"
 
@@ -117,6 +118,8 @@ def y_cable_wrapper_get_presence(physical_port):
             return y_cable_platform_chassis.get_sfp(physical_port).get_presence()
         except NotImplementedError:
             pass
+    if y_cable_is_platform_vs is True:
+        return True
     return y_cable_platform_sfputil.get_presence(physical_port)
 
 
@@ -159,6 +162,8 @@ def y_cable_wrapper_get_transceiver_info(physical_port):
             return y_cable_platform_chassis.get_sfp(physical_port).get_transceiver_info()
         except NotImplementedError:
             pass
+    if y_cable_is_platform_vs is True:
+        return {}
     return y_cable_platform_sfputil.get_transceiver_info_dict(physical_port)
 
 def get_ycable_physical_port_from_logical_port(logical_port_name):
@@ -710,10 +715,11 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event()):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
+    global y_cable_is_platform_vs
     # Connect to CONFIG_DB and create port status table inside state_db
     config_db, state_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
     static_tbl, mux_tbl = {}, {}
@@ -722,6 +728,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
 
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
+    y_cable_is_platform_vs = is_vs
 
     fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
     # Get the namespaces in the platform
@@ -799,7 +806,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                 try:
                     # Now that the value is in bitmap format, let's convert it to number
                     event_bits = int(value)
-                    if is_error_block_eeprom_reading(event_bits):
+                    if event_bits in errors_block_eeprom_reading:
                         check_identifier_presence_and_delete_mux_table_entry(
                             state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
                 except (TypeError, ValueError) as e:

@@ -266,18 +266,43 @@ class DaemonYcable(daemon_base.DaemonBase):
         global platform_chassis
 
         self.log_info("Start daemon init...")
+        config_db, metadata_tbl, metadata_dict = {}, {}, {}
+        is_vs = False
+
+        namespaces = multi_asic.get_front_end_namespaces()
+        for namespace in namespaces:
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            metadata_tbl[asic_id] = swsscommon.Table(
+                config_db[asic_id], "DEVICE_METADATA")
+
+        (status, fvs) = metadata_tbl[0].get("localhost")
+
+        if status is False:
+            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', metadata_tbl[0].getTableName()))
+            return
+
+        else:
+            # Convert list of tuples to a dictionary
+            metadata_dict = dict(fvs)
+            if "platform" in metadata_dict:
+                val = metadata_dict.get("platform", None)
+                if val == "x86_64-kvm_x86_64-r0":
+                    is_vs = True
+
 
         # Load new platform api class
         try:
-            import sonic_platform.platform
-            import sonic_platform_base.sonic_sfp.sfputilhelper
-            platform_chassis = sonic_platform.platform.Platform().get_chassis()
-            self.log_info("chassis loaded {}".format(platform_chassis))
+            if is_vs is not True:
+                import sonic_platform.platform
+                platform_chassis = sonic_platform.platform.Platform().get_chassis()
+                self.log_info("chassis loaded {}".format(platform_chassis))
             # we have to make use of sfputil for some features
             # even though when new platform api is used for all vendors.
             # in this sense, we treat it as a part of new platform api.
             # we have already moved sfputil to sonic_platform_base
             # which is the root of new platform api.
+            import sonic_platform_base.sonic_sfp.sfputilhelper
             platform_sfputil = sonic_platform_base.sonic_sfp.sfputilhelper.SfpUtilHelper()
         except Exception as e:
             self.log_warning("Failed to load chassis due to {}".format(repr(e)))
@@ -333,7 +358,7 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         # Init port y_cable status table
         y_cable_helper.init_ports_status_for_y_cable(
-            platform_sfputil, platform_chassis, self.y_cable_presence, self.stop_event)
+            platform_sfputil, platform_chassis, self.y_cable_presence, self.stop_event, is_vs)
 
     # Deinitialize daemon
     def deinit(self):

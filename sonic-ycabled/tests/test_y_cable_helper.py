@@ -174,7 +174,7 @@ class TestYCableScript(object):
                                                                                              'version_peer_next': '1.7MS'}))
     def test_post_port_mux_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", y_cable.ycable_utilities.y_cable_helper.MUX_CABLE_INFO_TABLE)
+        mux_tbl = Table("STATE_DB", "Y_CABLE_INFO_TABLE")
         rc = post_port_mux_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
 
@@ -214,7 +214,7 @@ class TestYCableScript(object):
                                                                                                     'tor_peer_lane2_postcursor2': '17'}))
     def test_post_port_mux_static_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", ycable.ycable_utilities.y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl = Table("STATE_DB", "Y_CABLE_STATIC_INFO_TABLE")
         rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl)
         assert(rc != -1)
 
@@ -1480,8 +1480,6 @@ class TestYCableScript(object):
         def mock_get_asic_id(mock_logical_port_name):
             return 0
 
-        
-
         y_cable_presence = [True]
 
         mock_table = MagicMock()
@@ -1513,23 +1511,24 @@ class TestYCableScript(object):
         mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
         mock_swsscommon_table.return_value = mock_table
 
-        change_ports_status_for_y_cable_change_event(
-            logical_port_dict,  y_cable_presence, stop_event=threading.Event())
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
 
-        mock_swsscommon_table.assert_called()
+            patched_util.get_asic_id_for_logical_port.return_value = 0
 
-    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
-    @patch('swsscommon.swsscommon.Table')
-    def test_change_ports_status_for_y_cable_change_event_sfp_removed(self, mock_swsscommon_table):
+            change_ports_status_for_y_cable_change_event(
+                logical_port_dict,  y_cable_presence, stop_event=threading.Event())
 
-        mock_logical_port_name = [""]
+            mock_swsscommon_table.assert_called()
 
-        def mock_get_asic_id(mock_logical_port_name):
-            return 0
+        @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+        @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+        @patch('swsscommon.swsscommon.Table')
+        def test_change_ports_status_for_y_cable_change_event_sfp_removed(self, mock_swsscommon_table):
 
-        
+            mock_logical_port_name = [""]
 
+            def mock_get_asic_id(mock_logical_port_name):
+                return 0
         y_cable_presence = [True]
         logical_port_dict = {'Ethernet0': '1'}
 
@@ -1538,10 +1537,13 @@ class TestYCableScript(object):
         mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
         mock_swsscommon_table.return_value = mock_table
 
-        change_ports_status_for_y_cable_change_event(
-            logical_port_dict,  y_cable_presence, stop_event=threading.Event())
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
 
-        mock_swsscommon_table.assert_called()
+            patched_util.get_asic_id_for_logical_port.return_value = 0
+            change_ports_status_for_y_cable_change_event(
+                logical_port_dict,  y_cable_presence, stop_event=threading.Event())
+
+            mock_swsscommon_table.assert_called()
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
@@ -1563,10 +1565,13 @@ class TestYCableScript(object):
         mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
         mock_swsscommon_table.return_value = mock_table
 
-        change_ports_status_for_y_cable_change_event(
-            logical_port_dict,  y_cable_presence, stop_event=threading.Event())
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
 
-        mock_swsscommon_table.assert_called()
+            patched_util.get_asic_id_for_logical_port.return_value = 0
+            change_ports_status_for_y_cable_change_event(
+                logical_port_dict,  y_cable_presence, stop_event=threading.Event())
+
+            mock_swsscommon_table.assert_called()
 
     @patch('swsscommon.swsscommon.Table')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
@@ -1583,11 +1588,14 @@ class TestYCableScript(object):
         def mock_get_asic_id(mock_logical_port_name):
             return 0
 
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+
+            patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
         
 
-        rc = delete_ports_status_for_y_cable()
+            rc = delete_ports_status_for_y_cable()
 
-        mock_swsscommon_table.assert_called()
+            mock_swsscommon_table.assert_called()
 
     def test_check_identifier_presence_and_update_mux_info_entry(self):
         asic_index = 0
@@ -1600,9 +1608,12 @@ class TestYCableScript(object):
         mux_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], MUX_CABLE_INFO_TABLE)
 
-        rc = check_identifier_presence_and_update_mux_info_entry(
-            state_db, mux_tbl, asic_index, logical_port_name)
-        assert(rc == None)
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+
+            patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
+            rc = check_identifier_presence_and_update_mux_info_entry(
+                state_db, mux_tbl, asic_index, logical_port_name)
+            assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances')
     def test_get_firmware_dict(self, port_instance):
@@ -1693,12 +1704,13 @@ class TestYCableScript(object):
             assert(mux_info_dict['version_a_inactive'] == "2020")
             assert(mux_info_dict['version_a_next'] == "2022")
 
-    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
-    def test_get_muxcable_info(self):
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
+    def test_get_muxcable_info(self, platform_sfputil):
         physical_port = 20
         
         logical_port_name = "Ethernet20"
+        platform_sfputil.get_asic_id_for_logical_port = 0
 
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
 
@@ -1709,7 +1721,8 @@ class TestYCableScript(object):
                     self.TARGET_TOR_A = 1
                     self.TARGET_TOR_B = 1
                     self.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS = 1
-                    self.download_firmware_status = 1
+                    self.FIRMWARE_DOWNLOAD_STATUS_FAILED = 2
+                    self.download_firmware_status = 0
                     self.SWITCH_COUNT_MANUAL = "manual"
                     self.SWITCH_COUNT_AUTO = "auto"
 
@@ -1751,12 +1764,13 @@ class TestYCableScript(object):
                 assert(rc['mux_direction'] == 'self')
                 assert(rc['internal_voltage'] == 0.5)
 
-    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
-    def test_get_muxcable_info_exceptions(self):
+    def test_get_muxcable_info_exceptions(self, platform_sfputil):
         physical_port = 20
         
         logical_port_name = "Ethernet20"
+        platform_sfputil.get_asic_id_for_logical_port = 0
 
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
 
@@ -1767,7 +1781,8 @@ class TestYCableScript(object):
                     self.TARGET_TOR_A = 1
                     self.TARGET_TOR_B = 1
                     self.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS = 1
-                    self.download_firmware_status = 1
+                    self.FIRMWARE_DOWNLOAD_STATUS_FAILED = 2
+                    self.download_firmware_status = 0
                     self.SWITCH_COUNT_MANUAL = "manual"
                     self.SWITCH_COUNT_AUTO = "auto"
 
@@ -1809,13 +1824,14 @@ class TestYCableScript(object):
                 assert(rc['mux_direction'] == 'unknown')
                 assert(rc['self_eye_height_lane1'] == 'N/A')
 
-    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
-    def test_get_muxcable_static_info(self):
+    def test_get_muxcable_static_info(self, platform_sfputil):
         physical_port = 0
         
         logical_port_name = "Ethernet0"
 
+        platform_sfputil.get_asic_id_for_logical_port = 0
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
             class PortInstanceHelper():
                 def __init__(self):
@@ -1838,47 +1854,49 @@ class TestYCableScript(object):
 
             patched_util.get.return_value = PortInstanceHelper()
 
-            rc = get_muxcable_static_info(physical_port, logical_port_name)
+            with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+                patched_util.get_asic_id_for_logical_port.return_value = 0
+                rc = get_muxcable_static_info(physical_port, logical_port_name)
 
-            assert (rc['read_side'] == 'tor1')
-            assert (rc['nic_lane1_precursor1'] == 1)
-            assert (rc['nic_lane1_precursor2'] == 7)
-            assert (rc['nic_lane1_maincursor'] == 7)
-            assert (rc['nic_lane1_postcursor1'] == 1)
-            assert (rc['nic_lane1_postcursor2'] == 0)
+                assert (rc['read_side'] == 'tor1')
+                assert (rc['nic_lane1_precursor1'] == 1)
+                assert (rc['nic_lane1_precursor2'] == 7)
+                assert (rc['nic_lane1_maincursor'] == 7)
+                assert (rc['nic_lane1_postcursor1'] == 1)
+                assert (rc['nic_lane1_postcursor2'] == 0)
 
-            assert (rc['nic_lane2_precursor1'] == 1)
-            assert (rc['nic_lane2_precursor2'] == 7)
-            assert (rc['nic_lane2_maincursor'] == 7)
-            assert (rc['nic_lane2_postcursor1'] == 1)
-            assert (rc['nic_lane2_postcursor2'] == 0)
+                assert (rc['nic_lane2_precursor1'] == 1)
+                assert (rc['nic_lane2_precursor2'] == 7)
+                assert (rc['nic_lane2_maincursor'] == 7)
+                assert (rc['nic_lane2_postcursor1'] == 1)
+                assert (rc['nic_lane2_postcursor2'] == 0)
 
-            assert (rc['tor_self_lane1_precursor1'] == 17)
-            assert (rc['tor_self_lane1_precursor2'] == 17)
-            assert (rc['tor_self_lane1_maincursor'] == 17)
-            assert (rc['tor_self_lane1_postcursor1'] == 17)
-            assert (rc['tor_self_lane1_postcursor2'] == 17)
+                assert (rc['tor_self_lane1_precursor1'] == 17)
+                assert (rc['tor_self_lane1_precursor2'] == 17)
+                assert (rc['tor_self_lane1_maincursor'] == 17)
+                assert (rc['tor_self_lane1_postcursor1'] == 17)
+                assert (rc['tor_self_lane1_postcursor2'] == 17)
 
-            assert (rc['tor_self_lane2_precursor1'] == 17)
-            assert (rc['tor_self_lane2_precursor2'] == 17)
-            assert (rc['tor_self_lane2_maincursor'] == 17)
-            assert (rc['tor_self_lane2_postcursor1'] == 17)
-            assert (rc['tor_self_lane2_postcursor2'] == 17)
+                assert (rc['tor_self_lane2_precursor1'] == 17)
+                assert (rc['tor_self_lane2_precursor2'] == 17)
+                assert (rc['tor_self_lane2_maincursor'] == 17)
+                assert (rc['tor_self_lane2_postcursor1'] == 17)
+                assert (rc['tor_self_lane2_postcursor2'] == 17)
 
-            assert (rc['tor_peer_lane1_precursor1'] == -17)
-            assert (rc['tor_peer_lane1_precursor2'] == -17)
-            assert (rc['tor_peer_lane1_maincursor'] == -17)
-            assert (rc['tor_peer_lane1_postcursor1'] == -17)
-            assert (rc['tor_peer_lane1_postcursor2'] == -17)
+                assert (rc['tor_peer_lane1_precursor1'] == -17)
+                assert (rc['tor_peer_lane1_precursor2'] == -17)
+                assert (rc['tor_peer_lane1_maincursor'] == -17)
+                assert (rc['tor_peer_lane1_postcursor1'] == -17)
+                assert (rc['tor_peer_lane1_postcursor2'] == -17)
 
-            assert (rc['tor_peer_lane2_precursor1'] == -17)
-            assert (rc['tor_peer_lane2_precursor2'] == -17)
-            assert (rc['tor_peer_lane2_maincursor'] == -17)
-            assert (rc['tor_peer_lane2_postcursor1'] == -17)
-            assert (rc['tor_peer_lane2_postcursor2'] == -17)
+                assert (rc['tor_peer_lane2_precursor1'] == -17)
+                assert (rc['tor_peer_lane2_precursor2'] == -17)
+                assert (rc['tor_peer_lane2_maincursor'] == -17)
+                assert (rc['tor_peer_lane2_postcursor1'] == -17)
+                assert (rc['tor_peer_lane2_postcursor2'] == -17)
 
-    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
-    def test_post_mux_static_info_to_db(self):
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
+    def test_post_mux_static_info_to_db(self, platform_sfputil):
         is_warm_start = True
 
         mock_logical_port_name = [""]
@@ -1886,15 +1904,15 @@ class TestYCableScript(object):
         def mock_get_asic_id(mock_logical_port_name):
             return 0
 
-        
+        platform_sfputil.get_asic_id_for_logical_port = 0
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
 
         rc = post_mux_static_info_to_db(is_warm_start,  stop_event)
         assert(rc == None)
 
-    @patch('ycable.ycable_utilities.y_cable_helper.get_asic_id_for_logical_port', MagicMock(return_value=0))
-    def test_post_mux_info_to_db(self):
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
+    def test_post_mux_info_to_db(selfi, platform_sfputil):
         is_warm_start = True
 
         mock_logical_port_name = [""]
@@ -1903,7 +1921,7 @@ class TestYCableScript(object):
             return 0
 
         
-
+        platform_sfputil.get_asic_id_for_logical_port = 0
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
 
