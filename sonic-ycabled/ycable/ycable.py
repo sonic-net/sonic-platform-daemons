@@ -293,7 +293,7 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         # Load new platform api class
         try:
-            if is_vs is not True:
+            if is_vs is False:
                 import sonic_platform.platform
                 platform_chassis = sonic_platform.platform.Platform().get_chassis()
                 self.log_info("chassis loaded {}".format(platform_chassis))
@@ -309,11 +309,12 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         # Load platform specific sfputil class
         if platform_chassis is None or platform_sfputil is None:
-            try:
-                platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
-            except Exception as e:
-                self.log_error("Failed to load sfputil: {}".format(str(e)), True)
-                sys.exit(SFPUTIL_LOAD_ERROR)
+            if is_vs is False:
+                try:
+                    platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
+                except Exception as e:
+                    self.log_error("Failed to load sfputil: {}".format(str(e)), True)
+                    sys.exit(SFPUTIL_LOAD_ERROR)
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.

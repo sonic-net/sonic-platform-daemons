@@ -2633,6 +2633,7 @@ class YCableTableUpdateTask(object):
                                 status = True
                                 for log in res_list:
                                     fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
+                                    index = index + 1
                                     helper_logger.log_notice("event log for cable {} port {}".format(log, port))
                                     xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
                             except Exception as e:
