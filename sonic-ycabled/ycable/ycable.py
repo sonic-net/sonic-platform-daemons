@@ -8,6 +8,7 @@
 try:
     import signal
     import sys
+    import time
     import threading
     
     from enum import Enum
@@ -106,6 +107,7 @@ class YcableInfoUpdateTask(object):
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
 
+        time.sleep(0.1)
         # Start loop to update ycable info in DB periodically
         while not self.task_stopping_event.wait(YCABLE_INFO_UPDATE_PERIOD_SECS):
             logical_port_list = platform_sfputil.logical
@@ -238,28 +240,6 @@ class DaemonYcable(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '" + sig + "'")
 
-    # Wait for port config is done
-    def wait_for_port_config_done(self, namespace):
-        # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
-
-        sel = swsscommon.Select()
-        sst = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-        sel.addSelectable(sst)
-
-        # Make sure this daemon started after all port configured
-        while not self.stop_event.is_set():
-            (state, c) = sel.select(SELECT_TIMEOUT_MSECS)
-            if state == swsscommon.Select.TIMEOUT:
-                continue
-            if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-                continue
-
-            (key, op, fvp) = sst.pop()
-            if key in ["PortConfigDone", "PortInitDone"]:
-                break
-
     # Initialize daemon
     def init(self):
         global platform_sfputil
@@ -353,8 +333,6 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         # Make sure this daemon started after all port configured
         self.log_info("Wait for port config is done")
-        #for namespace in namespaces:
-            #self.wait_for_port_config_done(namespace)
 
 
         # Init port y_cable status table
