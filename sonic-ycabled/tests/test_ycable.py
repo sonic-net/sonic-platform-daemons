@@ -63,12 +63,22 @@ class TestYcableScript(object):
                 pass
 
             
+    @patch("swsscommon.swsscommon.Select",MagicMock())
+    @patch("swsscommon.swsscommon.Select.addSelectable",MagicMock())
     def test_ycable_helper_class_run(self):
         Y_cable_task = YCableTableUpdateTask()
         Y_cable_task.task_stopping_event = MagicMock()
-        Y_cable_task.task_stopping_event.is_set = MagicMock(return_value=True)
+        Y_cable_task.task_thread = MagicMock()
+        Y_cable_task.task_thread.start = MagicMock()
+        Y_cable_task.task_thread.join = MagicMock()
+        Y_cable_task.task_cli_thead = MagicMock()
+        Y_cable_task.task_cli_thead.start = MagicMock()
+        Y_cable_task.task_cli_thead.join = MagicMock()
+        Y_cable_task.task_stopping_event.return_value.is_set.return_value = True
         Y_cable_task.task_worker()
         Y_cable_task.task_cli_worker()
+        Y_cable_task.task_run()
+        Y_cable_task.task_stop()
 
 
     def test_detect_port_in_error_status(self):
