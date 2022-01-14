@@ -614,11 +614,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill in the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
-                                """post_port_mux_info_to_db(
-                                    logical_port_name,  mux_tbl[asic_index])
-                                post_port_mux_static_info_to_db(
-                                    logical_port_name,  static_tbl[asic_index])
-                                """
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
@@ -638,11 +633,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
-                                """post_port_mux_info_to_db(
-                                    logical_port_name,  mux_tbl[asic_index])
-                                post_port_mux_static_info_to_db(
-                                    logical_port_name,  static_tbl[asic_index])
-                                """
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
@@ -1510,6 +1500,22 @@ def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
             continue
         post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
 
+
+def put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl, port):
+    index = 0
+    for val in res:
+        fvs_log = swsscommon.FieldValuePairs(
+            [(str(index), str(val))])
+        index = index + 1
+        xcvrd_show_ber_res_tbl.set(port, fvs_log)
+
+
+def put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl, port):
+
+    for key, val in res.items():
+        fvs_log = swsscommon.FieldValuePairs(
+            [(str(key), str(val))])
+        xcvrd_show_ber_res_tbl.set(port, fvs_log)
 
 def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
     helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
@@ -2631,11 +2637,12 @@ class YCableTableUpdateTask(object):
                                 res_list = port_instance.get_event_log()
                                 index = 0
                                 status = True
-                                for log in res_list:
-                                    fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
-                                    index = index + 1
-                                    helper_logger.log_notice("event log for cable {} port {}".format(log, port))
-                                    xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
+                                if isinstance(list, res_list):
+                                    for log in res_list:
+                                        fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
+                                        helper_logger.log_notice("event log for cable {} port {}".format(log, port))
+                                        index = index +1
+                                        xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
                             except Exception as e:
                                 status = -1
                                 helper_logger.log_warning("Failed to execute the event log API for port {} due to {}".format(physical_port,repr(e)))
@@ -2745,13 +2752,9 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute the get_ber_info API for port {} due to {}".format(physical_port,repr(e)))
-                            index = 0
-                            if res is not None:
-                                for val in res:
-                                    fvs_log = swsscommon.FieldValuePairs(
-                                        [(str(index), str(val))])
-                                    index = index + 1
-                                    xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+                            if res is not None and isinstance(res, list):
+                                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
                         elif mode == "eye":
                             if target is None:
                                 helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_eye_info port {}".format(port))
@@ -2764,13 +2767,9 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute the eye_heights API for port {} due to {}".format(physical_port,repr(e)))
-                            index = 0
-                            if res is not None:
-                                for val in res:
-                                    fvs_log = swsscommon.FieldValuePairs(
-                                        [(str(index), str(val))])
-                                    index = index + 1
-                                    xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+                            if res is not None and isinstance(res, list):
+                                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
                         elif mode == "fec_stats":
                             if target is None:
                                 helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec_stats port {}".format(port))
@@ -2783,11 +2782,9 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute the get_fec_stats API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None:
-                                for key, val in res.items():
-                                    fvs_log = swsscommon.FieldValuePairs(
-                                        [(str(key), str(val))])
-                                    xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+                            if res is not None and isinstance(res, dict):
+                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
                         elif mode == "pcs_stats":
                             if target is None:
                                 helper_logger.log_warning("Error: Could not get target or correct args for cli cmd pcs_stats port {}".format(port))
@@ -2800,11 +2797,9 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute cli cmd API get_pcs_stats for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None:
-                                for key, val in res.items():
-                                    fvs_log = swsscommon.FieldValuePairs(
-                                        [(str(key), str(val))])
-                                    xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+                            if res is not None and isinstance(res, dict):
+                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
                         elif mode == "cable_alive":
                             with y_cable_port_locks[physical_port]:
                                 try:
@@ -2826,11 +2821,9 @@ class YCableTableUpdateTask(object):
                                 except Exception as e:
                                     status = -1
                                     helper_logger.log_warning("Failed to execute cli cmd debug_dump API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None:
-                                for key, val in res.items():
-                                    fvs_log = swsscommon.FieldValuePairs(
-                                        [(str(key), str(val))])
-                                    xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+                            if res is not None and isinstance(res, dict):
+                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
                         set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
                     else:
                         helper_logger.log_error("Wrong param for cli cmd debug_dump/cli_event/fec_stats API port {}".format(port))
