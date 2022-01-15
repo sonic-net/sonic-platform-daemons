@@ -269,6 +269,9 @@ class TestYcableScript(object):
         ycable = DaemonYcable(SYSLOG_IDENTIFIER)
         ycable.init()
         ycable.deinit()
+        sig = "event"
+        frame = MagicMock()
+        ycable.signal_handler(sig, frame)
         # TODO: fow now we only simply call ycable.init/deinit without any further check, it only makes sure that
         # ycable.init/deinit will not raise unexpected exception. In future, probably more check will be added
 

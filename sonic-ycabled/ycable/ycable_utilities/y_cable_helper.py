@@ -586,7 +586,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                     "Error: Unable to import attr name for Y-Cable initiation {}".format(logical_port_name))
                                 create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
                                 return
- 
+
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
@@ -776,7 +776,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
     for logical_port_name, value in port_dict.items():
         if stop_event.is_set():
             break
-        
+
         # Get the asic to which this port belongs
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
@@ -1517,6 +1517,31 @@ def put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl, port):
             [(str(key), str(val))])
         xcvrd_show_ber_res_tbl.set(port, fvs_log)
 
+def gather_arg_from_db_and_check_for_type(arg_tbl, port, key, fvp_dict, arg):
+    status = 'False'
+
+    mode = fvp_dict.get(key, None)
+
+    (arg_status, fvp_s) = arg_tbl.get(port)
+
+    res_dir = dict(fvp_s)
+
+    target = res_dir.get(arg, None)
+    if target is not None:
+        return (target, mode)
+
+    return (None, mode)
+
+def check_physical_port_correctness(physical_port, status_val, status, sts_tbl, rsp_tbl, port, str_val):
+    if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+        # error scenario update table accordingly
+        helper_logger.log_warning("{} {}".format(str_val, port))
+        set_result_and_delete_port(status_val, status, sts_tbl, rsp_tbl, port)
+        return False
+
+    return True
+
+
 def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
     helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
     try:
@@ -1574,6 +1599,7 @@ class YCableTableUpdateTask(object):
             y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
             sel.addSelectable(status_tbl[asic_id])
             sel.addSelectable(mux_cable_command_tbl[asic_id])
+
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
         while True:
@@ -2053,7 +2079,7 @@ class YCableTableUpdateTask(object):
                     else:
                         helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
                         set_result_and_delete_port('result', 'False', xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-                        
+
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
                 (port, op, fvp) = xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
@@ -2436,17 +2462,11 @@ class YCableTableUpdateTask(object):
 
                     fvp_dict = dict(fvp)
 
-
                     if "config_prbs" in fvp_dict:
                         status = 'False'
 
-                        config_prbs_mode = fvp_dict.get("config_prbs", None)
+                        (target,config_prbs_mode) = gather_arg_from_db_and_check_for_type(xcvrd_config_prbs_cmd_arg_tbl[asic_index], port, "config_prbs", fvp_dict, "target")
 
-                        (arg_status, fvp_s) = xcvrd_config_prbs_cmd_arg_tbl[asic_index].get(port)
-
-                        res_dir = dict(fvp_s)
-
-                        target = res_dir.get("target", None)
                         if target is not None:
                             target = int(target)
 
@@ -2482,7 +2502,7 @@ class YCableTableUpdateTask(object):
                             if lane_mask is None or mode_value is None:
                                 helper_logger.log_warning("Error: Could not get correct args lan_mask/mode_value for cli cmd enable prbs port {}".format(port))
                                 set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                                break    
+                                break
                             with y_cable_port_locks[physical_port]:
                                 try:
                                     status = port_instance.enable_prbs_mode(target, mode_value, lane_mask, direction)
@@ -2547,13 +2567,8 @@ class YCableTableUpdateTask(object):
 
                         status = 'False'
 
-                        config_loop_mode = fvp_dict.get("config_loop", None)
+                        (target, config_loop_mode) = gather_arg_from_db_and_check_for_type(xcvrd_config_loop_cmd_arg_tbl[asic_index], port, "config_loop", fvp_dict, "target")
 
-                        (arg_status, fvp_s) = xcvrd_config_loop_cmd_arg_tbl[asic_index].get(port)
-
-                        res_dir = dict(fvp_s)
-
-                        target = res_dir.get("target", None)
                         if target is not None:
                             target = int(target)
 
@@ -2577,7 +2592,7 @@ class YCableTableUpdateTask(object):
                                 mode_value = port_instance.LOOPBACK_MODE_NEAR_END
                             else:
                                 mode_value = int(mode_value)
-                                
+
                             lane_mask = res_dir.get("lane_mask", None)
 
                             if lane_mask is None:
@@ -2717,17 +2732,14 @@ class YCableTableUpdateTask(object):
 
                     if "get_ber" in fvp_dict:
                         status = 'False'
-                        mode = fvp_dict.get("get_ber", None)
-                        (arg_status, fvp_s) = xcvrd_show_ber_cmd_arg_tbl[asic_index].get(port)
 
-                        res_dir = dict(fvp_s)
+                        (target, mode) = gather_arg_from_db_and_check_for_type(xcvrd_show_ber_cmd_arg_tbl[asic_index], port, "get_ber", fvp_dict, "target")
 
-                        target = res_dir.get("target", None)
                         if target is not None:
                             target = int(target)
 
                         physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
                             # error scenario update table accordingly
                             helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec port {}".format(port))
                             set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
@@ -2841,7 +2853,7 @@ class YCableTableUpdateTask(object):
         helper_logger.log_info("stopping the cli and probing task threads xcvrd")
         self.task_thread.join()
         self.task_cli_thread.join()
-        
+
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")

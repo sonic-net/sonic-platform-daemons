@@ -49,6 +49,22 @@ class TestYCableScript(object):
         rc = format_mapping_identifier(None)
         assert(rc == None)
 
+    def test_gather_arg_from_db_and_check_for_type(self):
+
+        arg_tbl = {"Ethernet0": (True, {"abc": "x", "def": "y"})}
+        dic = {"key": "value"}
+        rc = gather_arg_from_db_and_check_for_type(arg_tbl, "Ethernet0", "key", dic, "abc")
+
+        assert(rc == ("x", "value"))
+
+    def test_gather_arg_from_db_and_check_for_none_type(self):
+
+        arg_tbl = {"Ethernet0": (True, {"abcd": "x", "def": "y"})}
+        dic = {"key": "value"}
+        rc = gather_arg_from_db_and_check_for_type(arg_tbl, "Ethernet0", "key", dic, "abc")
+
+        assert(rc == (None, "value"))
+
     def test_y_cable_wrapper_get_transceiver_info(self):
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
             patched_util.get_transceiver_info_dict.return_value = {'manufacturer': 'Microsoft',
