@@ -43,19 +43,19 @@ class TestYcableScript(object):
             Y_cable_state_task = YcableStateUpdateTask()
             Y_cable_state_task.task_process = MagicMock()
             Y_cable_state_task.task_stopping_event = MagicMock()
-            Y_cable_state_task.task_stopping_event.is_set = MagicMock()
             stopping_event = MagicMock()
             sfp_error_event = MagicMock()
             y_cable_presence = [True]
             Y_cable_state_task.task_run(sfp_error_event, y_cable_presence)
             Y_cable_state_task.task_stop()
-            #Y_cable_state_task.task_worker(stopping_event, sfp_error_event, y_cable_presence)
             Y_cable_task = YcableInfoUpdateTask()
             Y_cable_task.task_thread = MagicMock()
             Y_cable_task.task_stopping_event = MagicMock()
             Y_cable_task.task_stopping_event.is_set = MagicMock()
             Y_cable_task.task_run(y_cable_presence)
             Y_cable_task.task_stop()
+            Y_cable_state_task.task_stopping_event.return_value.is_set.return_value = True
+            #Y_cable_state_task.task_worker(stopping_event, sfp_error_event, y_cable_presence)
             # For now just check if exception is thrown for UT purposes
             try:
                 Y_cable_task.task_worker([True])
@@ -269,6 +269,25 @@ class TestYcableScript(object):
         ycable = DaemonYcable(SYSLOG_IDENTIFIER)
         ycable.init()
         ycable.deinit()
+        # TODO: fow now we only simply call ycable.init/deinit without any further check, it only makes sure that
+        # ycable.init/deinit will not raise unexpected exception. In future, probably more check will be added
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('ycable.ycable.platform_sfputil', MagicMock())
+    @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
+    @patch('ycable.ycable.YcableInfoUpdateTask', MagicMock())
+    @patch('ycable.ycable.YcableInfoUpdateTask.task_run', MagicMock())
+    @patch('ycable.ycable.YcableStateUpdateTask', MagicMock())
+    @patch('ycable.ycable.YcableStateUpdateTask.task_run', MagicMock())
+    @patch('ycable.ycable_utilities.y_cable_helper.init_ports_status_for_y_cable', MagicMock())
+    def test_DaemonYcable_init_deinit_full(self):
+        ycable = DaemonYcable(SYSLOG_IDENTIFIER)
+        ycable.init = MagicMock()
+        ycable.init.return_value = MagicMock()
+        ycable.stop_event = MagicMock()
+        ycable.stop_event.wait.return_value = True
+        ycable.run()
         # TODO: fow now we only simply call ycable.init/deinit without any further check, it only makes sure that
         # ycable.init/deinit will not raise unexpected exception. In future, probably more check will be added
 

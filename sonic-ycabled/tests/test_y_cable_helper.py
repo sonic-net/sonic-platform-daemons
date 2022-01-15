@@ -3,6 +3,7 @@ from sonic_platform_base.sfp_base import SfpBase
 from swsscommon import swsscommon
 from sonic_py_common import daemon_base
 from ycable.ycable_utilities.y_cable_helper import *
+from ycable.ycable import *
 import copy
 import os
 import sys
@@ -2347,3 +2348,12 @@ class TestYCableScript(object):
         rc = set_show_firmware_fields("Ethernet0", mux_info_dict, xcvrd_show_fw_res_tbl)
 
         assert(rc == 0)
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('ycable.ycable.platform_sfputil', MagicMock())
+    @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
+    def test_DaemonYcable_init_deinit(self):
+        ycable = DaemonYcable(SYSLOG_IDENTIFIER)
+        ycable.init()
+        ycable.deinit()

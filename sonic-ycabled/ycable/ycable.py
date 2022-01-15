@@ -355,7 +355,10 @@ class DaemonYcable(daemon_base.DaemonBase):
         if self.y_cable_presence[0] is True:
             y_cable_helper.delete_ports_status_for_y_cable()
 
-        del globals()['platform_chassis']
+        global_values = globals()
+        val = global_values.get('platform_chassis')
+        if val is not None:
+            del global_values['platform_chassis']
 
     # Run daemon
 
