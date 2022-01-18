@@ -1465,7 +1465,6 @@ def put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl, port):
         xcvrd_show_ber_res_tbl.set(port, fvs_log)
 
 def gather_arg_from_db_and_check_for_type(arg_tbl, port, key, fvp_dict, arg):
-    status = 'False'
 
     mode = fvp_dict.get(key, None)
 
