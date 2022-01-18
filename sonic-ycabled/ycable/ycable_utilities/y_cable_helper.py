@@ -633,6 +633,10 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
+                                post_port_mux_info_to_db(
+                                    logical_port_name, mux_tbl[asic_index])
+                                post_port_mux_static_info_to_db(
+                                    logical_port_name, static_tbl[asic_index])
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
@@ -1443,63 +1447,6 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
             static_table.set(logical_port_name, fvs)
         else:
             return -1
-
-
-def post_mux_static_info_to_db(is_warm_start, stop_event=threading.Event()):
-    # Connect to STATE_DB and create transceiver mux/static info tables
-    state_db, static_tbl = {}, {}
-
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-
-    # Post all the current interface dom/sfp info to STATE_DB
-    logical_port_list = y_cable_platform_sfputil.logical
-    for logical_port_name in logical_port_list:
-        if stop_event.is_set():
-            break
-
-        # Get the asic to which this port belongs
-        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
-            logical_port_name)
-        if asic_index is None:
-            helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
-            continue
-        post_port_mux_static_info_to_db(logical_port_name, static_tbl[asic_index])
-        post_port_mux_static_info_to_db(logical_port_name, port_mapping, static_tbl[asic_index])
-
-
-def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
-    # Connect to STATE_DB and create transceiver mux/static info tables
-    state_db, mux_tbl, static_tbl = {}, {}, {}
-
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
-
-    # Post all the current interface dom/sfp info to STATE_DB
-    logical_port_list = y_cable_platform_sfputil.logical
-    for logical_port_name in logical_port_list:
-        if stop_event.is_set():
-            break
-
-        # Get the asic to which this port belongs
-        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
-            logical_port_name)
-        if asic_index is None:
-            helper_logger.log_warning(
-                "Got invalid asic index for {}, ignored".format(logical_port_name))
-            continue
-        post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
-
 
 def put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl, port):
     index = 0

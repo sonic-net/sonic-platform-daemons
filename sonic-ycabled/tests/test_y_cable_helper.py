@@ -2291,38 +2291,6 @@ class TestYCableScript(object):
                 assert (rc['read_side'] == 'tor2')
                 assert (rc['nic_lane1_precursor1'] == "N/A")
 
-    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
-    def test_post_mux_static_info_to_db(self, platform_sfputil):
-        is_warm_start = True
-
-        mock_logical_port_name = [""]
-
-        def mock_get_asic_id(mock_logical_port_name):
-            return 0
-
-        platform_sfputil.get_asic_id_for_logical_port = 0
-        stop_event = threading.Event()
-        stop_event.is_set = MagicMock(return_value=False)
-
-        rc = post_mux_static_info_to_db(is_warm_start,  stop_event)
-        assert(rc == None)
-
-    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
-    def test_post_mux_info_to_db(selfi, platform_sfputil):
-        is_warm_start = True
-
-        mock_logical_port_name = [""]
-
-        def mock_get_asic_id(mock_logical_port_name):
-            return 0
-
-        platform_sfputil.get_asic_id_for_logical_port = 0
-        stop_event = threading.Event()
-        stop_event.is_set = MagicMock(return_value=False)
-
-        rc = post_mux_info_to_db(is_warm_start,  stop_event)
-        assert(rc == None)
-
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances')
     @patch('swsscommon.swsscommon.Table')
     def test_task_download_firmware_worker(self, port_instance, mock_swsscommon_table):
