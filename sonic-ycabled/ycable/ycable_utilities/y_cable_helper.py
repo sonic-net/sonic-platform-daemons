@@ -1474,11 +1474,11 @@ def gather_arg_from_db_and_check_for_type(arg_tbl, port, key, fvp_dict, arg):
 
     target = res_dir.get(arg, None)
     if target is not None:
-        return (target, mode)
+        return (target, mode, res_dir)
 
-    return (None, mode)
+    return (None, mode, res_dir)
 
-def check_physical_port_correctness(physical_port, status_val, status, sts_tbl, rsp_tbl, port, str_val):
+"""def check_physical_port_correctness(physical_port, status_val, status, sts_tbl, rsp_tbl, port, str_val):
     if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
         # error scenario update table accordingly
         helper_logger.log_warning("{} {}".format(str_val, port))
@@ -1486,7 +1486,7 @@ def check_physical_port_correctness(physical_port, status_val, status, sts_tbl, 
         return False
 
     return True
-
+"""
 
 def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
     helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
@@ -1501,6 +1501,348 @@ def task_download_firmware_worker(port, physical_port, port_instance, file_full_
     helper_logger.log_debug(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
     rc[0] = status
     helper_logger.log_debug("download thread finished port {} physical_port {}".format(port, physical_port))
+
+def handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "config_prbs" in fvp_dict:
+
+        (target,config_prbs_mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_config_prbs_cmd_arg_tbl[asic_index], port, "config_prbs", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable/disable prbs anlt/reset port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable prbs anlt/reset port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+            return -1
+
+        if config_prbs_mode == "enable":
+            mode_value = res_dir.get("mode_value", None)
+            if mode_value is not None:
+                mode_value = int(mode_value)
+
+            lane_mask = res_dir.get("lane_mask", None)
+            if lane_mask is not None:
+                lane_mask = int(lane_mask)
+
+            direction = res_dir.get("direction", None)
+            if direction is None:
+                direction = port_instance.PRBS_DIRECTION_BOTH
+            else:
+                direction = int(direction)
+
+            if lane_mask is None or mode_value is None:
+                helper_logger.log_warning("Error: Could not get correct args lan_mask/mode_value for cli cmd enable prbs port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.enable_prbs_mode(target, mode_value, lane_mask, direction)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable prbs API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "disable":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.disable_prbs_mode(target, direction)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the disable prbs API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "reset":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.reset(target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the reset API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "anlt":
+            enable = res_dir.get("mode", None)
+            if enable is None:
+                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set anlt port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            enable = int(enable)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.set_anlt(enable, target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the set_anlt API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "fec":
+            mode = res_dir.get("mode", None)
+            if mode is None:
+                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set fec port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            mode = int(mode)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.set_fec_mode(mode, target)
+                except Exception as e:
+                    status = -1
+        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd enable/disable prbs anlt/reset API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+
+def handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "config_loop" in fvp_dict:
+
+
+        (target, config_loop_mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_config_loop_cmd_arg_tbl[asic_index], port, "config_loop", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable enable/disable loopback {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable loopback mode port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+            return -1
+
+        if config_loop_mode == "enable":
+            mode_value = res_dir.get("mode_value", None)
+            if mode_value is None:
+                mode_value = port_instance.LOOPBACK_MODE_NEAR_END
+            else:
+                mode_value = int(mode_value)
+
+            lane_mask = res_dir.get("lane_mask", None)
+
+            if lane_mask is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable loopback port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+                return -1
+            else:
+                lane_mask = int(lane_mask)
+
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.enable_loopback_mode(target, mode_value, lane_mask)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_loop_mode == "disable":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.disable_loopback_mode(target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd enable/disable loopback port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+
+def handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port):
+    status = 'False'
+    fvp_dict = dict(fvp)
+
+    if "show_event" in fvp_dict:
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd event log port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd event log port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+            return -1
+
+        with y_cable_port_locks[physical_port]:
+            try:
+                res_list = port_instance.get_event_log()
+                index = 0
+                status = True
+                if isinstance(res_list, list):
+                    for log in res_list:
+                        fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
+                        helper_logger.log_notice("event log for cable {} port {}".format(log, port))
+                        index = index +1
+                        xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
+            except Exception as e:
+                status = -1
+                helper_logger.log_warning("Failed to execute the event log API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd event log API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+
+def handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "get_fec" in fvp_dict:
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_fec_eye_anlt port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd get_fec_eye_anlt port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+            return -1
+
+        with y_cable_port_locks[physical_port]:
+            try:
+                fec_res_nic = port_instance.get_fec_mode(port_instance.TARGET_NIC)
+                fec_res_a = port_instance.get_fec_mode(port_instance.TARGET_TOR_A)
+                fec_res_b = port_instance.get_fec_mode(port_instance.TARGET_TOR_B)
+                speed_res_nic = port_instance.get_speed()
+                an_res_nic = port_instance.get_anlt(port_instance.TARGET_NIC)
+                an_res_a = port_instance.get_anlt(port_instance.TARGET_TOR_A)
+                an_res_b = port_instance.get_anlt(port_instance.TARGET_TOR_B)
+                fvs_log = swsscommon.FieldValuePairs(
+                    [("fec_nic", str(fec_res_nic)),
+                     ("fec_tor_a", str(fec_res_a)),
+                     ("fec_tor_b", str(fec_res_b)),
+                     ("speed", str(speed_res_nic)),
+                     ("anlt_nic", str(an_res_nic)),
+                     ("anlt_tor_a", str(an_res_a)),
+                     ("anlt_tor_b", str(an_res_b))])
+                xcvrd_show_fec_res_tbl[asic_index].set(port, fvs_log)
+                status = True
+            except Exception as e:
+                status = -1
+                helper_logger.log_warning("Failed to execute the get_fec_eye_anlt API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd get_fec_eye_anlt port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+
+def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port):
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "get_ber" in fvp_dict:
+
+        (target, mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_show_ber_cmd_arg_tbl[asic_index], port, "get_ber", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd debug_dump/cli_event/fec_stats {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+            return -1
+
+        if mode == "ber":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_ber_info(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the get_ber_info API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, list):
+                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "eye":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_eye_heights(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the eye_heights API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, list):
+                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "fec_stats":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_fec_stats(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the get_fec_stats API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "pcs_stats":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_pcs_stats(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd API get_pcs_stats for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "cable_alive":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_alive_status()
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd get_alive_status API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None:
+                fvs_log = swsscommon.FieldValuePairs(
+                    [("cable", str(res))])
+                xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+        elif mode == "debug_dump":
+            option = res_dir.get("option", None)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.debug_dump_registers(option)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd debug_dump API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd debug_dump/cli_event/fec_stats API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
@@ -2336,7 +2678,6 @@ class YCableTableUpdateTask(object):
 
                         with y_cable_port_locks[physical_port]:
                             try:
-                                helper_logger.log_warning("cli cmd mux activate firmware port {} {}".format(port, hitless))
                                 status = port_instance.activate_firmware(file_full_path, hitless)
                                 time.sleep(5)
                             except Exception as e:
@@ -2405,99 +2746,8 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-
-                    fvp_dict = dict(fvp)
-
-                    if "config_prbs" in fvp_dict:
-                        status = 'False'
-
-                        (target,config_prbs_mode) = gather_arg_from_db_and_check_for_type(xcvrd_config_prbs_cmd_arg_tbl[asic_index], port, "config_prbs", fvp_dict, "target")
-
-                        if target is not None:
-                            target = int(target)
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable/disable prbs anlt/reset port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable prbs anlt/reset port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_sts_tbl[asic_index], port)
-                            break
-
-                        if config_prbs_mode == "enable":
-                            mode_value = res_dir.get("mode_value", None)
-                            if mode_value is not None:
-                                mode_value = int(mode_value)
-
-                            lane_mask = res_dir.get("lane_mask", None)
-                            if lane_mask is not None:
-                                lane_mask = int(lane_mask)
-
-                            direction = res_dir.get("direction", None)
-                            if direction is None:
-                                direction = port_instance.PRBS_DIRECTION_BOTH
-                            else:
-                                direction = int(direction)
-
-                            if lane_mask is None or mode_value is None:
-                                helper_logger.log_warning("Error: Could not get correct args lan_mask/mode_value for cli cmd enable prbs port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                                break
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.enable_prbs_mode(target, mode_value, lane_mask, direction)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the enable prbs API for port {} due to {}".format(physical_port,repr(e)))
-                        elif config_prbs_mode == "disable":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.disable_prbs_mode(target, direction)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the disable prbs API for port {} due to {}".format(physical_port,repr(e)))
-                        elif config_prbs_mode == "reset":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.reset(target)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the reset API for port {} due to {}".format(physical_port,repr(e)))
-                        elif config_prbs_mode == "anlt":
-                            enable = res_dir.get("mode", None)
-                            if enable is None:
-                                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set anlt port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                                break
-                            enable = int(enable)
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.set_anlt(enable, target)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the set_anlt API for port {} due to {}".format(physical_port,repr(e)))
-                        elif config_prbs_mode == "fec":
-                            mode = res_dir.get("mode", None)
-                            if mode is None:
-                                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set fec port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                                break
-                            mode = int(mode)
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.set_anlt(mode, target)
-                                except Exception as e:
-                                    status = -1
-                        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd enable/disable prbs anlt/reset API port {}".format(port))
-                        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                    handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port)
+                    break
 
             while True:
                 (port, op, fvp) = xcvrd_config_loop_cmd_tbl[asic_index].pop()
@@ -2506,65 +2756,8 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-
-                    fvp_dict = dict(fvp)
-
-                    if "config_loop" in fvp_dict:
-
-                        status = 'False'
-
-                        (target, config_loop_mode) = gather_arg_from_db_and_check_for_type(xcvrd_config_loop_cmd_arg_tbl[asic_index], port, "config_loop", fvp_dict, "target")
-
-                        if target is not None:
-                            target = int(target)
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable enable/disable loopback {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable loopback mode port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
-                            break
-
-                        if config_loop_mode == "enable":
-                            mode_value = res_dir.get("mode_value", None)
-                            if mode_value is None:
-                                mode_value = port_instance.LOOPBACK_MODE_NEAR_END
-                            else:
-                                mode_value = int(mode_value)
-
-                            lane_mask = res_dir.get("lane_mask", None)
-
-                            if lane_mask is None:
-                                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable loopback port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
-                                break
-                            else:
-                                lane_mask = int(lane_mask)
-
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.enable_loopback_mode(target, mode_value, lane_mask)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
-                        elif config_loop_mode == "disable":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    status = port_instance.disable_loopback_mode(target)
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
-                        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd enable/disable loopback port {}".format(port))
-                        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+                    handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port)
+                    break
 
             while True:
                 (port, op, fvp) = xcvrd_show_event_cmd_tbl[asic_index].pop()
@@ -2574,43 +2767,8 @@ class YCableTableUpdateTask(object):
 
                 if fvp:
 
-                    fvp_dict = dict(fvp)
-
-                    if "show_event" in fvp_dict:
-                        status = 'False'
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd event log port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd event log port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
-                            break
-
-                        with y_cable_port_locks[physical_port]:
-                            try:
-                                res_list = port_instance.get_event_log()
-                                index = 0
-                                status = True
-                                if isinstance(list, res_list):
-                                    for log in res_list:
-                                        fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
-                                        helper_logger.log_notice("event log for cable {} port {}".format(log, port))
-                                        index = index +1
-                                        xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
-                            except Exception as e:
-                                status = -1
-                                helper_logger.log_warning("Failed to execute the event log API for port {} due to {}".format(physical_port,repr(e)))
-                        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd event log API port {}".format(port))
-                        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+                    handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port)
+                    break
 
             while True:
                 (port, op, fvp) = xcvrd_show_fec_cmd_tbl[asic_index].pop()
@@ -2620,51 +2778,8 @@ class YCableTableUpdateTask(object):
 
                 if fvp:
 
-                    fvp_dict = dict(fvp)
-
-                    if "get_fec" in fvp_dict:
-                        status = 'False'
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_fec_eye_anlt port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd get_fec_eye_anlt port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
-                            break
-
-                        with y_cable_port_locks[physical_port]:
-                            try:
-                                fec_res_nic = port_instance.get_fec_mode(port_instance.TARGET_NIC)
-                                fec_res_a = port_instance.get_fec_mode(port_instance.TARGET_TOR_A)
-                                fec_res_b = port_instance.get_fec_mode(port_instance.TARGET_TOR_B)
-                                speed_res_nic = port_instance.get_speed()
-                                an_res_nic = port_instance.get_anlt(port_instance.TARGET_NIC)
-                                an_res_a = port_instance.get_anlt(port_instance.TARGET_TOR_A)
-                                an_res_b = port_instance.get_anlt(port_instance.TARGET_TOR_B)
-                                fvs_log = swsscommon.FieldValuePairs(
-                                    [("fec_nic", str(fec_res_nic)),
-                                     ("fec_tor_a", str(fec_res_a)),
-                                     ("fec_tor_b", str(fec_res_b)),
-                                     ("speed", str(speed_res_nic)),
-                                     ("anlt_nic", str(an_res_nic)),
-                                     ("anlt_tor_a", str(an_res_a)),
-                                     ("anlt_tor_b", str(an_res_b))])
-                                xcvrd_show_fec_res_tbl[asic_index].set(port, fvs_log)
-                                status = True
-                            except Exception as e:
-                                status = -1
-                                helper_logger.log_warning("Failed to execute the get_fec_eye_anlt API for port {} due to {}".format(physical_port,repr(e)))
-                        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd get_fec_eye_anlt port {}".format(port))
-                        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+                    handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port)
+                    break
 
             while True:
                 (port, op, fvp) = xcvrd_show_ber_cmd_tbl[asic_index].pop()
@@ -2673,103 +2788,9 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-
-                    fvp_dict = dict(fvp)
-
-                    if "get_ber" in fvp_dict:
-                        status = 'False'
-
-                        (target, mode) = gather_arg_from_db_and_check_for_type(xcvrd_show_ber_cmd_arg_tbl[asic_index], port, "get_ber", fvp_dict, "target")
-
-                        if target is not None:
-                            target = int(target)
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd debug_dump/cli_event/fec_stats {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                            break
-
-                        if mode == "ber":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.get_ber_info(target)
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the get_ber_info API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None and isinstance(res, list):
-                                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
-
-                        elif mode == "eye":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.get_eye_heights(target)
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the eye_heights API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None and isinstance(res, list):
-                                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
-
-                        elif mode == "fec_stats":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.get_fec_stats(target)
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute the get_fec_stats API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None and isinstance(res, dict):
-                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
-
-                        elif mode == "pcs_stats":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.get_pcs_stats(target)
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute cli cmd API get_pcs_stats for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None and isinstance(res, dict):
-                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
-
-                        elif mode == "cable_alive":
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.get_alive_status()
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute cli cmd get_alive_status API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None:
-                                fvs_log = swsscommon.FieldValuePairs(
-                                    [("cable", str(res))])
-                                xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
-                        elif mode == "debug_dump":
-                            option = res_dir.get("option", None)
-                            with y_cable_port_locks[physical_port]:
-                                try:
-                                    res = port_instance.debug_dump_registers(option)
-                                    status = True
-                                except Exception as e:
-                                    status = -1
-                                    helper_logger.log_warning("Failed to execute cli cmd debug_dump API for port {} due to {}".format(physical_port,repr(e)))
-                            if res is not None and isinstance(res, dict):
-                                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
-
-                        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd debug_dump/cli_event/fec_stats API port {}".format(port))
-                        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                   
+                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, asic_index, port)
+                    break
 
     def task_run(self):
         self.task_thread = threading.Thread(target=self.task_worker)
