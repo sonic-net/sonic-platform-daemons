@@ -790,8 +790,8 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                     state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
-                check_identifier_presence_and_delete_mux_table_entry(
-                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                """check_identifier_presence_and_delete_mux_table_entry(
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)"""
             else:
                 try:
                     # Now that the value is in bitmap format, let's convert it to number
@@ -2753,10 +2753,6 @@ class YCableTableUpdateTask(object):
                             break
 
                         if mode == "ber":
-                            if target is None:
-                                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_ber_info port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                                break
                             with y_cable_port_locks[physical_port]:
                                 try:
                                     res = port_instance.get_ber_info(target)
@@ -2768,10 +2764,6 @@ class YCableTableUpdateTask(object):
                                 put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
                         elif mode == "eye":
-                            if target is None:
-                                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_eye_info port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                                break
                             with y_cable_port_locks[physical_port]:
                                 try:
                                     res = port_instance.get_eye_heights(target)
@@ -2783,10 +2775,6 @@ class YCableTableUpdateTask(object):
                                 put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
                         elif mode == "fec_stats":
-                            if target is None:
-                                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec_stats port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                                break
                             with y_cable_port_locks[physical_port]:
                                 try:
                                     res = port_instance.get_fec_stats(target)
@@ -2798,10 +2786,6 @@ class YCableTableUpdateTask(object):
                                 put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
                         elif mode == "pcs_stats":
-                            if target is None:
-                                helper_logger.log_warning("Error: Could not get target or correct args for cli cmd pcs_stats port {}".format(port))
-                                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
-                                break
                             with y_cable_port_locks[physical_port]:
                                 try:
                                     res = port_instance.get_pcs_stats(target)
