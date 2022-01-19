@@ -1554,6 +1554,12 @@ def handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_t
                     status = -1
                     helper_logger.log_warning("Failed to execute the enable prbs API for port {} due to {}".format(physical_port,repr(e)))
         elif config_prbs_mode == "disable":
+            direction = res_dir.get("direction", None)
+            if direction is None:
+                direction = port_instance.PRBS_DIRECTION_BOTH
+            else:
+                direction = int(direction)
+
             with y_cable_port_locks[physical_port]:
                 try:
                     status = port_instance.disable_prbs_mode(target, direction)
@@ -1757,7 +1763,7 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
             target = int(target)
 
         physical_port = get_ycable_physical_port_from_logical_port(port)
-        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
             # error scenario update table accordingly
             helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec port {}".format(port))
             set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
@@ -1771,6 +1777,10 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
             return -1
 
         if mode == "ber":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_ber_info port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
             with y_cable_port_locks[physical_port]:
                 try:
                     res = port_instance.get_ber_info(target)
@@ -1782,6 +1792,10 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
                 put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
         elif mode == "eye":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_eye_info port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
             with y_cable_port_locks[physical_port]:
                 try:
                     res = port_instance.get_eye_heights(target)
@@ -1793,6 +1807,10 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
                 put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
         elif mode == "fec_stats":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec_stats port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
             with y_cable_port_locks[physical_port]:
                 try:
                     res = port_instance.get_fec_stats(target)
@@ -1804,6 +1822,10 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
                 put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
 
         elif mode == "pcs_stats":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get target or correct args for cli cmd pcs_stats port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
             with y_cable_port_locks[physical_port]:
                 try:
                     res = port_instance.get_pcs_stats(target)
@@ -2738,7 +2760,6 @@ class YCableTableUpdateTask(object):
                     else:
                         helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
                         set_result_and_delete_port('status', 'False', xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
-
             while True:
                 (port, op, fvp) = xcvrd_config_prbs_cmd_tbl[asic_index].pop()
 
@@ -2788,8 +2809,8 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-                   
-                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, asic_index, port)
+                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port)
+
                     break
 
     def task_run(self):
