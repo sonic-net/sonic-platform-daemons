@@ -320,6 +320,9 @@ def update_tor_active_side(read_side, state, logical_port_name):
                     return y_cable_toggle_mux_torB(physical_port)
                 elif state == "standby":
                     return y_cable_toggle_mux_torA(physical_port)
+            else:
+                # not a valid read side
+                return -1
 
             # TODO: Should we confirm that the mux was indeed toggled?
 
@@ -690,7 +693,11 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                     static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
                     mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                 # fill the newly found entry
-                delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
+                #delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
+                #We dont delete the values here, rather just update the values in state DB
+                read_side = active_side = -1
+                update_table_mux_status_for_statedb_port_tbl(
+                    y_cable_tbl[asic_index], "unknown", read_side, active_side, logical_port_name)
                 delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
                 delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
                 delete_change_event[:] = [True]
@@ -794,8 +801,8 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                     state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
-                """check_identifier_presence_and_delete_mux_table_entry(
-                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)"""
+                check_identifier_presence_and_delete_mux_table_entry(
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
             else:
                 try:
                     # Now that the value is in bitmap format, let's convert it to number
@@ -1958,14 +1965,15 @@ class YCableTableUpdateTask(object):
                     if "state" in fvp_dict:
                         # got a state change
                         new_status = fvp_dict["state"]
+                        requested_status = new_status
                         (status, fvs) = y_cable_tbl[asic_index].get(port)
                         if status is False:
                             helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                                 port, y_cable_tbl[asic_index].getTableName()))
                             continue
                         mux_port_dict = dict(fvs)
-                        old_status = mux_port_dict.get("state")
-                        read_side = mux_port_dict.get("read_side")
+                        old_status = mux_port_dict.get("state", None)
+                        read_side = mux_port_dict.get("read_side", None)
                         # Now whatever is the state requested, toggle the mux appropriately
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {}".format(port, old_status, new_status))
                         active_side = update_tor_active_side(read_side, new_status, port)
@@ -1975,8 +1983,7 @@ class YCableTableUpdateTask(object):
                             new_status = 'unknown'
 
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
-                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state from {} to {} {}".format(
-                            port, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old {} to {} {}".format(port, requested_status, old_status, new_status, threading.currentThread().getName()))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                         fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                   ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
