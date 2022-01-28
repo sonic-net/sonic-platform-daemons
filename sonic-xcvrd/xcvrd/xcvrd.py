@@ -902,7 +902,6 @@ class DomInfoUpdateTask(object):
 
         # Connect to STATE_DB and create transceiver dom info table
         state_db, dom_tbl, status_tbl = {}, {}, {}
-        mux_tbl = {}
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
