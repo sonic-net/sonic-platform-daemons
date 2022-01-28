@@ -48,6 +48,9 @@ parameters:
       root_dir: sonic-xcvrd
       python2: true
       python3: true
+    - name: ycabled
+      root_dir: sonic-ycabled
+      python3: true
 
 jobs:
   - ${{ each project in parameters.project_list }}:

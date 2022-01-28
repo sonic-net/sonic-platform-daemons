@@ -22,25 +22,15 @@ swsscommon.SubscriberStateTable = MagicMock()
 swsscommon.SonicDBConfig = MagicMock()
 #swsscommon.Select = MagicMock()
 
-sys.modules['sonic_y_cable'] = MagicMock()
-sys.modules['sonic_y_cable.y_cable'] = MagicMock()
-
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "xcvrd")
-helper_file_path = os.path.join(scripts_path, "xcvrd_utilities"+"/y_cable_helper.py")
-sys.path.insert(0, modules_path)
 
 os.environ["XCVRD_UNIT_TESTING"] = "1"
-load_source('y_cable_helper', scripts_path + '/xcvrd_utilities/y_cable_helper.py')
-from y_cable_helper import *
 from xcvrd.xcvrd import *
 
 
 class TestXcvrdScript(object):
-
-    def test_xcvrd_helper_class_run(self):
-        Y_cable_task = YCableTableUpdateTask()
 
     @patch('xcvrd.xcvrd.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
