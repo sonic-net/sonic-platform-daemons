@@ -21,11 +21,11 @@ SELECT_TIMEOUT = 1000
 
 y_cable_platform_sfputil = None
 y_cable_platform_chassis = None
+y_cable_is_platform_vs = None
 
 SYSLOG_IDENTIFIER = "y_cable_helper"
 
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
-
 
 # SFP status definition, shall be aligned with the definition in get_change_event() of ChassisBase
 SFP_STATUS_REMOVED = '0'
@@ -46,6 +46,7 @@ errors_block_eeprom_reading = {
     SFP_STATUS_ERR_HIGH_TEMP,
     SFP_STATUS_ERR_BAD_CABLE
 }
+
 y_cable_port_instances = {}
 y_cable_port_locks = {}
 
@@ -117,6 +118,8 @@ def y_cable_wrapper_get_presence(physical_port):
             return y_cable_platform_chassis.get_sfp(physical_port).get_presence()
         except NotImplementedError:
             pass
+    if y_cable_is_platform_vs is True:
+        return True
     return y_cable_platform_sfputil.get_presence(physical_port)
 
 
@@ -159,6 +162,8 @@ def y_cable_wrapper_get_transceiver_info(physical_port):
             return y_cable_platform_chassis.get_sfp(physical_port).get_transceiver_info()
         except NotImplementedError:
             pass
+    if y_cable_is_platform_vs is True:
+        return {}
     return y_cable_platform_sfputil.get_transceiver_info_dict(physical_port)
 
 def get_ycable_physical_port_from_logical_port(logical_port_name):
@@ -315,6 +320,9 @@ def update_tor_active_side(read_side, state, logical_port_name):
                     return y_cable_toggle_mux_torB(physical_port)
                 elif state == "standby":
                     return y_cable_toggle_mux_torA(physical_port)
+            else:
+                # not a valid read side
+                return -1
 
             # TODO: Should we confirm that the mux was indeed toggled?
 
@@ -581,7 +589,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                     "Error: Unable to import attr name for Y-Cable initiation {}".format(logical_port_name))
                                 create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
                                 return
- 
+
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
@@ -609,10 +617,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill in the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
-                                post_port_mux_info_to_db(
-                                    logical_port_name,  mux_tbl[asic_index])
-                                post_port_mux_static_info_to_db(
-                                    logical_port_name,  static_tbl[asic_index])
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
@@ -633,9 +637,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
                                 post_port_mux_info_to_db(
-                                    logical_port_name,  mux_tbl[asic_index])
+                                    logical_port_name, mux_tbl[asic_index])
                                 post_port_mux_static_info_to_db(
-                                    logical_port_name,  static_tbl[asic_index])
+                                    logical_port_name, static_tbl[asic_index])
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
@@ -689,7 +693,11 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                     static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
                     mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                 # fill the newly found entry
-                delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
+                #delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
+                #We dont delete the values here, rather just update the values in state DB
+                read_side = active_side = -1
+                update_table_mux_status_for_statedb_port_tbl(
+                    y_cable_tbl[asic_index], "unknown", read_side, active_side, logical_port_name)
                 delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
                 delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
                 delete_change_event[:] = [True]
@@ -699,17 +707,20 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                 if len(physical_port_list) == 1:
 
                     physical_port = physical_port_list[0]
-                    y_cable_port_instances.pop(physical_port)
-                    y_cable_port_locks.pop(physical_port)
+                    if y_cable_port_instances.get(physical_port) is not None:
+                        y_cable_port_instances.pop(physical_port)
+                    if y_cable_port_instances.get(physical_port) is not None:
+                        y_cable_port_locks.pop(physical_port)
                 else:
                     helper_logger.log_warning(
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event()):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
+    global y_cable_is_platform_vs
     # Connect to CONFIG_DB and create port status table inside state_db
     config_db, state_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
     static_tbl, mux_tbl = {}, {}
@@ -718,6 +729,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
 
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
+    y_cable_is_platform_vs = is_vs
 
     fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
     # Get the namespaces in the platform
@@ -772,33 +784,38 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
-    for key, value in port_dict.items():
+    for logical_port_name, value in port_dict.items():
         if stop_event.is_set():
             break
-        logical_port_list = y_cable_platform_sfputil.get_physical_to_logical(int(key))
-        if logical_port_list is None:
-            helper_logger.log_warning("Got unknown FP port index {}, ignored".format(key))
+
+        # Get the asic to which this port belongs
+        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
+        if asic_index is None:
+            helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
             continue
-        for logical_port_name in logical_port_list:
 
-            # Get the asic to which this port belongs
-            asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
-            if asic_index is None:
-                helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+        if logical_port_name in port_table_keys[asic_index]:
+            if value == SFP_STATUS_INSERTED:
+                helper_logger.log_info("Got SFP inserted ycable event")
+                check_identifier_presence_and_update_mux_table_entry(
+                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            elif value == SFP_STATUS_REMOVED:
+                helper_logger.log_info("Got SFP deleted ycable event")
+                check_identifier_presence_and_delete_mux_table_entry(
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+            else:
+                try:
+                    # Now that the value is in bitmap format, let's convert it to number
+                    event_bits = int(value)
+                    if event_bits in errors_block_eeprom_reading:
+                        check_identifier_presence_and_delete_mux_table_entry(
+                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                except (TypeError, ValueError) as e:
+                    helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
+
+                # SFP return unkown event, just ignore for now.
+                helper_logger.log_warning("Got unknown event {}, ignored".format(value))
                 continue
-
-            if logical_port_name in port_table_keys[asic_index]:
-                if value == SFP_STATUS_INSERTED:
-                    helper_logger.log_info("Got SFP inserted event")
-                    check_identifier_presence_and_update_mux_table_entry(
-                        state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
-                elif value == SFP_STATUS_REMOVED or value in errors_block_eeprom_reading:
-                    check_identifier_presence_and_delete_mux_table_entry(
-                        state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
-                else:
-                    # SFP return unkown event, just ignore for now.
-                    helper_logger.log_warning("Got unknown event {}, ignored".format(value))
-                    continue
 
     # If there was a delete event and y_cable_presence was true, reaccess the y_cable presence
     if y_cable_presence[0] is True and delete_change_event[0] is True:
@@ -857,6 +874,7 @@ def delete_ports_status_for_y_cable():
                 physical_port = physical_port_list[0]
                 if y_cable_port_instances.get(physical_port) is not None:
                     y_cable_port_instances.pop(physical_port)
+                if y_cable_port_locks.get(physical_port) is not None:
                     y_cable_port_locks.pop(physical_port)
             else:
                 helper_logger.log_warning(
@@ -972,6 +990,9 @@ def get_muxcable_info(physical_port, logical_port_name):
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for muxcable info for Y cable port {}".format(logical_port_name))
         return -1
+
+    if port_instance.download_firmware_status == port_instance.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS:
+        return
 
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -1434,61 +1455,45 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
         else:
             return -1
 
-
-def post_mux_static_info_to_db(is_warm_start, stop_event=threading.Event()):
-    # Connect to STATE_DB and create transceiver mux/static info tables
-    state_db, static_tbl = {}, {}
-
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-
-    # Post all the current interface dom/sfp info to STATE_DB
-    logical_port_list = y_cable_platform_sfputil.logical
-    for logical_port_name in logical_port_list:
-        if stop_event.is_set():
-            break
-
-        # Get the asic to which this port belongs
-        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
-            logical_port_name)
-        if asic_index is None:
-            helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
-            continue
-        post_port_mux_static_info_to_db(logical_port_name, mux_tbl[asic_index])
+def put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl, port):
+    index = 0
+    for val in res:
+        fvs_log = swsscommon.FieldValuePairs(
+            [(str(index), str(val))])
+        index = index + 1
+        xcvrd_show_ber_res_tbl.set(port, fvs_log)
 
 
-def post_mux_info_to_db(is_warm_start, stop_event=threading.Event()):
-    # Connect to STATE_DB and create transceiver mux/static info tables
-    state_db, mux_tbl, static_tbl = {}, {}, {}
+def put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl, port):
 
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
+    for key, val in res.items():
+        fvs_log = swsscommon.FieldValuePairs(
+            [(str(key), str(val))])
+        xcvrd_show_ber_res_tbl.set(port, fvs_log)
 
-    # Post all the current interface dom/sfp info to STATE_DB
-    logical_port_list = y_cable_platform_sfputil.logical
-    for logical_port_name in logical_port_list:
-        if stop_event.is_set():
-            break
+def gather_arg_from_db_and_check_for_type(arg_tbl, port, key, fvp_dict, arg):
 
-        # Get the asic to which this port belongs
-        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
-            logical_port_name)
-        if asic_index is None:
-            helper_logger.log_warning(
-                "Got invalid asic index for {}, ignored".format(logical_port_name))
-            continue
-        post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+    mode = fvp_dict.get(key, None)
 
+    (arg_status, fvp_s) = arg_tbl.get(port)
+
+    res_dir = dict(fvp_s)
+
+    target = res_dir.get(arg, None)
+    if target is not None:
+        return (target, mode, res_dir)
+
+    return (None, mode, res_dir)
+
+"""def check_physical_port_correctness(physical_port, status_val, status, sts_tbl, rsp_tbl, port, str_val):
+    if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+        # error scenario update table accordingly
+        helper_logger.log_warning("{} {}".format(str_val, port))
+        set_result_and_delete_port(status_val, status, sts_tbl, rsp_tbl, port)
+        return False
+
+    return True
+"""
 
 def task_download_firmware_worker(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl, rc):
     helper_logger.log_debug("worker thread launched for downloading physical port {} path {}".format(physical_port, file_full_path))
@@ -1503,6 +1508,370 @@ def task_download_firmware_worker(port, physical_port, port_instance, file_full_
     helper_logger.log_debug(" downloading complete {} {} {}".format(physical_port, file_full_path, status))
     rc[0] = status
     helper_logger.log_debug("download thread finished port {} physical_port {}".format(port, physical_port))
+
+def handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "config_prbs" in fvp_dict:
+
+        (target,config_prbs_mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_config_prbs_cmd_arg_tbl[asic_index], port, "config_prbs", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable/disable prbs anlt/reset port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable prbs anlt/reset port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+            return -1
+
+        if config_prbs_mode == "enable":
+            mode_value = res_dir.get("mode_value", None)
+            if mode_value is not None:
+                mode_value = int(mode_value)
+
+            lane_mask = res_dir.get("lane_mask", None)
+            if lane_mask is not None:
+                lane_mask = int(lane_mask)
+
+            direction = res_dir.get("direction", None)
+            if direction is None:
+                direction = port_instance.PRBS_DIRECTION_BOTH
+            else:
+                direction = int(direction)
+
+            if lane_mask is None or mode_value is None:
+                helper_logger.log_warning("Error: Could not get correct args lan_mask/mode_value for cli cmd enable prbs port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.enable_prbs_mode(target, mode_value, lane_mask, direction)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable prbs API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "disable":
+            direction = res_dir.get("direction", None)
+            if direction is None:
+                direction = port_instance.PRBS_DIRECTION_BOTH
+            else:
+                direction = int(direction)
+
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.disable_prbs_mode(target, direction)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the disable prbs API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "reset":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.reset(target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the reset API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "anlt":
+            enable = res_dir.get("mode", None)
+            if enable is None:
+                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set anlt port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            enable = int(enable)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.set_anlt(enable, target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the set_anlt API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_prbs_mode == "fec":
+            mode = res_dir.get("mode", None)
+            if mode is None:
+                helper_logger.log_warning("Error: Could not get correct args (enable) for cli cmd set fec port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+                return -1
+            mode = int(mode)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.set_fec_mode(mode, target)
+                except Exception as e:
+                    status = -1
+        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd enable/disable prbs anlt/reset API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_config_prbs_cmd_sts_tbl[asic_index], xcvrd_config_prbs_rsp_tbl[asic_index], port)
+
+def handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "config_loop" in fvp_dict:
+
+
+        (target, config_loop_mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_config_loop_cmd_arg_tbl[asic_index], port, "config_loop", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR or target is None:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable enable/disable loopback {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd enable/disable loopback mode port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+            return -1
+
+        if config_loop_mode == "enable":
+            mode_value = res_dir.get("mode_value", None)
+            if mode_value is None:
+                mode_value = port_instance.LOOPBACK_MODE_NEAR_END
+            else:
+                mode_value = int(mode_value)
+
+            lane_mask = res_dir.get("lane_mask", None)
+
+            if lane_mask is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd enable loopback port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+                return -1
+            else:
+                lane_mask = int(lane_mask)
+
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.enable_loopback_mode(target, mode_value, lane_mask)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
+        elif config_loop_mode == "disable":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.disable_loopback_mode(target)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the enable/disable loopback API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd enable/disable loopback port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_config_loop_cmd_sts_tbl[asic_index], xcvrd_config_loop_rsp_tbl[asic_index], port)
+
+def handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port):
+    status = 'False'
+    fvp_dict = dict(fvp)
+
+    if "show_event" in fvp_dict:
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd event log port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd event log port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+            return -1
+
+        with y_cable_port_locks[physical_port]:
+            try:
+                res_list = port_instance.get_event_log()
+                index = 0
+                status = True
+                if isinstance(res_list, list):
+                    for log in res_list:
+                        fvs_log = swsscommon.FieldValuePairs([(str(index), str(log))])
+                        helper_logger.log_notice("event log for cable {} port {}".format(log, port))
+                        index = index +1
+                        xcvrd_show_event_res_tbl[asic_index].set(port, fvs_log)
+            except Exception as e:
+                status = -1
+                helper_logger.log_warning("Failed to execute the event log API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd event log API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_event_cmd_sts_tbl[asic_index], xcvrd_show_event_rsp_tbl[asic_index], port)
+
+def handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "get_fec" in fvp_dict:
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_fec_eye_anlt port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd get_fec_eye_anlt port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+            return -1
+
+        with y_cable_port_locks[physical_port]:
+            try:
+                fec_res_nic = port_instance.get_fec_mode(port_instance.TARGET_NIC)
+                fec_res_a = port_instance.get_fec_mode(port_instance.TARGET_TOR_A)
+                fec_res_b = port_instance.get_fec_mode(port_instance.TARGET_TOR_B)
+                speed_res_nic = port_instance.get_speed()
+                an_res_nic = port_instance.get_anlt(port_instance.TARGET_NIC)
+                an_res_a = port_instance.get_anlt(port_instance.TARGET_TOR_A)
+                an_res_b = port_instance.get_anlt(port_instance.TARGET_TOR_B)
+                fvs_log = swsscommon.FieldValuePairs(
+                    [("fec_nic", str(fec_res_nic)),
+                     ("fec_tor_a", str(fec_res_a)),
+                     ("fec_tor_b", str(fec_res_b)),
+                     ("speed", str(speed_res_nic)),
+                     ("anlt_nic", str(an_res_nic)),
+                     ("anlt_tor_a", str(an_res_a)),
+                     ("anlt_tor_b", str(an_res_b))])
+                xcvrd_show_fec_res_tbl[asic_index].set(port, fvs_log)
+                status = True
+            except Exception as e:
+                status = -1
+                helper_logger.log_warning("Failed to execute the get_fec_eye_anlt API for port {} due to {}".format(physical_port,repr(e)))
+        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd get_fec_eye_anlt port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
+
+def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port):
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "get_ber" in fvp_dict:
+
+        (target, mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_show_ber_cmd_arg_tbl[asic_index], port, "get_ber", fvp_dict, "target")
+
+        if target is not None:
+            target = int(target)
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd debug_dump/cli_event/fec_stats {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+            return -1
+
+        if mode == "ber":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_ber_info port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_ber_info(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the get_ber_info API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, list):
+                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "eye":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd get_eye_info port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_eye_heights(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the eye_heights API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, list):
+                put_all_values_from_list_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "fec_stats":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get physical port or correct args for cli cmd fec_stats port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_fec_stats(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the get_fec_stats API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "pcs_stats":
+            if target is None:
+                helper_logger.log_warning("Error: Could not get target or correct args for cli cmd pcs_stats port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+                return -1
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_pcs_stats(target)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd API get_pcs_stats for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        elif mode == "cable_alive":
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.get_alive_status()
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd get_alive_status API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None:
+                fvs_log = swsscommon.FieldValuePairs(
+                    [("cable", str(res))])
+                xcvrd_show_ber_res_tbl[asic_index].set(port, fvs_log)
+        elif mode == "debug_dump":
+            option = res_dir.get("option", None)
+            with y_cable_port_locks[physical_port]:
+                try:
+                    res = port_instance.debug_dump_registers(option)
+                    status = True
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute cli cmd debug_dump API for port {} due to {}".format(physical_port,repr(e)))
+            if res is not None and isinstance(res, dict):
+                put_all_values_from_dict_to_db(res, xcvrd_show_ber_res_tbl[asic_index], port)
+
+        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd debug_dump/cli_event/fec_stats API port {}".format(port))
+        set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
+
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
@@ -1547,6 +1916,7 @@ class YCableTableUpdateTask(object):
             y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
             sel.addSelectable(status_tbl[asic_id])
             sel.addSelectable(mux_cable_command_tbl[asic_id])
+
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
         while True:
@@ -1595,14 +1965,15 @@ class YCableTableUpdateTask(object):
                     if "state" in fvp_dict:
                         # got a state change
                         new_status = fvp_dict["state"]
+                        requested_status = new_status
                         (status, fvs) = y_cable_tbl[asic_index].get(port)
                         if status is False:
                             helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                                 port, y_cable_tbl[asic_index].getTableName()))
                             continue
                         mux_port_dict = dict(fvs)
-                        old_status = mux_port_dict.get("state")
-                        read_side = mux_port_dict.get("read_side")
+                        old_status = mux_port_dict.get("state", None)
+                        read_side = mux_port_dict.get("read_side", None)
                         # Now whatever is the state requested, toggle the mux appropriately
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {}".format(port, old_status, new_status))
                         active_side = update_tor_active_side(read_side, new_status, port)
@@ -1612,8 +1983,7 @@ class YCableTableUpdateTask(object):
                             new_status = 'unknown'
 
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
-                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state from {} to {} {}".format(
-                            port, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old {} to {} {}".format(port, requested_status, old_status, new_status, threading.currentThread().getName()))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                         fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                   ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
@@ -1663,17 +2033,23 @@ class YCableTableUpdateTask(object):
         xcvrd_log_tbl = {}
         xcvrd_down_fw_cmd_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
         xcvrd_down_fw_status_cmd_tbl, xcvrd_down_fw_status_rsp_tbl, xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
-        xcvrd_acti_fw_cmd_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}
+        xcvrd_acti_fw_cmd_tbl, xcvrd_acti_fw_cmd_arg_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
         xcvrd_roll_fw_cmd_tbl, xcvrd_roll_fw_rsp_tbl, xcvrd_roll_fw_cmd_sts_tbl = {}, {}, {}
         xcvrd_show_fw_cmd_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_res_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}
+        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}, {}
         xcvrd_show_hwmode_swmode_cmd_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, xcvrd_show_hwmode_swmode_cmd_sts_tbl = {}, {}, {}
         xcvrd_config_hwmode_state_cmd_tbl, xcvrd_config_hwmode_state_rsp_tbl , xcvrd_config_hwmode_state_cmd_sts_tbl= {}, {}, {}
         xcvrd_config_hwmode_swmode_cmd_tbl, xcvrd_config_hwmode_swmode_rsp_tbl , xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
+        xcvrd_config_prbs_cmd_tbl, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_rsp_tbl , xcvrd_config_prbs_cmd_sts_tbl= {}, {}, {}, {}
+        xcvrd_config_loop_cmd_tbl, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_rsp_tbl , xcvrd_config_loop_cmd_sts_tbl= {}, {}, {}, {}
+        xcvrd_show_event_cmd_tbl, xcvrd_show_event_rsp_tbl , xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_res_tbl= {}, {}, {}, {}
+        xcvrd_show_fec_cmd_tbl, xcvrd_show_fec_rsp_tbl , xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl= {}, {}, {}, {}
+        xcvrd_show_ber_cmd_tbl, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl , xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
 
 
         sel = swsscommon.Select()
 
+        helper_logger.log_error("executing the cli for prbs thread {}".format(threading.currentThread().getName()))
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
@@ -1707,6 +2083,8 @@ class YCableTableUpdateTask(object):
                 appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
             xcvrd_acti_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
                 appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
+            xcvrd_acti_fw_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_ACTI_FW_CMD_ARG")
             xcvrd_acti_fw_rsp_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_ACTI_FW_RSP")
             xcvrd_roll_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
@@ -1721,6 +2099,8 @@ class YCableTableUpdateTask(object):
                 appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
             xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
+            xcvrd_show_hwmode_dir_res_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RES")
             xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
             xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
@@ -1739,6 +2119,48 @@ class YCableTableUpdateTask(object):
                 appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
             xcvrd_show_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_RSP")
+            xcvrd_config_prbs_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
+            xcvrd_config_prbs_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD_ARG")
+            xcvrd_config_prbs_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
+            xcvrd_config_prbs_rsp_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_CONFIG_PRBS_RSP")
+            xcvrd_config_loop_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
+            xcvrd_config_loop_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD_ARG")
+            xcvrd_config_loop_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
+            xcvrd_config_loop_rsp_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_CONFIG_LOOP_RSP")
+            xcvrd_show_event_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
+            xcvrd_show_event_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
+            xcvrd_show_event_rsp_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_EVENT_LOG_RSP")
+            xcvrd_show_event_res_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_EVENT_LOG_RES")
+            xcvrd_show_fec_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
+            xcvrd_show_fec_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
+            xcvrd_show_fec_rsp_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_GET_FEC_RSP")
+            xcvrd_show_fec_res_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_GET_FEC_RES")
+            xcvrd_show_ber_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], "XCVRD_GET_BER_CMD")
+            xcvrd_show_ber_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_GET_BER_CMD_ARG")
+            xcvrd_show_ber_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "XCVRD_GET_BER_CMD")
+            xcvrd_show_ber_rsp_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_GET_BER_RSP")
+            xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "XCVRD_GET_BER_RES")
             sel.addSelectable(xcvrd_log_tbl[asic_id])
             sel.addSelectable(xcvrd_down_fw_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_down_fw_status_cmd_tbl[asic_id])
@@ -1749,6 +2171,11 @@ class YCableTableUpdateTask(object):
             sel.addSelectable(xcvrd_config_hwmode_state_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
+            sel.addSelectable(xcvrd_config_prbs_cmd_tbl[asic_id])
+            sel.addSelectable(xcvrd_config_loop_cmd_tbl[asic_id])
+            sel.addSelectable(xcvrd_show_event_cmd_tbl[asic_id])
+            sel.addSelectable(xcvrd_show_fec_cmd_tbl[asic_id])
+            sel.addSelectable(xcvrd_show_ber_cmd_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
@@ -1811,14 +2238,23 @@ class YCableTableUpdateTask(object):
 
                     if "state" in fvp_dict:
 
+                        presence = "False"
+
                         physical_port = get_ycable_physical_port_from_logical_port(port)
+                        if physical_port is not None and y_cable_wrapper_get_presence(physical_port):
+                            presence = "True"
+
+                        fvs_log = swsscommon.FieldValuePairs([(str("presence"), str(presence))])
+                        xcvrd_show_hwmode_dir_res_tbl[asic_index].set(port, fvs_log)
+
                         if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            state = 'cable not present'
+                            state = 'unknown'
                             # error scenario update table accordingly
                             helper_logger.log_error(
                                 "Error: Could not get physical port for cli command show mux hwmode muxdirection Y cable port {}".format(port))
                             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                             break
+
 
                         port_instance = get_ycable_port_instance_from_logical_port(port)
                         if port_instance is None or port_instance in port_mapping_error_values:
@@ -1960,7 +2396,7 @@ class YCableTableUpdateTask(object):
                     else:
                         helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
                         set_result_and_delete_port('result', 'False', xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-                        
+
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
                 (port, op, fvp) = xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
@@ -2234,6 +2670,16 @@ class YCableTableUpdateTask(object):
                         file_name = fvp_dict["activate_firmware"]
                         status = 'False'
 
+                        (arg_status, fvp_s) = xcvrd_acti_fw_cmd_arg_tbl[asic_index].get(port)
+
+                        res_dir = dict(fvp_s)
+
+                        hitless = res_dir.get("hitless", None)
+                        if hitless is not None:
+                            hitless = False
+                        else:
+                            hitless = True
+
                         if file_name == 'null':
                             file_full_path = None
                         else:
@@ -2261,7 +2707,8 @@ class YCableTableUpdateTask(object):
 
                         with y_cable_port_locks[physical_port]:
                             try:
-                                status = port_instance.activate_firmware(file_full_path, True)
+                                status = port_instance.activate_firmware(file_full_path, hitless)
+                                time.sleep(5)
                             except Exception as e:
                                 status = -1
                                 helper_logger.log_warning("Failed to execute the activate_firmware API for port {} due to {}".format(physical_port,repr(e)))
@@ -2320,7 +2767,58 @@ class YCableTableUpdateTask(object):
                     else:
                         helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
                         set_result_and_delete_port('status', 'False', xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+            while True:
+                (port, op, fvp) = xcvrd_config_prbs_cmd_tbl[asic_index].pop()
 
+                if not port:
+                    break
+
+                if fvp:
+                    handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port)
+                    break
+
+            while True:
+                (port, op, fvp) = xcvrd_config_loop_cmd_tbl[asic_index].pop()
+
+                if not port:
+                    break
+
+                if fvp:
+                    handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port)
+                    break
+
+            while True:
+                (port, op, fvp) = xcvrd_show_event_cmd_tbl[asic_index].pop()
+
+                if not port:
+                    break
+
+                if fvp:
+
+                    handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port)
+                    break
+
+            while True:
+                (port, op, fvp) = xcvrd_show_fec_cmd_tbl[asic_index].pop()
+
+                if not port:
+                    break
+
+                if fvp:
+
+                    handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port)
+                    break
+
+            while True:
+                (port, op, fvp) = xcvrd_show_ber_cmd_tbl[asic_index].pop()
+
+                if not port:
+                    break
+
+                if fvp:
+                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port)
+
+                    break
 
     def task_run(self):
         self.task_thread = threading.Thread(target=self.task_worker)
@@ -2334,7 +2832,7 @@ class YCableTableUpdateTask(object):
         helper_logger.log_info("stopping the cli and probing task threads xcvrd")
         self.task_thread.join()
         self.task_cli_thread.join()
-        
+
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")
