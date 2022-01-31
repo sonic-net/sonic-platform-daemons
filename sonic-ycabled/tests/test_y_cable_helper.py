@@ -3518,15 +3518,14 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances')
     @patch('swsscommon.swsscommon.Table')
     @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_port_instance_from_logical_port')
+    @patch('threading.Thread')
     @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type',MagicMock(return_value=(0, "fec", {"modex":"0",
                                                                                                                                 "lane_mask":"0",
                                                                                                                                 "direction":"0"})))
     @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_physical_port_from_logical_port',MagicMock(return_value=(0)))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('os.path.isfile', MagicMock(return_value=True))
-    @patch('threading.Thread', MagicMock(return_value=True))
-    @patch('threading.Thread.start', MagicMock(return_value=True))
-    def test_handle_config_firmware_down_cmd_arg_tbl_notification_with_instance(self,port_instance, mock_swsscommon_table, port_instance_helper):
+    def test_handle_config_firmware_down_cmd_arg_tbl_notification_with_instance(self,port_instance, mock_swsscommon_table, port_instance_helper, thread_obj):
         
         mock_table = MagicMock()
         mock_swsscommon_table.return_value = mock_table
@@ -3534,17 +3533,16 @@ class TestYCableScript(object):
         xcvrd_down_fw_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
         port_instance = MagicMock()
-        port_instance.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS = 1
-        port_instance.PRBS_DIRECTION_BOTH = 2
-        port_instance.enable_prbs_mode.return_value = True
-        port_instance.disable_prbs_mode.return_value = True
+        thread_instance = MagicMock()
+        thread_instance.start = MagicMock()
+        thread_obj = thread_instance
         port_instance_helper = port_instance
 
 
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
-        fvp = {"downoad_firmware": "null"}
+        fvp = {"download_firmware": "null"}
 
         rc = handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, task_download_firmware_thread)
         assert(rc == None)
@@ -3571,6 +3569,115 @@ class TestYCableScript(object):
         fvp = {"download_firmware": "null"}
 
         rc = handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, task_download_firmware_thread)
+        assert(rc == -1)
+
+
+    @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type',MagicMock(return_value=(0, "fec", {"modex":"0",
+                                                                                                                                "lane_mask":"0",
+                                                                                                                                "direction":"0"})))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('os.path.isfile', MagicMock(return_value=True))
+    def test_handle_config_firmware_acti_cmd_arg_tbl_notification_no_port(self, mock_swsscommon_table):
+        
+        mock_table = MagicMock()
+        mock_swsscommon_table.return_value = mock_table
+
+        xcvrd_down_fw_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
+        xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
+
+        asic_index = 0
+        task_download_firmware_thread = {}
+        port = "Ethernet0"
+        fvp = {"activate_firmware": "null"}
+
+        rc = handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+        assert(rc == -1)
+
+
+    @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type',MagicMock(return_value=(0, "fec", {"modex":"0",
+                                                                                                                                "lane_mask":"0",
+                                                                                                                                "direction":"0"})))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_physical_port_from_logical_port',MagicMock(return_value=(0)))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('os.path.isfile', MagicMock(return_value=True))
+    def test_handle_config_firmware_acti_cmd_arg_tbl_notification_else_condition(self,mock_swsscommon_table):
+        
+        mock_table = MagicMock()
+        mock_swsscommon_table.return_value = mock_table
+
+        xcvrd_down_fw_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
+        xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
+
+        asic_index = 0
+        task_download_firmware_thread = {}
+        port = "Ethernet0"
+        fvp = {"down_firmware": "null"}
+
+        rc = handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+        assert(rc == None)
+
+
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances')
+    @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_port_instance_from_logical_port')
+    @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type',MagicMock(return_value=(0, "activate_firmware", {"modex":"0",
+                                                                                                                                "lane_mask":"0",
+                                                                                                                                "direction":"0"})))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_physical_port_from_logical_port',MagicMock(return_value=(0)))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('os.path.isfile', MagicMock(return_value=True))
+    @patch('time.sleep', MagicMock(return_value=True))
+    def test_handle_config_firmware_acti_cmd_arg_tbl_notification_with_instance(self,port_instance, mock_swsscommon_table, port_instance_helper):
+        
+        mock_table = MagicMock()
+        mock_swsscommon_table.return_value = mock_table
+
+        xcvrd_down_fw_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
+        xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
+        port_instance = MagicMock()
+        port_instance.activate_firmware = MagicMock(return_value=True)
+        thread_instance = MagicMock()
+        thread_instance.start = MagicMock()
+        thread_obj = thread_instance
+        port_instance_helper = port_instance
+
+
+        asic_index = 0
+        task_download_firmware_thread = {}
+        port = "Ethernet0"
+        fvp = {"activate_firmware": "null"}
+
+        rc = handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+        assert(rc == None)
+
+
+    @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type',MagicMock(return_value=(0, "fec", {"modex":"0",
+                                                                                                                                "lane_mask":"0",
+                                                                                                                                "direction":"0"})))
+    @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_physical_port_from_logical_port',MagicMock(return_value=(0)))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('os.path.isfile', MagicMock(return_value=True))
+    def test_handle_config_firmware_acti_cmd_arg_tbl_notification_no_instance(self,mock_swsscommon_table):
+        
+        mock_table = MagicMock()
+        mock_swsscommon_table.return_value = mock_table
+
+        xcvrd_down_fw_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
+        xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
+
+        asic_index = 0
+        task_download_firmware_thread = {}
+        port = "Ethernet0"
+        fvp = {"activate_firmware": "null"}
+
+        rc = handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
         assert(rc == -1)
 
 

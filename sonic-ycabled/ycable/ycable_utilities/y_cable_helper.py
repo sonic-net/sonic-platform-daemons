@@ -1961,6 +1961,60 @@ def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xc
         set_result_and_delete_port('status', status, xcvrd_show_ber_cmd_sts_tbl[asic_index], xcvrd_show_ber_rsp_tbl[asic_index], port)
 
 
+def handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_acti_fw_cmd_sts_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port):
+
+    fvp_dict = dict(fvp)
+    status = 'False'
+
+    if "activate_firmware" in fvp_dict:
+        file_name = fvp_dict["activate_firmware"]
+
+        (hitless, mode, res_dir) = gather_arg_from_db_and_check_for_type(xcvrd_acti_fw_cmd_arg_tbl[asic_index], port, "activate_firmware", fvp_dict, "hitless")
+
+
+        if hitless is not None:
+            hitless = False
+        else:
+            hitless = True
+
+        if file_name == 'null':
+            file_full_path = None
+        else:
+            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
+            if not os.path.isfile(file_full_path):
+                helper_logger.log_error("ERROR: cli cmd mux activate firmware file does not exist port {} file {}".format(port, file_name))
+                set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
+                return -1
+
+
+        physical_port = get_ycable_physical_port_from_logical_port(port)
+        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+            # error scenario update table accordingly
+            helper_logger.log_warning("Error: Could not get physical port for cli cmd mux activate firmware port {}".format(port))
+            set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
+            return -1
+
+        port_instance = get_ycable_port_instance_from_logical_port(port)
+        if port_instance is None or port_instance in port_mapping_error_values:
+            helper_logger.log_warning("Error: Could not get port instance for cli cmd mux activate firmware port {}".format(port))
+            # error scenario update table accordingly
+            set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
+            return -1
+
+
+        with y_cable_port_locks[physical_port]:
+            try:
+                status = port_instance.activate_firmware(file_full_path, hitless)
+                time.sleep(5)
+            except Exception as e:
+                status = -1
+                helper_logger.log_warning("Failed to execute the activate_firmware API for port {} due to {}".format(physical_port,repr(e)))
+
+        set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
+    else:
+        helper_logger.log_error("Wrong param for cli cmd mux activate firmware port {}".format(port))
+        set_result_and_delete_port('status', 'False', xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
+
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
     def __init__(self):
@@ -2712,60 +2766,9 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
+                    handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_acti_fw_cmd_sts_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+                    break
 
-                    fvp_dict = dict(fvp)
-
-                    if "activate_firmware" in fvp_dict:
-                        file_name = fvp_dict["activate_firmware"]
-                        status = 'False'
-
-                        (arg_status, fvp_s) = xcvrd_acti_fw_cmd_arg_tbl[asic_index].get(port)
-
-                        res_dir = dict(fvp_s)
-
-                        hitless = res_dir.get("hitless", None)
-                        if hitless is not None:
-                            hitless = False
-                        else:
-                            hitless = True
-
-                        if file_name == 'null':
-                            file_full_path = None
-                        else:
-                            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
-                            if not os.path.isfile(file_full_path):
-                                helper_logger.log_error("ERROR: cli cmd mux activate firmware file does not exist port {} file {}".format(port, file_name))
-                                set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
-                                break
-
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port for cli cmd mux activate firmware port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd mux activate firmware port {}".format(port))
-                            # error scenario update table accordingly
-                            set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
-                            break
-
-
-                        with y_cable_port_locks[physical_port]:
-                            try:
-                                status = port_instance.activate_firmware(file_full_path, hitless)
-                                time.sleep(5)
-                            except Exception as e:
-                                status = -1
-                                helper_logger.log_warning("Failed to execute the activate_firmware API for port {} due to {}".format(physical_port,repr(e)))
-
-                        set_result_and_delete_port('status', status, xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd mux activate firmware port {}".format(port))
-                        set_result_and_delete_port('status', 'False', xcvrd_acti_fw_cmd_sts_tbl[asic_index], xcvrd_acti_fw_rsp_tbl[asic_index], port)
 
             while True:
                 (port, op, fvp) = xcvrd_roll_fw_cmd_tbl[asic_index].pop()
