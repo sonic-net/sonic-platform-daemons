@@ -1758,6 +1758,94 @@ def handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_sh
         helper_logger.log_error("Wrong param for cli cmd get_fec_eye_anlt port {}".format(port))
         set_result_and_delete_port('status', status, xcvrd_show_fec_cmd_sts_tbl[asic_index], xcvrd_show_fec_rsp_tbl[asic_index], port)
 
+def handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, xcvrd_roll_fw_cmd_sts_tbl, xcvrd_roll_fw_rsp_tbl, asic_index, port):
+
+        fvp_dict = dict(fvp)
+
+
+        if "rollback_firmware" in fvp_dict:
+            file_name = fvp_dict["rollback_firmware"]
+            status = 'False'
+
+            if file_name == 'null':
+                file_full_path = None
+            else:
+                file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
+                if not os.path.isfile(file_full_path):
+                    helper_logger.log_error("Error: cli cmd mux rollback firmware file does not exist port {} file {}".format(port, file_name))
+                    set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+                    return -1
+
+
+
+            physical_port = get_ycable_physical_port_from_logical_port(port)
+            if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+                # error scenario update table accordingly
+                helper_logger.log_warning("Error: Could not get physical port for cli cmd mux rollback firmware port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+                return -1
+
+            port_instance = get_ycable_port_instance_from_logical_port(port)
+            if port_instance is None or port_instance in port_mapping_error_values:
+                # error scenario update table accordingly
+                helper_logger.log_warning("Error: Could not get port instance for cli cmd mux rollback firmware port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+
+            with y_cable_port_locks[physical_port]:
+                try:
+                    status = port_instance.rollback_firmware(file_full_path)
+                except Exception as e:
+                    status = -1
+                    helper_logger.log_warning("Failed to execute the rollback_firmware API for port {} due to {}".format(physical_port,repr(e)))
+            set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+        else:
+            helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
+            set_result_and_delete_port('status', 'False', xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
+
+def handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, task_download_firmware_thread):
+
+        # This check might be redundant, to check, the presence of this Port in keys
+        # in logical_port_list but keep for now for coherency
+        # also skip checking in logical_port_list inside sfp_util
+
+        fvp_dict = dict(fvp)
+
+        if "download_firmware" in fvp_dict:
+
+            file_name = fvp_dict["download_firmware"]
+            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
+
+            status = -1
+
+            if not os.path.isfile(file_full_path):
+                helper_logger.log_error("Error: cli cmd download firmware file does not exist port {} file {}".format(port, file_name))
+                set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+                return -1
+
+            physical_port = get_ycable_physical_port_from_logical_port(port)
+            if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
+                # error scenario update table accordingly
+                helper_logger.log_error(
+                    "Error: Could not get physical port for cli cmd download firmware cli Y cable port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+                return -1
+
+            port_instance = get_ycable_port_instance_from_logical_port(port)
+            if port_instance is None or port_instance in port_mapping_error_values:
+                # error scenario update table accordingly
+                helper_logger.log_error(
+                    "Error: Could not get port instance for cli cmd download firmware Y cable port {}".format(port))
+                set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+                return -1
+
+            rc = {}
+            task_download_firmware_thread[physical_port] = threading.Thread(target=task_download_firmware_worker, args=(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl[asic_index], xcvrd_down_fw_cmd_sts_tbl[asic_index], rc,))
+            task_download_firmware_thread[physical_port].start()
+        else:
+            helper_logger.log_error(
+                "Error: Wrong input parameter get for cli cmd download firmware Y cable port {}".format(port))
+            set_result_and_delete_port('status', '-1', xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+
 def handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port):
     fvp_dict = dict(fvp)
     status = 'False'
@@ -2540,47 +2628,8 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-                    # This check might be redundant, to check, the presence of this Port in keys
-                    # in logical_port_list but keep for now for coherency
-                    # also skip checking in logical_port_list inside sfp_util
-
-                    fvp_dict = dict(fvp)
-
-                    if "download_firmware" in fvp_dict:
-
-                        file_name = fvp_dict["download_firmware"]
-                        file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
-
-                        status = -1
-
-                        if not os.path.isfile(file_full_path):
-                            helper_logger.log_error("Error: cli cmd download firmware file does not exist port {} file {}".format(port, file_name))
-                            set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
-                            break
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            # error scenario update table accordingly
-                            helper_logger.log_error(
-                                "Error: Could not get physical port for cli cmd download firmware cli Y cable port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_error(
-                                "Error: Could not get port instance for cli cmd download firmware Y cable port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
-                            break
-
-                        rc = {}
-                        self.task_download_firmware_thread[physical_port] = threading.Thread(target=task_download_firmware_worker, args=(port, physical_port, port_instance, file_full_path, xcvrd_down_fw_rsp_tbl[asic_index], xcvrd_down_fw_cmd_sts_tbl[asic_index], rc,))
-                        self.task_download_firmware_thread[physical_port].start()
-                    else:
-                        helper_logger.log_error(
-                            "Error: Wrong input parameter get for cli cmd download firmware Y cable port {}".format(port))
-                        set_result_and_delete_port('status', '-1', xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
+                    handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, task_download_firmware_thread)
+                    break
 
             while True:
                 (port, op, fvp) = xcvrd_show_fw_cmd_tbl[asic_index].pop()
@@ -2725,48 +2774,9 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
+                    handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, xcvrd_roll_fw_cmd_sts_tbl, xcvrd_roll_fw_rsp_tbl, asic_index, port)
+                    break
 
-                    fvp_dict = dict(fvp)
-
-
-                    if "rollback_firmware" in fvp_dict:
-                        file_name = fvp_dict["rollback_firmware"]
-                        status = 'False'
-
-                        if file_name == 'null':
-                            file_full_path = None
-                        else:
-                            file_full_path = '/usr/share/sonic/firmware/{}'.format(file_name)
-                            if not os.path.isfile(file_full_path):
-                                helper_logger.log_error("Error: cli cmd mux rollback firmware file does not exist port {} file {}".format(port, file_name))
-                                set_result_and_delete_port('status', status, xcvrd_down_fw_cmd_sts_tbl[asic_index], xcvrd_down_fw_rsp_tbl[asic_index], port)
-                                break
-
-
-
-                        physical_port = get_ycable_physical_port_from_logical_port(port)
-                        if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get physical port for cli cmd mux rollback firmware port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
-                            break
-
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            # error scenario update table accordingly
-                            helper_logger.log_warning("Error: Could not get port instance for cli cmd mux rollback firmware port {}".format(port))
-                            set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
-
-                        with y_cable_port_locks[physical_port]:
-                            try:
-                                status = port_instance.rollback_firmware(file_full_path)
-                            except Exception as e:
-                                status = -1
-                                helper_logger.log_warning("Failed to execute the rollback_firmware API for port {} due to {}".format(physical_port,repr(e)))
-                        set_result_and_delete_port('status', status, xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
-                    else:
-                        helper_logger.log_error("Wrong param for cli cmd mux rollback firmware port {}".format(port))
-                        set_result_and_delete_port('status', 'False', xcvrd_roll_fw_cmd_sts_tbl[asic_index], xcvrd_roll_fw_rsp_tbl[asic_index], port)
             while True:
                 (port, op, fvp) = xcvrd_config_prbs_cmd_tbl[asic_index].pop()
 
