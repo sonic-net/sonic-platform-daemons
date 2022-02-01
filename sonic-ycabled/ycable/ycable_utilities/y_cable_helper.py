@@ -858,11 +858,11 @@ def delete_ports_status_for_y_cable():
         # Get the asic to which this port belongs
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
-        if asic_index is None:
-            helper_logger.log_warning(
-                "Got invalid asic index for {}, ignored".format(logical_port_name))
-        
-        try:
+        if asic_index is not None:
+            
+            # Get the y table keys
+            y_cable_port_keys = y_cable_tbl_keys.get(asic_index, None)
+            
             if logical_port_name in y_cable_tbl_keys[asic_index]:
                 delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
                 delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
@@ -880,9 +880,9 @@ def delete_ports_status_for_y_cable():
                 else:
                     helper_logger.log_warning(
                         "Error: Retreived multiple ports for a Y cable port {} while deleting entries".format(logical_port_name))
-        except Exception as e:
-            helper_logger.log_error("Exception: {}".format(repr(e)))
-            return
+        else:
+            helper_logger.log_warning(
+                "Got invalid asic index for {}, ignored".format(logical_port_name))
 
 
 def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
