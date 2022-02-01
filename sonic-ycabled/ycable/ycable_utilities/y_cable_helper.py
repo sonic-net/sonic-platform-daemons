@@ -861,24 +861,28 @@ def delete_ports_status_for_y_cable():
         if asic_index is None:
             helper_logger.log_warning(
                 "Got invalid asic index for {}, ignored".format(logical_port_name))
+        
+        try:
+            if logical_port_name in y_cable_tbl_keys[asic_index]:
+                delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
+                delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
+                delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
+                # delete the y_cable port instance
+                physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
-        if logical_port_name in y_cable_tbl_keys[asic_index]:
-            delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
-            delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
-            delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
-            # delete the y_cable port instance
-            physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+                if len(physical_port_list) == 1:
 
-            if len(physical_port_list) == 1:
-
-                physical_port = physical_port_list[0]
-                if y_cable_port_instances.get(physical_port) is not None:
-                    y_cable_port_instances.pop(physical_port)
-                if y_cable_port_locks.get(physical_port) is not None:
-                    y_cable_port_locks.pop(physical_port)
-            else:
-                helper_logger.log_warning(
-                    "Error: Retreived multiple ports for a Y cable port {} while deleting entries".format(logical_port_name))
+                    physical_port = physical_port_list[0]
+                    if y_cable_port_instances.get(physical_port) is not None:
+                        y_cable_port_instances.pop(physical_port)
+                    if y_cable_port_locks.get(physical_port) is not None:
+                        y_cable_port_locks.pop(physical_port)
+                else:
+                    helper_logger.log_warning(
+                        "Error: Retreived multiple ports for a Y cable port {} while deleting entries".format(logical_port_name))
+        except Exception as e:
+            helper_logger.log_error("Exception: {}".format(repr(e)))
+            return
 
 
 def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
