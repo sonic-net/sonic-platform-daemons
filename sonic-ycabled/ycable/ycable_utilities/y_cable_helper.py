@@ -860,10 +860,10 @@ def delete_ports_status_for_y_cable():
             logical_port_name)
         if asic_index is not None:
             
-            # Get the y table keys
+            # Get the y cable port keys from the table
             y_cable_port_keys = y_cable_tbl_keys.get(asic_index, None)
             
-            if logical_port_name in y_cable_tbl_keys[asic_index]:
+            if logical_port_name in y_cable_port_keys:
                 delete_port_from_y_cable_table(logical_port_name, y_cable_tbl[asic_index])
                 delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
                 delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
