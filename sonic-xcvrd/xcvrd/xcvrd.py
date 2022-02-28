@@ -649,7 +649,7 @@ def get_media_capabilities_value(transceiver_info, key=[]):
                     if speed < 1000:
                         continue
                     spd_list.append("{}x{}G".format(int(8 / lanes), int(speed / 1000)))
-        elif type in ['QSFP', 'QSFP+', 'QSFP28', 'GBIC']:
+        elif type in ['QSFP', 'QSFP+', 'QSFP28']:
             if spd_max == 100000:
                 spd_list.append("1x100G")
                 spd_list.append("1x40G")
