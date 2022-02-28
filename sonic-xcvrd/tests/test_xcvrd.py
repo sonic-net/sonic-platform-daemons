@@ -233,6 +233,27 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         init_port_sfp_status_tbl(port_mapping, stop_event)
 
+    def test_get_media_capability(self):
+        xcvr_info_dict = {
+            0: {
+                'manufacturer': 'Amphenol',
+                'model': 'NDAAFF-0001',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '40GBASE-CR4', 'Extended Specification compliance': '100GBASE-CR4, 25GBASE-CR CA-25G-L or 50GBASE-CR2 with RS'}",
+                'type_abbrv_name': 'QSFP28',
+                'type': 'QSFP28 or later'
+            }
+        }
+
+        # Test a good 'specification_compliance' value
+        result = get_media_capabilities_value(xcvr_info_dict[0])
+        assert result.get('xcvr_capabilities') == 'AN,LT'
+        assert result.get('xcvr_speeds') == '1x100G,1x40G,2x50G,2x20G,4x25G,4x10G'
+
+        # Test a bad 'specification_compliance' value
+        xcvr_info_dict[0]['specification_compliance'] = 'N/A'
+        result = get_media_capabilities_value(xcvr_info_dict[0])
+        assert len(result) == 0
+
     def test_get_media_settings_key(self):
         xcvr_info_dict = {
             0: {

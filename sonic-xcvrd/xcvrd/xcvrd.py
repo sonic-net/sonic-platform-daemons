@@ -98,6 +98,51 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 # Helper functions =============================================================
 #
 
+# Get speed from interface name
+def get_speed_from_host_ifname(ifname):
+    """
+    Get the speed from the host interface name
+
+    Args:
+        ifname: String, interface name
+
+    Returns:
+        Integer, the port speed if success otherwise 0
+    """
+    # see HOST_ELECTRICAL_INTERFACE of sff8024.py
+    speed = 0
+    if '400G' in ifname:
+        speed = 400000
+    elif '200G' in ifname:
+        speed = 200000
+    elif '100G' in ifname or 'CAUI-4' in ifname:
+        speed = 100000
+    elif '50G' in ifname or 'LAUI-2' in ifname:
+        speed = 50000
+    elif '40G' in ifname or 'XLAUI' in ifname or 'XLPPI' in ifname:
+        speed = 40000
+    elif '25G' in ifname:
+        speed = 25000
+    elif '10G' in ifname or 'SFI' in ifname or 'XFI' in ifname:
+        speed = 10000
+    elif '1000BASE' in ifname:
+        speed = 1000
+    return speed
+
+# Get speed from transceiver_info
+def get_speed_from_transceiver_info(transceiver_info):
+    """
+    Get the speed from the transceiver_info
+
+    Args:
+        transceiver_info: dictionary, transceiver information
+
+    Returns:
+        Integer, the port speed if success otherwise 0
+    """
+    comp = transceiver_info.get('specification_compliance')
+    return get_speed_from_host_ifname(comp)
+
 # Get physical port name
 
 
@@ -566,6 +611,59 @@ def check_port_in_range(range_str, physical_port):
         return True
     return False
 
+def get_media_capabilities_value(transceiver_info, key=[]):
+    caps = {}
+    MEDIA_CAPABILITIES_KEY = 'MEDIA_CAPABILITIES'
+    if (g_dict is not None) and (MEDIA_CAPABILITIES_KEY in g_dict):
+        for p in g_dict[MEDIA_CAPABILITIES_KEY]:
+            for k in key:
+                if p != k:
+                    continue
+                caps = g_dict[MEDIA_CAPABILITIES_KEY][p]
+                break
+
+        if len(caps) > 0:
+            return caps
+
+    type = transceiver_info.get('type_abbrv_name')
+    if type is None:
+        type = transceiver_info.get('type').split()[0]
+    spec = transceiver_info.get('specification_compliance')
+    feat = []
+    if 'GBASE-CR' in spec:
+        feat.append('AN')
+        feat.append('LT')
+    if len(feat) > 0:
+        caps['xcvr_capabilities'] = ",".join(feat)
+
+    spd_list = []
+    spd_max = get_speed_from_transceiver_info(transceiver_info)
+    if (spd_max >= 1000) and ('AN' in feat):
+        if type in ['QSFP-DD', 'OSFP-8X']:
+            app_dict_str = transceiver_info.get('application_advertisement')
+            if app_dict_str not in [None, '', 'N/A', 'n/a']:
+                app_dict = ast.literal_eval(app_dict_str)
+                for k, v in app_dict.items():
+                    lanes = int(v.get('host_lane_count', '8'))
+                    speed = get_speed_from_host_ifname(v.get('host_electrical_interface_id'))
+                    if speed < 1000:
+                        continue
+                    spd_list.append("{}x{}G".format(int(8 / lanes), int(speed / 1000)))
+        elif type in ['QSFP', 'QSFP+', 'QSFP28', 'GBIC']:
+            if spd_max == 100000:
+                spd_list.append("1x100G")
+                spd_list.append("1x40G")
+                spd_list.append("2x50G")
+                spd_list.append("2x20G")
+                spd_list.append("4x25G")
+                spd_list.append("4x10G")
+            else:
+                spd_list.append("1x40G")
+                spd_list.append("2x20G")
+                spd_list.append("4x10G")
+    if len(spd_list) > 0:
+        caps['xcvr_speeds'] = ",".join(spd_list)
+    return caps
 
 def get_media_settings_value(physical_port, key):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
@@ -665,7 +763,7 @@ def get_media_settings_key(physical_port, transceiver_dict):
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
-    media_type = transceiver_dict[physical_port]['type_abbrv_name']
+    media_type = transceiver_dict[physical_port].get('type_abbrv_name', '')
 
     if len(media_type) != 0:
         media_key += media_type
@@ -758,8 +856,17 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                            ganged_member_num, ganged_port)
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict)
-        media_dict = get_media_settings_value(physical_port, key)
 
+        media_caps = get_media_capabilities_value(transceiver_dict[physical_port], key)
+        if len(media_caps) > 0:
+            fvs = swsscommon.FieldValuePairs(len(media_caps))
+            idx = 0
+            for k, v in media_caps.items():
+                fvs[idx] = (str(k), str(v))
+                idx += 1
+            app_port_tbl.set(port_name, fvs)
+
+        media_dict = get_media_settings_value(physical_port, key)
         if len(media_dict) == 0:
             helper_logger.log_error("Error in obtaining media setting for {}".format(logical_port_name))
             return
@@ -778,7 +885,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             index += 1
 
         app_port_tbl.set(port_name, fvs)
-
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
@@ -922,36 +1028,6 @@ class CmisManagerTask:
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
-    def get_interface_speed(self, ifname):
-        """
-        Get the port speed from the host interface name
-
-        Args:
-            ifname: String, interface name
-
-        Returns:
-            Integer, the port speed if success otherwise 0
-        """
-        # see HOST_ELECTRICAL_INTERFACE of sff8024.py
-        speed = 0
-        if '400G' in ifname:
-            speed = 400000
-        elif '200G' in ifname:
-            speed = 200000
-        elif '100G' in ifname or 'CAUI-4' in ifname:
-            speed = 100000
-        elif '50G' in ifname or 'LAUI-2' in ifname:
-            speed = 50000
-        elif '40G' in ifname or 'XLAUI' in ifname or 'XLPPI' in ifname:
-            speed = 40000
-        elif '25G' in ifname:
-            speed = 25000
-        elif '10G' in ifname or 'SFI' in ifname or 'XFI' in ifname:
-            speed = 10000
-        elif '1000BASE' in ifname:
-            speed = 1000
-        return speed
-
     def get_cmis_application_desired(self, api, channel, speed):
         """
         Get the CMIS application code that matches the specified host side configurations
@@ -983,7 +1059,7 @@ class CmisManagerTask:
             d = appl_dict[c]
             if d.get('host_lane_count') != host_lane_count:
                 continue
-            if self.get_interface_speed(d.get('host_electrical_interface_id')) != speed:
+            if get_speed_from_host_ifname(d.get('host_electrical_interface_id')) != speed:
                 continue
             appl_code = c
             break
