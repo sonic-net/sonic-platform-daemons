@@ -19,6 +19,7 @@ SYSLOG_IDENTIFIER = 'pcied_test'
 NOT_AVAILABLE = 'N/A'
 
 daemon_base.db_connect = mock.MagicMock()
+swsscommon.Table = mock.MagicMock()
 
 tests_path = os.path.dirname(os.path.abspath(__file__))
 
