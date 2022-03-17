@@ -10,7 +10,6 @@ if sys.version_info >= (3, 3):
 else:
     from mock import MagicMock, patch, mock_open
 
-from sonic_py_common import daemon_base, device_info
 from .mock_platform import MockPcieUtil
 
 tests_path = os.path.dirname(os.path.abspath(__file__))
