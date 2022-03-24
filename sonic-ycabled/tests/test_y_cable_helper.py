@@ -413,7 +413,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == 1)
+        assert(rc == (1, 1))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
@@ -429,7 +429,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == 2)
+        assert(rc == (2,2))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
@@ -445,7 +445,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == 2)
+        assert(rc == (2,1))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
@@ -461,7 +461,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == 1)
+        assert(rc == (1,2))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
@@ -477,7 +477,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == -1)
+        assert(rc == (-1,1))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=False))
@@ -493,7 +493,7 @@ class TestYCableScript(object):
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
 
-        assert(rc == -1)
+        assert(rc == (-1,1))
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
