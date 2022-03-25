@@ -546,6 +546,16 @@ class TestYCableScript(object):
 
         assert(rc == (-1, -1))
 
+    def test_get_mux_cable_info_without_presence(self):
+
+            rc = get_muxcable_info_without_presence()
+
+        assert(rc['tor_active'] == 'unknown')
+        assert(['mux_direction'] == 'unknown')
+        assert(['manual_switch_count'] == 'N/A')
+        assert(mux_info_dict['auto_switch_count'] == 'N/A')
+
+
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     def test_get_ycable_physical_port_from_logical_port(self):
