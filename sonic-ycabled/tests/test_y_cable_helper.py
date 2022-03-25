@@ -551,9 +551,9 @@ class TestYCableScript(object):
             rc = get_muxcable_info_without_presence()
 
         assert(rc['tor_active'] == 'unknown')
-        assert(['mux_direction'] == 'unknown')
-        assert(['manual_switch_count'] == 'N/A')
-        assert(mux_info_dict['auto_switch_count'] == 'N/A')
+        assert(rc['mux_direction'] == 'unknown')
+        assert(rc['manual_switch_count'] == 'N/A')
+        assert(rc['auto_switch_count'] == 'N/A')
 
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
