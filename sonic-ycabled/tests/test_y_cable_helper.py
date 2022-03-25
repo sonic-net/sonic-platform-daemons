@@ -548,7 +548,7 @@ class TestYCableScript(object):
 
     def test_get_mux_cable_info_without_presence(self):
 
-            rc = get_muxcable_info_without_presence()
+        rc = get_muxcable_info_without_presence()
 
         assert(rc['tor_active'] == 'unknown')
         assert(rc['mux_direction'] == 'unknown')
