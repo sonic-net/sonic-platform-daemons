@@ -492,7 +492,7 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
                 update_table_mux_status_for_statedb_port_tbl(
                     mux_config_tbl, "unknown", read_side, active_side, logical_port_name)
                 helper_logger.log_error(
-                    "Line 495 Error: Could not establish the active side for Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
+                    "Error: Could not establish the active side for Y cable port {} to perform read_y_cable update state db".format(logical_port_name))
                 return
 
             if read_side == active_side and (active_side == 1 or active_side == 2):
