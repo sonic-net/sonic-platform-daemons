@@ -2529,7 +2529,7 @@ class YCableTableUpdateTask(object):
                             new_status = 'unknown'
 
                         helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
-                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old state {} to new state {} thread {}".format(port, requested_status, old_status, new_status, threading.currentThread().getName()))
+                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old state {} to new state {} read_side  {} thread id {}".format(port, requested_status, old_status, new_status, read_side, threading.currentThread().getName()))
                         time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                         fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                   ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
