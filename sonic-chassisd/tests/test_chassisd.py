@@ -469,7 +469,6 @@ def test_signal_handler():
     daemon_chassisd.log_info.assert_called_with("Caught {} signal 'SIGINT' - exiting...".format(128 + test_signal))
     assert daemon_chassisd.log_warning.call_count == 0
     assert daemon_chassisd.stop.set.call_count == 1
-    assert exit_code == (128 + test_signal)
 
     # Reset
     daemon_chassisd.log_info.reset_mock()
@@ -483,7 +482,6 @@ def test_signal_handler():
     daemon_chassisd.log_info.assert_called_with("Caught {} signal 'SIGTERM' - exiting...".format(128 + test_signal))
     assert daemon_chassisd.log_warning.call_count == 0
     assert daemon_chassisd.stop.set.call_count == 1
-    assert exit_code == (128 + test_signal)
 
     # Reset
     daemon_chassisd.log_info.reset_mock()
