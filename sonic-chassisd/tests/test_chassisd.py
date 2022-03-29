@@ -443,7 +443,7 @@ def test_asic_presence():
     assert fvs == None
 
 def test_signal_handler():
-    global exit_code
+    exit_code = 0
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop.set = MagicMock()
     daemon_chassisd.log_info = MagicMock()
