@@ -26,9 +26,10 @@ from chassis_db_init import *
 def test_provision_db():
     chassis = MockChassis()
     log = MagicMock()
-    serial = "Serial No"
+    serial = "Service Tag"
     model = "Model A"
     revision = "Rev C"
+    serial_num = "Serial No"
 
     chassis_table = provision_db(chassis, log)
 
@@ -36,3 +37,4 @@ def test_provision_db():
     assert serial == fvs[CHASSIS_INFO_SERIAL_FIELD]
     assert model == fvs[CHASSIS_INFO_MODEL_FIELD]
     assert revision == fvs[CHASSIS_INFO_REV_FIELD]
+    assert serial_num == fvs[CHASSIS_INFO_SERIAL_NUM_FIELD]
