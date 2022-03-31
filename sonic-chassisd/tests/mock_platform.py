@@ -94,7 +94,7 @@ class MockChassis:
         return True
 
     def get_serial(self):
-        return "Service tag"
+        return "Service Tag"
 
     def get_model(self):
         return "Model A"
