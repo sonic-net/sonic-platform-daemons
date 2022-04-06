@@ -324,6 +324,43 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                      ('is_replaceable', str(is_replaceable)),
                      ('dom_capability', port_info_dict['dom_capability']
                       if 'dom_capability' in port_info_dict else 'N/A'),
+                     ('active_firmware', port_info_dict['active_firmware']
+                      if 'active_firmware' in port_info_dict else 'N/A'),
+                     ('inactive_firmware', port_info_dict['inactive_firmware']
+                      if 'inactive_firmware' in port_info_dict else 'N/A'),
+                     ('hardware_rev', port_info_dict['hardware_rev']
+                      if 'hardware_rev' in port_info_dict else 'N/A'),
+                     ('media_interface_code', port_info_dict['media_interface_code']
+                      if 'media_interface_code' in port_info_dict else 'N/A'),
+                     ('host_electrical_interface', port_info_dict['host_electrical_interface']
+                      if 'host_electrical_interface' in port_info_dict else 'N/A'),
+                     ('host_lane_count', str(port_info_dict['host_lane_count'])
+                      if 'host_lane_count' in port_info_dict else 'N/A'),
+                     ('media_lane_count', str(port_info_dict['media_lane_count'])
+                      if 'media_lane_count' in port_info_dict else 'N/A'),
+                     ('host_lane_assignment_option', str(port_info_dict['host_lane_assignment_option'])
+                      if 'host_lane_assignment_option' in port_info_dict else 'N/A'),
+                     ('media_lane_assignment_option', str(port_info_dict['media_lane_assignment_option'])
+                      if 'media_lane_assignment_option' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane1', str(port_info_dict['active_apsel_hostlane1'])
+                      if 'active_apsel_hostlane1' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane2', str(port_info_dict['active_apsel_hostlane2'])
+                      if 'active_apsel_hostlane2' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane3', str(port_info_dict['active_apsel_hostlane3'])
+                      if 'active_apsel_hostlane3' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane4', str(port_info_dict['active_apsel_hostlane4'])
+                      if 'active_apsel_hostlane4' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane5', str(port_info_dict['active_apsel_hostlane5'])
+                      if 'active_apsel_hostlane5' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane6', str(port_info_dict['active_apsel_hostlane6'])
+                      if 'active_apsel_hostlane6' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane7', str(port_info_dict['active_apsel_hostlane7'])
+                      if 'active_apsel_hostlane7' in port_info_dict else 'N/A'),
+                     ('active_apsel_hostlane8', str(port_info_dict['active_apsel_hostlane8'])
+                      if 'active_apsel_hostlane8' in port_info_dict else 'N/A'),
+                     ('media_interface_technology', port_info_dict['media_interface_technology']
+                      if 'media_interface_technology' in port_info_dict else 'N/A'),
+                     ('cmis_rev', port_info_dict['cmis_rev'] if 'cmis_rev' in port_info_dict else 'N/A')
                      ])
                 table.set(port_name, fvs)
             else:
