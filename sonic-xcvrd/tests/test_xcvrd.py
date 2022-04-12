@@ -155,7 +155,11 @@ class TestXcvrdScript(object):
                                                                                 'active_apsel_hostlane7': 1,
                                                                                 'active_apsel_hostlane8': 1,
                                                                                 'media_interface_technology': '1',
-                                                                                'cmis_rev': '5.0'}))
+                                                                                'cmis_rev': '5.0',
+                                                                                'supported_max_tx_power': 1.0,
+                                                                                'supported_min_tx_power': -15.0,
+                                                                                'supported_max_laser_freq': 196100,
+                                                                                'supported_min_laser_freq': 191300}))
     def test_post_port_sfp_info_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
