@@ -1121,6 +1121,10 @@ class CmisManagerTask:
         return done
 
     def task_worker(self):
+        global xcvr_table_helper
+        del xcvr_table_helper
+        xcvr_table_helper = XcvrTableHelper()
+
         self.log_notice("Starting...")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
@@ -1442,6 +1446,10 @@ class SfpStateUpdateTask(object):
         return event
 
     def task_worker(self, stopping_event, sfp_error_event):
+        global xcvr_table_helper
+        del xcvr_table_helper
+        xcvr_table_helper = XcvrTableHelper()
+
         helper_logger.log_info("Start SFP monitoring loop")
 
         transceiver_dict = {}
