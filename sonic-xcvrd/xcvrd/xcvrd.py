@@ -964,8 +964,10 @@ class CmisManagerTask:
         self.task_process = None
         self.port_dict = {}
         self.port_mapping = copy.deepcopy(port_mapping)
+        self.xcvr_table_helper = XcvrTableHelper()
         self.isPortInitDone = False
         self.isPortConfigDone = False
+
 
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
@@ -997,9 +999,11 @@ class CmisManagerTask:
             return
 
         # Skip if the port/cage type is not a CMIS
-        ptype = _wrapper_get_sfp_type(pport)
-        if ptype not in self.CMIS_MODULE_TYPES:
-            return
+        # 'index' can be -1 if STATE_DB|PORT_TABLE
+        # TODO:Make sure doesnot breakt non-CMIS
+        #ptype = _wrapper_get_sfp_type(pport)
+        #if ptype not in self.CMIS_MODULE_TYPES:
+        #    return
 
         if lport not in self.port_dict:
             self.port_dict[lport] = {}
@@ -1011,6 +1015,10 @@ class CmisManagerTask:
                 self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
             if port_change_event.port_dict is not None and 'lanes' in port_change_event.port_dict:
                 self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
+            if port_change_event.port_dict is not None and 'host_tx_ready' in port_change_event.port_dict:
+                self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
+            if port_change_event.port_dict is not None and 'admin_status' in port_change_event.port_dict:
+                self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_INSERTED
             self.reset_cmis_init(lport, 0)
         else:
@@ -1213,13 +1221,59 @@ class CmisManagerTask:
 
         return done
 
+    # Returns 'True' if the Host Tx signal(from the host towards the QSFP-DD)
+    # is indicated to be good by Orchagent, 'False' otherwise
+    def is_host_tx_ready(self, lport):
+        host_tx_ready = 'False'
+        admin_status = 'down'
+
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+
+        found, port_info = cfg_port_tbl.get(lport)
+        if found:
+            # Check admin_status too ...just in case
+            admin_status = dict(port_info)['admin_status']
+            helper_logger.log_warning("$$${} admin_status = {}".format(lport, admin_status))
+
+        helper_logger.log_warning("$$${} host_tx_ready = {}".format(lport, host_tx_ready))
+        found, port_info = state_port_tbl.get(lport)
+        if found and 'host_tx_ready' in dict(port_info):
+            host_tx_ready = dict(port_info)['host_tx_ready']
+
+        return admin_status == 'up' and host_tx_ready == 'True'
+
+    def get_host_tx_status(self, lport):
+        host_tx_ready = 'False'
+
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+
+        found, port_info = state_port_tbl.get(lport)
+        if found and 'host_tx_ready' in dict(port_info):
+            host_tx_ready = dict(port_info)['host_tx_ready']
+        return host_tx_ready
+
+    def get_port_admin_status(self, lport):
+        admin_status = 'down'
+
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+
+        found, port_info = cfg_port_tbl.get(lport)
+        if found:
+            # Check admin_status too ...just in case
+            admin_status = dict(port_info)['admin_status']
+        return admin_status
+
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper()
 
         self.log_notice("Starting...")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
-        sel, asic_context = port_mapping.subscribe_port_update_event(['APPL_DB', 'STATE_DB'])
+        sel, asic_context = port_mapping.subscribe_port_update_event()
         while not self.task_stopping_event.is_set():
             # Handle port change event from main thread
             port_mapping.handle_port_update_event(sel,
@@ -1244,6 +1298,14 @@ class CmisManagerTask:
                              self.CMIS_STATE_READY,
                              self.CMIS_STATE_REMOVED]:
                     continue
+
+                # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
+                # was updated or this is the first run so reconcile the above two attributes
+                if 'host_tx_ready' not in self.port_dict[lport]:
+                   self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
+
+                if 'admin_status' not in self.port_dict[lport]:
+                   self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
@@ -1310,6 +1372,12 @@ class CmisManagerTask:
                 try:
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
+                        if self.port_dict[lport]['host_tx_ready'] != 'True' or \
+                                self.port_dict[lport]['admin_status'] != 'up':
+                           self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                           # Force DataPath re-init
+                           api.tx_disable_channel(host_lanes, True)
+
                         appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
                         if appl < 1:
                             self.log_error("{}: no suitable app for the port".format(lport))
@@ -1378,7 +1446,8 @@ class CmisManagerTask:
                         # NOTE: Some CMIS compliant modules may have 'auto-squelch' feature where
                         # the module won't take datapaths to Activated state if host tries to enable
                         # the datapaths while there is no good Tx signal from the host-side.
-                        if not is_host_tx_ready(lport):
+                        if self.port_dict[lport]['admin_status'] != 'up' or \
+                                self.port_dict[lport]['host_tx_ready'] != 'True':
                             self.log_notice("{} waiting for host tx ready...".format(lport))
                             continue
 
@@ -2143,8 +2212,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
 class XcvrTableHelper:
     def __init__(self):
-        self.int_tbl, self.dom_tbl, self.status_tbl, self.app_port_tbl = {}, {}, {}, {}
+        self.int_tbl, self.dom_tbl, self.status_tbl, self.app_port_tbl, \
+		self.cfg_port_tbl, self.state_port_tbl = {}, {}, {}, {}, {}, {}
         self.state_db = {}
+        self.cfg_db = {}
         self.namespaces = multi_asic.get_front_end_namespaces()
         for namespace in self.namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
@@ -2152,8 +2223,11 @@ class XcvrTableHelper:
             self.int_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
             self.dom_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_SENSOR_TABLE)
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             appl_db = daemon_base.db_connect("APPL_DB", namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+            self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
 
     def get_intf_tbl(self, asic_id):
         return self.int_tbl[asic_id]
@@ -2170,6 +2244,11 @@ class XcvrTableHelper:
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
 
+    def get_cfg_port_tbl(self, asic_id):
+        return self.cfg_port_tbl[asic_id]
+
+    def get_state_port_tbl(self, asic_id):
+        return self.state_port_tbl[asic_id]
 
 #
 # Main =========================================================================
