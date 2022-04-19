@@ -912,29 +912,6 @@ def is_fast_reboot_enabled():
 
     return fastboot_enabled
 
-# Returns 'True' if the Host Tx signal(from the host towards the QSFP-DD)
-# is indicated to be good by Orchagent, 'False' otherwise
-def is_host_tx_ready(lport):
-    host_tx_ready = 'False'
-    state_db_host =  daemon_base.db_connect("STATE_DB")
-    port_tbl = swsscommon.Table(state_db_host, 'PORT_TABLE')
-    keys = port_tbl.getKeys()
-
-    if lport in keys:
-       cmd = 'sonic-db-cli STATE_DB hget "PORT_TABLE|{}" host_tx_ready'.format(lport)
-       proc = subprocess.Popen(cmd, shell=True, universal_newlines=True, stdout=subprocess.PIPE)
-       (stdout, stderr) = proc.communicate()
-       host_tx_ready = stdout.rstrip('\n')
-       #helper_logger.log_warning("$$${} host_tx_ready = {}".format(lport, host_tx_ready))
-       # Check admin_status too ...just in case
-       cmd = 'sonic-db-cli APPL_DB hget "PORT_TABLE:{}" admin_status'.format(lport)
-       proc = subprocess.Popen(cmd, shell=True, universal_newlines=True, stdout=subprocess.PIPE)
-       (stdout, stderr) = proc.communicate()
-       admin_status = stdout.rstrip('\n')
-       #helper_logger.log_warning("$$${} admin_status = {}".format(lport, admin_status))
-
-    return admin_status == 'up' and host_tx_ready == 'True'
-
 #
 # Helper classes ===============================================================
 #
@@ -1220,29 +1197,6 @@ class CmisManagerTask:
                 break
 
         return done
-
-    # Returns 'True' if the Host Tx signal(from the host towards the QSFP-DD)
-    # is indicated to be good by Orchagent, 'False' otherwise
-    def is_host_tx_ready(self, lport):
-        host_tx_ready = 'False'
-        admin_status = 'down'
-
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
-        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
-
-        found, port_info = cfg_port_tbl.get(lport)
-        if found:
-            # Check admin_status too ...just in case
-            admin_status = dict(port_info)['admin_status']
-            helper_logger.log_warning("$$${} admin_status = {}".format(lport, admin_status))
-
-        helper_logger.log_warning("$$${} host_tx_ready = {}".format(lport, host_tx_ready))
-        found, port_info = state_port_tbl.get(lport)
-        if found and 'host_tx_ready' in dict(port_info):
-            host_tx_ready = dict(port_info)['host_tx_ready']
-
-        return admin_status == 'up' and host_tx_ready == 'True'
 
     def get_host_tx_status(self, lport):
         host_tx_ready = 'False'
