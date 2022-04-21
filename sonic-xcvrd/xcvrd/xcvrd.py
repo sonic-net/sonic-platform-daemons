@@ -1966,7 +1966,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Post all the current interface dom/sfp info to STATE_DB
         self.log_info("Post all port DOM/SFP info to DB")
-        retry_eeprom_set = post_port_sfp_dom_info_to_db(is_warm_start, port_mapping_data, self.stop_event)
+        retry_eeprom_set = post_port_sfp_dom_info_to_db(is_warm_start, port_mapping_data, self.xcvr_table_helper, self.stop_event)
 
         # Init port sfp status table
         self.log_info("Init port sfp status table")
