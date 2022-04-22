@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+
+"""
+    smart_nic
+    smart_nic interface/update daemon for SONiC
+"""
 import os
 import signal
 import sys
@@ -33,9 +39,8 @@ DEFAULT_NAMESPACE = ""
 LOOPBACK_INTERFACE_T0 = "10.212.64.1" 
 LOOPBACK_INTERFACE_LT0 = "10.212.64.2" 
 # rename and put in right place
-# port id 0 -> means T0
-# port id 1 -> means LT0
-# test
+# port id 0 -> maps to  T0
+# port id 1 -> maps to  LT0
 
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 

@@ -1,6 +1,4 @@
 from setuptools import setup, find_packages
-import os
-import os.path
 from distutils.command.build_py import build_py as _build_py
 import distutils.command
 import pkg_resources
@@ -79,11 +77,3 @@ setup(
     ],
     keywords='sonic SONiC TRANSCEIVER transceiver daemon XCVRD xcvrd',
 )
-
-"""for file in proto_files:
-    print("grpc generation result for '{}'".format(file))
-    args = "--proto_path=. --python_out=. --grpc_python_out=. {0}".format(file)
-    result = subprocess.call("python3 -m grpc_tools.protoc " + args, shell=True)
-    print("grpc generation result for '{0}': code {1}".format(file, result))
-    """
-
