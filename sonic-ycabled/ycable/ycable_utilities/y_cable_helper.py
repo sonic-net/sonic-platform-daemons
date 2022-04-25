@@ -645,6 +645,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 # fill in the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
+                                post_port_mux_static_info_to_db(
+                                    logical_port_name, static_tbl[asic_index])
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
