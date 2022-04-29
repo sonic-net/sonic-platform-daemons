@@ -469,6 +469,12 @@ def main():
         if key in ["PortConfigDone", "PortInitDone"]:
             break
 
+    # Close the unused socket to prevent mem-leak. Since Xcvrd opens socket to subscribe to
+    # APP_DB's PORT_TABLE events, if Xcvrd doesnot listen on the opened socket, then over a
+    # period of time, redis-DB Send-Q will accumulate events(Eg due to continous port flap) 
+    # that can grow up slowly over a period of time resulting in memory leak. 
+    sel.removeSelectable(sst)
+
     # Post all the current interface SFP info to STATE_DB
     logical_port_list = platform_sfputil.logical
     for logical_port_name in logical_port_list:
