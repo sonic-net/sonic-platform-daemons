@@ -389,6 +389,33 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     if time_diff < time_to_wait:
         time.sleep(time_to_wait - time_diff)
 
+def wait_for_all_ports_configured():
+    # Connect to APPL_DB and subscribe to PORT table notifications
+    appl_db = swsscommon.DBConnector(swsscommon.APPL_DB,
+                                     REDIS_HOSTNAME,
+                                     REDIS_PORT,
+                                     REDIS_TIMEOUT_MSECS)
+    sel = swsscommon.Select()
+    sst = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+    sel.addSelectable(sst)
+
+    # Make sure this daemon started after all port configured.
+    while XCVRD_MAIN_TASK_RUNNING_FLAG:
+        (state, c) = sel.select(SELECT_TIMEOUT_MSECS)
+        if state == swsscommon.Select.TIMEOUT:
+            continue
+        if state != swsscommon.Select.OBJECT:
+            log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+            continue
+
+        (key, op, fvp) = sst.pop()
+        if key in ["PortConfigDone", "PortInitDone"]:
+            break
+    # Close the unused socket to prevent mem-leak. Since Xcvrd opens socket to subscribe to
+    # APP_DB's PORT_TABLE events, if Xcvrd doesnot listen on the opened socket, then over a
+    # period of time, redis-DB Send-Q will accumulate events(Eg due to continous port flap)
+    # that can grow up slowly over a period of time resulting in memory leak.
+    sel.removeSelectable(sst)
 
 # Timer thread wrapper class to update dom info to DB periodically
 class dom_info_update_task:
@@ -446,34 +473,8 @@ def main():
     int_tbl = swsscommon.Table(state_db, "TRANSCEIVER_INFO")
     dom_tbl = swsscommon.Table(state_db, "TRANSCEIVER_DOM_SENSOR")
 
-    # Connect to APPL_DB abd subscribe to PORT table notifications
-    appl_db = swsscommon.DBConnector(swsscommon.APPL_DB,
-                                     REDIS_HOSTNAME,
-                                     REDIS_PORT,
-                                     REDIS_TIMEOUT_MSECS)
 
-    sel = swsscommon.Select()
-    sst = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-    sel.addSelectable(sst)
-
-    # Make sure this daemon started after all port configured.
-    while XCVRD_MAIN_TASK_RUNNING_FLAG:
-        (state, c) = sel.select(SELECT_TIMEOUT_MSECS)
-        if state == swsscommon.Select.TIMEOUT:
-            continue
-        if state != swsscommon.Select.OBJECT:
-            log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-            continue
-
-        (key, op, fvp) = sst.pop()
-        if key in ["PortConfigDone", "PortInitDone"]:
-            break
-
-    # Close the unused socket to prevent mem-leak. Since Xcvrd opens socket to subscribe to
-    # APP_DB's PORT_TABLE events, if Xcvrd doesnot listen on the opened socket, then over a
-    # period of time, redis-DB Send-Q will accumulate events(Eg due to continous port flap) 
-    # that can grow up slowly over a period of time resulting in memory leak. 
-    sel.removeSelectable(sst)
+    wait_for_all_ports_configured()
 
     # Post all the current interface SFP info to STATE_DB
     logical_port_list = platform_sfputil.logical
@@ -501,16 +502,16 @@ def main():
     # - Initial state: INIT, before received system ready or a normal event
     # - Final state: EXIT
     # - other state: NORMAL, after has received system-ready or a normal event
-    
+
     # events definition
     # - SYSTEM_NOT_READY
     # - SYSTEM_BECOME_READY
-    #   - 
+    #   -
     # - NORMAL_EVENT
     #   - sfp insertion/removal
     #   - timeout returned by sfputil.get_change_event with status = true
     # - SYSTEM_FAIL
-    
+
     # State transition:
     # 1. SYSTEM_NOT_READY
     #     - INIT
@@ -562,7 +563,7 @@ def main():
         time_start = time.time()
         status, port_dict = platform_sfputil.get_transceiver_change_event(timeout)
         event = mapping_event_from_change_event(status, port_dict)
-        
+
         if event == SYSTEM_NOT_READY:
             if state == STATE_INIT:
                 # system not ready, wait and retry
@@ -572,10 +573,10 @@ def main():
                 else:
                     retry = retry + 1
 
-                    # get_transceiver_change_event may return immediately, 
-                    # we want the retry expired in expected time period, 
-                    # So need to calc the time diff, 
-                    # if time diff less that the pre-defined waiting time, 
+                    # get_transceiver_change_event may return immediately,
+                    # we want the retry expired in expected time period,
+                    # So need to calc the time diff,
+                    # if time diff less that the pre-defined waiting time,
                     # use sleep() to complete the time.
                     waiting_time_compensation_with_sleep(time_start, RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000)
             elif state == STATE_NORMAL:
@@ -593,8 +594,8 @@ def main():
                 next_state = STATE_NORMAL
             else:
                 next_state = STATE_EXIT
-        
-        
+
+
         elif event == NORMAL_EVENT:
             if state == STATE_NORMAL or state == STATE_INIT:
                 if state == STATE_INIT:
@@ -639,14 +640,14 @@ def main():
         elif event == SYSTEM_FAIL:
             if state == STATE_INIT:
                 # To overcome a case that system is only temporarily not available,
-                # when get system fail event will wait and retry for a certain period,  
+                # when get system fail event will wait and retry for a certain period,
                 # if system recovered in this period xcvrd will transit to INIT state
                 # and continue run, if can not recover then exit.
                 if retry >= RETRY_TIMES_FOR_SYSTEM_FAIL:
                     log_error("System failed to recover in {} secs. Exiting...".format((RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS/1000)*RETRY_TIMES_FOR_SYSTEM_FAIL))
                     next_state = STATE_EXIT
                 else:
-                    retry = retry + 1                   
+                    retry = retry + 1
                     waiting_time_compensation_with_sleep(time_start, RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS/1000)
             elif state == STATE_NORMAL:
                 log_error("Got system_fail in normal state, treat as error, transition to INIT...")
@@ -657,7 +658,7 @@ def main():
                 next_state = STATE_EXIT
         else:
             log_warning("Got unknown event {} on state {}.".format(event, state))
-        
+
         if next_state != state:
             log_info("State transition from {} to {}".format(state, next_state))
             state = next_state
