@@ -99,7 +99,7 @@ jobs:
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python-swsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Pipeline.Workspace)/target/debs/
+      workingDirectory: $(Pipeline.Workspace)/target/debs/buster/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -114,7 +114,7 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/buster/
+      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
       displayName: 'Install Python dependencies'
 
     - script: |
