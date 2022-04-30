@@ -13,8 +13,18 @@ setup(
     scripts=[
         'scripts/pcied',
     ],
-    setup_requires= [
+    setup_requires=[
+        'pytest-runner',
         'wheel'
+    ],
+    install_requires=[
+        'enum34; python_version < "3.4"',
+        'sonic-py-common',
+    ],
+    tests_require=[
+        'mock>=2.0.0; python_version < "3.3"',
+        'pytest',
+        'pytest-cov',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -29,4 +39,5 @@ setup(
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC PCIe pcie PCIED pcied',
+    test_suite='setup.get_test_suite'
 )

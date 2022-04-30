@@ -16,13 +16,15 @@ setup(
     scripts=[
         'scripts/thermalctld',
     ],
-    setup_requires= [
+    setup_requires=[
         'pytest-runner',
         'wheel'
     ],
-    tests_require = [
+    tests_require=[
+        'mock>=2.0.0; python_version < "3.3"',
         'pytest',
-        'mock>=2.0.0'
+        'pytest-cov',
+        'sonic-platform-common'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -34,6 +36,7 @@ setup(
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC THERMALCONTROL thermalcontrol THERMALCTL thermalctl thermalctld',
