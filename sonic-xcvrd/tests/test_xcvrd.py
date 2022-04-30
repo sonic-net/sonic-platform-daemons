@@ -1,3 +1,6 @@
+from xcvrd.xcvrd_utilities.port_mapping import *
+from xcvrd.xcvrd_utilities.sfp_status_helper import *
+from xcvrd.xcvrd import *
 import copy
 import os
 import sys
@@ -21,19 +24,12 @@ swsscommon.SubscriberStateTable = MagicMock()
 swsscommon.SonicDBConfig = MagicMock()
 #swsscommon.Select = MagicMock()
 
-sys.modules['sonic_y_cable'] = MagicMock()
-sys.modules['sonic_y_cable.y_cable'] = MagicMock()
-
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "xcvrd")
 sys.path.insert(0, modules_path)
 
 os.environ["XCVRD_UNIT_TESTING"] = "1"
-from xcvrd.xcvrd import *
-from xcvrd.xcvrd_utilities.y_cable_helper import *
-from xcvrd.xcvrd_utilities.sfp_status_helper import *
-from xcvrd.xcvrd_utilities.port_mapping import *
 
 with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
     media_settings_dict = json.load(f)
@@ -43,8 +39,6 @@ global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
 class TestXcvrdScript(object):
-    def test_xcvrd_helper_class_run(self):
-        Y_cable_task = YCableTableUpdateTask(None)
 
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type')
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -142,7 +136,30 @@ class TestXcvrdScript(object):
                                                                                 'nominal_bit_rate': '0.7',
                                                                                 'application_advertisement': '0.7',
                                                                                 'is_replaceable': '0.7',
-                                                                                'dom_capability': '0.7', }))
+                                                                                'dom_capability': '0.7',
+                                                                                'active_firmware': '1.1',
+                                                                                'inactive_firmware': '1.0',
+                                                                                'hardware_rev': '1.0',
+                                                                                'media_interface_code': '0.1',
+                                                                                'host_electrical_interface': '0.1',
+                                                                                'host_lane_count': 8,
+                                                                                'media_lane_count': 1,
+                                                                                'host_lane_assignment_option': 1,
+                                                                                'media_lane_assignment_option': 1,
+                                                                                'active_apsel_hostlane1': 1,
+                                                                                'active_apsel_hostlane2': 1,
+                                                                                'active_apsel_hostlane3': 1,
+                                                                                'active_apsel_hostlane4': 1,
+                                                                                'active_apsel_hostlane5': 1,
+                                                                                'active_apsel_hostlane6': 1,
+                                                                                'active_apsel_hostlane7': 1,
+                                                                                'active_apsel_hostlane8': 1,
+                                                                                'media_interface_technology': '1',
+                                                                                'cmis_rev': '5.0',
+                                                                                'supported_max_tx_power': 1.0,
+                                                                                'supported_min_tx_power': -15.0,
+                                                                                'supported_max_laser_freq': 196100,
+                                                                                'supported_min_laser_freq': 191300}))
     def test_post_port_sfp_info_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
@@ -155,7 +172,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': '22.75',
                                                                                 'vendor_rev': '0.5',
                                                                                 'serial': '0.7',
@@ -225,161 +242,21 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
         stop_event = threading.Event()
-        post_port_sfp_dom_info_to_db(True, port_mapping, stop_event)
+        xcvr_table_helper = XcvrTableHelper()
+        post_port_sfp_dom_info_to_db(True, port_mapping, xcvr_table_helper, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_init_port_sfp_status_tbl(self):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
         stop_event = threading.Event()
-        init_port_sfp_status_tbl(port_mapping, stop_event)
-
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.get_muxcable_info', MagicMock(return_value={'tor_active': 'self',
-                                                                       'mux_direction': 'self',
-                                                                       'manual_switch_count': '7',
-                                                                       'auto_switch_count': '71',
-                                                                       'link_status_self': 'up',
-                                                                       'link_status_peer': 'up',
-                                                                       'link_status_nic': 'up',
-                                                                       'nic_lane1_active': 'True',
-                                                                       'nic_lane2_active': 'True',
-                                                                       'nic_lane3_active': 'True',
-                                                                       'nic_lane4_active': 'True',
-                                                                       'self_eye_height_lane1': '500',
-                                                                       'self_eye_height_lane2': '510',
-                                                                       'peer_eye_height_lane1': '520',
-                                                                       'peer_eye_height_lane2': '530',
-                                                                       'nic_eye_height_lane1': '742',
-                                                                       'nic_eye_height_lane2': '750',
-                                                                       'internal_temperature': '28',
-                                                                       'internal_voltage': '3.3',
-                                                                       'nic_temperature': '20',
-                                                                       'nic_voltage': '2.7',
-                                                                       'version_nic_active': '1.6MS',
-                                                                       'version_nic_inactive': '1.7MS',
-                                                                       'version_nic_next': '1.7MS',
-                                                                       'version_self_active': '1.6MS',
-                                                                       'version_self_inactive': '1.7MS',
-                                                                       'version_self_next': '1.7MS',
-                                                                       'version_peer_active': '1.6MS',
-                                                                       'version_peer_inactive': '1.7MS',
-                                                                       'version_peer_next': '1.7MS'}))
-    def test_post_port_mux_info_to_db(self):
-        logical_port_name = "Ethernet0"
-        port_mapping = PortMapping()
-        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_INFO_TABLE)
-        rc = post_port_mux_info_to_db(logical_port_name, port_mapping, mux_tbl)
-        assert(rc != -1)
-
-
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.get_muxcable_static_info', MagicMock(return_value={'read_side': 'self',
-                                                                              'nic_lane1_precursor1': '1',
-                                                                              'nic_lane1_precursor2': '-7',
-                                                                              'nic_lane1_maincursor': '-1',
-                                                                              'nic_lane1_postcursor1': '11',
-                                                                              'nic_lane1_postcursor2': '11',
-                                                                              'nic_lane2_precursor1': '12',
-                                                                              'nic_lane2_precursor2': '7',
-                                                                              'nic_lane2_maincursor': '7',
-                                                                              'nic_lane2_postcursor1': '7',
-                                                                              'nic_lane2_postcursor2': '7',
-                                                                              'tor_self_lane1_precursor1': '17',
-                                                                              'tor_self_lane1_precursor2': '17',
-                                                                              'tor_self_lane1_maincursor': '17',
-                                                                              'tor_self_lane1_postcursor1': '17',
-                                                                              'tor_self_lane1_postcursor2': '17',
-                                                                              'tor_self_lane2_precursor1': '7',
-                                                                              'tor_self_lane2_precursor2': '7',
-                                                                              'tor_self_lane2_maincursor': '7',
-                                                                              'tor_self_lane2_postcursor1': '7',
-                                                                              'tor_self_lane2_postcursor2': '7',
-                                                                              'tor_peer_lane1_precursor1': '7',
-                                                                              'tor_peer_lane1_precursor2': '7',
-                                                                              'tor_peer_lane1_maincursor': '17',
-                                                                              'tor_peer_lane1_postcursor1': '7',
-                                                                              'tor_peer_lane1_postcursor2': '17',
-                                                                              'tor_peer_lane2_precursor1': '7',
-                                                                              'tor_peer_lane2_precursor2': '7',
-                                                                              'tor_peer_lane2_maincursor': '17',
-                                                                              'tor_peer_lane2_postcursor1': '7',
-                                                                              'tor_peer_lane2_postcursor2': '17'}))
-    def test_post_port_mux_static_info_to_db(self):
-        logical_port_name = "Ethernet0"
-        port_mapping = PortMapping()
-        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_STATIC_INFO_TABLE)
-        rc = post_port_mux_static_info_to_db(logical_port_name, port_mapping, mux_tbl)
-        assert(rc != -1)
-
-    def test_y_cable_helper_format_mapping_identifier1(self):
-        rc = format_mapping_identifier("ABC        ")
-        assert(rc == "abc")
-
-    def test_y_cable_wrapper_get_transceiver_info(self):
-        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
-            patched_util.get_transceiver_info_dict.return_value = {'manufacturer': 'Microsoft',
-                                                                              'model': 'model1'}
-
-            transceiver_dict = y_cable_wrapper_get_transceiver_info(1)
-            vendor = transceiver_dict.get('manufacturer')
-            model = transceiver_dict.get('model')
-
-        assert(vendor == "Microsoft")
-        assert(model == "model1")
-
-    def test_y_cable_wrapper_get_presence(self):
-        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
-            patched_util.get_presence.return_value = True
-
-            presence = y_cable_wrapper_get_presence(1)
-
-        assert(presence == True)
-
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    def test_get_ycable_physical_port_from_logical_port(self):
-        port_mapping = PortMapping()
-        instance = get_ycable_physical_port_from_logical_port("Ethernet0", port_mapping)
-
-        assert(instance == 0)
-
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
-    def test_get_ycable_port_instance_from_logical_port(self):
-
-        with patch('xcvrd.xcvrd_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
-            patched_util.get.return_value = 0
-            port_mapping = PortMapping()
-            instance = get_ycable_port_instance_from_logical_port("Ethernet0", port_mapping)
-
-        assert(instance == 0)
-
-    def test_set_show_firmware_fields(self):
-
-        mux_info_dict = {}
-        xcvrd_show_fw_res_tbl = Table("STATE_DB", "XCVRD_SHOW_FW_RES")
-        mux_info_dict['version_self_active'] = '0.8'
-        mux_info_dict['version_self_inactive'] = '0.7'
-        mux_info_dict['version_self_next'] = '0.7'
-        mux_info_dict['version_peer_active'] = '0.8'
-        mux_info_dict['version_peer_inactive'] = '0.7'
-        mux_info_dict['version_peer_next'] = '0.7'
-        mux_info_dict['version_nic_active'] = '0.8'
-        mux_info_dict['version_nic_inactive'] = '0.7'
-        mux_info_dict['version_nic_next'] = '0.7'
-        rc = set_show_firmware_fields("Ethernet0", mux_info_dict, xcvrd_show_fw_res_tbl)
-
-        assert(rc == 0)
+        xcvr_table_helper = XcvrTableHelper()
+        init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
     def test_get_media_settings_key(self):
         xcvr_info_dict = {
@@ -432,7 +309,6 @@ class TestXcvrdScript(object):
         port_mapping.handle_port_change_event(port_change_event)
         notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
 
-
     def test_detect_port_in_error_status(self):
         class MockTable:
             def get(self, key):
@@ -458,7 +334,8 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Select.select')
     def test_handle_port_config_change(self, mock_select, mock_sub_table):
         mock_selectable = MagicMock()
-        mock_selectable.pop = MagicMock(side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
 
@@ -467,15 +344,18 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
         logger = MagicMock()
-        handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_mapping.handle_port_change_event)
+        handle_port_config_change(sel, asic_context, stop_event, port_mapping,
+                                  logger, port_mapping.handle_port_change_event)
 
         assert port_mapping.logical_port_list.count('Ethernet0')
         assert port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert port_mapping.get_physical_to_logical(1) == ['Ethernet0']
         assert port_mapping.get_logical_to_physical('Ethernet0') == [1]
 
-        mock_selectable.pop = MagicMock(side_effect=[('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )), (None, None, None)])
-        handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_mapping.handle_port_change_event)
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )), (None, None, None)])
+        handle_port_config_change(sel, asic_context, stop_event, port_mapping,
+                                  logger, port_mapping.handle_port_change_event)
         assert not port_mapping.logical_port_list
         assert not port_mapping.logical_to_physical
         assert not port_mapping.physical_to_logical
@@ -484,8 +364,8 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Table')
     def test_get_port_mapping(self, mock_swsscommon_table):
         mock_table = MagicMock()
-        mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
-        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
+        mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0'])
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), (True, (('index', 3), ))])
         mock_swsscommon_table.return_value = mock_table
         port_mapping = get_port_mapping()
         assert port_mapping.logical_port_list.count('Ethernet0')
@@ -498,13 +378,18 @@ class TestXcvrdScript(object):
         assert port_mapping.get_physical_to_logical(2) == ['Ethernet4']
         assert port_mapping.get_logical_to_physical('Ethernet4') == [2]
 
-
+        assert port_mapping.logical_port_list.count('Ethernet-IB0') == 0
+        assert port_mapping.get_asic_id_for_logical_port('Ethernet-IB0') == None
+        assert port_mapping.get_physical_to_logical(3) == None
+        assert port_mapping.get_logical_to_physical('Ethernet-IB0') == None
+                                        
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
     def test_DaemonXcvrd_wait_for_port_config_done(self, mock_select, mock_sub_table):
         mock_selectable = MagicMock()
-        mock_selectable.pop = MagicMock(side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('PortConfigDone', None, None)])
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('PortConfigDone', None, None)])
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
@@ -684,10 +569,11 @@ class TestXcvrdScript(object):
         task.task_worker()
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
 
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_DomInfoUpdateTask_handle_port_change_event(self):
         port_mapping = PortMapping()
         task = DomInfoUpdateTask(port_mapping)
+        task.xcvr_table_helper = XcvrTableHelper()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         task.on_port_config_change(port_change_event)
         assert task.port_mapping.logical_port_list.count('Ethernet0')
@@ -707,11 +593,11 @@ class TestXcvrdScript(object):
     def test_DomInfoUpdateTask_task_run_stop(self):
         port_mapping = PortMapping()
         task = DomInfoUpdateTask(port_mapping)
-        task.task_run([False])
+        task.task_run()
         task.task_stop()
         assert not task.task_thread.is_alive()
 
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status')
     @patch('xcvrd.xcvrd.post_port_dom_info_to_db')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
@@ -720,15 +606,17 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Select.select')
     def test_DomInfoUpdateTask_task_worker(self, mock_select, mock_sub_table, mock_post_dom_th, mock_post_dom_info, mock_detect_error):
         mock_selectable = MagicMock()
-        mock_selectable.pop = MagicMock(side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
-        
+
         port_mapping = PortMapping()
         task = DomInfoUpdateTask(port_mapping)
+        task.xcvr_table_helper = XcvrTableHelper()
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
         mock_detect_error.return_value = True
-        task.task_worker([False])
+        task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
         assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert task.port_mapping.get_physical_to_logical(1) == ['Ethernet0']
@@ -737,13 +625,12 @@ class TestXcvrdScript(object):
         assert mock_post_dom_info.call_count == 0
         mock_detect_error.return_value = False
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
-        task.task_worker([False])
+        task.task_worker()
         assert mock_post_dom_th.call_count == 1
         assert mock_post_dom_info.call_count == 1
 
-
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=False))
-    @patch('xcvrd.xcvrd.xcvr_table_helper')
+    @patch('xcvrd.xcvrd.XcvrTableHelper')
     def test_SfpStateUpdateTask_handle_port_change_event(self, mock_table_helper):
         mock_table = MagicMock()
         mock_table.get = MagicMock(return_value=(False, None))
@@ -754,10 +641,11 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(port_mapping, retry_eeprom_set)
+        task.xcvr_table_helper = XcvrTableHelper()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(stopping_event, [False], port_change_event)
+            task.on_port_config_change(port_change_event)
             if task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
@@ -770,7 +658,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(stopping_event, [False], port_change_event)
+            task.on_port_config_change(port_change_event)
             if not task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
@@ -785,17 +673,24 @@ class TestXcvrdScript(object):
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(port_mapping, retry_eeprom_set)
         sfp_error_event = multiprocessing.Event()
-        task.task_run(sfp_error_event, [False])
+        task.task_run(sfp_error_event)
         assert wait_until(5, 1, task.task_process.is_alive)
         task.task_stop()
         assert wait_until(5, 1, lambda: task.task_process.is_alive() is False)
 
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
     def test_SfpStateUpdateTask_retry_eeprom_reading(self, mock_post_sfp_info):
+        mock_table = MagicMock()
+        mock_table.get = MagicMock(return_value=(False, None))
+
         port_mapping = PortMapping()
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(port_mapping, retry_eeprom_set)
+        task.xcvr_table_helper = XcvrTableHelper()
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=mock_table)
+        task.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=mock_table)
+        task.xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=mock_table)
         task.retry_eeprom_reading()
         assert mock_post_sfp_info.call_count == 0
 
@@ -833,7 +728,7 @@ class TestXcvrdScript(object):
         assert task._mapping_event_from_change_event(True, port_dict) == NORMAL_EVENT
 
     @patch('time.sleep', MagicMock())
-    @patch('xcvrd.xcvrd.xcvr_table_helper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_config_change', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_config_change', MagicMock())
@@ -850,13 +745,14 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(port_mapping, retry_eeprom_set)
+        task.xcvr_table_helper = XcvrTableHelper()
         stop_event = multiprocessing.Event()
         sfp_error_event = multiprocessing.Event()
-        mock_change_event.return_value = (True, {0:0}, {})
+        mock_change_event.return_value = (True, {0: 0}, {})
         mock_mapping_event.return_value = SYSTEM_NOT_READY
 
         # Test state machine: STATE_INIT + SYSTEM_NOT_READY event => STATE_INIT + SYSTEM_NOT_READY event ... => STATE_EXIT
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_os_kill.call_count == 1
         assert sfp_error_event.is_set()
 
@@ -864,7 +760,7 @@ class TestXcvrdScript(object):
         mock_os_kill.reset_mock()
         sfp_error_event.clear()
         # Test state machine: STATE_INIT + SYSTEM_FAIL event => STATE_INIT + SYSTEM_FAIL event ... => STATE_EXIT
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_os_kill.call_count == 1
         assert sfp_error_event.is_set()
 
@@ -872,29 +768,30 @@ class TestXcvrdScript(object):
         mock_os_kill.reset_mock()
         sfp_error_event.clear()
         # Test state machine: STATE_INIT + SYSTEM_BECOME_READY event => STATE_NORMAL + SYSTEM_NOT_READY event ... => STATE_EXIT
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_os_kill.call_count == 1
         assert not sfp_error_event.is_set()
 
-        mock_mapping_event.side_effect = [SYSTEM_BECOME_READY, SYSTEM_FAIL] + [SYSTEM_FAIL] * (RETRY_TIMES_FOR_SYSTEM_READY + 1)
+        mock_mapping_event.side_effect = [SYSTEM_BECOME_READY, SYSTEM_FAIL] + \
+            [SYSTEM_FAIL] * (RETRY_TIMES_FOR_SYSTEM_READY + 1)
         mock_os_kill.reset_mock()
         sfp_error_event.clear()
         # Test state machine: STATE_INIT + SYSTEM_BECOME_READY event => STATE_NORMAL + SYSTEM_FAIL event ... => STATE_INIT
         # + SYSTEM_FAIL event ... => STATE_EXIT
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_os_kill.call_count == 1
         assert sfp_error_event.is_set()
 
         task.port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
-        mock_change_event.return_value = (True, {1:SFP_STATUS_INSERTED}, {})
+        mock_change_event.return_value = (True, {1: SFP_STATUS_INSERTED}, {})
         mock_mapping_event.side_effect = None
         mock_mapping_event.return_value = NORMAL_EVENT
         mock_post_sfp_info.return_value = SFP_EEPROM_NOT_READY
         stop_event.is_set = MagicMock(side_effect=[False, True])
         # Test state machine: handle SFP insert event, but EEPROM read failure
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_updata_status.call_count == 1
-        assert mock_post_sfp_info.call_count == 2 # first call and retry call
+        assert mock_post_sfp_info.call_count == 2  # first call and retry call
         assert mock_post_dom_info.call_count == 0
         assert mock_post_dom_th.call_count == 0
         assert mock_update_media_setting.call_count == 0
@@ -906,7 +803,7 @@ class TestXcvrdScript(object):
         mock_updata_status.reset_mock()
         mock_post_sfp_info.reset_mock()
         # Test state machine: handle SFP insert event, and EEPROM read success
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_updata_status.call_count == 1
         assert mock_post_sfp_info.call_count == 1
         assert mock_post_dom_info.call_count == 1
@@ -914,24 +811,24 @@ class TestXcvrdScript(object):
         assert mock_update_media_setting.call_count == 1
 
         stop_event.is_set = MagicMock(side_effect=[False, True])
-        mock_change_event.return_value = (True, {1:SFP_STATUS_REMOVED}, {})
+        mock_change_event.return_value = (True, {1: SFP_STATUS_REMOVED}, {})
         mock_updata_status.reset_mock()
         # Test state machine: handle SFP remove event
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_updata_status.call_count == 1
         assert mock_del_dom.call_count == 1
 
         stop_event.is_set = MagicMock(side_effect=[False, True])
         error = int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING | SfpBase.SFP_ERROR_BIT_POWER_BUDGET_EXCEEDED
-        mock_change_event.return_value = (True, {1:error}, {})
+        mock_change_event.return_value = (True, {1: error}, {})
         mock_updata_status.reset_mock()
         mock_del_dom.reset_mock()
         # Test state machine: handle SFP error event
-        task.task_worker(stop_event, sfp_error_event, [False])
+        task.task_worker(stop_event, sfp_error_event)
         assert mock_updata_status.call_count == 1
         assert mock_del_dom.call_count == 1
 
-    @patch('xcvrd.xcvrd.xcvr_table_helper')
+    @patch('xcvrd.xcvrd.XcvrTableHelper')
     @patch('xcvrd.xcvrd._wrapper_get_presence')
     @patch('xcvrd.xcvrd.notify_media_setting')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
@@ -958,6 +855,10 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(port_mapping, retry_eeprom_set)
+        task.xcvr_table_helper = XcvrTableHelper()
+        task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
+        task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
+        task.xcvr_table_helper.get_dom_tbl = mock_table_helper.get_dom_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         task.port_mapping.handle_port_change_event(port_change_event)
         # SFP information is in the DB, copy the SFP information for the newly added logical port
@@ -1012,12 +913,13 @@ class TestXcvrdScript(object):
         # SFP information is not in DB, and SFP is not present, and SFP is in error status
         task.on_add_logical_port(port_change_event)
         assert mock_updata_status.call_count == 1
-        mock_updata_status.assert_called_with('Ethernet0', status_tbl, task.sfp_error_dict[1][0], 'Blocking EEPROM from being read|Power budget exceeded')
+        mock_updata_status.assert_called_with(
+            'Ethernet0', status_tbl, task.sfp_error_dict[1][0], 'Blocking EEPROM from being read|Power budget exceeded')
 
     def test_sfp_insert_events(self):
         from xcvrd.xcvrd import _wrapper_soak_sfp_insert_event
         sfp_insert_events = {}
-        insert = port_dict = {1:'1', 2:'1', 3:'1', 4:'1', 5:'1'}
+        insert = port_dict = {1: '1', 2: '1', 3: '1', 4: '1', 5: '1'}
         start = time.time()
         while True:
             _wrapper_soak_sfp_insert_event(sfp_insert_events, insert)
@@ -1026,13 +928,12 @@ class TestXcvrdScript(object):
             assert not bool(insert)
         assert insert == port_dict
 
-
     def test_sfp_remove_events(self):
         from xcvrd.xcvrd import _wrapper_soak_sfp_insert_event
         sfp_insert_events = {}
-        insert = {1:'1', 2:'1', 3:'1', 4:'1', 5:'1'}
-        removal = {1:'0', 2:'0', 3:'0', 4:'0', 5:'0'}
-        port_dict = {1:'0', 2:'0', 3:'0', 4:'0', 5:'0'}
+        insert = {1: '1', 2: '1', 3: '1', 4: '1', 5: '1'}
+        removal = {1: '0', 2: '0', 3: '0', 4: '0', 5: '0'}
+        port_dict = {1: '0', 2: '0', 3: '0', 4: '0', 5: '0'}
         for x in range(5):
             _wrapper_soak_sfp_insert_event(sfp_insert_events, insert)
             time.sleep(1)
@@ -1054,7 +955,7 @@ class TestXcvrdScript(object):
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_presence = MagicMock(return_value=True)
-        
+
         assert _wrapper_get_presence(1)
 
         mock_sfputil.get_presence = MagicMock(return_value=False)
@@ -1088,7 +989,7 @@ class TestXcvrdScript(object):
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_transceiver_info_dict = MagicMock(return_value=True)
-        
+
         assert _wrapper_get_transceiver_info(1)
 
         mock_sfputil.get_transceiver_info_dict = MagicMock(return_value=False)
@@ -1108,7 +1009,7 @@ class TestXcvrdScript(object):
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_transceiver_dom_info_dict = MagicMock(return_value=True)
-        
+
         assert _wrapper_get_transceiver_dom_info(1)
 
         mock_sfputil.get_transceiver_dom_info_dict = MagicMock(return_value=False)
@@ -1128,7 +1029,7 @@ class TestXcvrdScript(object):
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_transceiver_dom_threshold_info_dict = MagicMock(return_value=True)
-        
+
         assert _wrapper_get_transceiver_dom_threshold_info(1)
 
         mock_sfputil.get_transceiver_dom_threshold_info_dict = MagicMock(return_value=False)
@@ -1200,7 +1101,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())    
+    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
@@ -1208,7 +1109,6 @@ class TestXcvrdScript(object):
         xcvrd.deinit()
         # TODO: fow now we only simply call xcvrd.init/deinit without any further check, it only makes sure that
         # xcvrd.init/deinit will not raise unexpected exception. In future, probably more check will be added
-
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):

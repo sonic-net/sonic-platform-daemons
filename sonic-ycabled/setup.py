@@ -1,28 +1,30 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
-    name='sonic-pcied',
+    name='sonic-ycabled',
     version='1.0',
-    description='PCIe check daemon for SONiC',
+    description='Y-cable configuration daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Sujin Kang',
-    maintainer_email='sujkang@microsoft.com',
-    scripts=[
-        'scripts/pcied',
-    ],
-    setup_requires=[
-        'pytest-runner',
-        'wheel'
-    ],
+    maintainer='Vaibhav Dahiya',
+    maintainer_email='vdahiya@microsoft.com',
+    packages=find_packages(),
+    entry_points={
+        'console_scripts': [
+            'ycabled = ycable.ycable:main',
+        ]
+    },
     install_requires=[
+        # NOTE: This package also requires swsscommon, but it is not currently installed as a wheel
         'enum34; python_version < "3.4"',
         'sonic-py-common',
     ],
+    setup_requires=[
+        'wheel'
+    ],
     tests_require=[
-        'mock>=2.0.0; python_version < "3.3"',
         'pytest',
         'pytest-cov',
     ],
@@ -35,9 +37,8 @@ setup(
         'License :: OSI Approved :: Apache Software License',
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
-        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC PCIe pcie PCIED pcied',
-    test_suite='setup.get_test_suite'
+    keywords='sonic SONiC TRANSCEIVER transceiver daemon YCABLE ycable',
 )
