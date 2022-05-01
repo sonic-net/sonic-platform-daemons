@@ -2578,10 +2578,11 @@ class YCableTableUpdateTask(object):
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
                             update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
+
             while True:
                 (port, op_m, fvp_m) = status_app_tbl[asic_index].pop()
 
-                if not port_m:
+                if not port:
                     break
                 helper_logger.log_debug("Y_CABLE_DEBUG: received a mux_cable_table app update for port status {} {}".format(port, threading.currentThread().getName()))
 
