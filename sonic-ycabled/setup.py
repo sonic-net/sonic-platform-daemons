@@ -31,7 +31,7 @@ class BuildPyCommand (_build_py, object):
 setup(
     name='sonic-ycabled',
     version='1.0',
-    description='Y-cable and smart nic configuration daemon for SONiC'
+    description='Y-cable and smart nic configuration daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
