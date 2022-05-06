@@ -1331,6 +1331,8 @@ class CmisManagerTask:
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
                            api.tx_disable_channel(host_lanes, True)
+                           self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                           continue
 
                         appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
                         if appl < 1:
