@@ -183,7 +183,7 @@ def check_mux_cable_port_type(logical_port_name, port_tbl, asic_index):
         if "state" in mux_table_dict and "soc_ipv4" in mux_table_dict:
 
             val = mux_table_dict.get("state", None)
-            soc_ipv4 = mux_table_dict.get("soc_ipv4", None)
+            #soc_ipv4 = mux_table_dict.get("soc_ipv4", None)
             cable_type = mux_table_dict.get("cable_type", None)
             if val in ["active", "standby", "auto", "manual"] and cable_type == "active-active":
                 return True
@@ -529,10 +529,10 @@ def hook_grpc_nic_simulated(target, soc_ip):
         target (function): The function collecting transceiver info.
     """
 
-    NIC_SIMULATOR_CONFIG_FILE = "/etc/sonic/nic_simulator.json"
+    #NIC_SIMULATOR_CONFIG_FILE = "/etc/sonic/nic_simulator.json"
 
     def wrapper(*args, **kwargs):
-        res = target(*args, **kwargs)
+        #res = target(*args, **kwargs)
         if os.path.exists(MUX_SIMULATOR_CONFIG_FILE):
             """setup channels for all downlinks
             NIC simulator will run on same port number
@@ -680,7 +680,7 @@ def check_identfier_presence_and_setup_channel(logical_port_name, port_tbl, hw_m
                 if len(physical_port_list) == 1:
 
                     physical_port = physical_port_list[0]
-                    if True:
+                    if y_cable_wrapper_get_presence(physical_port):
                         channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4)
                         if channel is not None:
                             grpc_port_channels[logical_port_name] = channel
@@ -772,7 +772,7 @@ def try_grpc(callback, *args, **kwargs):
         if resp is None:
             return_val = False
     except grpc.RpcError as e:
-        err_msg = 'Grpc error code '+str(e.code())
+        #err_msg = 'Grpc error code '+str(e.code())
         if e.code() == grpc.StatusCode.CANCELLED:
             helper_logger.log_notice("rpc cancelled for port= {}".format("0"))
         elif e.code() == grpc.StatusCode.UNAVAILABLE:
