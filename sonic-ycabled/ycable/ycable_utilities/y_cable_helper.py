@@ -234,6 +234,292 @@ def set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_rsp_tbl):
     return 0
 
 
+
+def check_mux_cable_port_type(logical_port_name, port_tbl, asic_index):
+
+    (status, fvs) = port_tbl[asic_index].get(logical_port_name)
+    if status is False:
+        helper_logger.log_warning(
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
+        return (False, None)
+
+    else:
+        # Convert list of tuples to a dictionary
+        mux_table_dict = dict(fvs)
+        if "state" in mux_table_dict:
+
+            val = mux_table_dict.get("state", None)
+            #soc_ipv4 = mux_table_dict.get("soc_ipv4", None)
+            cable_type = mux_table_dict.get("cable_type", None)
+            if val in ["active", "standby", "auto", "manual"] and cable_type == "active-standby":
+                return (True , "standby")
+            elif val in ["active", "standby", "auto", "manual"] and cable_type == "active-active":
+                return (False, "active")
+            else:
+                return (False, None)
+        else:
+            return (False, None)
+
+
+def hook_grpc_nic_simulated(target, soc_ip):
+    """
+    Args:
+        target (function): The function collecting transceiver info.
+    """
+
+    #NIC_SIMULATOR_CONFIG_FILE = "/etc/sonic/nic_simulator.json"
+
+    def wrapper(*args, **kwargs):
+        #res = target(*args, **kwargs)
+        if os.path.exists(MUX_SIMULATOR_CONFIG_FILE):
+            """setup channels for all downlinks
+            NIC simulator will run on same port number
+            Todo put a task for secure channel"""
+            channel = grpc.insecure_channel("server_ip:GRPC_PORT".format(host))
+            stub = None
+            #metadata_interceptor = MetadataInterceptor(("grpc_server", soc_ipv4))
+            #intercept_channel = grpc.intercept_channel(channel, metadata_interceptor)
+            #stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(intercept_channel)
+            # TODO hook the interceptor appropriately
+        return channel, stub
+
+    wrapper.__name__ = target.__name__
+
+    return wrapper
+
+
+def retry_setup_grpc_channel_for_port(port, asic_index):
+
+    config_db, port_tbl = {}, {}
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
+
+    (status, fvs) = port_tbl[asic_index].get(port)
+    if status is False:
+        helper_logger.log_warning(
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(port, port_tbl[asic_index].getTableName()))
+        return
+
+    else:
+        # Convert list of tuples to a dictionary
+        mux_table_dict = dict(fvs)
+        if "state" in mux_table_dict and "soc_ipv4" in mux_table_dict:
+            soc_ipv4 = mux_table_dict.get("soc_ipv4", None)
+
+            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4)
+            if channel is None or stub is None:
+                helper_logger.log_notice(
+                    "stub is None, while reattempt setting up channels did not work{}".format(port))
+            return
+        else:
+            grpc_port_channels[port] = channel
+            grpc_port_stubs[port] = stub
+
+def setup_grpc_channel_for_port(port, soc_ip):
+    "TODO make these configurable like RESTAPI"
+    """
+    root_cert = open('/etc/sonic/credentials/ca-chain-bundle.cert.pem', 'rb').read()
+    key = open('/etc/sonic/credentials/client.key.pem', 'rb').read()
+    cert_chain = open('/etc/sonic/credentials/client.cert.pem', 'rb').read()
+
+    """
+    """
+    Dummy values for lab for now
+    TODO remove these once done
+    root_cert = open('/home/admin/proto_out1/proto_out/ca-chain-bundle.cert.pem', 'rb').read()
+    key = open('/home/admin/proto_out1/proto_out/client.key.pem', 'rb').read()
+    cert_chain = open('/home/admin/proto_out1/proto_out/client.cert.pem', 'rb').read()
+    """
+    """credential = grpc.ssl_channel_credentials(
+            root_certificates=root_cert,
+            private_key=key,
+            certificate_chain=cert_chain)
+    """
+    helper_logger.log_debug("setting up gRPC channels for RPC's")
+    channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=[('grpc.keepalive_timeout_ms', 1000)])
+    stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
+
+    channel_ready = grpc.channel_ready_future(channel)
+
+    try:
+        channel_ready.result(timeout=0.5)
+    except grpc.FutureTimeoutError:
+        channel = None
+        stub = None
+        return channel, stub
+
+    if stub is not None:
+        helper_logger.log_warning("channel was setup gRPC ip {} port {}".format(soc_ip, port))
+    else:
+        helper_logger.log_warning("channel was not setup gRPC ip {} port {} no gRPC server running".format(soc_ip, port))
+
+    return channel, stub
+
+
+def process_loopback_interface_and_get_read_side(loopback_keys):
+
+    asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
+
+    for key in loopback_keys[asic_index]:
+        helper_logger.log_debug("key = {} ".format(key))
+        if key.startswith("Loopback3|") and "/" in key and "::" not in key:
+            helper_logger.log_debug("Loopback split  {} ".format(key))
+            temp_list = key.split('|')
+            addr = temp_list[1].split('/')
+            helper_logger.log_debug("Loopback split 2  {} ".format(addr))
+            if addr[0] == LOOPBACK_INTERFACE_LT0:
+                return 0
+            elif addr[0] == LOOPBACK_INTERFACE_T0:
+                return 1
+            else:
+                # Loopback3 should be present, if not present log a warning
+                helper_logger.log_warning("Could not get any address associated with Loopback3")
+                return -1
+
+    return -1
+
+
+def check_identfier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side):
+
+    global grpc_port_stubs
+    global grpc_port_channels
+
+    (status, fvs) = port_tbl[asic_index].get(logical_port_name)
+    if status is False:
+        helper_logger.log_warning(
+            "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
+        return
+
+    else:
+        # Convert list of tuples to a dictionary
+        mux_table_dict = dict(fvs)
+        if "state" in mux_table_dict and "soc_ipv4" in mux_table_dict:
+
+            val = mux_table_dict.get("state", None)
+            soc_ipv4 = mux_table_dict.get("soc_ipv4", None)
+            cable_type = mux_table_dict.get("cable_type", None)
+
+            if val in ["active", "standby", "auto", "manual"] and cable_type == "active-active":
+
+                # import the module and load the port instance
+                physical_port_list = logical_port_name_to_physical_port_list(
+                    logical_port_name)
+
+                if len(physical_port_list) == 1:
+
+                    physical_port = physical_port_list[0]
+                    if y_cable_wrapper_get_presence(physical_port):
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4)
+                        if channel is not None:
+                            grpc_port_channels[logical_port_name] = channel
+                            helper_logger.log_notice(
+                                "channel is None, first time setting up channels did not work {}".format(logical_port_name))
+                        if stub is not None:
+                            grpc_port_stubs[logical_port_name] = stub
+                            helper_logger.log_notice(
+                                "stub is None, first time setting up channels did not work {}".format(logical_port_name))
+                        fvs_updated = swsscommon.FieldValuePairs([('read_side', str(read_side))])
+                        hw_mux_cable_tbl[asic_index].set(logical_port_name, fvs_updated)
+                        hw_mux_cable_tbl_peer[asic_index].set(logical_port_name, fvs_updated)
+                    else:
+                        helper_logger.log_warning(
+                            "DAC cable not present while Channel setup Port {} for gRPC channel initiation".format(logical_port_name))
+
+                else:
+                    helper_logger.log_warning(
+                        "DAC cable logical to physical port mapping returned more than one physical ports while Channel setup Port {}".format(logical_port_name))
+            else:
+                helper_logger.log_warning(
+                    "DAC cable logical to physical port mapping returned more than one physical ports while Channel setup Port {}".format(logical_port_name))
+
+
+def setup_grpc_channels(stop_event):
+
+    helper_logger.log_debug("setting up channels for active-active")
+    config_db, state_db, port_tbl, loopback_tbl, port_table_keys = {}, {}, {}, {}, {}
+    loopback_keys = {}
+    hw_mux_cable_tbl = {}
+    hw_mux_cable_tbl_peer = {}
+
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
+        loopback_tbl[asic_id] = swsscommon.Table(
+            config_db[asic_id], "LOOPBACK_INTERFACE")
+        loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
+        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
+        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        hw_mux_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
+            state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+
+    read_side = process_loopback_interface_and_get_read_side(loopback_keys)
+
+    helper_logger.log_debug("while setting up grpc channels read side = {}".format(read_side))
+
+    # Init PORT_STATUS table if ports are on Y cable
+    logical_port_list = platform_sfputil.logical
+    for logical_port_name in logical_port_list:
+        if stop_event.is_set():
+            break
+
+        # Get the asic to which this port belongs
+        asic_index = platform_sfputil.get_asic_id_for_logical_port(
+            logical_port_name)
+        if asic_index is None:
+            helper_logger.log_warning(
+                "Got invalid asic index for {}, ignored".format(logical_port_name))
+            continue
+
+        if logical_port_name in port_table_keys[asic_index]:
+            check_identfier_presence_and_setup_channel(
+                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side)
+        else:
+            # This port does not exist in Port table of config but is present inside
+            # logical_ports after loading the port_mappings from port_config_file
+            # This should not happen
+            helper_logger.log_warning(
+                "Could not retreive port inside config_db PORT table {} for gRPC channel initiation".format(logical_port_name))
+
+
+def try_grpc(callback, *args, **kwargs):
+    """
+    Handy function to invoke the callback and catch NotImplementedError
+    :param callback: Callback to be invoked
+    :param args: Arguments to be passed to callback
+    :param kwargs: Default return value if exception occur
+    :return: Default return value if exception occur else return value of the callback
+    """
+
+    return_val = True
+    try:
+        resp = callback(*args)
+        if resp is None:
+            return_val = False
+    except grpc.RpcError as e:
+        #err_msg = 'Grpc error code '+str(e.code())
+        if e.code() == grpc.StatusCode.CANCELLED:
+            helper_logger.log_notice("rpc cancelled for port= {}".format(str(e.code())))
+        elif e.code() == grpc.StatusCode.UNAVAILABLE:
+            helper_logger.log_notice("rpc unavailable for port= {}".format(str(e.code())))
+        elif e.code() == grpc.StatusCode.INVALID_ARGUMENT:
+            helper_logger.log_notice("rpc unavailable for port= {}".format(str(e.code())))
+        resp = None
+        return_val = False
+
+    return return_val, resp
+
+
+def close(channel):
+    "Close the channel"
+    channel.close()
+
 def set_result_and_delete_port(result, actual_result, command_table, response_table, port):
     fvs = swsscommon.FieldValuePairs([(result, str(actual_result))])
     response_table.set(port, fvs)
@@ -2418,6 +2704,203 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_dir
     else:
         helper_logger.log_warning("Error: Wrong input param for cli command show mux hwmode muxdirection logical port {}".format(port))
         set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
+
+def parse_grpc_response_hw_mux_cable_change_state(ret, response, portid, port):
+    state = 'unknown'
+    "return a list of states"
+    if ret is True:
+        if response.portid[0] == portid:
+            if response.state[0] == True:
+                state = 'active'
+            # No other values expected
+            elif response.state[0] == False:
+                state = 'standby'
+            else:
+                helper_logger.log_warning("recieved an error state while parsing response hw mux no response state for port".format(port))
+        else:
+            helper_logger.log_warning("recieved an error portid while parsing response hw mux no portid for port".format(port))
+
+    else:
+        helper_logger.log_warning("recieved an error state while parsing response hw mux for port".format(port))
+        state = 'unknown'
+
+    return state
+
+
+def parse_grpc_response_forwarding_state(ret, response, read_side):
+    self_state = peer_state = 'unknown'
+
+    if ret is True and response is not None:
+        if int(read_side) == 0:
+            if response.state[0] == True:
+                self_state = 'active'
+            elif response.state[0] == False:
+                self_state = 'standby'
+            # No other values expected, should we raise exception/msg
+            # TODO handle other responses
+            if response.state[1] == True:
+                peer_state = 'active'
+            elif response.state[1] == False:
+                peer_state = 'standby'
+
+        elif int(read_side) == 1:
+            if response.state[1] == True:
+                self_state = 'active'
+            elif response.state[0] == False:
+                self_state = 'standby'
+            if response.state[0] == True:
+                peer_state = 'active'
+            elif response.state[0] == False:
+                peer_state = 'standby'
+    else:
+        self_state = 'unknown'
+        peer_state = 'unknown'
+
+    return (self_state, peer_state)
+
+
+def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, appl_db):
+
+    helper_logger.log_debug("recevied the notification fwd state")
+    fvp_dict = dict(fvp_m)
+
+    if "command" in fvp_dict:
+        # check if xcvrd got a probe command
+        probe_identifier = fvp_dict["command"]
+
+        if probe_identifier == "probe":
+            helper_logger.log_debug("processing the notification fwd state")
+            (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
+            if status is False:
+                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                    port, hw_mux_cable_tbl[asic_index].getTableName()))
+                return False
+            mux_port_dict = dict(fv)
+            read_side = mux_port_dict.get("read_side")
+            helper_logger.log_debug("while invoking fwd_state read_side = {}".format(read_side))
+            # TODO state only for dummy value in this request MSG remove this
+            request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[int(read_side), 1 - int(read_side)], state=[0, 0])
+            helper_logger.log_debug(
+                "calling RPC for getting forwarding state read_side portid = {} Ethernet port {}".format(read_side, port))
+
+            self_state = "unknown"
+            peer_state = "unknown"
+            stub = grpc_port_stubs.get("port", None)
+            if stub is None:
+                helper_logger.log_notice("stub is None for getting forwarding state RPC port {}".format(port))
+                retry_setup_grpc_channel_for_port(port, asic_index)
+                stub = grpc_port_stubs.get(port, None)
+                if stub is None:
+                    helper_logger.log_debug(
+                        "stub was None for performing fwd mux RPC port {}, setting it up again did not work".format(port))
+                    fvs_updated = swsscommon.FieldValuePairs([('response', str(self_state)),
+                                                              ('response_peer', str(peer_state))])
+                    fwd_state_response_tbl[asic_index].set(port, fvs_updated)
+                    return
+
+            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request)
+
+            (self_state, peer_state) = parse_grpc_response_forwarding_state(ret, response, read_side)
+            if response is not None:
+                # Debug only, remove this section once Server side is Finalized
+                fwd_response_port_ids = response.portid
+                fwd_response_port_ids_state = response.state
+                helper_logger.log_notice(
+                    "forwarding state RPC received response port ids = {}".format(fwd_response_port_ids))
+                helper_logger.log_notice(
+                    "forwarding state RPC received response state values = {}".format(fwd_response_port_ids_state))
+            fvs_updated = swsscommon.FieldValuePairs([('response', str(self_state)),
+                                                      ('response_peer', str(peer_state))])
+            fwd_state_response_tbl[asic_index].set(port, fvs_updated)
+            helper_logger.log_debug("processed the notification fwd state cleanly")
+            return True
+
+
+def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port):
+
+    # entering this section signifies a gRPC start for state
+    # change request from swss so initiate recording in mux_metrics table
+    time_start = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+    # This check might be redundant, to check, the presence of this Port in keys
+    # in logical_port_list but keep for now for coherency
+    # also skip checking in logical_port_list inside sfp_util
+
+    helper_logger.log_debug("recevied the notification mux hw state")
+    fvp_dict = dict(fvp)
+    toggle_side = "self"
+
+    if "state" in fvp_dict:
+        # got a state change
+        new_state = fvp_dict["state"]
+        requested_status = new_state
+        if requested_status in ["active", "standby"]:
+
+            (status, fvs) = hw_mux_cable_tbl[asic_index].get(port)
+            if status is False:
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                    port, hw_mux_cable_tbl[asic_index].getTableName()))
+                return
+            helper_logger.log_debug("processing the notification mux hw state")
+            mux_port_dict = dict(fvs)
+            old_state = mux_port_dict.get("state", None)
+            read_side = mux_port_dict.get("read_side", None)
+            curr_read_side = int(read_side)
+            # Now whatever is the state requested, call gRPC to update the soc state appropriately
+            if peer == True:
+                curr_read_side = 1-int(read_side)
+                toggle_side = "peer"
+
+            if new_state == "active":
+                state_req = 1
+            elif new_state == "standby":
+                state_req = 0
+
+            helper_logger.log_notice(
+                "calling RPC for hw mux_cable set state state peer = {} portid {} Ethernet port".format(peer, port))
+
+            request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[curr_read_side], state=[state_req])
+
+            stub = grpc_port_stubs.get(port, None)
+            if stub is None:
+                helper_logger.log_debug("stub is None for performing hw mux RPC port {}".format(port))
+                retry_setup_grpc_channel_for_port(port, asic_index)
+                stub = grpc_port_stubs.get(port, None)
+                if stub is None:
+                    helper_logger.log_notice(
+                        "stub was None for performing hw mux RPC port {}, setting it up again did not work".format(port))
+                    return
+
+            ret, response = try_grpc(stub.SetAdminForwardingPortState, request, timeout=10)
+            if response is not None:
+                # Debug only, remove this section once Server side is Finalized
+                hw_response_port_ids = response.portid
+                hw_response_port_ids_state = response.state
+                helper_logger.log_notice(
+                    "Set admin state RPC received response port ids = {}".format(hw_response_port_ids))
+                helper_logger.log_notice(
+                    "Set admin state RPC received response state values = {}".format(hw_response_port_ids_state))
+
+            active_side = parse_grpc_response_hw_mux_cable_change_state(ret, response, curr_read_side, port)
+
+            if active_side == "unknown":
+                helper_logger.log_debug(
+                    "ERR: Got a change event for updating gRPC but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(port, old_state, new_state))
+                new_state = 'unknown'
+
+            time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+            fvs_metrics = swsscommon.FieldValuePairs([('grpc_switch_{}_{}_start'.format(toggle_side, new_state), str(time_start)),
+                                                      ('grpc_switch_{}_{}_end'.format(toggle_side, new_state), str(time_end))])
+            grpc_metrics_tbl[asic_index].set(port, fvs_metrics)
+
+            fvs_updated = swsscommon.FieldValuePairs([('state', new_state),
+                                                      ('read_side', read_side),
+                                                      ('active_side', str(active_side))])
+            hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
+            helper_logger.log_debug("processed the notification hw mux state cleanly")
+        else:
+            helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
+                port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
+
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):

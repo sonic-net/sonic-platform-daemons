@@ -580,9 +580,6 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
             grpc_port_channels[port] = channel
             grpc_port_stubs[port] = stub
 
-# @hook_grpc_nic_simulated
-
-
 def setup_grpc_channel_for_port(port, soc_ip):
     "TODO make these configurable like RESTAPI"
     """

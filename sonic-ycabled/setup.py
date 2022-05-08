@@ -18,8 +18,8 @@ class GrpcTool(distutils.cmd.Command):
         grpc_tools.protoc.main([
             'grpc_tools.protoc',
             '-I{}'.format(proto_include),
-            '--python_out=proto_out/',
-            '--grpc_python_out=proto_out/',
+            '--python_out=ycable/ycable_utilities/',
+            '--grpc_python_out=ycable/ycable_utilities/',
             'linkmgr_grpc_driver.proto'
         ])
 
