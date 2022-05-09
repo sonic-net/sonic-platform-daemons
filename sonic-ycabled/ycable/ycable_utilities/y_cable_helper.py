@@ -268,10 +268,11 @@ def y_cable_toggle_mux_torA(physical_port):
 
     try:
         update_status = port_instance.toggle_mux_to_tor_a()
-        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
     except Exception as e:
         update_status = -1
         helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {} {}".format(physical_port, repr(e) , threading.currentThread().getName()))
+
+    port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
 
     helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR A for port {} status {} {}".format(physical_port, update_status, threading.currentThread().getName()))
     if update_status is True:
@@ -291,10 +292,11 @@ def y_cable_toggle_mux_torB(physical_port):
 
     try:
         update_status = port_instance.toggle_mux_to_tor_b()
-        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
     except Exception as e:
         update_status = -1
         helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {} {}".format(physical_port,repr(e), threading.currentThread().getName()))
+
+    port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
 
     helper_logger.log_debug("Y_CABLE_DEBUG: Status of toggling mux to ToR B for port {} {} {}".format(physical_port, update_status, threading.currentThread().getName()))
     if update_status is True:
@@ -331,12 +333,14 @@ def toggle_mux_tor_direction_and_update_read_side(state, logical_port_name, phys
     if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
         helper_logger.log_error(
             "Error: Could not get read side for toggle command from orchagent Y cable port {}".format(logical_port_name))
+        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return (-1, -1)
     if int(read_side) == 1 or int(read_side) == 2:
         (active_side, read_side) = toggle_mux_direction(physical_port, read_side, state)
         return (active_side, read_side)
     else:
         #should not happen
+        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return (-1,-1)
 
 
