@@ -13,8 +13,8 @@ from importlib import import_module
 
 
 import grpc
-from . import linkmgr_grpc_driver_pb2_grpc
-from . import linkmgr_grpc_driver_pb2
+from proto_out import linkmgr_grpc_driver_pb2_grpc
+from proto_out import linkmgr_grpc_driver_pb2
 from collections import namedtuple
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
@@ -2978,7 +2978,7 @@ class YCableTableUpdateTask(object):
         appl_db, state_db, config_db, status_tbl, status_tbl_peer, hw_mux_cable_tbl, hw_mux_cable_tbl_peer = {}, {}, {}, {}, {}, {}, {}
         hw_mux_cable_tbl_keys = {}
         port_tbl, port_table_keys = {}, {}
-        fwd_state_command_tbl, fwd_state_response_tbl, mux_command_tbl = {}, {}, {}
+        fwd_state_command_tbl, fwd_state_response_tbl, mux_cable_command_tbl = {}, {}, {}
         grpc_metrics_tbl = {}
         mux_metrics_tbl = {}
 
@@ -2991,20 +2991,18 @@ class YCableTableUpdateTask(object):
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
             config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
             mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            y_cable_command_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             mux_metrics_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
             hw_mux_cable_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            # TODO add definition inside app DB
             status_tbl_peer[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
-            # TODO add definition inside app DB
             fwd_state_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], "FORWARDING_STATE_COMMAND")
             fwd_state_response_tbl[asic_id] = swsscommon.Table(
@@ -3019,6 +3017,7 @@ class YCableTableUpdateTask(object):
             sel.addSelectable(status_tbl[asic_id])
             sel.addSelectable(status_tbl_peer[asic_id])
             sel.addSelectable(fwd_state_command_tbl[asic_id])
+            sel.addSelectable(mux_cable_command_tbl[asic_id])
 
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
@@ -3145,7 +3144,7 @@ class YCableTableUpdateTask(object):
                 if not port_m:
                     break
 
-                (status, cable_type) = check_mux_cable_port_type(port_m, port_tbl, asic_index
+                (status, cable_type) = check_mux_cable_port_type(port_m, port_tbl, asic_index)
 
                 if cable_type is not "active-active":
                     break
