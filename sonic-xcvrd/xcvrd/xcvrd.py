@@ -18,6 +18,7 @@ try:
     import time
     import datetime
     import subprocess
+    import argparse
 
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
@@ -936,7 +937,7 @@ class CmisManagerTask:
     CMIS_STATE_REMOVED   = 'REMOVED'
     CMIS_STATE_FAILED    = 'FAILED'
 
-    def __init__(self, port_mapping):
+    def __init__(self, port_mapping, skip_cmis_mgr=False):
         self.task_stopping_event = multiprocessing.Event()
         self.task_process = None
         self.port_dict = {}
@@ -944,7 +945,7 @@ class CmisManagerTask:
         self.xcvr_table_helper = XcvrTableHelper()
         self.isPortInitDone = False
         self.isPortConfigDone = False
-
+        self.skip_cmis_mgr = skip_cmis_mgr
 
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
@@ -1444,6 +1445,10 @@ class CmisManagerTask:
             self.log_notice("Platform chassis is not available, stopping...")
             return
 
+        if self.skip_cmis_mgr:
+            self.log_notice("Skipping CMIS Task Manager")
+            return
+
         self.task_process = multiprocessing.Process(target=self.task_worker)
         if self.task_process is not None:
             self.task_process.start()
@@ -1816,6 +1821,7 @@ class SfpStateUpdateTask(object):
         if self.task_stopping_event.is_set():
             return
 
+
         self.task_process = multiprocessing.Process(target=self.task_worker, args=(
             self.task_stopping_event, sfp_error_event))
         self.task_process.start()
@@ -1980,10 +1986,11 @@ class SfpStateUpdateTask(object):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier):
+    def __init__(self, log_identifier, skip_cmis_mgr=False):
         super(DaemonXcvrd, self).__init__(log_identifier)
         self.stop_event = threading.Event()
         self.sfp_error_event = multiprocessing.Event()
+        self.skip_cmis_mgr = skip_cmis_mgr
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -2126,7 +2133,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data, retry_eeprom_set = self.init()
 
         # Start the CMIS manager
-        cmis_manager = CmisManagerTask(port_mapping_data)
+        cmis_manager = CmisManagerTask(port_mapping_data, self.skip_cmis_mgr)
         cmis_manager.task_run()
 
         # Start the dom sensor info update thread
@@ -2214,7 +2221,11 @@ class XcvrTableHelper:
 
 
 def main():
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--skip_cmis_mgr', action='store_true')
+
+    args = parser.parse_args()
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr)
     xcvrd.run()
 
 
