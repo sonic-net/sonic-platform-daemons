@@ -18,9 +18,9 @@ class GrpcTool(distutils.cmd.Command):
         grpc_tools.protoc.main([
             'grpc_tools.protoc',
             '-I{}'.format(proto_include),
-            '--python_out=/',
-            '--grpc_python_out=/',
-            'linkmgr_grpc_driver.proto'
+            '--python_out=.',
+            '--grpc_python_out=.',
+            'proto/proto_out/linkmgr_grpc_driver.proto'
         ])
 
 class BuildPyCommand (_build_py, object):

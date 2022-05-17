@@ -15,8 +15,8 @@ from importlib import import_module
 
 
 import grpc
-import linkmgr_grpc_driver_pb2_grpc
-import linkmgr_grpc_driver_pb2
+from proto_out import linkmgr_grpc_driver_pb2_grpc
+from proto_out import linkmgr_grpc_driver_pb2
 from collections import namedtuple
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
