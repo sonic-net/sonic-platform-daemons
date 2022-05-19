@@ -4686,3 +4686,39 @@ class TestYCableScript(object):
             rc = handle_show_hwmode_state_cmd_arg_tbl_notification(
                 fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
             assert(rc == None)
+
+    def test_retry_setup_grpc_channel_for_port_incorrect(self):
+
+        status = True
+        fvs = [('state', "auto"), ('read_side', 1)]
+        Table = MagicMock()
+        Table.get.return_value = (status, fvs)
+        swsscommon.Table.return_value.get.return_value = (
+            False, {"read_side": "2"})
+        rc = retry_setup_grpc_channel_for_port("Ethernet0", 0)
+        assert(rc == False)
+
+    @patch('ycable.ycable_utilities.y_cable_helper.setup_grpc_channel_for_port', MagicMock(return_value=(True,True)))
+    def test_retry_setup_grpc_channel_for_port_correct(self):
+
+        status = True
+        fvs = [('state', "auto"), ('read_side', 1)]
+        Table = MagicMock()
+        Table.get.return_value = (status, fvs)
+        swsscommon.Table.return_value.get.return_value = (
+                True, {"cable_type": "active-active", "soc_ipv4":"192.168.0.1/32", "state":"active"})
+        rc = retry_setup_grpc_channel_for_port("Ethernet0", 0)
+        assert(rc == True)
+
+    @patch('ycable.ycable_utilities.y_cable_helper.setup_grpc_channel_for_port', MagicMock(return_value=(None,None)))
+    def test_retry_setup_grpc_channel_for_port_correct_none_val(self):
+
+        status = True
+        fvs = [('state', "auto"), ('read_side', 1)]
+        Table = MagicMock()
+        Table.get.return_value = (status, fvs)
+        swsscommon.Table.return_value.get.return_value = (
+                True, {"cable_type": "active-active", "soc_ipv4":"192.168.0.1/32", "state":"active"})
+        rc = retry_setup_grpc_channel_for_port("Ethernet0", 0)
+        assert(rc == False)
+

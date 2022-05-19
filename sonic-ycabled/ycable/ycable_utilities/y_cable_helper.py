@@ -332,7 +332,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
     if status is False:
         helper_logger.log_warning(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(port, port_tbl[asic_index].getTableName()))
-        return
+        return False
 
     else:
         # Convert list of tuples to a dictionary
@@ -347,10 +347,11 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
             if channel is None or stub is None:
                 helper_logger.log_notice(
                     "stub is None, while reattempt setting up channels did not work {}".format(port))
-            return
-        else:
-            grpc_port_channels[port] = channel
-            grpc_port_stubs[port] = stub
+                return False
+            else:
+                grpc_port_channels[port] = channel
+                grpc_port_stubs[port] = stub
+                return True
 
 def setup_grpc_channel_for_port(port, soc_ip):
     "TODO make these configurable like RESTAPI"
