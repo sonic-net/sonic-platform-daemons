@@ -1,5 +1,5 @@
 from setuptools import setup, find_packages
-from distutils.command.build_py import build_py as _build_py
+from distutils.command.build_ext import build_ext as _build_ext
 import distutils.command
 import pkg_resources
 
@@ -13,20 +13,20 @@ class GrpcTool(distutils.cmd.Command):
     def run(self):
         import grpc_tools.protoc
 
-        proto_include = pkg_resources.resource_filename('proto', '')
-
+        print("before command execution\n")
         grpc_tools.protoc.main([
             'grpc_tools.protoc',
-            '-I{}'.format(proto_include),
+            '-Iproto',
             '--python_out=.',
             '--grpc_python_out=.',
             'proto/proto_out/linkmgr_grpc_driver.proto'
         ])
+        print("command succeded\n")
 
-class BuildPyCommand (_build_py, object):
+class BuildExtCommand (_build_ext, object):
     def run(self):
         self.run_command('GrpcTool')
-        super(BuildPyCommand, self).run()
+        super(BuildExtCommand, self).run()
 
 setup(
     name='sonic-ycabled',
@@ -44,7 +44,7 @@ setup(
             'ycabled = ycable.ycable:main',
         ]
     },
-    cmdclass={'build_py': BuildPyCommand,
+    cmdclass={'build_ext': BuildExtCommand,
               'GrpcTool': GrpcTool},
     install_requires=[
         # NOTE: This package also requires swsscommon, but it is not currently installed as a wheel
