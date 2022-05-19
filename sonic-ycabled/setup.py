@@ -1,7 +1,6 @@
 from setuptools import setup, find_packages
 from distutils.command.build_ext import build_ext as _build_ext
 import distutils.command
-import pkg_resources
 
 class GrpcTool(distutils.cmd.Command):
     def initialize_options(self):

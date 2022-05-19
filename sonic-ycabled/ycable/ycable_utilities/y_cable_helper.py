@@ -17,7 +17,6 @@ from importlib import import_module
 import grpc
 from proto_out import linkmgr_grpc_driver_pb2_grpc
 from proto_out import linkmgr_grpc_driver_pb2
-from collections import namedtuple
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
 from sonic_y_cable import y_cable_vendor_mapping
@@ -2826,8 +2825,6 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
             helper_logger.log_debug(
                 "Y_CABLE_DEBUG:calling RPC for getting cli forwarding state read_side portid = {} Ethernet port {}".format(read_side, port))
 
-            self_state = "unknown"
-            peer_state = "unknown"
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
                 helper_logger.log_notice("stub is None for getting forwarding state RPC port {}".format(port))
