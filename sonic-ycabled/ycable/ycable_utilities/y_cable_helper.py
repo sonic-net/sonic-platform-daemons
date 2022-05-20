@@ -1076,6 +1076,41 @@ def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict,
         mux_info_dict[("version_{}_inactive".format(side))] = "N/A"
         mux_info_dict[("version_{}_next".format(side))] = "N/A"
 
+def get_muxcable_static_info_without_presence():
+    mux_info_static_dict = {}
+    mux_info_static_dict['read_side']= '-1'
+    mux_info_static_dict['nic_lane1_precursor1'] = 'N/A'
+    mux_info_static_dict['nic_lane1_precursor2'] = 'N/A'
+    mux_info_static_dict['nic_lane1_maincursor'] = 'N/A'
+    mux_info_static_dict['nic_lane1_postcursor1'] = 'N/A'
+    mux_info_static_dict['nic_lane1_postcursor2'] = 'N/A'
+    mux_info_static_dict['nic_lane2_precursor1'] = 'N/A'
+    mux_info_static_dict['nic_lane2_precursor2'] = 'N/A'
+    mux_info_static_dict['nic_lane2_maincursor'] = 'N/A'
+    mux_info_static_dict['nic_lane2_postcursor1'] = 'N/A'
+    mux_info_static_dict['nic_lane2_postcursor2'] = 'N/A'
+    mux_info_static_dict['tor_self_lane1_precursor1'] = 'N/A'
+    mux_info_static_dict['tor_self_lane1_precursor2'] = 'N/A'
+    mux_info_static_dict['tor_self_lane1_maincursor'] = 'N/A'
+    mux_info_static_dict['tor_self_lane1_postcursor1'] = 'N/A'
+    mux_info_static_dict['tor_self_lane1_postcursor2'] = 'N/A'
+    mux_info_static_dict['tor_self_lane2_precursor1'] = 'N/A'
+    mux_info_static_dict['tor_self_lane2_precursor2'] = 'N/A'
+    mux_info_static_dict['tor_self_lane2_maincursor'] = 'N/A'
+    mux_info_static_dict['tor_self_lane2_postcursor1'] = 'N/A'
+    mux_info_static_dict['tor_self_lane2_postcursor2'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane1_precursor1'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane1_precursor2'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane1_maincursor'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane1_postcursor1'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane1_postcursor2'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane2_precursor1'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane2_precursor2'] = 'N/A' 
+    mux_info_static_dict['tor_peer_lane2_maincursor'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane2_postcursor1'] = 'N/A'
+    mux_info_static_dict['tor_peer_lane2_postcursor2'] = 'N/A'
+
+    return mux_info_static_dict
 
 def get_muxcable_info_without_presence():
     mux_info_dict = {}
@@ -1540,9 +1575,11 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
     for physical_port in physical_port_list:
 
         if not y_cable_wrapper_get_presence(physical_port):
-            continue
+            helper_logger.log_warning("Error: trying to post mux static info without presence of port {}".format(logical_port_name))
+            mux_static_info_dict = get_muxcable_static_info_without_presence()
+        else:
+            mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
 
-        mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
 
         if mux_static_info_dict is not None and mux_static_info_dict is not -1:
             #transceiver_dict[physical_port] = port_info_dict
