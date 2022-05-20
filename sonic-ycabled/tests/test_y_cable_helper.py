@@ -4722,3 +4722,21 @@ class TestYCableScript(object):
         rc = retry_setup_grpc_channel_for_port("Ethernet0", 0)
         assert(rc == False)
 
+    def test_process_loopback_interface_and_get_read_side(self):
+
+        loopback_keys = [["Loopback3|10.212.64.2/3", "Loopback3|2603:1010:100:d::1/128"]]
+        rc = process_loopback_interface_and_get_read_side(loopback_keys)
+        assert(rc == 0)
+
+    def test_process_loopback_interface_and_get_read_side(self):
+
+        loopback_keys = [["Loopback3|10.212.64.1/3", "Loopback3|2603:1010:100:d::1/128"]]
+        rc = process_loopback_interface_and_get_read_side(loopback_keys)
+        assert(rc == 1)
+
+    def test_process_loopback_interface_and_get_read_side(self):
+
+        loopback_keys = [["Loopback2|10.212.64.1/3", "Loopback3|2603:1010:100:d::1/128"]]
+        rc = process_loopback_interface_and_get_read_side(loopback_keys)
+        assert(rc == -1)
+
