@@ -4836,12 +4836,75 @@ class TestYCableScript(object):
         rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence)
         assert(rc == None)
 
-    #@patch('grpc.insecure_channel', MagicMock(return_value=True))
     @patch('proto_out.linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub', MagicMock(return_value=True))
     def test_setup_grpc_channel_for_port(self):
 
         rc = setup_grpc_channel_for_port("Ethernet0", "192.168.0.1")
 
         assert(rc == (None, None))
+
+
+    def test_setup_grpc_channels(self):
+
+        stop_event = MagicMock()
+        stop_event.is_set.return_value = False
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+
+            patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
+            patched_util.get_asic_id_for_logical_port.return_value = 0
+            rc = setup_grpc_channels(stop_event)
+
+            assert(rc == None)
+
+
+    def test_check_mux_cable_port_type_get_none(self):
+
+        stop_event = MagicMock()
+        test_db = "TEST_DB"
+        status = False
+        asic_index = 0
+        fvs = [('state', "auto"), ('read_side', 1), ('cable_type','active-active'), ('soc_ipv4','192.168.0.1')]
+        stop_event.is_set.return_value = False
+        port_tbl = {}
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+        
+        rc = check_mux_cable_port_type("Ethernet0", port_tbl, 0)
+        assert(rc == (False, None))
+
+
+    def test_check_mux_cable_port_type_get_correct(self):
+
+        stop_event = MagicMock()
+        status = True
+        asic_index = 0
+        test_db = "TEST_DB"
+        fvs = [('state', "auto"), ('read_side', 1), ('cable_type','active-active'), ('soc_ipv4','192.168.0.1')]
+        stop_event.is_set.return_value = False
+        port_tbl = {}
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+        
+        rc = check_mux_cable_port_type("Ethernet0", port_tbl, 0)
+        assert(rc == (True, "active-active"))
+
+
+    def test_check_mux_cable_port_type_get_correct_standby(self):
+
+        stop_event = MagicMock()
+        status = True
+        asic_index = 0
+        test_db = "TEST_DB"
+        fvs = [('state', "auto"), ('read_side', 1), ('cable_type','active-standby'), ('soc_ipv4','192.168.0.1')]
+        stop_event.is_set.return_value = False
+        port_tbl = {}
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+        
+        rc = check_mux_cable_port_type("Ethernet0", port_tbl, 0)
+        assert(rc == (True, "active-standby"))
 
 

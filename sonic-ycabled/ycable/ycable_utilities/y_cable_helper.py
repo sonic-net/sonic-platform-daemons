@@ -512,13 +512,13 @@ def setup_grpc_channels(stop_event):
     helper_logger.log_debug("Y_CABLE_DEBUG:while setting up grpc channels read side = {}".format(read_side))
 
     # Init PORT_STATUS table if ports are on Y cable
-    logical_port_list = platform_sfputil.logical
+    logical_port_list = y_cable_platform_sfputil.logical
     for logical_port_name in logical_port_list:
         if stop_event.is_set():
             break
 
         # Get the asic to which this port belongs
-        asic_index = platform_sfputil.get_asic_id_for_logical_port(
+        asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
         if asic_index is None:
             helper_logger.log_warning(
