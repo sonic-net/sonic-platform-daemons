@@ -2897,7 +2897,7 @@ def parse_grpc_response_forwarding_state(ret, response, read_side):
         elif int(read_side) == 1:
             if response.state[1] == True:
                 self_state = 'active'
-            elif response.state[0] == False:
+            elif response.state[1] == False:
                 self_state = 'standby'
             if response.state[0] == True:
                 peer_state = 'active'

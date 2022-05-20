@@ -4964,3 +4964,171 @@ class TestYCableScript(object):
         assert(rc == "unknown")
 
 
+    def test_parse_grpc_response_forwarding_state_unknown_false(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [1]
+                self.state = [False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(False, None, 0)
+        assert(rc == ("unknown", "unknown"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_standby_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 0)
+        assert(rc == ("active", "standby"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_active_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 0)
+        assert(rc == ("active", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_standby_true_read_side(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("standby", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_active_true_read_side(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("active", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_active_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("active", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_standby_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("standby", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_standby_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 0)
+        assert(rc == ("standby", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_standby_standby_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("standby", "standby"))
+
+
+    def test_parse_grpc_response_forwarding_state_standby_standby_true(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 0)
+        assert(rc == ("standby", "standby"))
+
+
+    def test_parse_grpc_response_forwarding_state_active_active_with_true_read_side(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 0)
+        assert(rc == ("active", "active"))
+
+
+    def test_parse_grpc_response_forwarding_state_standby_standby_with_true_read_side(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_forwarding_state(True, response, 1)
+        assert(rc == ("standby", "standby"))
+
+
