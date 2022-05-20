@@ -4771,7 +4771,7 @@ class TestYCableScript(object):
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('ycable.ycable_utilities.y_cable_helper.setup_grpc_channel_for_port', MagicMock(return_value=(True, None)))
+    @patch('ycable.ycable_utilities.y_cable_helper.setup_grpc_channel_for_port', MagicMock(return_value=(None, None)))
     def test_check_identifier_presence_and_setup_channel_with_mock(self):
 
         status = True
@@ -5130,5 +5130,26 @@ class TestYCableScript(object):
         
         rc = parse_grpc_response_forwarding_state(True, response, 1)
         assert(rc == ("standby", "standby"))
+
+
+    @patch('ycable.ycable_utilities.y_cable_helper.grpc_port_stubs', MagicMock(return_value={}))
+    @patch('ycable.ycable_utilities.y_cable_helper.grpc_port_channels', MagicMock(return_value={}))
+    def test_parse_grpc_response_forwarding_state_standby_standby_with_true_read_side(self):
+
+        status = True
+        asic_index = 0
+        test_db = "TEST_DB"
+        port = "Ethernet0"
+        fvs_m = [('command', "probe"), ('read_side', 1), ('cable_type','active-standby'), ('soc_ipv4','192.168.0.1')]
+        hw_mux_cable_tbl = {}
+        fwd_state_response_tbl = {}
+        hw_mux_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        fwd_state_response_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        hw_mux_cable_tbl[asic_index].get.return_value = (status, fvs_m)
+        
+        rc = handle_fwd_state_command_grpc_notification(fvs_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, "TestDB")
+        assert(rc == True)
 
 
