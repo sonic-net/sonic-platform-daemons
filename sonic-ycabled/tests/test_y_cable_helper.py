@@ -379,9 +379,19 @@ class TestYCableScript(object):
     def test_y_cable_toggle_mux_torB_update_status_exception(self):
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
 
-            port_instance.get.return_value = "simulated_port"
-            port_instance.toggle_mux_to_tor_a.return_value = Exception(
-                NotImplementedError)
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                    self.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED = 0
+
+                # Defining function without self argument creates an exception,
+                # which is what we want for this test.
+                def get_mux_direction():
+                    pass
+                def toggle_mux_to_tor_a():
+                    raise NotImplementedError
+
+            port_instance.get.return_value = PortInstanceHelper()
 
             rc = y_cable_toggle_mux_torB(1)
 
