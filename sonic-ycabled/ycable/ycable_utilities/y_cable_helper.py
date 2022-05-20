@@ -380,7 +380,7 @@ def setup_grpc_channel_for_port(port, soc_ip):
     channel_ready = grpc.channel_ready_future(channel)
 
     try:
-        channel_ready.result(timeout=0.5)
+        channel_ready.result(timeout=0.2)
     except grpc.FutureTimeoutError:
         channel = None
         stub = None
@@ -453,7 +453,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                     physical_port = physical_port_list[0]
                     if y_cable_wrapper_get_presence(physical_port):
                         prev_stub = grpc_port_stubs.get(logical_port_name, None)
-                        prev_channel = grpc_port_stubs.get(logical_port_name, None)
+                        prev_channel = grpc_port_channels.get(logical_port_name, None)
                         if prev_channel is not None and prev_stub is not None:
                             return
 
