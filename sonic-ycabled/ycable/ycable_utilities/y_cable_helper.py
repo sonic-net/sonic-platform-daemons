@@ -343,6 +343,59 @@ def toggle_mux_tor_direction_and_update_read_side(state, logical_port_name, phys
         port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return (-1,-1)
 
+"""
+def poll_active_side_after_toggle(logical_port_name, read_side, requested_state, time_switchover_start):
+    physical_port_list = logical_port_name_to_physical_port_list(
+        logical_port_name)
+        
+
+    if len(physical_port_list) == 1:
+
+        physical_port = physical_port_list[0]
+        if physical_port != 1:
+            return
+        port_instance = y_cable_port_instances.get(physical_port)
+
+        required_side = 0
+        if read_side == '1':
+            if requested_state == "active":
+                required_side = 1
+            if requested_state == "standby":
+                required_side = 2
+        elif read_side == '2':
+            if requested_state == "active":
+                required_side = 2
+            if requested_state == "standby":
+                required_side = 1
+        else:
+            return
+
+        time_start = time.time()
+        count = 0
+        while True:
+            count = count + 1
+            curr_active_side = port_instance.get_mux_direction()
+            time_now = time.time()
+            time_diff = time_now - time_start
+            if curr_active_side == required_side:
+                break
+            elif time_diff >= TOGGLE_TIMEOUT:
+                helper_logger.log_warning(
+                    "Error: Could not toggle the mux for port {} {} to torA write eeprom timeout time taken {}, count: {}".format(physical_port, logical_port_name, time_now-time_switchover_start, count))
+                return -1
+
+            time.sleep(0.001)
+
+        time_taken = time.time() - time_switchover_start
+        helper_logger.log_warning(
+            "Sucessfully toggled the mux after polling port to required side {} {} {} {}, count: {}".format(physical_port, required_side, logical_port_name, time_taken, count))
+        return 1
+    else:
+        error_time = time.time() - time_switchover_start
+        helper_logger.log_warning(
+            "Error: Could not toggle the mux for port {} to torA write eeprom failed time taken {}".format(physical_port, error_time))
+"""
+
 
 def update_tor_active_side(read_side, state, logical_port_name):
     physical_port_list = logical_port_name_to_physical_port_list(
@@ -2460,8 +2513,6 @@ class YCableTableUpdateTask(object):
             config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
-            status_app_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_TABLE_NAME)
             mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
             y_cable_command_tbl[asic_id] = swsscommon.Table(
@@ -2583,29 +2634,6 @@ class YCableTableUpdateTask(object):
                             read_side = mux_port_dict.get("read_side")
                             update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
 
-            while True:
-                (port, op_m, fvp_m) = status_app_tbl[asic_index].pop()
-
-                if not port:
-                    break
-                helper_logger.log_debug("Y_CABLE_DEBUG: received a mux_cable_table app update for port status {} {}".format(port, threading.currentThread().getName()))
-
-                if fvp_m:
-
-                    if port not in y_cable_tbl_keys[asic_index]:
-                        continue
-
-                    fvp_dict = dict(fvp_m)
-
-                    if "state" in fvp_dict:
-                        # check if xcvrd got a probe command
-                        port_instance = get_ycable_port_instance_from_logical_port(port)
-                        if port_instance is None or port_instance in port_mapping_error_values:
-                            helper_logger.log_warning("Error: Could not get port instance for APP MUX_CABLE_TABLE  port {}".format(port))
-                            # error scenario update table accordingl
-                        else:
-                            port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_INPROGRESS
-
 
 
     def task_cli_worker(self):
@@ -2627,7 +2655,8 @@ class YCableTableUpdateTask(object):
         xcvrd_show_event_cmd_tbl, xcvrd_show_event_rsp_tbl , xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_res_tbl= {}, {}, {}, {}
         xcvrd_show_fec_cmd_tbl, xcvrd_show_fec_rsp_tbl , xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl= {}, {}, {}, {}
         xcvrd_show_ber_cmd_tbl, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl , xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
-
+        status_app_tbl = {}
+        y_cable_tbl, y_cable_tbl_keys = {}, {}
 
         sel = swsscommon.Select()
 
@@ -2742,6 +2771,11 @@ class YCableTableUpdateTask(object):
                 state_db[asic_id], "XCVRD_GET_BER_RSP")
             xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
                 state_db[asic_id], "XCVRD_GET_BER_RES")
+            status_app_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                appl_db[asic_id], swsscommon.APP_MUX_CABLE_TABLE_NAME)
+            y_cable_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
             sel.addSelectable(xcvrd_log_tbl[asic_id])
             sel.addSelectable(xcvrd_down_fw_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_down_fw_status_cmd_tbl[asic_id])
@@ -2757,6 +2791,7 @@ class YCableTableUpdateTask(object):
             sel.addSelectable(xcvrd_show_event_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_show_fec_cmd_tbl[asic_id])
             sel.addSelectable(xcvrd_show_ber_cmd_tbl[asic_id])
+            sel.addSelectable(status_app_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
@@ -2944,6 +2979,28 @@ class YCableTableUpdateTask(object):
                     handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port)
 
                     break
+            while True:
+                (port, op_m, fvp_m) = status_app_tbl[asic_index].pop()
+
+                if not port:
+                    break
+                helper_logger.log_debug("Y_CABLE_DEBUG: received a mux_cable_table app update for port status {} {}".format(port, threading.currentThread().getName()))
+
+                if fvp_m:
+
+                    if port not in y_cable_tbl_keys[asic_index]:
+                        continue
+
+                    fvp_dict = dict(fvp_m)
+
+                    if "state" in fvp_dict:
+                        # check if xcvrd got a probe command
+                        port_instance = get_ycable_port_instance_from_logical_port(port)
+                        if port_instance is None or port_instance in port_mapping_error_values:
+                            helper_logger.log_warning("Error: Could not get port instance for APP MUX_CABLE_TABLE  port {}".format(port))
+                            # error scenario update table accordingl
+                        else:
+                            port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_INPROGRESS
 
     def task_run(self):
         self.task_thread = threading.Thread(target=self.task_worker)
