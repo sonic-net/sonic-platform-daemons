@@ -4908,3 +4908,59 @@ class TestYCableScript(object):
         assert(rc == (True, "active-standby"))
 
 
+    def test_parse_grpc_response_hw_mux_cable_change_state(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0]
+                self.state = [True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_hw_mux_cable_change_state(True, response, 0, "Ethernet0")
+        assert(rc == "active")
+
+
+    def test_parse_grpc_response_hw_mux_cable_change_state_standby(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0]
+                self.state = [False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_hw_mux_cable_change_state(True, response, 0, "Ethernet0")
+        assert(rc == "standby")
+
+
+    def test_parse_grpc_response_hw_mux_cable_change_state_unknown(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [1]
+                self.state = [False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_hw_mux_cable_change_state(True, response, 0, "Ethernet0")
+        assert(rc == "unknown")
+
+
+    def test_parse_grpc_response_hw_mux_cable_change_state_unknown_false(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [1]
+                self.state = [False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_hw_mux_cable_change_state(False, response, 0, "Ethernet0")
+        assert(rc == "unknown")
+
+
