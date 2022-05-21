@@ -3943,6 +3943,10 @@ class TestYCableScript(object):
                     self.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS = 1
                     self.FIRMWARE_DOWNLOAD_STATUS_FAILED = 2
                     self.download_firmware_status = 0
+                    self.MUX_TOGGLE_STATUS_INPROGRESS = 1
+                    self.MUX_TOGGLE_STATUS_FAILED = 2
+                    self.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED = 2
+                    self.mux_toggle_status = 0
                     self.SWITCH_COUNT_MANUAL = "manual"
                     self.SWITCH_COUNT_AUTO = "auto"
 
@@ -4733,7 +4737,7 @@ class TestYCableScript(object):
 
     def test_get_mux_cable_static_info_without_presence(self):
 
-        rc = get_muxcable_info_without_presence()
+        rc = get_muxcable_static_info_without_presence()
 
         assert(rc['read_side'] == '-1')
         assert(rc['nic_lane1_precursor1'] == 'unknown')
