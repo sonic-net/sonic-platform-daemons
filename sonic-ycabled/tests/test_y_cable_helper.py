@@ -4740,7 +4740,7 @@ class TestYCableScript(object):
         rc = get_muxcable_static_info_without_presence()
 
         assert(rc['read_side'] == '-1')
-        assert(rc['nic_lane1_precursor1'] == 'unknown')
+        assert(rc['nic_lane1_precursor1'] == 'N/A')
         assert(rc['nic_lane1_precursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor2'] == 'N/A')
