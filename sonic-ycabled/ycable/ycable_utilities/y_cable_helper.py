@@ -602,6 +602,8 @@ def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_t
     # fill the newly found entry
     read_y_cable_and_update_statedb_port_tbl(
         logical_port_name, y_cable_tbl[asic_index])
+    post_port_mux_static_info_to_db(
+        logical_port_name, static_tbl[asic_index])
 
 def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence):
 
