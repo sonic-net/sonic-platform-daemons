@@ -557,7 +557,9 @@ def try_grpc(callback, *args, **kwargs):
         elif e.code() == grpc.StatusCode.UNAVAILABLE:
             helper_logger.log_notice("rpc unavailable for port= {}".format(str(e.code())))
         elif e.code() == grpc.StatusCode.INVALID_ARGUMENT:
-            helper_logger.log_notice("rpc unavailable for port= {}".format(str(e.code())))
+            helper_logger.log_notice("rpc invalid for port= {}".format(str(e.code())))
+        else:
+            helper_logger.log_notice("rpc exception error for port= {}".format(str(e.code())))
         resp = None
         return_val = False
 
@@ -2913,7 +2915,6 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                     state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
             (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
-            helper_logger.log_warning("reached 2")
             if status is False:
                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table while responding to cli cmd show mux status {}".format(
                     port, hw_mux_cable_tbl[asic_index].getTableName()))
@@ -2921,7 +2922,6 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
 
             mux_port_dict = dict(fv)
             read_side = mux_port_dict.get("read_side", None)
-            helper_logger.log_warning("reached 3")
             helper_logger.log_debug("Y_CABLE_DEBUG:before invoking RPC fwd_state read_side = {}".format(read_side))
             # TODO state only for dummy value in this request MSG remove this
             request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[int(read_side), 1 - int(read_side)], state=[0, 0])
