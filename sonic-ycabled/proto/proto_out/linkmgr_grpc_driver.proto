@@ -5,6 +5,7 @@ service DualToRActive {
   rpc SetAdminForwardingPortState(AdminRequest) returns (AdminReply) {}
   rpc QueryOperationPortState(OperationRequest) returns (OperationReply) {}
   rpc QueryLinkState(LinkStateRequest) returns (LinkStateReply) {}
+  rpc QueryServerVersion(ServerVersionRequest) returns (ServerVersionReply) {}
 }
 
 message AdminRequest {
@@ -35,6 +36,12 @@ message LinkStateReply {
   repeated bool state = 2;
 }
 
+message ServerVersionRequest {
+  string version = 1;
+}
 
+message ServerVersionReply {
+  string version = 1;
+}
 
 
