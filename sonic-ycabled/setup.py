@@ -12,7 +12,6 @@ class GrpcTool(distutils.cmd.Command):
     def run(self):
         import grpc_tools.protoc
 
-        print("before command execution\n")
         grpc_tools.protoc.main([
             'grpc_tools.protoc',
             '-Iproto',
@@ -20,7 +19,6 @@ class GrpcTool(distutils.cmd.Command):
             '--grpc_python_out=.',
             'proto/proto_out/linkmgr_grpc_driver.proto'
         ])
-        print("command succeded\n")
 
 class BuildExtCommand (_build_ext, object):
     def run(self):
