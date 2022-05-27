@@ -2939,7 +2939,7 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                 set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                 return
 
-            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request)
+            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request, timeout=0.1)
 
             (self_state, peer_state) = parse_grpc_response_forwarding_state(ret, response, read_side)
             state = self_state
@@ -2949,9 +2949,9 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                 fwd_response_port_ids = response.portid
                 fwd_response_port_ids_state = response.state
                 helper_logger.log_notice(
-                    "forwarding state RPC received response port ids = {}".format(fwd_response_port_ids))
+                    "forwarding state RPC received response port ids = {} port {}".format(fwd_response_port_ids, port))
                 helper_logger.log_notice(
-                    "forwarding state RPC received response state values = {}".format(fwd_response_port_ids_state))
+                    "forwarding state RPC received response state values = {} port {}".format(fwd_response_port_ids_state, port))
             else:
                 helper_logger.log_notice("response was none cli handle_fwd_state_command_grpc_notification {} ".format(port))
 
@@ -3052,7 +3052,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
                     fwd_state_response_tbl[asic_index].set(port, fvs_updated)
                     return
 
-            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request)
+            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request, timeout=0.1)
 
             (self_state, peer_state) = parse_grpc_response_forwarding_state(ret, response, read_side)
             if response is not None:
@@ -3060,9 +3060,9 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
                 fwd_response_port_ids = response.portid
                 fwd_response_port_ids_state = response.state
                 helper_logger.log_notice(
-                    "forwarding state RPC received response port ids = {}".format(fwd_response_port_ids))
+                    "forwarding state RPC received response port ids = {} port {}".format(fwd_response_port_ids, port))
                 helper_logger.log_notice(
-                    "forwarding state RPC received response state values = {}".format(fwd_response_port_ids_state))
+                    "forwarding state RPC received response state values = {} port {}".format(fwd_response_port_ids_state, port))
             else:
                 helper_logger.log_notice("response was none handle_fwd_state_command_grpc_notification {} ".format(port))
 
@@ -3131,7 +3131,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                         "stub was None for performing hw mux RPC port {}, setting it up again did not work".format(port))
                     return
 
-            ret, response = try_grpc(stub.SetAdminForwardingPortState, request, timeout=10)
+            ret, response = try_grpc(stub.SetAdminForwardingPortState, request, timeout=0.1)
             if response is not None:
                 # Debug only, remove this section once Server side is Finalized
                 hw_response_port_ids = response.portid
@@ -3276,10 +3276,10 @@ class YCableTableUpdateTask(object):
                                 # got a state change
                                 new_status = fvp_dict["state"]
                                 requested_status = new_status
-                                (status, fvs) = y_cable_tbl[asic_index].get(port)
+                                (status, fvs) = hw_mux_cable_tbl[asic_index].get(port)
                                 if status is False:
                                     helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                        port, y_cable_tbl[asic_index].getTableName()))
+                                        port, hw_mux_cable_tbl[asic_index].getTableName()))
                                     continue
                                 mux_port_dict = dict(fvs)
                                 old_status = mux_port_dict.get("state", None)
@@ -3302,7 +3302,7 @@ class YCableTableUpdateTask(object):
                                 fvs_updated = swsscommon.FieldValuePairs([('state', new_status),
                                                                           ('read_side', str(read_side)),
                                                                           ('active_side', str(active_side))])
-                                y_cable_tbl[asic_index].set(port, fvs_updated)
+                                hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
                             else:
                                 helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
                                     port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
@@ -3326,19 +3326,24 @@ class YCableTableUpdateTask(object):
 
                     fvp_dict = dict(fvp_m)
 
-                    if "command" in fvp_dict:
-                        # check if xcvrd got a probe command
-                        probe_identifier = fvp_dict["command"]
+                    (status, cable_type) = check_mux_cable_port_type(port_m, port_tbl, asic_index)
 
-                        if probe_identifier == "probe":
-                            (status, fv) = hw_mux_cable_tbl[asic_index].get(port_m)
-                            if status is False:
-                                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                    port_m, hw_mux_cable_tbl[asic_index].getTableName()))
-                                continue
-                            mux_port_dict = dict(fv)
-                            read_side = mux_port_dict.get("read_side")
-                            update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
+                    if status:
+
+                        if cable_type == 'active-standby' and "command" in fvp_dict:
+
+                            # check if xcvrd got a probe command
+                            probe_identifier = fvp_dict["command"]
+
+                            if probe_identifier == "probe":
+                                (status, fv) = hw_mux_cable_tbl[asic_index].get(port_m)
+                                if status is False:
+                                    helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                                        port_m, hw_mux_cable_tbl[asic_index].getTableName()))
+                                    continue
+                                mux_port_dict = dict(fv)
+                                read_side = mux_port_dict.get("read_side")
+                                update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
 
             while True:
                 (port_m, op_m, fvp_m) = fwd_state_command_tbl[asic_index].pop()
