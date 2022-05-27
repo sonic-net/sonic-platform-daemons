@@ -1905,7 +1905,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
         else:
             mux_info_dict = get_muxcable_info(physical_port, logical_port_name)
 
-        if mux_info_dict is not None and mux_info_dict is not -1:
+        if mux_info_dict is not None and mux_info_dict !=  -1:
             #transceiver_dict[physical_port] = port_info_dict
             fvs = swsscommon.FieldValuePairs(
                 [('tor_active',  mux_info_dict["tor_active"]),
@@ -1962,7 +1962,7 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
             mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
 
 
-        if mux_static_info_dict is not None and mux_static_info_dict is not -1:
+        if mux_static_info_dict is not None and mux_static_info_dict != -1:
             #transceiver_dict[physical_port] = port_info_dict
             fvs = swsscommon.FieldValuePairs(
                 [('read_side',  mux_static_info_dict["read_side"]),
@@ -2937,6 +2937,7 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                     helper_logger.log_warning(
                         "stub was None for performing cli fwd mux RPC port {}, setting it up again did not work".format(port))
                 set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
+                return
 
             ret, response = try_grpc(stub.QueryAdminForwardingPortState, request)
 
@@ -3122,7 +3123,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
 
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
-                helper_logger.debug("Y_CABLE_DEBUG:stub is None for performing hw mux RPC port {}".format(port))
+                helper_logger.log_debug("Y_CABLE_DEBUG:stub is None for performing hw mux RPC port {}".format(port))
                 retry_setup_grpc_channel_for_port(port, asic_index)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
@@ -3320,7 +3321,7 @@ class YCableTableUpdateTask(object):
 
                 if fvp_m:
 
-                    if port_m not in y_cable_tbl_keys[asic_index]:
+                    if port_m not in hw_mux_cable_tbl_keys[asic_index]:
                         continue
 
                     fvp_dict = dict(fvp_m)
@@ -3330,10 +3331,10 @@ class YCableTableUpdateTask(object):
                         probe_identifier = fvp_dict["command"]
 
                         if probe_identifier == "probe":
-                            (status, fv) = y_cable_tbl[asic_index].get(port_m)
+                            (status, fv) = hw_mux_cable_tbl[asic_index].get(port_m)
                             if status is False:
                                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                    port_m, y_cable_tbl[asic_index].getTableName()))
+                                    port_m, hw_mux_cable_tbl[asic_index].getTableName()))
                                 continue
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
@@ -3565,7 +3566,7 @@ class YCableTableUpdateTask(object):
                 helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
                 if fvp_m:
 
-                    if key is "Y_CABLE":
+                    if key == "Y_CABLE":
                         continue
 
                     fvp_dict = dict(fvp_m)
