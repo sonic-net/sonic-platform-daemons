@@ -262,7 +262,7 @@ class TestYcableScript(object):
         assert(rc == 0)
 
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('swsscommon.swsscommon.AdvancedStart', MagicMock())
     @patch('ycable.ycable.platform_sfputil', MagicMock())
     @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
     def test_DaemonYcable_init_deinit(self):
@@ -276,7 +276,7 @@ class TestYcableScript(object):
         # ycable.init/deinit will not raise unexpected exception. In future, probably more check will be added
 
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('swsscommon.swsscommon.AdvancedStart', MagicMock())
     @patch('ycable.ycable.platform_sfputil', MagicMock())
     @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
     @patch('ycable.ycable.YcableInfoUpdateTask', MagicMock())
