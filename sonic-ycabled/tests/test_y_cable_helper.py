@@ -2432,7 +2432,7 @@ class TestYCableScript(object):
         assert(rc == 0)
 
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('swsscommon.swsscommon.AdvancedStart', MagicMock())
     @patch('ycable.ycable.platform_sfputil', MagicMock())
     @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
     def test_DaemonYcable_init_deinit(self):

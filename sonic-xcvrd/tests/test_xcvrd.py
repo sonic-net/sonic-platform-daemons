@@ -357,7 +357,7 @@ class TestXcvrdScript(object):
         assert port_mapping.get_asic_id_for_logical_port('Ethernet-IB0') == None
         assert port_mapping.get_physical_to_logical(3) == None
         assert port_mapping.get_logical_to_physical('Ethernet-IB0') == None
-                                        
+
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
@@ -1061,7 +1061,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('swsscommon.swsscommon.AdvancedStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)

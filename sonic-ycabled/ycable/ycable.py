@@ -10,7 +10,7 @@ try:
     import sys
     import time
     import threading
-    
+
     from enum import Enum
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
@@ -325,10 +325,10 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         """
         # TODO need to decide if we need warm start capability in this ycabled daemon
-        warmstart = swsscommon.WarmStart()
-        warmstart.initialize("ycabled", "pmon")
-        warmstart.checkWarmStart("ycabled", "pmon", False)
-        is_warm_start = warmstart.isWarmStart()
+        advancedstart = swsscommon.AdvancedStart()
+        advancedstart.initialize("ycabled", "pmon")
+        advancedstart.checkAdvancedStart("ycabled", "pmon", False)
+        is_advanced_start = advancedstart.isAdvancedStart()
         """
 
         # Make sure this daemon started after all port configured
