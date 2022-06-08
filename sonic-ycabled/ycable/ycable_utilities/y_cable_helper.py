@@ -321,6 +321,9 @@ def hook_grpc_nic_simulated(target, soc_ip):
 
 def retry_setup_grpc_channel_for_port(port, asic_index):
 
+    global grpc_port_stubs
+    global grpc_port_channels
+
     config_db, port_tbl = {}, {}
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -354,7 +357,6 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
                 return True
 
 def setup_grpc_channel_for_port(port, soc_ip):
-    "TODO make these configurable like RESTAPI"
     """
     root_cert = open('/etc/sonic/credentials/ca-chain-bundle.cert.pem', 'rb').read()
     key = open('/etc/sonic/credentials/client.key.pem', 'rb').read()
@@ -386,9 +388,9 @@ def setup_grpc_channel_for_port(port, soc_ip):
         stub = None
 
     if stub is None:
-        helper_logger.log_warning("stub was not setup gRPC ip {} port {}, no gRPC server running ".format(soc_ip, port))
+        helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
     if channel is None:
-        helper_logger.log_warning("channel was not setup gRPC ip {} port {}, no gRPC server running".format(soc_ip, port))
+        helper_logger.log_warning("channel was not setup for gRPC soc ip {} port {}, no gRPC server running ?".format(soc_ip, port))
 
     return channel, stub
 
@@ -2922,6 +2924,11 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
 
             mux_port_dict = dict(fv)
             read_side = mux_port_dict.get("read_side", None)
+            state = mux_port_dict.get("state", None)
+            if state is not None:
+                set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
+                return
+
             helper_logger.log_debug("Y_CABLE_DEBUG:before invoking RPC fwd_state read_side = {}".format(read_side))
             # TODO state only for dummy value in this request MSG remove this
             request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[int(read_side), 1 - int(read_side)], state=[0, 0])
@@ -2930,12 +2937,8 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
 
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
-                helper_logger.log_notice("stub is None for getting forwarding state RPC port {}".format(port))
-                retry_setup_grpc_channel_for_port(port, asic_index)
-                stub = grpc_port_stubs.get(port, None)
-                if stub is None:
-                    helper_logger.log_warning(
-                        "stub was None for performing cli fwd mux RPC port {}, setting it up again did not work".format(port))
+                # no need to retry setup channels for mux cli hw mode command
+                helper_logger.log_warning("stub is None for getting forwarding state RPC port for cli query {}".format(port))
                 set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                 return
 
@@ -3041,7 +3044,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
             peer_state = "unknown"
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
-                helper_logger.log_notice("stub is None for getting forwarding state RPC port {}".format(port))
+                helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {}".format(port))
                 retry_setup_grpc_channel_for_port(port, asic_index)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
@@ -3117,7 +3120,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                 state_req = 0
 
             helper_logger.log_notice(
-                "calling RPC for hw mux_cable set state state peer = {} portid {} Ethernet port".format(peer, port))
+                "calling RPC for hw mux_cable set state state peer = {} portid Ethernet port {}".format(peer, port))
 
             request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[curr_read_side], state=[state_req])
 
@@ -3736,6 +3739,11 @@ class YCableTableUpdateTask(object):
                         continue
 
                     fvp_dict = dict(fvp_m)
+
+                    (status, cable_type) = check_mux_cable_port_type(port, port_tbl, asic_index)
+
+                    if status is False or cable_type != "active-standby":
+                        break
 
                     if "state" in fvp_dict:
                         # check if xcvrd got a probe command
