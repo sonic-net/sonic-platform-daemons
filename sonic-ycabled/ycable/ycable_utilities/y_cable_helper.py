@@ -29,6 +29,10 @@ else:
 
 SELECT_TIMEOUT = 1000
 
+#gRPC timeouts for RPC
+QUERY_ADMIN_FORWARDING_TIMEOUT = 0.1
+SET_ADMIN_FORWARDING_TIMEOUT = 0.5
+
 y_cable_platform_sfputil = None
 y_cable_platform_chassis = None
 y_cable_is_platform_vs = None
@@ -46,8 +50,8 @@ DEFAULT_NAMESPACE = ""
 
 LOOPBACK_INTERFACE_T0 = "10.212.64.1/32"
 LOOPBACK_INTERFACE_LT0 = "10.212.64.2/32"
-LOOPBACK_INTERFACE_T0_NIC = "10.1.0.37/32"
-LOOPBACK_INTERFACE_LT0_NIC = "10.1.0.38/32"
+LOOPBACK_INTERFACE_T0_NIC = "10.1.0.38/32"
+LOOPBACK_INTERFACE_LT0_NIC = "10.1.0.39/32"
 # rename and put in right place
 # port id 0 -> maps to  T0
 # port id 1 -> maps to  LT0
@@ -538,10 +542,11 @@ def setup_grpc_channels(stop_event):
                 "Could not retreive port inside config_db PORT table {} for gRPC channel initiation".format(logical_port_name))
 
 
-def try_grpc(callback, *args, **kwargs):
+def try_grpc(callback, rpc_timeout, *args, **kwargs):
     """
     Handy function to invoke the callback and catch NotImplementedError
     :param callback: Callback to be invoked
+    :param rpc_timeout: timeout for RPC in seconds
     :param args: Arguments to be passed to callback
     :param kwargs: Default return value if exception occur
     :return: Default return value if exception occur else return value of the callback
@@ -549,7 +554,11 @@ def try_grpc(callback, *args, **kwargs):
 
     return_val = True
     try:
-        resp = callback(*args)
+        if rpc_timeout is not None:
+            resp = callback(*args, timeout=rpc_timeout)
+        else:
+            resp = callback(*args)
+
         if resp is None:
             return_val = False
     except grpc.RpcError as e:
@@ -559,7 +568,9 @@ def try_grpc(callback, *args, **kwargs):
         elif e.code() == grpc.StatusCode.UNAVAILABLE:
             helper_logger.log_notice("rpc unavailable for port= {}".format(str(e.code())))
         elif e.code() == grpc.StatusCode.INVALID_ARGUMENT:
-            helper_logger.log_notice("rpc invalid for port= {}".format(str(e.code())))
+            helper_logger.log_notice("rpc invalid arguement for port= {}".format(str(e.code())))
+        elif e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+            helper_logger.log_notice("rpc timeout exceeded for port= {} timeout = {}".format(str(e.code()), rpc_timeout))
         else:
             helper_logger.log_notice("rpc exception error for port= {}".format(str(e.code())))
         resp = None
@@ -1172,7 +1183,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_chassis = platform_chassis
     y_cable_is_platform_vs = is_vs
 
-    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
+    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'debug')])
     # Get the namespaces in the platform
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
@@ -2942,7 +2953,7 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                 set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                 return
 
-            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request, timeout=0.1)
+            ret, response = try_grpc(stub.QueryAdminForwardingPortState, QUERY_ADMIN_FORWARDING_TIMEOUT , request)
 
             (self_state, peer_state) = parse_grpc_response_forwarding_state(ret, response, read_side)
             state = self_state
@@ -3055,7 +3066,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
                     fwd_state_response_tbl[asic_index].set(port, fvs_updated)
                     return
 
-            ret, response = try_grpc(stub.QueryAdminForwardingPortState, request, timeout=0.1)
+            ret, response = try_grpc(stub.QueryAdminForwardingPortState, QUERY_ADMIN_FORWARDING_TIMEOUT, request)
 
             (self_state, peer_state) = parse_grpc_response_forwarding_state(ret, response, read_side)
             if response is not None:
@@ -3134,7 +3145,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                         "stub was None for performing hw mux RPC port {}, setting it up again did not work".format(port))
                     return
 
-            ret, response = try_grpc(stub.SetAdminForwardingPortState, request, timeout=0.1)
+            ret, response = try_grpc(stub.SetAdminForwardingPortState, SET_ADMIN_FORWARDING_TIMEOUT, request)
             if response is not None:
                 # Debug only, remove this section once Server side is Finalized
                 hw_response_port_ids = response.portid
