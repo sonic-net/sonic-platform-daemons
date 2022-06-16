@@ -4699,7 +4699,7 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.check_mux_cable_port_type', MagicMock(return_value=(True,"active-standby")))
     @patch('os.path.isfile', MagicMock(return_value=True))
     @patch('time.sleep', MagicMock(return_value=True))
-    def test_handle_show_mux_state_cmd_arg_tbl_notification_with_instance_auto(self, mock_swsscommon_table, platform_sfputil):
+    def test_handle_show_mux_state_cmd_arg_tbl_notification_with_instance_auto_active_standby(self, mock_swsscommon_table, platform_sfputil):
 
         mock_table = MagicMock()
         mock_table.get = MagicMock(
@@ -4717,6 +4717,61 @@ class TestYCableScript(object):
         port = "Ethernet0"
         platform_sfputil.get_asic_id_for_logical_port = 0
         fvp = {"state": "active"}
+
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
+            class PortInstanceHelper():
+                def __init__(self):
+                    self.EEPROM_ERROR = -1
+                    self.TARGET_NIC = 1
+                    self.TARGET_TOR_A = 1
+                    self.TARGET_TOR_B = 1
+                    self.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS = 1
+                    self.FIRMWARE_DOWNLOAD_STATUS_FAILED = 2
+                    self.download_firmware_status = 0
+                    self.SWITCH_COUNT_MANUAL = "manual"
+                    self.SWITCH_COUNT_AUTO = "auto"
+                    self.SWITCHING_MODE_MANUAL = 0
+                    self.SWITCHING_MODE_AUTO = 1
+
+                def get_read_side(self):
+                    return 1
+
+                def get_switching_mode(self):
+                    return 1
+
+                def get_mux_direction(self):
+                    return 2
+
+            patched_util.get.return_value = PortInstanceHelper()
+            rc = handle_show_hwmode_state_cmd_arg_tbl_notification(
+                fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
+            assert(rc == None)
+
+    @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
+    @patch('ycable.ycable_utilities.y_cable_helper.get_ycable_physical_port_from_logical_port', MagicMock(return_value=(0)))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
+    @patch('ycable.ycable_utilities.y_cable_helper.check_mux_cable_port_type', MagicMock(return_value=(True,"active-active")))
+    def test_handle_show_mux_state_cmd_arg_tbl_notification_with_instance_auto_active_active(self, mock_swsscommon_table, platform_sfputil):
+
+        mock_table = MagicMock()
+        mock_table.get = MagicMock(
+            side_effect=[(True, (('state', "auto"), ("soc_ipv4", "192.168.0.1/32"))), (True, (('index', 2), ))])
+        mock_swsscommon_table.return_value = mock_table
+
+        xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        xcvrd_show_hwmode_dir_cmd_sts_tbl = mock_swsscommon_table
+        xcvrd_show_hwmode_dir_rsp_tbl = mock_swsscommon_table
+        xcvrd_show_hwmode_dir_res_tbl = mock_swsscommon_table
+        port_tbl = mock_swsscommon_table
+        asic_index = 0
+        port = "Ethernet0"
+        platform_sfputil.get_asic_id_for_logical_port = 0
+        fvp = {"state": "active"}
+        swsscommon.Table.return_value.get.return_value = (
+                False, {"read_side": "2", "state": "active"})
 
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as patched_util:
             class PortInstanceHelper():
