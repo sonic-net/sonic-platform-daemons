@@ -1183,7 +1183,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_chassis = platform_chassis
     y_cable_is_platform_vs = is_vs
 
-    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'debug')])
+    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
     # Get the namespaces in the platform
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
