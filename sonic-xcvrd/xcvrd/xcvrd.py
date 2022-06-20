@@ -937,15 +937,16 @@ class CmisManagerTask:
     CMIS_STATE_REMOVED   = 'REMOVED'
     CMIS_STATE_FAILED    = 'FAILED'
 
-    def __init__(self, port_mapping, skip_cmis_mgr=False):
+    def __init__(self, namespaces, port_mapping, skip_cmis_mgr=False):
         self.task_stopping_event = multiprocessing.Event()
         self.task_process = None
         self.port_dict = {}
         self.port_mapping = copy.deepcopy(port_mapping)
-        self.xcvr_table_helper = XcvrTableHelper()
+        self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.namespaces = namespaces
 
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
@@ -978,27 +979,24 @@ class CmisManagerTask:
 
         # Skip if the port/cage type is not a CMIS
         # 'index' can be -1 if STATE_DB|PORT_TABLE
-        # TODO:Make sure doesnot breakt non-CMIS
-        #ptype = _wrapper_get_sfp_type(pport)
-        #if ptype not in self.CMIS_MODULE_TYPES:
-        #    return
-
         if lport not in self.port_dict:
             self.port_dict[lport] = {}
+
+        if port_change_event.port_dict is None:
+            return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
-            if port_change_event.port_dict is not None and 'speed' in port_change_event.port_dict:
+            if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
                 self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
-            if port_change_event.port_dict is not None and 'lanes' in port_change_event.port_dict:
+            if 'lanes' in port_change_event.port_dict:
                 self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
-            if port_change_event.port_dict is not None and 'host_tx_ready' in port_change_event.port_dict:
+            if 'host_tx_ready' in port_change_event.port_dict:
                 self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
-            if port_change_event.port_dict is not None and 'admin_status' in port_change_event.port_dict:
+            if 'admin_status' in port_change_event.port_dict:
                 self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
-            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_INSERTED
-            self.reset_cmis_init(lport, 0)
+            self.force_cmis_reinit(lport, 0)
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
@@ -1123,12 +1121,15 @@ class CmisManagerTask:
 
         return True
 
-    def reset_cmis_init(self, lport, retries=0):
+    def force_cmis_reinit(self, lport, retries=0):
+        """
+        Try to force the restart of CMIS state machine
+        """
         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_INSERTED
         self.port_dict[lport]['cmis_retries'] = retries
         self.port_dict[lport]['cmis_expired'] = None # No expiration
 
-    def test_module_state(self, api, states):
+    def check_module_state(self, api, states):
         """
         Check if the CMIS module is in the specified state
 
@@ -1143,7 +1144,7 @@ class CmisManagerTask:
         """
         return api.get_module_state() in states
 
-    def test_config_error(self, api, channel, states):
+    def check_config_error(self, api, channel, states):
         """
         Check if the CMIS configuration states are in the specified state
 
@@ -1171,7 +1172,7 @@ class CmisManagerTask:
 
         return done
 
-    def test_datapath_state(self, api, channel, states):
+    def check_datapath_state(self, api, channel, states):
         """
         Check if the CMIS datapath states are in the specified state
 
@@ -1200,7 +1201,7 @@ class CmisManagerTask:
         return done
 
     def get_host_tx_status(self, lport):
-        host_tx_ready = 'False'
+        host_tx_ready = 'false'
 
         asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
         state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
@@ -1223,9 +1224,10 @@ class CmisManagerTask:
         return admin_status
 
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper()
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         self.log_notice("Starting...")
+        print("Starting")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event()
@@ -1327,7 +1329,7 @@ class CmisManagerTask:
                 try:
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
-                        if self.port_dict[lport]['host_tx_ready'] != 'True' or \
+                        if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
@@ -1365,16 +1367,16 @@ class CmisManagerTask:
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
-                        if not self.test_module_state(api, ['ModuleReady']):
+                        if not self.check_module_state(api, ['ModuleReady']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
-                                self.reset_cmis_init(lport, retries + 1)
+                                self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if not self.test_datapath_state(api, host_lanes, ['DataPathDeactivated']):
+                        if not self.check_datapath_state(api, host_lanes, ['DataPathDeactivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
-                                self.reset_cmis_init(lport, retries + 1)
+                                self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # D.1.3 Software Configuration and Initialization
@@ -1386,17 +1388,17 @@ class CmisManagerTask:
 
                         if not api.set_application(host_lanes, appl):
                             self.log_notice("{}: unable to set application".format(lport))
-                            self.reset_cmis_init(lport, retries + 1)
+                            self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # TODO: Use fine grained time when the CMIS memory map is available
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
-                        if not self.test_config_error(api, host_lanes, ['ConfigSuccess']):
+                        if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
-                                self.reset_cmis_init(lport, retries + 1)
+                                self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # Ensure the Datapath is NOT Activated unless the host Tx siganl is good.
@@ -1404,7 +1406,7 @@ class CmisManagerTask:
                         # the module won't take datapaths to Activated state if host tries to enable
                         # the datapaths while there is no good Tx signal from the host-side.
                         if self.port_dict[lport]['admin_status'] != 'up' or \
-                                self.port_dict[lport]['host_tx_ready'] != 'True':
+                                self.port_dict[lport]['host_tx_ready'] != 'true':
                             self.log_notice("{} waiting for host tx ready...".format(lport))
                             continue
 
@@ -1414,10 +1416,10 @@ class CmisManagerTask:
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        if not self.test_datapath_state(api, host_lanes, ['DataPathInitialized']):
+                        if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
-                                self.reset_cmis_init(lport, retries + 1)
+                                self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # Turn ON the laser
@@ -1425,10 +1427,10 @@ class CmisManagerTask:
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
-                        if not self.test_datapath_state(api, host_lanes, ['DataPathActivated']):
+                        if not self.check_datapath_state(api, host_lanes, ['DataPathActivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
-                                self.reset_cmis_init(lport, retries + 1)
+                                self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         self.log_notice("{}: READY".format(lport))
@@ -1463,13 +1465,14 @@ class CmisManagerTask:
 
 
 class DomInfoUpdateTask(object):
-    def __init__(self, port_mapping):
+    def __init__(self, namespaces, port_mapping):
         self.task_thread = None
         self.task_stopping_event = threading.Event()
         self.port_mapping = copy.deepcopy(port_mapping)
+        self.namespaces = namespaces
 
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper()
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         helper_logger.log_info("Start DOM monitoring loop")
         dom_info_cache = {}
         dom_th_info_cache = {}
@@ -1533,7 +1536,7 @@ class DomInfoUpdateTask(object):
 
 class SfpStateUpdateTask(object):
     RETRY_EEPROM_READING_INTERVAL = 60
-    def __init__(self, port_mapping, retry_eeprom_set):
+    def __init__(self, namespaces, port_mapping, retry_eeprom_set):
         self.task_process = None
         self.task_stopping_event = multiprocessing.Event()
         self.port_mapping = copy.deepcopy(port_mapping)
@@ -1545,6 +1548,7 @@ class SfpStateUpdateTask(object):
         # because _wrapper_get_presence returns the SFP presence status
         self.sfp_error_dict = {}
         self.sfp_insert_events = {}
+        self.namespaces = namespaces
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -1571,7 +1575,7 @@ class SfpStateUpdateTask(object):
         return event
 
     def task_worker(self, stopping_event, sfp_error_event):
-        self.xcvr_table_helper = XcvrTableHelper()
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         helper_logger.log_info("Start SFP monitoring loop")
 
@@ -1991,6 +1995,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.sfp_error_event = multiprocessing.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.namespaces = ['']
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -2072,9 +2077,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
+        # To prevent race condition in get_all_namespaces() we cache the namespaces before 
+        # creating any worker threads
+        self.namespaces = multi_asic.get_front_end_namespaces()
 
         # Initialize xcvr table helper
-        self.xcvr_table_helper = XcvrTableHelper()
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         if is_fast_reboot_enabled():
             self.log_info("Skip loading media_settings.json in case of fast-reboot")
@@ -2088,9 +2096,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Make sure this daemon started after all port configured
         self.log_info("Wait for port config is done")
-        for namespace in self.xcvr_table_helper.namespaces:
+        for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
-
 
         port_mapping_data = port_mapping.get_port_mapping()
 
@@ -2133,15 +2140,15 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data, retry_eeprom_set = self.init()
 
         # Start the CMIS manager
-        cmis_manager = CmisManagerTask(port_mapping_data, self.skip_cmis_mgr)
+        cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.skip_cmis_mgr)
         cmis_manager.task_run()
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(port_mapping_data)
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data)
         dom_info_update.task_run()
 
         # Start the sfp state info update process
-        sfp_state_update = SfpStateUpdateTask(port_mapping_data, retry_eeprom_set)
+        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, retry_eeprom_set)
         sfp_state_update.task_run(self.sfp_error_event)
 
         # Start the Y-cable state info update process if Y cable presence established
@@ -2174,13 +2181,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
 
 class XcvrTableHelper:
-    def __init__(self):
+    def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.status_tbl, self.app_port_tbl, \
 		self.cfg_port_tbl, self.state_port_tbl = {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
-        self.namespaces = multi_asic.get_front_end_namespaces()
-        for namespace in self.namespaces:
+        for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             self.int_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
