@@ -1230,7 +1230,7 @@ class CmisManagerTask:
         print("Starting")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
-        sel, asic_context = port_mapping.subscribe_port_update_event()
+        sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces)
         while not self.task_stopping_event.is_set():
             # Handle port change event from main thread
             port_mapping.handle_port_update_event(sel,
@@ -1476,7 +1476,7 @@ class DomInfoUpdateTask(object):
         helper_logger.log_info("Start DOM monitoring loop")
         dom_info_cache = {}
         dom_th_info_cache = {}
-        sel, asic_context = port_mapping.subscribe_port_config_change()
+        sel, asic_context = port_mapping.subscribe_port_config_change(self.namespaces)
 
         # Start loop to update dom info in DB periodically
         while not self.task_stopping_event.wait(DOM_INFO_UPDATE_PERIOD_SECS):
@@ -1649,7 +1649,7 @@ class SfpStateUpdateTask(object):
         retry = 0
         timeout = RETRY_PERIOD_FOR_SYSTEM_READY_MSECS
         state = STATE_INIT
-        sel, asic_context = port_mapping.subscribe_port_config_change()
+        sel, asic_context = port_mapping.subscribe_port_config_change(self.namespaces)
         port_change_event_handler = functools.partial(self.on_port_config_change, stopping_event)
         while not stopping_event.is_set():
             port_mapping.handle_port_config_change(sel, asic_context, stopping_event, self.port_mapping, helper_logger, port_change_event_handler)
@@ -2099,7 +2099,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
 
-        port_mapping_data = port_mapping.get_port_mapping()
+        port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
 
         # Post all the current interface dom/sfp info to STATE_DB
         self.log_info("Post all port DOM/SFP info to DB")
@@ -2116,7 +2116,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Start daemon deinit...")
 
         # Delete all the information from DB and then exit
-        port_mapping_data = port_mapping.get_port_mapping()
+        port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
         logical_port_list = port_mapping_data.logical_port_list
         for logical_port_name in logical_port_list:
             # Get the asic to which this port belongs
