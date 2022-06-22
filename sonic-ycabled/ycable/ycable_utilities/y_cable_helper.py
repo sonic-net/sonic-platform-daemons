@@ -401,8 +401,6 @@ def setup_grpc_channel_for_port(port, soc_ip):
 def put_init_values_for_grpc_states(port, read_side, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index):
 
 
-    self_state = "unknown"
-    peer_state = "unknown"
     stub = grpc_port_stubs.get(port, None)
     request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[int(read_side), 1 - int(read_side)], state=[0, 0])
     if stub is None:
