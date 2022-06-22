@@ -341,7 +341,7 @@ class TestXcvrdScript(object):
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
 
-        sel, asic_context = subscribe_port_config_change()
+        sel, asic_context = subscribe_port_config_change(DEFAULT_NAMESPACE)
         port_mapping = PortMapping()
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
@@ -369,7 +369,7 @@ class TestXcvrdScript(object):
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0'])
         mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), (True, (('index', 3), ))])
         mock_swsscommon_table.return_value = mock_table
-        port_mapping = get_port_mapping()
+        port_mapping = get_port_mapping(DEFAULT_NAMESPACE)
         assert port_mapping.logical_port_list.count('Ethernet0')
         assert port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert port_mapping.get_physical_to_logical(1) == ['Ethernet0']
