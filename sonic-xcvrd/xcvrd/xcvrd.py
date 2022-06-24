@@ -994,10 +994,10 @@ class CmisManagerTask:
                 self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
             if 'host_tx_ready' in port_change_event.port_dict:
                 self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
-            if 'admin_status' in port_change_event.port_dict and 'oper_status' in port_change_event.dict:
+            if 'admin_status' in port_change_event.port_dict and 'oper_status' in port_change_event.port_dict:
                 # At times 'admin_status' is NOT the same in the PORT_TABLE of APPL_DB and STATE_DB
                 # We dont have better way to check if 'admin_status' is from APPL_DB or STATE_DB so this
-                # check is put temporarily to list only to APPL_DB's admin_status and ignore that of STATE_DB
+                # check is put temporarily to listen only to APPL_DB's admin_status and ignore that of STATE_DB
                 self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
             self.force_cmis_reinit(lport, 0)
         else:
