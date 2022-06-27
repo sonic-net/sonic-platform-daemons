@@ -565,7 +565,7 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
 # Update port dom/sfp info in db
 
 
-def post_port_sfp_dom_info_to_db(is_advanced_start, port_mapping, stop_event=threading.Event()):
+def post_port_sfp_dom_info_to_db(is_advanced_start, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
     # Connect to STATE_DB and create transceiver dom/sfp info tables
     transceiver_dict = {}
     retry_eeprom_set = set()
@@ -2038,7 +2038,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Post all the current interface dom/sfp info to STATE_DB
         self.log_info("Post all port DOM/SFP info to DB")
 
-        retry_eeprom_set = post_port_sfp_dom_info_to_db(is_advanced_start, port_mapping_data, self.stop_event)
+        retry_eeprom_set = post_port_sfp_dom_info_to_db(is_advanced_start, port_mapping_data, self.xcvr_table_helper, self.stop_event)
 
         # Init port sfp status table
         self.log_info("Init port sfp status table")
