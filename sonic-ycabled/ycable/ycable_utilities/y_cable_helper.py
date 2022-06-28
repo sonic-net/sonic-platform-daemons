@@ -380,16 +380,21 @@ def setup_grpc_channel_for_port(port, soc_ip):
             certificate_chain=cert_chain)
     """
     helper_logger.log_debug("Y_CABLE_DEBUG:setting up gRPC channel for RPC's {} {}".format(port,soc_ip))
-    channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=[('grpc.keepalive_timeout_ms', 1000)])
-    stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
-    channel_ready = grpc.channel_ready_future(channel)
+     retries = 3
+     for _ in range(retries):
+         channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=[('grpc.keepalive_timeout_ms', 1000)])
+         stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
-    try:
-        channel_ready.result(timeout=0.2)
-    except grpc.FutureTimeoutError:
-        channel = None
-        stub = None
+         channel_ready = grpc.channel_ready_future(channel)
+
+         try:
+             channel_ready.result(timeout=0.2)
+         except grpc.FutureTimeoutError:
+             channel = None
+             stub = None
+         else:
+             break
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
