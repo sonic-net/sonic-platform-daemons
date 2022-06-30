@@ -3187,7 +3187,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
                     helper_logger.log_warning(
-                            "stub was None for performing hw mux RPC port {}, setting it up again did not work, posting unknown for stateDB:HW_MUX_CABLE_TABLE".format(port))
+                            "gRPC channel was initially not setup for performing hw mux set state RPC port {}, trying to set gRPC channel again also did not work, posting unknown state for stateDB:HW_MUX_CABLE_TABLE".format(port))
                     active_side = new_state = 'unknown'
                     time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                     fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_{}_start'.format(toggle_side, new_state), str(time_start)),
@@ -3201,16 +3201,6 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                     return
 
             ret, response = try_grpc(stub.SetAdminForwardingPortState, SET_ADMIN_FORWARDING_TIMEOUT, request)
-            """
-            TODO remove some of this debug code
-            future_obj = grpc.channel_ready_future(grpc_port_channels[port])
-            try:
-                future_obj.result(timeout=0.1)
-            except:
-                helper_logger.log_warning("port %s channel is not ready" % port)
-
-            helper_logger.log_warning("port %s: ret: %s, response: %s" % (port, ret, response))
-            """
 
             if response is not None:
                 # Debug only, remove this section once Server side is Finalized
