@@ -53,7 +53,7 @@ LOOPBACK_INTERFACE_LT0 = "10.212.64.2/32"
 LOOPBACK_INTERFACE_T0_NIC = "10.1.0.38/32"
 LOOPBACK_INTERFACE_LT0_NIC = "10.1.0.39/32"
 # rename and put in right place
-# port id 0 -> maps to  UT0
+# port id 0 -> maps to  T0
 # port id 1 -> maps to  LT0
 
 SYSLOG_IDENTIFIER = "y_cable_helper"
