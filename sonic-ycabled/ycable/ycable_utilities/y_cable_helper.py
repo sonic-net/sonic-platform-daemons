@@ -398,6 +398,8 @@ def setup_grpc_channel_for_port(port, soc_ip):
         except grpc.FutureTimeoutError:
             channel = None
             stub = None
+        else:
+            break
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
