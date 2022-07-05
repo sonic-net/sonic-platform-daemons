@@ -469,6 +469,9 @@ class TestXcvrdScript(object):
         mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
         mock_xcvr_api.set_application = MagicMock(return_value=True)
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=True)
+        mock_xcvr_api.get_tx_config_power = MagicMock(return_value=0)
+        mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_application_advertisement = MagicMock(return_value={
             1: {
@@ -551,6 +554,10 @@ class TestXcvrdScript(object):
 
         task.get_host_tx_status = MagicMock(return_value='true')
         task.get_port_admin_status = MagicMock(return_value='up')
+        task.get_configured_tx_power = MagicMock(return_value=-13)
+        task.get_configured_laser_freq = MagicMock(return_value=193100)
+        task.configure_tx_output_power = MagicMock(return_value=1)
+        task.configure_laser_frequency = MagicMock(return_value=1)
 
         # Case 1: Module Inserted --> DP_DEINIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])

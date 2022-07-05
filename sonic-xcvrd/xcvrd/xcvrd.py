@@ -1281,7 +1281,6 @@ class CmisManagerTask:
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         self.log_notice("Starting...")
-        print("Starting")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces)
@@ -1363,12 +1362,13 @@ class CmisManagerTask:
 
                     if api.is_coherent_module():
                        if 'tx_power' not in self.port_dict[lport]:
-                           self.port_dic[lport]['tx_power'] = self.get_configured_tx_power(lport)
+                           self.port_dict[lport]['tx_power'] = self.get_configured_tx_power(lport)
                        if 'laser_freq' not in self.port_dict[lport]:
-                           self.port_dic[lport]['laser_freq'] = self.get_configured_laser_freq(lport)
+                           self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq(lport)
                 except AttributeError:
                     # Skip if these essential routines are not available
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                    assert 1 == 0
                     continue
 
                 # CMIS expiration and retries
@@ -1396,7 +1396,6 @@ class CmisManagerTask:
                            api.tx_disable_channel(host_lanes, True)
                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                            continue
-
                     # Configure the target output power if ZR module
                         if api.is_coherent_module():
                            tx_power = self.port_dict[lport]['tx_power']
