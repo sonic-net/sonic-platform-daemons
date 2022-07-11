@@ -18,39 +18,17 @@ pr:
     include:
       - '*'
 
-pool:
-  vmImage: 'ubuntu-20.04'
+pool: sonicbld-armhf
 
 resources:
   containers:
-  - container: sonic-slave-buster
-    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-buster:latest
+  - container: sonic-slave-bullseye-armhf
+    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye-armhf:latest
 
 parameters:
 - name: project_list
   type: object
   default:
-    - name: chassisd
-      root_dir: sonic-chassisd
-      python3: true
-    - name: ledd
-      root_dir: sonic-ledd
-      python3: true
-    - name: pcied
-      root_dir: sonic-pcied
-      python3: true
-    - name: psud
-      root_dir: sonic-psud
-      python3: true
-    - name: syseepromd
-      root_dir: sonic-syseepromd
-      python3: true
-    - name: thermalctld
-      root_dir: sonic-thermalctld
-      python3: true
-    - name: xcvrd
-      root_dir: sonic-xcvrd
-      python3: true
     - name: ycabled
       root_dir: sonic-ycabled
       python3: true
@@ -60,7 +38,7 @@ parameters:
 
 jobs:
   - job: build_test
-    container: sonic-slave-buster
+    container: sonic-slave-bullseye
     variables:
       sourceBranch: "$(Build.SourceBranch)"
     steps:
@@ -93,9 +71,8 @@ jobs:
         sudo dpkg -i libnl-nf-3-200_*.deb
         sudo dpkg -i libhiredis0.14_*.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
-        sudo dpkg -i python-swsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Pipeline.Workspace)/target/debs/buster/
+      workingDirectory: $(Pipeline.Workspace)/target/debs/bullseye/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -106,17 +83,8 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/buster/
+      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/bullseye/
       displayName: 'Install Python dependencies'
-
-    - script: |
-        set -ex
-        # Install .NET CORE
-        curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-        sudo apt-add-repository https://packages.microsoft.com/debian/10/prod
-        sudo apt-get update
-        sudo apt-get install -y dotnet-sdk-5.0
-      displayName: "Install .NET CORE"
 
     - ${{ each project in parameters.project_list }}:
       # Python 3
@@ -125,14 +93,6 @@ jobs:
             python3 setup.py test
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
-
-        - task: PublishTestResults@2
-          inputs:
-            testResultsFiles: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/test-results.xml'
-            testRunTitle: ${{ project.name }} (Python 3)
-            failTaskOnFailedTests: true
-          condition: succeededOrFailed()
-          displayName: '${{ project.name }}(Py3) Publish test results'
 
         - script: |
             set -e
@@ -143,12 +103,3 @@ jobs:
         - publish: '$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/dist/'
           artifact: ${{ project.root_dir }}
           displayName: "${{ project.name }}(Py3) Publish wheels"
-    - task: reportgenerator@4
-      inputs:
-        reports: '$(Build.SourcesDirectory)/**/coverage.xml'
-        targetdir: '$(Build.SourcesDirectory)/'
-    - task: PublishCodeCoverageResults@1
-      inputs:
-        codeCoverageTool: 'Cobertura'
-        summaryFileLocation: '$(Build.SourcesDirectory)/Cobertura.xml'
-        pathToSources: $(System.DefaultWorkingDirectory)/
