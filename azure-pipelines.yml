@@ -38,7 +38,7 @@ parameters:
 
 jobs:
   - job: build_test
-    container: sonic-slave-bullseye
+    container: sonic-slave-bullseye-armhf
     variables:
       sourceBranch: "$(Build.SourceBranch)"
     steps:
