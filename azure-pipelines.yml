@@ -65,11 +65,11 @@ jobs:
     - script: |
         set -xe
         sudo apt-get -y purge libhiredis-dev libnl-3-dev libnl-route-3-dev
-        sudo dpkg -i libnl-3-200_*.deb
-        sudo dpkg -i libnl-genl-3-200_*.deb
-        sudo dpkg -i libnl-route-3-200_*.deb
-        sudo dpkg -i libnl-nf-3-200_*.deb
-        sudo dpkg -i libhiredis0.14_*.deb
+        sudo dpkg -i libnl-3-200_*_armhf.deb
+        sudo dpkg -i libnl-genl-3-200_*_armhf.deb
+        sudo dpkg -i libnl-route-3-200_*_armhf.deb
+        sudo dpkg -i libnl-nf-3-200_*_armhf.deb
+        sudo dpkg -i libhiredis0.14_*_armhf.deb
         sudo dpkg -i libswsscommon_1.0.0_armhf.deb
         sudo dpkg -i python3-swsscommon_1.0.0_armhf.deb
       workingDirectory: $(Pipeline.Workspace)/target/debs/bullseye/
