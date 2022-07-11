@@ -90,7 +90,7 @@ jobs:
       # Python 3
       - ${{ if eq(project.python3, true) }}:
         - script: |
-            python3 setup.py test
+            LD_DEBUG=bindings python3 setup.py test
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
 
