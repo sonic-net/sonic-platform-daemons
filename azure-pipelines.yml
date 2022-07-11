@@ -56,8 +56,8 @@ jobs:
       inputs:
         source: 'specific'
         project: 'build'
-        pipeline: 142
-        artifact: 'sonic-buildimage.vs'
+        pipeline: 141
+        artifact: 'sonic-buildimage.marvell-armhf'
         runVersion: 'latestFromBranch'
         runBranch: "$(sourceBranch)"
       displayName: "Download artifacts from latest sonic-buildimage build"
@@ -70,8 +70,8 @@ jobs:
         sudo dpkg -i libnl-route-3-200_*.deb
         sudo dpkg -i libnl-nf-3-200_*.deb
         sudo dpkg -i libhiredis0.14_*.deb
-        sudo dpkg -i libswsscommon_1.0.0_amd64.deb
-        sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
+        sudo dpkg -i libswsscommon_1.0.0_armhf.deb
+        sudo dpkg -i python3-swsscommon_1.0.0_armhf.deb
       workingDirectory: $(Pipeline.Workspace)/target/debs/bullseye/
       displayName: 'Install Debian dependencies'
 
