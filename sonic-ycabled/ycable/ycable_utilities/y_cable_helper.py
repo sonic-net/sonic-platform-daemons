@@ -372,9 +372,9 @@ def get_grpc_credentials(type, kvp):
 
     root_file = kvp.get("ca_crt", None)
     if root_file is not None: 
-		root_cert = open(root_file, 'rb').read()
+        root_cert = open(root_file, 'rb').read()
     else:
-        helper_logger.log_error("grpc credential channel setup no root file in config_db)
+        helper_logger.log_error("grpc credential channel setup no root file in config_db")
         return None
 
     if type == "mutual":
@@ -382,29 +382,27 @@ def get_grpc_credentials(type, kvp):
         if cert_file is not None: 
             cert_chain = open(cert_file, 'rb').read()
         else:
-            helper_logger.log_error("grpc credential channel setup no cert file for mutual authentication in config_db)
+            helper_logger.log_error("grpc credential channel setup no cert file for mutual authentication in config_db")
             return None
 
         key_file = kvp.get("server_key", None)
         if key_file is not None: 
             key = open(key_file, 'rb').read()
         else:
-            helper_logger.log_error("grpc credential channel setup no key file for mutual authentication in config_db)
+            helper_logger.log_error("grpc credential channel setup no key file for mutual authentication in config_db")
             return None
 
-		credential = grpc.ssl_channel_credentials(
-				root_certificates=root_cert,
-				private_key=key,
-				certificate_chain=cert_chain)
+        credential = grpc.ssl_channel_credentials(
+                root_certificates=root_cert,
+                private_key=key,
+                certificate_chain=cert_chain)
     elif type == "server":
-		credential = grpc.ssl_channel_credentials(
-				root_certificates=root_cert,
-				private_key=key,
-				root_certificates=root_cert)
+        credential = grpc.ssl_channel_credentials(
+                root_certificates=root_cert)
 
     return credential
 
-def create_channel(type,level, kvp):
+def create_channel(type,level, kvp, soc_ip):
 
     retries = 3
     for _ in range(retries):
@@ -458,7 +456,7 @@ def setup_grpc_channel_for_port(port, soc_ip):
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPC_CLIENT")
+        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPCCLIENT")
 
     asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(port)
 
@@ -470,11 +468,25 @@ def setup_grpc_channel_for_port(port, soc_ip):
     
     # check the type of configuration and try to setup a TLS/non TLS channel
     #'config': {
-    #'allow_insecure': 'false',
+    #'type': 'secure',
     #'auth_level': 'server',
     #'log_level': 'info'
     #},
+   
 
+    grpc_config_dict = dict(fvs)
+    type = grpc_config_dict.get("type", None)
+    level = grpc_config_dict.get("auth_level", None)
+
+    (status, fvs) = grpc_config[asic_index].get("certs")
+    if status is False:
+        helper_logger.log_warning(
+            "Could not retreive fieldvalue pairs for {}, inside config_db table kvp certs for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
+        return (None, None)
+
+    kvp = dict(fvs)
+
+    channel, stub =create_channel(type,level, kvp, soc_ip) 
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
@@ -1501,12 +1513,13 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
+    (cable_status, cable_type) = check_mux_cable_port_type(logical_port_name, port_tbl, asic_index)
 
     if status is False:
         helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
-    else:
+    elif cable_status and cable_type == "active-standby":
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
