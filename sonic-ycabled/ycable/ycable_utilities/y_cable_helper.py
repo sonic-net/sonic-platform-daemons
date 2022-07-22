@@ -413,6 +413,7 @@ def create_channel(type,level, kvp, soc_ip):
 
         if type == "secure": 
             credential = get_grpc_credentials(level, kvp)
+            target_name = kvp.get("grpc_ssl_credential", None)
             if credential is None or target_name is None:
                 return (None, None)
 
