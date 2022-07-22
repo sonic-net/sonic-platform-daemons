@@ -413,7 +413,7 @@ def create_channel(type,level, kvp, soc_ip):
 
         if type == "secure": 
             credential = get_grpc_credentials(type, kvp)
-	    if credential is None or target_name is None:
+            if credential is None or target_name is None:
                 return (None, None)
 
             GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
