@@ -378,14 +378,14 @@ def get_grpc_credentials(type, kvp):
         return None
 
     if type == "mutual":
-        cert_file = kvp.get("server_crt", None)
+        cert_file = kvp.get("client_crt", None)
         if cert_file is not None: 
             cert_chain = open(cert_file, 'rb').read()
         else:
             helper_logger.log_error("grpc credential channel setup no cert file for mutual authentication in config_db")
             return None
 
-        key_file = kvp.get("server_key", None)
+        key_file = kvp.get("client_key", None)
         if key_file is not None: 
             key = open(key_file, 'rb').read()
         else:
@@ -399,6 +399,10 @@ def get_grpc_credentials(type, kvp):
     elif type == "server":
         credential = grpc.ssl_channel_credentials(
                 root_certificates=root_cert)
+    else:
+        #should not happen
+        helper_logger.log_error("grpc credential channel setup no type specified for authentication in config_db")
+        return None
 
     return credential
 
@@ -409,8 +413,10 @@ def create_channel(type,level, kvp, soc_ip):
 
         if type == "secure": 
             credential = get_grpc_credentials(type, kvp)
-            if credntial is None:
+	    if credential is None or target_name is None:
                 return (None, None)
+
+            GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
 
             channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
         else:
