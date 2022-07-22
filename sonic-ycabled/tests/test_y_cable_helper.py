@@ -5309,4 +5309,25 @@ class TestYCableScript(object):
         assert(rc['nic_lane1_postcursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor2'] == 'N/A')
 
+    def test_get_grpc_credentials(self):
+        
+        kvp = {}
+        type = None
 
+        rc = get_grpc_credentials(type, kvp)
+
+        assert(rc == None)
+
+
+    @patch('builtins.open')
+    def test_get_grpc_credentials_root(self, open):
+        
+        kvp = {"ca_crt": "file"}
+        type = "server" 
+
+        mock_file = MagicMock()
+        mock_file.read = MagicMock(return_value=bytes('abcdefgh', 'utf-8'))
+        open.return_value = mock_file
+        rc = get_grpc_credentials(type, kvp)
+
+        assert(rc != None)
