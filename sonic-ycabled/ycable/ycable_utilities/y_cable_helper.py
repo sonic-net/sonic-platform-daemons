@@ -412,7 +412,7 @@ def create_channel(type,level, kvp, soc_ip):
     for _ in range(retries):
 
         if type == "secure": 
-            credential = get_grpc_credentials(type, kvp)
+            credential = get_grpc_credentials(level, kvp)
             if credential is None or target_name is None:
                 return (None, None)
 
@@ -437,12 +437,7 @@ def create_channel(type,level, kvp, soc_ip):
     return channel, stub
 
 def setup_grpc_channel_for_port(port, soc_ip):
-    """
-    root_cert = open('/etc/sonic/credentials/ca-chain-bundle.cert.pem', 'rb').read()
-    key = open('/etc/sonic/credentials/client.key.pem', 'rb').read()
-    cert_chain = open('/etc/sonic/credentials/client.cert.pem', 'rb').read()
 
-    """
     """
     Dummy values for lab for now
     TODO remove these once done
@@ -466,33 +461,32 @@ def setup_grpc_channel_for_port(port, soc_ip):
 
     asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(port)
 
+    #if no config from config DB, treat channel to be as insecure
+    type = "insecure"
+    level = "server"
+
     (status, fvs) = grpc_config[asic_index].get("config")
     if status is False:
         helper_logger.log_warning(
             "Could not retreive fieldvalue pairs for {}, inside config_db table kvp config for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
-        return (None, None)
+    else:
+        grpc_config_dict = dict(fvs)
+        type = grpc_config_dict.get("type", None)
+        level = grpc_config_dict.get("auth_level", None)
     
-    # check the type of configuration and try to setup a TLS/non TLS channel
-    #'config': {
-    #'type': 'secure',
-    #'auth_level': 'server',
-    #'log_level': 'info'
-    #},
    
+    kvp = {}
+    if type == "secure":
+        (status, fvs) = grpc_config[asic_index].get("certs")
+        if status is False:
+            helper_logger.log_warning(
+                "Could not retreive fieldvalue pairs for {}, inside config_db table kvp certs for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
+            #if type is secure, must have certs defined
+            return (None, None)
+        kvp = dict(fvs)
 
-    grpc_config_dict = dict(fvs)
-    type = grpc_config_dict.get("type", None)
-    level = grpc_config_dict.get("auth_level", None)
 
-    (status, fvs) = grpc_config[asic_index].get("certs")
-    if status is False:
-        helper_logger.log_warning(
-            "Could not retreive fieldvalue pairs for {}, inside config_db table kvp certs for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
-        return (None, None)
-
-    kvp = dict(fvs)
-
-    channel, stub =create_channel(type,level, kvp, soc_ip) 
+    channel, stub = create_channel(type, level, kvp, soc_ip) 
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
