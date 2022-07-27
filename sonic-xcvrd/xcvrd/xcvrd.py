@@ -1207,7 +1207,7 @@ class CmisManagerTask:
 
         return done
 
-    def get_configured_laser_freq(self, lport):
+    def get_configured_laser_freq_from_db(self, lport):
         """
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
@@ -1220,7 +1220,7 @@ class CmisManagerTask:
             freq = dict(port_info)['laser_freq']
         return int(freq)
 
-    def get_configured_tx_power(self, lport):
+    def get_configured_tx_power_from_db(self, lport):
         """
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
@@ -1362,13 +1362,12 @@ class CmisManagerTask:
 
                     if api.is_coherent_module():
                        if 'tx_power' not in self.port_dict[lport]:
-                           self.port_dict[lport]['tx_power'] = self.get_configured_tx_power(lport)
+                           self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
                        if 'laser_freq' not in self.port_dict[lport]:
-                           self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq(lport)
+                           self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
                 except AttributeError:
                     # Skip if these essential routines are not available
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                    assert 1 == 0
                     continue
 
                 # CMIS expiration and retries

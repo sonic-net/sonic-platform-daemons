@@ -452,17 +452,17 @@ class TestXcvrdScript(object):
         cfg_port_tbl.get = MagicMock(return_value=(True, (('laser_freq', 193100),)))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
         task.xcvr_table_helper.get_cfg_port_tbl = mock_table_helper.get_cfg_port_tbl
-        assert task.get_configured_laser_freq('Ethernet0') == 193100
+        assert task.get_configured_laser_freq_from_db('Ethernet0') == 193100
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
-    def test_CmisManagerTask_get_configured_tx_power(self, mock_table_helper):
+    def test_CmisManagerTask_get_configured_tx_power_from_db(self, mock_table_helper):
         port_mapping = PortMapping()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping)
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.get = MagicMock(return_value=(True, (('tx_power', -10),)))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
         task.xcvr_table_helper.get_cfg_port_tbl = mock_table_helper.get_cfg_port_tbl
-        assert task.get_configured_tx_power('Ethernet0') == -10
+        assert task.get_configured_tx_power_from_db('Ethernet0') == -10
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
@@ -575,8 +575,8 @@ class TestXcvrdScript(object):
 
         task.get_host_tx_status = MagicMock(return_value='true')
         task.get_port_admin_status = MagicMock(return_value='up')
-        task.get_configured_tx_power = MagicMock(return_value=-13)
-        task.get_configured_laser_freq = MagicMock(return_value=193100)
+        task.get_configured_tx_power_from_db = MagicMock(return_value=-13)
+        task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
