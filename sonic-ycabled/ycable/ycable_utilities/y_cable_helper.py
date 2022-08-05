@@ -90,6 +90,7 @@ errors_block_eeprom_reading = {
 y_cable_port_instances = {}
 y_cable_port_locks = {}
 
+disable_telemetry = False
 
 Y_CABLE_STATUS_NO_TOR_ACTIVE = 0
 Y_CABLE_STATUS_TORA_ACTIVE = 1
@@ -1504,6 +1505,11 @@ def delete_ports_status_for_y_cable():
 
 
 def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
+
+    global disable_telemetry
+
+    if disable_telemetry == True:
+       return
 
     # Get the namespaces in the platform
     config_db, port_tbl = {}, {}
@@ -3537,6 +3543,8 @@ class YCableTableUpdateTask(object):
 
     def task_cli_worker(self):
 
+        global disable_telemetry
+
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, config_db , state_db, y_cable_tbl = {}, {}, {}, {}
         xcvrd_log_tbl = {}
@@ -3730,8 +3738,8 @@ class YCableTableUpdateTask(object):
                 helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
                 if fvp_m:
 
-                    if key == "Y_CABLE":
-                        continue
+                    if key != "Y_CABLE":
+                        break
 
                     fvp_dict = dict(fvp_m)
                     if "log_verbosity" in fvp_dict:
@@ -3743,6 +3751,16 @@ class YCableTableUpdateTask(object):
 
                         elif probe_identifier == "notice":
                             helper_logger.set_min_log_priority_notice()
+                    if "disable_telemetry" in fvp_dict:
+                        # check if xcvrd got a probe command
+                        enable = fvp_dict["disable_telemetry"]
+
+                        helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable telemetry flag to {}".format(enable))
+                        if enable == "True":
+                            disable_telemetry = True
+
+                        elif enable == "False":
+                            disable_telemetry = False
 
             while True:
                 # show muxcable hwmode state <port>
