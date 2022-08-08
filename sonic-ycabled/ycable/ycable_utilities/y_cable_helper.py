@@ -3762,8 +3762,9 @@ class YCableTableUpdateTask(object):
                 if not key:
                     break
 
-                helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
-                handle_ycable_enable_disable_tel_notification(fvp_m, 'Y_CABLE')
+                if fvp_m:
+                    helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
+                    handle_ycable_enable_disable_tel_notification(fvp_m, 'Y_CABLE')
                     break
 
             while True:
