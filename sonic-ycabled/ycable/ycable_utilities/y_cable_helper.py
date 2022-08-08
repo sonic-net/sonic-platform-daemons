@@ -3329,6 +3329,35 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
             helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
                 port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
 
+def handle_ycable_enable_disable_tel_notification(fvp_m, key):
+
+    global disable_telemetry
+
+    if fvp_m:
+
+        if key != "Y_CABLE":
+            break
+
+        fvp_dict = dict(fvp_m)
+        if "log_verbosity" in fvp_dict:
+            # check if xcvrd got a probe command
+            probe_identifier = fvp_dict["log_verbosity"]
+
+            if probe_identifier == "debug":
+                helper_logger.set_min_log_priority_debug()
+
+            elif probe_identifier == "notice":
+                helper_logger.set_min_log_priority_notice()
+        if "disable_telemetry" in fvp_dict:
+            # check if xcvrd got a probe command
+            enable = fvp_dict["disable_telemetry"]
+
+            helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable telemetry flag to {}".format(enable))
+            if enable == "True":
+                disable_telemetry = True
+
+            elif enable == "False":
+                disable_telemetry = False
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
@@ -3543,8 +3572,6 @@ class YCableTableUpdateTask(object):
 
     def task_cli_worker(self):
 
-        global disable_telemetry
-
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
         appl_db, config_db , state_db, y_cable_tbl = {}, {}, {}, {}
         xcvrd_log_tbl = {}
@@ -3736,31 +3763,8 @@ class YCableTableUpdateTask(object):
                     break
 
                 helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
-                if fvp_m:
-
-                    if key != "Y_CABLE":
-                        break
-
-                    fvp_dict = dict(fvp_m)
-                    if "log_verbosity" in fvp_dict:
-                        # check if xcvrd got a probe command
-                        probe_identifier = fvp_dict["log_verbosity"]
-
-                        if probe_identifier == "debug":
-                            helper_logger.set_min_log_priority_debug()
-
-                        elif probe_identifier == "notice":
-                            helper_logger.set_min_log_priority_notice()
-                    if "disable_telemetry" in fvp_dict:
-                        # check if xcvrd got a probe command
-                        enable = fvp_dict["disable_telemetry"]
-
-                        helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable telemetry flag to {}".format(enable))
-                        if enable == "True":
-                            disable_telemetry = True
-
-                        elif enable == "False":
-                            disable_telemetry = False
+                handle_ycable_enable_disable_tel_notification(fvp_m, 'Y_CABLE')
+                    break
 
             while True:
                 # show muxcable hwmode state <port>
