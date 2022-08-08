@@ -5338,7 +5338,7 @@ class TestYCableScript(object):
 
         fvp_m = {"disable_telemetry": "True"}
         rc = handle_ycable_enable_disable_tel_notification(fvp_m, "Y_CABLE")
-        assert(patch == True)
+        assert(rc == None)
 
     def test_handle_ycable_enable_disable_tel_notification_probe(self):
 
