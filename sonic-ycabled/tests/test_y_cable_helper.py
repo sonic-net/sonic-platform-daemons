@@ -5333,11 +5333,12 @@ class TestYCableScript(object):
         assert(rc != None)
 
 
-    def test_handle_ycable_enable_disable_tel_notification(self):
+    @patch('ycable.ycable_utilities.y_cable_helper.disable_telemetry')
+    def test_handle_ycable_enable_disable_tel_notification(self, patch):
 
         fvp_m = {"disable_telemetry": "True"}
         rc = handle_ycable_enable_disable_tel_notification(fvp_m, "Y_CABLE")
-        assert(ycable.ycable_utilities.y_cable_helper.disable_telemetry == True)
+        assert(patch == True)
 
     def test_handle_ycable_enable_disable_tel_notification_probe(self):
 
