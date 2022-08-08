@@ -3336,7 +3336,7 @@ def handle_ycable_enable_disable_tel_notification(fvp_m, key):
     if fvp_m:
 
         if key != "Y_CABLE":
-            break
+            return
 
         fvp_dict = dict(fvp_m)
         if "log_verbosity" in fvp_dict:
