@@ -4744,7 +4744,6 @@ class TestYCableScript(object):
         assert(rc['nic_lane1_precursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor2'] == 'N/A')
-        assert(rc != None)
 
 
     @patch('ycable.ycable_utilities.y_cable_helper.disable_telemetry')
