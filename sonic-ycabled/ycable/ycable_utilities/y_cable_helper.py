@@ -50,6 +50,7 @@ errors_block_eeprom_reading = {
 y_cable_port_instances = {}
 y_cable_port_locks = {}
 
+disable_telemetry = False
 
 Y_CABLE_STATUS_NO_TOR_ACTIVE = 0
 Y_CABLE_STATUS_TORA_ACTIVE = 1
@@ -980,6 +981,11 @@ def delete_ports_status_for_y_cable():
 
 
 def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
+
+    global disable_telemetry
+
+    if disable_telemetry == True:
+       return
 
     # Get the namespaces in the platform
     config_db, port_tbl = {}, {}
@@ -2520,6 +2526,136 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_dir
     else:
         helper_logger.log_warning("Error: Wrong input param for cli command show mux hwmode muxdirection logical port {}".format(port))
         set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
+        helper_logger.log_warning("command key not present in the notification fwd state handling port {}".format(port))
+
+
+def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port):
+
+    # entering this section signifies a gRPC start for state
+    # change request from swss so initiate recording in mux_metrics table
+    time_start = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+    # This check might be redundant, to check, the presence of this Port in keys
+    # in logical_port_list but keep for now for coherency
+    # also skip checking in logical_port_list inside sfp_util
+
+    helper_logger.log_debug("Y_CABLE_DEBUG:recevied the notification mux hw state")
+    fvp_dict = dict(fvp)
+    toggle_side = "self"
+
+    if "state" in fvp_dict:
+        # got a state change
+        new_state = fvp_dict["state"]
+        requested_status = new_state
+        if requested_status in ["active", "standby"]:
+
+            (status, fvs) = hw_mux_cable_tbl[asic_index].get(port)
+            if status is False:
+                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                    port, hw_mux_cable_tbl[asic_index].getTableName()))
+                return
+            helper_logger.log_debug("Y_CABLE_DEBUG processing the notification mux hw state port {}".format(port))
+            mux_port_dict = dict(fvs)
+            old_state = mux_port_dict.get("state", None)
+            read_side = mux_port_dict.get("read_side", None)
+            curr_read_side = int(read_side)
+            # Now whatever is the state requested, call gRPC to update the soc state appropriately
+            if peer == True:
+                curr_read_side = 1-int(read_side)
+                toggle_side = "peer"
+
+            if new_state == "active":
+                state_req = 1
+            elif new_state == "standby":
+                state_req = 0
+
+            helper_logger.log_notice(
+                "calling RPC for hw mux_cable set state ispeer = {} port {} portid {} read_side {} state requested {}".format(peer, port, curr_read_side, read_side, new_state))
+
+            request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[curr_read_side], state=[state_req])
+
+            stub = grpc_port_stubs.get(port, None)
+            if stub is None:
+                helper_logger.log_debug("Y_CABLE_DEBUG:stub is None for performing hw mux RPC port {}".format(port))
+                retry_setup_grpc_channel_for_port(port, asic_index)
+                stub = grpc_port_stubs.get(port, None)
+                if stub is None:
+                    helper_logger.log_warning(
+                            "gRPC channel was initially not setup for performing hw mux set state RPC port {}, trying to set gRPC channel again also did not work, posting unknown state for stateDB:HW_MUX_CABLE_TABLE".format(port))
+                    active_side = new_state = 'unknown'
+                    time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+                    fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_{}_start'.format(toggle_side, new_state), str(time_start)),
+                                                              ('xcvrd_switch_{}_{}_end'.format(toggle_side, new_state), str(time_end))])
+                    grpc_metrics_tbl[asic_index].set(port, fvs_metrics)
+
+                    fvs_updated = swsscommon.FieldValuePairs([('state', new_state),
+                                                              ('read_side', read_side),
+                                                              ('active_side', str(active_side))])
+                    hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
+                    return
+
+            ret, response = try_grpc(stub.SetAdminForwardingPortState, SET_ADMIN_FORWARDING_TIMEOUT, request)
+
+            if response is not None:
+                # Debug only, remove this section once Server side is Finalized
+                hw_response_port_ids = response.portid
+                hw_response_port_ids_state = response.state
+                helper_logger.log_notice(
+                    "Set admin state RPC received response port {} port ids = {} curr_read_side {} read_side {}".format(port, hw_response_port_ids, curr_read_side, read_side))
+                helper_logger.log_notice(
+                    "Set admin state RPC received response port {} state values = {} curr_read_side {} read_side {}".format(port, hw_response_port_ids_state, curr_read_side, read_side))
+            else:
+                helper_logger.log_notice("response was none hw_mux_cable_table_grpc_notification {} ".format(port))
+
+            active_side = parse_grpc_response_hw_mux_cable_change_state(ret, response, curr_read_side, port)
+
+            if active_side == "unknown":
+                helper_logger.log_warning(
+                    "ERR: Got a change event for updating gRPC but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(port, old_state, new_state))
+                new_state = 'unknown'
+
+            time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+            fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_{}_start'.format(toggle_side, new_state), str(time_start)),
+                                                      ('xcvrd_switch_{}_{}_end'.format(toggle_side, new_state), str(time_end))])
+            grpc_metrics_tbl[asic_index].set(port, fvs_metrics)
+
+            fvs_updated = swsscommon.FieldValuePairs([('state', new_state),
+                                                      ('read_side', read_side),
+                                                      ('active_side', str(active_side))])
+            hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
+            helper_logger.log_debug("Y_CABLE_DEBUG: processed the notification hw mux state cleanly {}".format(port))
+        else:
+            helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
+                port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
+
+def handle_ycable_enable_disable_tel_notification(fvp_m, key):
+
+    global disable_telemetry
+
+    if fvp_m:
+
+        if key != "Y_CABLE":
+            return
+
+        fvp_dict = dict(fvp_m)
+        if "log_verbosity" in fvp_dict:
+            # check if xcvrd got a probe command
+            probe_identifier = fvp_dict["log_verbosity"]
+
+            if probe_identifier == "debug":
+                helper_logger.set_min_log_priority_debug()
+
+            elif probe_identifier == "notice":
+                helper_logger.set_min_log_priority_notice()
+        if "disable_telemetry" in fvp_dict:
+            # check if xcvrd got a probe command
+            enable = fvp_dict["disable_telemetry"]
+
+            helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable telemetry flag to {}".format(enable))
+            if enable == "True":
+                disable_telemetry = True
+
+            elif enable == "False":
+                disable_telemetry = False
 
 # Thread wrapper class to update y_cable status periodically
 class YCableTableUpdateTask(object):
@@ -2863,22 +2999,10 @@ class YCableTableUpdateTask(object):
                 if not key:
                     break
 
-                helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
                 if fvp_m:
-
-                    if key == "Y_CABLE":
-                        continue
-
-                    fvp_dict = dict(fvp_m)
-                    if "log_verbosity" in fvp_dict:
-                        # check if xcvrd got a probe command
-                        probe_identifier = fvp_dict["log_verbosity"]
-
-                        if probe_identifier == "debug":
-                            helper_logger.set_min_log_priority_debug()
-
-                        elif probe_identifier == "notice":
-                            helper_logger.set_min_log_priority_notice()
+                    helper_logger.log_notice("Y_CABLE_DEBUG: trying to enable/disable debug logs")
+                    handle_ycable_enable_disable_tel_notification(fvp_m, 'Y_CABLE')
+                    break
 
             while True:
                 # show muxcable hwmode state <port>
