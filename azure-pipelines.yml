@@ -64,7 +64,7 @@ jobs:
           pipeline: 1
           artifact: sonic-buildimage.vs
           runVersion: 'latestFromBranch'
-          runBranch: 'refs/heads/202012'
+          runBranch: 'refs/heads/master'
         displayName: "Download artifacts from latest sonic-buildimage build"
 
       - script: |
@@ -85,7 +85,6 @@ jobs:
           sudo pip2 install swsssdk-2.0.1-py2-none-any.whl
           sudo pip2 install sonic_py_common-1.0-py2-none-any.whl
           sudo pip2 install sonic_config_engine-1.0-py2-none-any.whl
-          sudo pip2 install sonic_platform_common-1.0-py2-none-any.whl
           sudo pip3 install swsssdk-2.0.1-py3-none-any.whl
           sudo pip3 install sonic_py_common-1.0-py3-none-any.whl
           sudo pip3 install sonic_yang_mgmt-1.0-py3-none-any.whl
