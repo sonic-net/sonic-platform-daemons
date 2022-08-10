@@ -61,10 +61,10 @@ jobs:
         inputs:
           source: specific
           project: build
-          pipeline: 1
+          pipeline: 142
           artifact: sonic-buildimage.vs
           runVersion: 'latestFromBranch'
-          runBranch: 'refs/heads/master'
+          runBranch: 'refs/heads/202012'
         displayName: "Download artifacts from latest sonic-buildimage build"
 
       - script: |
@@ -92,7 +92,7 @@ jobs:
           sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
           sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
           sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-        workingDirectory: $(Pipeline.Workspace)/target/python-wheels/buster/
+        workingDirectory: $(Pipeline.Workspace)/target/python-wheels/
         displayName: 'Install Python dependencies'
 
       # Python 2
