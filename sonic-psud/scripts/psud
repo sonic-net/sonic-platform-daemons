@@ -542,7 +542,6 @@ class DaemonPsud(daemon_base.DaemonBase):
                     power_exceeded_threshold = True
 
             if psu_status.set_power_exceed_threshold(power_exceeded_threshold):
-                set_led = True
                 log_on_status_changed(self, not psu_status.power_exceeded_threshold,
                                       'PSU power warning cleared: {} power {} is back to normal.'.format(name, power),
                                       'PSU power warning: {} power {} exceeds critical threshold {}.'.format(name, power, power_threshold))
