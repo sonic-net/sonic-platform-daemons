@@ -352,7 +352,7 @@ class PsuStatus(object):
         return True
 
     def is_ok(self):
-        return self.presence and self.power_good and self.voltage_good and self.temperature_good and not self.power_exceeded_threshold
+        return self.presence and self.power_good and self.voltage_good and self.temperature_good
 
 
 #
