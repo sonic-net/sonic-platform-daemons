@@ -105,9 +105,9 @@ def subscribe_port_config_change(namespaces):
         sel.addSelectable(port_tbl)
     return sel, asic_context
 
-def subscribe_port_update_event(namespaces):
+def subscribe_port_update_event(namespaces, logger):
     port_tbl_map = [
-        {'APPL_DB': swsscommon.APP_PORT_TABLE_NAME},
+        {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
         {'STATE_DB': 'TRANSCEIVER_INFO'},
         {'STATE_DB': 'PORT_TABLE'},
     ]
@@ -119,6 +119,8 @@ def subscribe_port_update_event(namespaces):
             db = daemon_base.db_connect(list(d.keys())[0], namespace=namespace)
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             port_tbl = swsscommon.SubscriberStateTable(db, list(d.values())[0])
+            logger.log_notice("subscribing to table: {} in {} : {} DB".format(
+                port_tbl, list(d.keys())[0], list(d.values())[0]))
             asic_context[port_tbl] = asic_id
             sel.addSelectable(port_tbl)
     return sel, asic_context
@@ -159,6 +161,7 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
                                                         asic_context[port_tbl],
                                                         PortChangeEvent.PORT_DEL,
                                                         fvp)
+                logger.log_notice("handle_port_update_event() : op={} port_tbl {} fvp {}".format(op, port_tbl, fvp))
                 if port_change_event is not None:
                     port_change_event_handler(port_change_event)
 
