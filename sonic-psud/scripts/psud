@@ -525,7 +525,6 @@ class DaemonPsud(daemon_base.DaemonBase):
                 if (try_get(psu.get_psu_power_critical_threshold) and try_get(psu.get_psu_power_threshold) and power != NOT_AVAILABLE):
                     psu_status.check_psu_power_threshold = True
 
-        power_threshold = NOT_AVAILABLE
         power_exceeded_threshold = psu_status.power_exceeded_threshold
         power_threshold = try_get(psu.get_psu_power_threshold, NOT_AVAILABLE)
         power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
@@ -537,7 +536,7 @@ class DaemonPsud(daemon_base.DaemonBase):
                     power_exceeded_threshold = False
             else:
                 # The rising threshold is the critical threshold
-                if power > power_critical_threshold:
+                if power >= power_critical_threshold:
                     # Raise alarm
                     power_exceeded_threshold = True
 
