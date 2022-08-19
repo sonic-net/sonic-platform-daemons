@@ -306,6 +306,21 @@ class TestDaemonPsud(object):
         assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
         assert psu.STATUS_LED_COLOR_GREEN == psu.get_status_led()
 
+        # Thresholds become invalid on the fly
+        psu.get_psu_power_critical_threshold = mock.MagicMock(side_effect=NotImplementedError(''))
+        daemon_psud._update_single_psu_data(1, psu)
+        assert not daemon_psud.psu_status_dict[1].check_psu_power_threshold
+        assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
+        psu.get_psu_power_critical_threshold = mock.MagicMock(return_value=120.0)
+        daemon_psud.psu_status_dict[1].check_psu_power_threshold = True
+        daemon_psud._update_single_psu_data(1, psu)
+        assert daemon_psud.psu_status_dict[1].check_psu_power_threshold
+        assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
+        psu.get_psu_power_threshold = mock.MagicMock(side_effect=NotImplementedError(''))
+        daemon_psud._update_single_psu_data(1, psu)
+        assert not daemon_psud.psu_status_dict[1].check_psu_power_threshold
+        assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
+
     def test_set_psu_led(self):
         mock_logger = mock.MagicMock()
         mock_psu = MockPsu("PSU 1", 0, True, True)

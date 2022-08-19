@@ -529,7 +529,11 @@ class DaemonPsud(daemon_base.DaemonBase):
         power_threshold = try_get(psu.get_psu_power_threshold, NOT_AVAILABLE)
         power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
         if psu_status.check_psu_power_threshold:
-            if psu_status.power_exceeded_threshold:
+            if power_threshold == NOT_AVAILABLE or power_critical_threshold == NOT_AVAILABLE:
+                self.log_error("PSU power thresholds become invalid: threshold {} critical threshold {}".format(power_threshold, power_critical_threshold))
+                psu_status.check_psu_power_threshold = False
+                psu_status.power_exceeded_threshold = False
+            elif psu_status.power_exceeded_threshold:
                 # The failing threshold is the warning threshold
                 if power < power_threshold:
                     # Clear alarm
