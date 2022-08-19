@@ -183,12 +183,11 @@ class TestDaemonPsud(object):
         daemon_psud.psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
         assert not daemon_psud.psu_status_dict[1].check_psu_power_threshold
 
+    @mock.patch('psud.daemon_base.db_connect', mock.MagicMock())
     def test_power_threshold(self):
         psu = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678', '1234')
         psud.platform_chassis = MockChassis()
         psud.platform_chassis._psu_list.append(psu)
-
-        psud.daemon_base.db_connect = mock.MagicMock()
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
