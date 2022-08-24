@@ -149,7 +149,6 @@ class YcableStateUpdateTask(object):
 
         # Connect to STATE_DB and listen to ycable transceiver status update tables
         state_db, status_tbl= {}, {}
-        port_dict = {}
 
         sel = swsscommon.Select()
 
@@ -195,6 +194,7 @@ class YcableStateUpdateTask(object):
                 if not fvp_dict:
                     continue
 
+                port_dict = {}
                 port_dict[port] = fvp_dict.get('status', None)
 
                 y_cable_helper.change_ports_status_for_y_cable_change_event(
