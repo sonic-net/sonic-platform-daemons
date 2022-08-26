@@ -143,7 +143,7 @@ class TestDaemonPsud(object):
         expected_calls = [mock.call("Failed to update PSU data - Test message")] * 2
         assert daemon_psud.log_warning.mock_calls == expected_calls
 
-    def _construct_expected_fvp(self, power=100.0, power_threshold='N/A', power_critical_threshold='N/A', power_overload=False):
+    def _construct_expected_fvp(self, power=100.0, power_warning_threshold='N/A', power_critical_threshold='N/A', power_overload=False):
         expected_fvp = psud.swsscommon.FieldValuePairs(
             [(psud.PSU_INFO_MODEL_FIELD, 'Fake Model'),
              (psud.PSU_INFO_SERIAL_FIELD, '12345678'),
@@ -155,7 +155,7 @@ class TestDaemonPsud(object):
              (psud.PSU_INFO_VOLTAGE_MAX_TH_FIELD, '13.0'),
              (psud.PSU_INFO_CURRENT_FIELD, '8.0'),
              (psud.PSU_INFO_POWER_FIELD, str(power)),
-             (psud.PSU_INFO_POWER_THRESHOLD, str(power_threshold)),
+             (psud.PSU_INFO_POWER_WARNING_THRESHOLD, str(power_warning_threshold)),
              (psud.PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)),
              (psud.PSU_INFO_POWER_OVERLOAD, str(power_overload)),
              (psud.PSU_INFO_FRU_FIELD, 'True'),
