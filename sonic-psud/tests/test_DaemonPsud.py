@@ -193,7 +193,7 @@ class TestDaemonPsud(object):
 
         daemon_psud.psu_tbl = mock.MagicMock()
         psu.get_psu_power_critical_threshold = mock.MagicMock(return_value=120.0)
-        psu.get_psu_power_threshold = mock.MagicMock(return_value=110.0)
+        psu.get_psu_power_warning_threshold = mock.MagicMock(return_value=110.0)
 
         # Normal start. All good and all thresholds are supported
         # Power is in normal range (below warning threshold)
@@ -315,7 +315,7 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_data(1, psu)
         assert daemon_psud.psu_status_dict[1].check_psu_power_threshold
         assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
-        psu.get_psu_power_threshold = mock.MagicMock(side_effect=NotImplementedError(''))
+        psu.get_psu_power_warning_threshold = mock.MagicMock(side_effect=NotImplementedError(''))
         daemon_psud._update_single_psu_data(1, psu)
         assert not daemon_psud.psu_status_dict[1].check_psu_power_threshold
         assert not daemon_psud.psu_status_dict[1].power_exceeded_threshold
