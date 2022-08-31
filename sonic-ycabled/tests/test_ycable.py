@@ -297,7 +297,6 @@ class TestYcableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event', MagicMock(return_value=0))
     def test_handle_state_update_task(self):
 
-
         rc = handle_state_update_task(port, fvp_dict, y_cable_presence, stopping_event)
         assert(rc == 0)
 
@@ -313,5 +312,3 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
-
-
