@@ -746,6 +746,7 @@ def y_cable_toggle_mux_torA(physical_port):
     if port_instance is None:
         helper_logger.log_error(
             "Error: Could not get port instance for read side for  Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
+        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return -1
 
     try:
@@ -770,6 +771,7 @@ def y_cable_toggle_mux_torB(physical_port):
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for read side for  Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
+        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return -1
 
     try:
@@ -808,6 +810,7 @@ def toggle_mux_tor_direction_and_update_read_side(state, logical_port_name, phys
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for read side for while processing a toggle Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
+        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return (-1, -1)
 
     read_side = port_instance.get_read_side()
