@@ -296,9 +296,13 @@ class TestYcableScript(object):
 
     @patch('ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event', MagicMock(return_value=0))
     def test_handle_state_update_task(self):
-
+        
+        port = "Ethernet0"
+        fvp_dict = {}
+        y_cable_presence = false
+        stopping_event = None
         rc = handle_state_update_task(port, fvp_dict, y_cable_presence, stopping_event)
-        assert(rc == 0)
+        assert(rc == None)
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):

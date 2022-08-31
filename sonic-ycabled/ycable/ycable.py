@@ -85,10 +85,8 @@ def handle_state_update_task(port, fvp_dict, y_cable_presence, stopping_event):
     port_dict = {}
     port_dict[port] = fvp_dict.get('status', None)
 
-    rc = y_cable_helper.change_ports_status_for_y_cable_change_event(
+    y_cable_helper.change_ports_status_for_y_cable_change_event(
         port_dict, y_cable_presence, stopping_event)
-
-    return rc
 
 #
 # Helper classes ===============================================================
