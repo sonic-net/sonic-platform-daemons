@@ -299,7 +299,7 @@ class TestYcableScript(object):
         
         port = "Ethernet0"
         fvp_dict = {}
-        y_cable_presence = false
+        y_cable_presence = False
         stopping_event = None
         rc = handle_state_update_task(port, fvp_dict, y_cable_presence, stopping_event)
         assert(rc == None)
