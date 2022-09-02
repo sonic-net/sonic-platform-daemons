@@ -746,7 +746,6 @@ def y_cable_toggle_mux_torA(physical_port):
     if port_instance is None:
         helper_logger.log_error(
             "Error: Could not get port instance for read side for  Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
-        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return -1
 
     try:
@@ -771,7 +770,6 @@ def y_cable_toggle_mux_torB(physical_port):
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for read side for  Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
-        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return -1
 
     try:
@@ -810,7 +808,6 @@ def toggle_mux_tor_direction_and_update_read_side(state, logical_port_name, phys
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for read side for while processing a toggle Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
-        port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
         return (-1, -1)
 
     read_side = port_instance.get_read_side()
@@ -2275,6 +2272,9 @@ def handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_t
                     status = -1
                     helper_logger.log_warning("Failed to execute the disable prbs API for port {} due to {}".format(physical_port,repr(e)))
         elif config_prbs_mode == "reset":
+
+            port_instance.mux_toggle_status = port_instance.MUX_TOGGLE_STATUS_NOT_INITIATED_OR_FINISHED
+            port_instance.download_firmware_status == port_instance.FIRMWARE_DOWNLOAD_STATUS_NOT_INITIATED_OR_FINISHED
             with y_cable_port_locks[physical_port]:
                 try:
                     status = port_instance.reset(target)
