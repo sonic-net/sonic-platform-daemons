@@ -421,9 +421,11 @@ def connect_channel(channel, stub, port):
         else:
             break
 
-def create_channel(type,level, kvp, soc_ip, port):
+def create_channel(type, level, kvp, soc_ip, port):
 
     channel, stub = None, None
+
+    #Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
         if channel_connectivity == grpc.ChannelConnectivity.TRANSIENT_FAILURE:
             helper_logger.log_notice("gRPC port {} state changed to TRANSIENT_FAILURE".format(port))
@@ -458,8 +460,9 @@ def create_channel(type,level, kvp, soc_ip, port):
 
     #connect_channel(channel, stub, port)
     """
-    Removing the connect channel call for now, since it is not required for normal gRPC
-    and all use cases seem to work without it
+    Comment the connect channel call for now, since it is not required for normal gRPC I/O
+    and all use cases seem to work without it.
+    TODO: will need to see if this subroutine call can be ommitted for all use cases
     """
 
     return channel, stub
