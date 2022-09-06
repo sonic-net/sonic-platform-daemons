@@ -423,7 +423,6 @@ def connect_channel(channel, stub, port):
 
 def create_channel(type, level, kvp, soc_ip, port):
 
-    channel, stub = None, None
 
     #Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
