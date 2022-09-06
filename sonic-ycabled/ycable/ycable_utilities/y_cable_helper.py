@@ -461,8 +461,8 @@ def create_channel(type, level, kvp, soc_ip, port):
     #connect_channel(channel, stub, port)
     """
     Comment the connect channel call for now, since it is not required for normal gRPC I/O
-    and all use cases seem to work without it.
-    TODO: will need to see if this subroutine call can be ommitted for all use cases
+    and all use cases work without it.
+    TODO: check if this subroutine call can be ommitted for all use cases in future enhancements
     """
 
     return channel, stub
