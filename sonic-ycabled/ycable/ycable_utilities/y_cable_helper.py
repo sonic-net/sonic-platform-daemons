@@ -456,12 +456,12 @@ def create_channel(type,level, kvp, soc_ip, port):
     if channel is not None:
         channel.subscribe(wait_for_state_change)
 
-    connect_channel(channel, stub, port)
-    if channel is None:
-        helper_logger.log_notice("gRPC port {} channel is None".format(port))
-    if stub is None:
-        helper_logger.log_notice("gRPC port {} stub is None".format(port))
-   
+    #connect_channel(channel, stub, port)
+    """
+    Removing the connect channel call for now, since it is not required for normal gRPC
+    and all use cases seem to work without it
+    """
+
     return channel, stub
 
 def setup_grpc_channel_for_port(port, soc_ip):
@@ -515,6 +515,11 @@ def setup_grpc_channel_for_port(port, soc_ip):
 
 
     channel, stub = create_channel(type, level, kvp, soc_ip, port) 
+
+    if stub is None:
+        helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
+    if channel is None:
+        helper_logger.log_warning("channel was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
 
     return channel, stub
 
