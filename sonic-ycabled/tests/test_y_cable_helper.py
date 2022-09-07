@@ -4972,7 +4972,7 @@ class TestYCableScript(object):
         with patch('grpc.channel_ready_future') as patched_util:
 
             patched_util.result.return_value = 0
-            rc = connect_channel(channel, stub, port)
+            rc = connect_channel(patched_util, None, None)
             assert(rc == None)
 
     def test_setup_grpc_channels(self):
