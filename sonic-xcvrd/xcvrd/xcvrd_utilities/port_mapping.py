@@ -131,7 +131,7 @@ def subscribe_port_update_event(namespaces, logger):
             asic_context[port_tbl] = asic_id
             sel.addSelectable(port_tbl)
             logger.log_warning("subscribing to port_tbl {} - {} DB of namespace {} ".format(
-                                        port_tbl, list(d.values())[0]), namespace)
+                                        port_tbl, list(d.values())[0], namespace))
     return sel, asic_context
 
 def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_event_handler):
