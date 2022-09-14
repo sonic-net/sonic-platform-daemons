@@ -334,6 +334,24 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
+    def test_handle_port_update_event(self, mock_select, mock_sub_table):
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+        logger = MagicMock()
+
+        sel, asic_context = subscribe_port_update_event(DEFAULT_NAMESPACE, logger)
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        stop_event.is_set = MagicMock(return_value=False)
+        handle_port_update_event(sel, asic_context, stop_event,
+                                  logger, port_mapping.handle_port_change_event)
+
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
     def test_handle_port_config_change(self, mock_select, mock_sub_table):
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
