@@ -923,6 +923,7 @@ class CmisManagerTask:
 
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
+    CMIS_DEF_EXPIRED_ZR  = 200 # seconds, expiration time for ZR module
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP']
     CMIS_NUM_CHANNELS    = 8
 
@@ -986,22 +987,38 @@ class CmisManagerTask:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
+            need_update = False
             if pport >= 0:
-                self.port_dict[lport]['index'] = pport
+                if self.port_dict[lport].get('index') != pport:
+                    self.port_dict[lport]['index'] = pport
+                    need_update = True
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
-                self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
+                if self.port_dict[lport].get('speed') != port_change_event.port_dict['speed']:
+                    self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
+                    need_update = True
             if 'lanes' in port_change_event.port_dict:
-                self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
+                if self.port_dict[lport].get('lanes') != port_change_event.port_dict['lanes']:
+                    self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
+                    need_update = True
             if 'host_tx_ready' in port_change_event.port_dict:
-                self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
+                if self.port_dict[lport].get('host_tx_ready') != port_change_event.port_dict['host_tx_ready']:
+                    self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
+                    need_update = True
             if 'admin_status' in port_change_event.port_dict:
-                self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
+                if self.port_dict[lport].get('admin_status') != port_change_event.port_dict['admin_status']:
+                    self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
+                    need_update = True
             if 'laser_freq' in port_change_event.port_dict:
-                self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
+                if self.port_dict[lport].get('laser_freq') != int(port_change_event.port_dict['laser_freq']):
+                    self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
+                    need_update = True
             if 'tx_power' in port_change_event.port_dict:
-                self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
+                if self.port_dict[lport].get('tx_power') != float(port_change_event.port_dict['tx_power']):
+                    self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
+                    need_update = True
 
-            self.force_cmis_reinit(lport, 0)
+            if need_update:
+                self.force_cmis_reinit(lport, 0)
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
@@ -1072,6 +1089,12 @@ class CmisManagerTask:
             break
 
         return (appl_code & 0xf)
+
+    def get_cmis_expired(self, api):
+        if api.is_coherent_module():
+           return self.CMIS_DEF_EXPIRED_ZR
+        else:
+           return self.CMIS_DEF_EXPIRED
 
     def is_cmis_application_update_required(self, api, channel, speed):
         """
@@ -1458,7 +1481,7 @@ class CmisManagerTask:
                         # TODO: Make sure this doesn't impact other datapaths
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1495,7 +1518,7 @@ class CmisManagerTask:
                             continue
 
                         # TODO: Use fine grained time when the CMIS memory map is available
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
@@ -1516,7 +1539,7 @@ class CmisManagerTask:
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
                         # TODO: Use fine grained timeout when the CMIS memory map is available
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.CMIS_DEF_EXPIRED)
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
@@ -1614,7 +1637,7 @@ class DomInfoUpdateTask(object):
         self.task_stopping_event.set()
         self.task_thread.join()
 
-    def on_port_config_change(self, port_change_event):
+    def on_port_config_change(self, stopping_event, port_change_event):
         if port_change_event.event_type == port_mapping.PortChangeEvent.PORT_REMOVE:
             self.on_remove_logical_port(port_change_event)
         self.port_mapping.handle_port_change_event(port_change_event)
