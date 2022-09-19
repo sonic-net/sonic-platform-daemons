@@ -634,14 +634,14 @@ class TestXcvrdScript(object):
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        task.on_port_config_change(None, port_change_event)
+        task.on_port_config_change(port_change_event)
         assert task.port_mapping.logical_port_list.count('Ethernet0')
         assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert task.port_mapping.get_physical_to_logical(1) == ['Ethernet0']
         assert task.port_mapping.get_logical_to_physical('Ethernet0') == [1]
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
-        task.on_port_config_change(None, port_change_event)
+        task.on_port_config_change(port_change_event)
         assert not task.port_mapping.logical_port_list
         assert not task.port_mapping.logical_to_physical
         assert not task.port_mapping.physical_to_logical
@@ -704,7 +704,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(port_change_event)
+            task.on_port_config_change(None, port_change_event)
             if task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
@@ -717,7 +717,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(port_change_event)
+            task.on_port_config_change(None, port_change_event)
             if not task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
