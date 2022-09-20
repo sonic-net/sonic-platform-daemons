@@ -436,7 +436,7 @@ def create_channel(type, level, kvp, soc_ip, port):
 
     asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(port)
 
-    channel, stub = None, None
+    # Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
         if channel_connectivity == grpc.ChannelConnectivity.TRANSIENT_FAILURE:
             helper_logger.log_notice("gRPC port {} state changed to TRANSIENT_FAILURE".format(port))
