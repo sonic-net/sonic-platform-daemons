@@ -440,8 +440,8 @@ def create_channel(type, level, kvp, soc_ip, port):
     def wait_for_state_change(channel_connectivity):
         if channel_connectivity == grpc.ChannelConnectivity.TRANSIENT_FAILURE:
             helper_logger.log_notice("gRPC port {} state changed to TRANSIENT_FAILURE".format(port))
-            fvs_updated = swsscommon.FieldValuePairs([('response', 'failure'),
-                                                      ('response_peer', 'failure')])
+            # for connectivity state to FAILURE/IDLE report a failure
+            fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
             fwd_state_response_tbl[asic_index].set(port, fvs_updated)
 
         if channel_connectivity == grpc.ChannelConnectivity.CONNECTING:
@@ -450,8 +450,8 @@ def create_channel(type, level, kvp, soc_ip, port):
             helper_logger.log_notice("gRPC port {} state changed to READY".format(port))
         if channel_connectivity == grpc.ChannelConnectivity.IDLE:
             helper_logger.log_notice("gRPC port {} state changed to IDLE".format(port))
-            fvs_updated = swsscommon.FieldValuePairs([('response', 'failure'),
-                                                      ('response_peer', 'failure')])
+            # for connectivity state to FAILURE/IDLE report a failure
+            fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
             fwd_state_response_tbl[asic_index].set(port, fvs_updated) 
 
         if channel_connectivity == grpc.ChannelConnectivity.SHUTDOWN:
