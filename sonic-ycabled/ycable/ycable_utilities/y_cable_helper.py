@@ -5,6 +5,7 @@
 
 import datetime
 import ipaddress
+import json
 import os
 import re
 import sys
@@ -114,6 +115,8 @@ port_mapping_error_values = {
   PHYSICAL_PORT_MAPPING_ERROR,
   PORT_INSTANCE_ERROR
 }
+
+SECRETS_PATH = "/etc/sonic/grpc_secrets.json"
 
 def format_mapping_identifier(string):
     """
@@ -369,6 +372,40 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
                 grpc_port_stubs[port] = stub
                 return True
 
+def apply_grpc_secrets_configuration(parsed_data):
+
+    config_db, grpc_config = {}, {}
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPCCLIENT")
+
+   
+    asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
+    grpc_client_config = parsed_data.get("GRPCCLIENT", None)
+    if grpc_client_config is not None:
+        config = grpc_client_config.get("config", None)
+        if config is not None:
+            type = config.get("type",None)
+            auth_level = config.get("auth_level",None)
+            log_level = config.get("log_level", None)
+            fvs_updated = swsscommon.FieldValuePairs([('type', type),
+                                                      ('auth_level',auth_level ),
+                                                      ('log_level',log_level)])
+            grpc_config[asic_index].set('config', fvs_updated)
+        certs = grpc_client_config.get("certs", None)
+        if certs is not None:
+            client_crt = certs.get("client_crt", None)
+            client_key = certs.get("client_key", None)
+            ca_crt = certs.get("ca_crt", None)
+            grpc_ssl_credential = certs.get("grpc_ssl_credential",None)
+            fvs_updated = swsscommon.FieldValuePairs([('client_crt', client_crt),
+                                                      ('client_key', client_key),
+                                                      ('grpc_ssl_credential', grpc_ssl_credential),
+                                                      ('ca_crt',ca_crt)])
+            grpc_config[asic_index].set('certs', fvs_updated)
+    
 
 def get_grpc_credentials(type, kvp):
 
@@ -695,6 +732,10 @@ def setup_grpc_channels(stop_event):
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
+        if os.path.isfile(SECRETS_PATH):
+            with open(SECRETS_PATH, 'r') as f:
+                parsed_data = json.load(f)
+                apply_grpc_secrets_configuration(parsed_data)
 
     helper_logger.log_debug("Y_CABLE_DEBUG:while setting up grpc channels read side = {}".format(read_side))
 
@@ -1385,6 +1426,10 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
+        if os.path.isfile(SECRETS_PATH):
+            with open(SECRETS_PATH, 'r') as f:
+                parsed_data = json.load(f)
+                apply_grpc_secrets_configuration(parsed_data)
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
