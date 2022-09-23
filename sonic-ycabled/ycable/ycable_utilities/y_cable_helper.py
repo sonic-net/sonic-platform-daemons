@@ -1492,6 +1492,10 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
+        if os.path.isfile(SECRETS_PATH):
+            with open(SECRETS_PATH, 'r') as f:
+                parsed_data = json.load(f)
+                apply_grpc_secrets_configuration(parsed_data)
 
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
@@ -1553,6 +1557,7 @@ def delete_ports_status_for_y_cable():
     state_db, config_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
     y_cable_tbl_keys = {}
     static_tbl, mux_tbl = {}, {}
+    grpc_config = {}
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
@@ -1566,6 +1571,14 @@ def delete_ports_status_for_y_cable():
         mux_tbl[asic_id] = swsscommon.Table(
             state_db[asic_id], MUX_CABLE_INFO_TABLE)
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
+        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPCCLIENT")
+
+
+    if read_side != -1:
+        asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
+        if os.path.isfile(SECRETS_PATH):
+            grpc_config[asic_id]._del("config")
+            grpc_config[asic_id]._del("certs")
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
