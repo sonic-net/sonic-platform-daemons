@@ -1577,8 +1577,8 @@ def delete_ports_status_for_y_cable():
     if read_side != -1:
         asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
         if os.path.isfile(SECRETS_PATH):
-            grpc_config[asic_id]._del("config")
-            grpc_config[asic_id]._del("certs")
+            grpc_config[asic_index]._del("config")
+            grpc_config[asic_index]._del("certs")
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
