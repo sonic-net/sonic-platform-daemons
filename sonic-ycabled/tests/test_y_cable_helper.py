@@ -5358,11 +5358,12 @@ class TestYCableScript(object):
         rc = handle_ycable_enable_disable_tel_notification(fvp_m, "Y_CABLE")
         assert(rc == None)
 
-    def test_apply_grpc_secrets_configuration(self):
+    @patch('builtins.open')
+    @patch('json.load')
+    def test_apply_grpc_secrets_configuration(self, open, json_load):
 
-        parsed_data = {"GRPCCLIENT": {"config":"insecure",
-                                       "auth_level":"server",
-                                       "log_level":"INFO"}}
         parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}
+
+        json_load.return_value = parsed_data
         rc = apply_grpc_secrets_configuration(parsed_data)
         assert(rc == None)

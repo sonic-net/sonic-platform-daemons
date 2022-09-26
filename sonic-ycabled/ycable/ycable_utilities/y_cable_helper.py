@@ -372,7 +372,11 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
                 grpc_port_stubs[port] = stub
                 return True
 
-def apply_grpc_secrets_configuration(parsed_data):
+def apply_grpc_secrets_configuration(SECRETS_PATH):
+
+
+    with open(SECRETS_PATH, 'r') as f:
+        parsed_data = json.load(f)
 
     config_db, grpc_config = {}, {}
     namespaces = multi_asic.get_front_end_namespaces()
@@ -733,9 +737,7 @@ def setup_grpc_channels(stop_event):
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            with open(SECRETS_PATH, 'r') as f:
-                parsed_data = json.load(f)
-                apply_grpc_secrets_configuration(parsed_data)
+            apply_grpc_secrets_configuration(SECRETS_PATH)
 
     helper_logger.log_debug("Y_CABLE_DEBUG:while setting up grpc channels read side = {}".format(read_side))
 
@@ -1427,9 +1429,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            with open(SECRETS_PATH, 'r') as f:
-                parsed_data = json.load(f)
-                apply_grpc_secrets_configuration(parsed_data)
+            apply_grpc_secrets_configuration(SECRETS_PATH)
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -1493,9 +1493,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            with open(SECRETS_PATH, 'r') as f:
-                parsed_data = json.load(f)
-                apply_grpc_secrets_configuration(parsed_data)
+            apply_grpc_secrets_configuration(SECRETS_PATH)
 
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
