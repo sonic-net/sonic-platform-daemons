@@ -5360,13 +5360,11 @@ class TestYCableScript(object):
 
 
     @patch('builtins.open')
-    #@patch('json.load')
     def test_apply_grpc_secrets_configuration(self, open):
 
         parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}
 
         mock_file = MagicMock()
-        mock_file.read = MagicMock(return_value=bytes('abcdefgh', 'utf-8'))
         open.return_value = mock_file
         #json_load.return_value = parsed_data
         with patch('json.load') as patched_util:

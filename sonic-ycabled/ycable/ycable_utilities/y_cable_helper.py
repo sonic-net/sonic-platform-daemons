@@ -375,7 +375,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
 def apply_grpc_secrets_configuration(SECRETS_PATH):
 
 
-    f = open(SECRETS_PATH, 'rb').read()
+    f = open(SECRETS_PATH, 'rb')
     parsed_data = json.load(f)
 
     config_db, grpc_config = {}, {}
