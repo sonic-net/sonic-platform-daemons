@@ -5360,7 +5360,7 @@ class TestYCableScript(object):
 
     def test_apply_grpc_secrets_configuration(self):
 
-        parsed_data = "{'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}"
+        parsed_data = "{"GRPCCLIENT": {"config": {"type": "secure", "auth_level": "server", "log_level": "info"}, "certs": {"client_crt": "one.crt", "client_key": "one.key", "ca_crt": "ss.crt", "grpc_ssl_credential": "jj.tsl"}}}"
 
         with patch('builtins.open', new_callable=mock_open, read_data= parsed_data) as mock_fd:
             rc = apply_grpc_secrets_configuration('test')
