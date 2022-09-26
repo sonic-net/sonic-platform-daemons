@@ -5358,10 +5358,18 @@ class TestYCableScript(object):
         rc = handle_ycable_enable_disable_tel_notification(fvp_m, "Y_CABLE")
         assert(rc == None)
 
-    def test_apply_grpc_secrets_configuration(self):
 
-        parsed_data = "{"GRPCCLIENT": {"config": {"type": "secure", "auth_level": "server", "log_level": "info"}, "certs": {"client_crt": "one.crt", "client_key": "one.key", "ca_crt": "ss.crt", "grpc_ssl_credential": "jj.tsl"}}}"
+    @patch('builtins.open')
+    #@patch('json.load')
+    def test_apply_grpc_secrets_configuration(self, open):
 
-        with patch('builtins.open', new_callable=mock_open, read_data= parsed_data) as mock_fd:
-            rc = apply_grpc_secrets_configuration('test')
+        parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}
+
+        mock_file = MagicMock()
+        mock_file.read = MagicMock(return_value=bytes('abcdefgh', 'utf-8'))
+        open.return_value = mock_file
+        #json_load.return_value = parsed_data
+        with patch('json.load') as patched_util:
+            patched_util.return_value = parsed_data
+            rc = apply_grpc_secrets_configuration(None)
             assert(rc == None)
