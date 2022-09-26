@@ -10,9 +10,9 @@ import sys
 import time
 
 if sys.version_info >= (3, 3):
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock, patch, mock_open
 else:
-    from mock import MagicMock, patch
+    from mock import MagicMock, patch, mock_open
 
 
 daemon_base.db_connect = MagicMock()
@@ -5358,12 +5358,10 @@ class TestYCableScript(object):
         rc = handle_ycable_enable_disable_tel_notification(fvp_m, "Y_CABLE")
         assert(rc == None)
 
-    @patch('builtins.open')
-    @patch('json.load')
-    def test_apply_grpc_secrets_configuration(self, open, json_load):
+    def test_apply_grpc_secrets_configuration(self):
 
         parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}
 
-        json_load.return_value = parsed_data
-        rc = apply_grpc_secrets_configuration(parsed_data)
-        assert(rc == None)
+        with patch('builtins.open', new_callable=mock_open, read_data= parsed_data) as mock_fd:
+            rc = apply_grpc_secrets_configuration('test')
+            assert(rc == None)
