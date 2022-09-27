@@ -414,7 +414,7 @@ def apply_grpc_secrets_configuration(SECRETS_PATH):
 def get_grpc_credentials(type, kvp):
 
     root_file = kvp.get("ca_crt", None)
-    if root_file is not None: 
+    if root_file is not None and os.path.isfile(root_file): 
         root_cert = open(root_file, 'rb').read()
     else:
         helper_logger.log_error("grpc credential channel setup no root file in config_db")
@@ -422,14 +422,14 @@ def get_grpc_credentials(type, kvp):
 
     if type == "mutual":
         cert_file = kvp.get("client_crt", None)
-        if cert_file is not None: 
+        if cert_file is not None and os.path.isfile(cert_file): 
             cert_chain = open(cert_file, 'rb').read()
         else:
             helper_logger.log_error("grpc credential channel setup no cert file for mutual authentication in config_db")
             return None
 
         key_file = kvp.get("client_key", None)
-        if key_file is not None: 
+        if key_file is not None and and os.path.isfile(key_file): 
             key = open(key_file, 'rb').read()
         else:
             helper_logger.log_error("grpc credential channel setup no key file for mutual authentication in config_db")

@@ -5317,6 +5317,7 @@ class TestYCableScript(object):
         assert(rc['nic_lane1_postcursor1'] == 'N/A')
         assert(rc['nic_lane1_postcursor2'] == 'N/A')
 
+    @patch('os.path.isfile', MagicMock(return_value=True))
     def test_get_grpc_credentials(self):
         
         kvp = {}
@@ -5328,6 +5329,7 @@ class TestYCableScript(object):
 
 
     @patch('builtins.open')
+    @patch('os.path.isfile', MagicMock(return_value=True))
     def test_get_grpc_credentials_root(self, open):
         
         kvp = {"ca_crt": "file"}
