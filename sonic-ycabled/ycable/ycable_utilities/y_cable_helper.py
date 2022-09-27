@@ -429,7 +429,7 @@ def get_grpc_credentials(type, kvp):
             return None
 
         key_file = kvp.get("client_key", None)
-        if key_file is not None and and os.path.isfile(key_file): 
+        if key_file is not None and os.path.isfile(key_file): 
             key = open(key_file, 'rb').read()
         else:
             helper_logger.log_error("grpc credential channel setup no key file for mutual authentication in config_db")
