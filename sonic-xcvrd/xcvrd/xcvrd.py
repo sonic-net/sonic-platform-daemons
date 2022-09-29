@@ -923,7 +923,6 @@ class CmisManagerTask:
 
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
-    CMIS_DEF_EXPIRED_ZR  = 200 # seconds, expiration time for ZR module
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP']
     CMIS_NUM_CHANNELS    = 8
 
@@ -1090,11 +1089,8 @@ class CmisManagerTask:
 
         return (appl_code & 0xf)
 
-    def get_cmis_expired(self, api):
-        if api.is_coherent_module():
-           return self.CMIS_DEF_EXPIRED_ZR
-        else:
-           return self.CMIS_DEF_EXPIRED
+    def get_cmis_dp_init_duration(self, api):
+        return max(api.get_datapath_init_duration()/1000, self.CMIS_DEF_EXPIRED)
 
     def is_cmis_application_update_required(self, api, channel, speed):
         """
@@ -1481,7 +1477,7 @@ class CmisManagerTask:
                         # TODO: Make sure this doesn't impact other datapaths
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1518,7 +1514,7 @@ class CmisManagerTask:
                             continue
 
                         # TODO: Use fine grained time when the CMIS memory map is available
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
@@ -1539,7 +1535,7 @@ class CmisManagerTask:
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
                         # TODO: Use fine grained timeout when the CMIS memory map is available
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_expired(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
