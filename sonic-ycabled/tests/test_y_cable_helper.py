@@ -578,7 +578,8 @@ class TestYCableScript(object):
 
             mock_toggle_object = MagicMock()
             mock_toggle_object.toggle_mux_to_tor_b.return_value = True
-            mock_toggle_object.get_read_side.return_value = NotImplementedError
+            mock_toggle_object.get_read_side.return_value =  MagicMock(
+                                side_effect=NotImplementedError)
             patched_util.get.return_value = mock_toggle_object
 
             rc = update_tor_active_side(read_side, state, logical_port_name)
