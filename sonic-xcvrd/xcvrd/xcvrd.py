@@ -1090,7 +1090,10 @@ class CmisManagerTask:
         return (appl_code & 0xf)
 
     def get_cmis_dp_init_duration(self, api):
-        return max(api.get_datapath_init_duration()/1000, self.CMIS_DEF_EXPIRED)
+        return api.get_datapath_init_duration()/1000
+
+    def get_cmis_dp_deinit_duration(self, api):
+        return api.get_datapath_deinit_duration()/1000
 
     def is_cmis_application_update_required(self, api, channel, speed):
         """
@@ -1194,6 +1197,32 @@ class CmisManagerTask:
                 break
 
         return done
+
+    def check_datapath_init_pending(self, api, channel):
+        """
+        Check if the CMIS datapath init is pending
+
+        Args:
+            api:
+                XcvrApi object
+            channel:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+
+        Returns:
+            Boolean, true if any lanes are pending datapath init, otherwise false
+        """
+        pending = False
+        dpinit_pending_dict = api.get_dpinit_pending()
+        for lane in range(self.CMIS_NUM_CHANNELS):
+            if ((1 << lane) & channel) == 0:
+                continue
+            key = "DPInitPending{}".format(lane + 1)
+            if dpinit_pending_dict[key]:
+                pending = True
+                break
+
+        return pending
 
     def check_datapath_state(self, api, channel, states):
         """
@@ -1477,7 +1506,7 @@ class CmisManagerTask:
                         # TODO: Make sure this doesn't impact other datapaths
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_deinit_duration(api))
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1513,8 +1542,11 @@ class CmisManagerTask:
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        # TODO: Use fine grained time when the CMIS memory map is available
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
+                        if self.check_datapath_init_pending(api, host_lanes):
+                            self.log_notice("{}: datapath init pending".format(lport))
+                            self.force_cmis_reinit(lport, retries + 1)
+                            continue
+
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
@@ -1534,7 +1566,6 @@ class CmisManagerTask:
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
-                        # TODO: Use fine grained timeout when the CMIS memory map is available
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
@@ -1956,7 +1987,7 @@ class SfpStateUpdateTask(object):
         self.task_stopping_event.set()
         os.kill(self.task_process.pid, signal.SIGKILL)
 
-    def on_port_config_change(self, stopping_event, port_change_event):
+    def on_port_config_change(self , port_change_event):
         if port_change_event.event_type == port_mapping.PortChangeEvent.PORT_REMOVE:
             self.on_remove_logical_port(port_change_event)
             self.port_mapping.handle_port_change_event(port_change_event)

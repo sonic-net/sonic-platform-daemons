@@ -515,6 +515,17 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
+            'DPInitPending1': False,
+            'DPInitPending2': False,
+            'DPInitPending3': False,
+            'DPInitPending4': False,
+            'DPInitPending5': False,
+            'DPInitPending6': False,
+            'DPInitPending7': False,
+            'DPInitPending8': False
+        })
         mock_xcvr_api.get_application_advertisement = MagicMock(return_value={
             1: {
                 'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
@@ -705,7 +716,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(None, port_change_event)
+            task.on_port_config_change(port_change_event)
             if task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
@@ -718,7 +729,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_REMOVE)
         wait_time = 5
         while wait_time > 0:
-            task.on_port_config_change(None, port_change_event)
+            task.on_port_config_change(port_change_event)
             if not task.port_mapping.logical_port_list:
                 break
             wait_time -= 1
