@@ -4667,7 +4667,7 @@ class TestYCableScript(object):
                     self.SWITCHING_MODE_AUTO = 1
 
                 def get_read_side(self):
-                    return -1
+                    return 3
 
                 def get_switching_mode(self):
                     return 0
