@@ -4680,7 +4680,7 @@ class TestYCableScript(object):
             patched_util.get.return_value = PortInstanceHelper()
             rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
                 fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
-            assert(rc == None)
+            assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
     @patch('ycable.ycable_utilities.y_cable_helper.gather_arg_from_db_and_check_for_type', MagicMock(return_value=(0, "fec", {"modex": "0",
