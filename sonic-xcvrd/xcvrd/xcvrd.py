@@ -986,38 +986,22 @@ class CmisManagerTask:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
-            need_update = False
             if pport >= 0:
-                if self.port_dict[lport].get('index') != pport:
-                    self.port_dict[lport]['index'] = pport
-                    need_update = True
+                self.port_dict[lport]['index'] = pport
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
-                if self.port_dict[lport].get('speed') != port_change_event.port_dict['speed']:
-                    self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
-                    need_update = True
+                self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
             if 'lanes' in port_change_event.port_dict:
-                if self.port_dict[lport].get('lanes') != port_change_event.port_dict['lanes']:
-                    self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
-                    need_update = True
+                self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
             if 'host_tx_ready' in port_change_event.port_dict:
-                if self.port_dict[lport].get('host_tx_ready') != port_change_event.port_dict['host_tx_ready']:
-                    self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
-                    need_update = True
+                self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
             if 'admin_status' in port_change_event.port_dict:
-                if self.port_dict[lport].get('admin_status') != port_change_event.port_dict['admin_status']:
-                    self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
-                    need_update = True
+                self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
             if 'laser_freq' in port_change_event.port_dict:
-                if self.port_dict[lport].get('laser_freq') != int(port_change_event.port_dict['laser_freq']):
-                    self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
-                    need_update = True
+                self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
             if 'tx_power' in port_change_event.port_dict:
-                if self.port_dict[lport].get('tx_power') != float(port_change_event.port_dict['tx_power']):
-                    self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
-                    need_update = True
+                self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
 
-            if need_update:
-                self.force_cmis_reinit(lport, 0)
+            self.force_cmis_reinit(lport, 0)
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
@@ -1089,10 +1073,10 @@ class CmisManagerTask:
 
         return (appl_code & 0xf)
 
-    def get_cmis_dp_init_duration(self, api):
+    def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
 
-    def get_cmis_dp_deinit_duration(self, api):
+    def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
     def is_cmis_application_update_required(self, api, channel, speed):
@@ -1210,16 +1194,16 @@ class CmisManagerTask:
                 e.g. 0x5 for lane 0 and lane 2.
 
         Returns:
-            Boolean, true if any lanes are pending datapath init, otherwise false
+            Boolean, true if all lanes are pending datapath init, otherwise false
         """
-        pending = False
+        pending = True
         dpinit_pending_dict = api.get_dpinit_pending()
         for lane in range(self.CMIS_NUM_CHANNELS):
             if ((1 << lane) & channel) == 0:
                 continue
             key = "DPInitPending{}".format(lane + 1)
-            if dpinit_pending_dict[key]:
-                pending = True
+            if not dpinit_pending_dict[key]:
+                pending = False
                 break
 
         return pending
@@ -1506,7 +1490,7 @@ class CmisManagerTask:
                         # TODO: Make sure this doesn't impact other datapaths
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_deinit_duration(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_deinit_duration_secs(api))
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1542,10 +1526,13 @@ class CmisManagerTask:
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if self.check_datapath_init_pending(api, host_lanes):
-                            self.log_notice("{}: datapath init pending".format(lport))
-                            self.force_cmis_reinit(lport, retries + 1)
-                            continue
+                        if getattr(api, 'get_cmis_rev', None):
+                            # Check datapath init pending on module that supports CMIS 5.x
+                            majorRev = int(api.get_cmis_rev().split('.')[0])
+                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes):
+                                self.log_notice("{}: datapath init not pending".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                continue
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
@@ -1566,7 +1553,7 @@ class CmisManagerTask:
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration(api))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=self.get_cmis_dp_init_duration_secs(api))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
