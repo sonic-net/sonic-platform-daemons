@@ -998,13 +998,9 @@ def update_tor_active_side(read_side, state, logical_port_name):
         return (-1, -1)
 
 
-def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, appl_db, read_side):
+def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, appl_db, read_side, y_cable_response_tbl):
 
     status = None
-    y_cable_response_tbl = {}
-
-    y_cable_response_tbl[asic_index] = swsscommon.Table(
-        appl_db[asic_index], "MUX_CABLE_RESPONSE_TABLE")
     physical_port_list = logical_port_name_to_physical_port_list(
         logical_port_name)
 
@@ -3542,6 +3538,7 @@ class YCableTableUpdateTask(object):
         port_tbl, port_table_keys = {}, {}
         fwd_state_command_tbl, fwd_state_response_tbl, mux_cable_command_tbl = {}, {}, {}
         mux_metrics_tbl = {}
+        y_cable_response_tbl = {}
 
         sel = swsscommon.Select()
 
@@ -3570,6 +3567,8 @@ class YCableTableUpdateTask(object):
                 appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
             hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
                 state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+            y_cable_response_tbl[asic_id] = swsscommon.Table(
+                appl_db[asic_id], "MUX_CABLE_RESPONSE_TABLE")
             hw_mux_cable_tbl_keys[asic_id] = hw_mux_cable_tbl[asic_id].getKeys()
             port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
             port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
@@ -3699,7 +3698,7 @@ class YCableTableUpdateTask(object):
                                     continue
                                 mux_port_dict = dict(fv)
                                 read_side = mux_port_dict.get("read_side")
-                                update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
+                                update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side), y_cable_response_tbl)
 
             while True:
                 (port_m, op_m, fvp_m) = fwd_state_command_tbl[asic_index].pop()
