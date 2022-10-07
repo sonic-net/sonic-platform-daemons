@@ -19,6 +19,7 @@ try:
     import datetime
     import subprocess
     import argparse
+    import re
 
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
@@ -216,33 +217,18 @@ def _wrapper_get_sfp_error_description(physical_port):
 # Remove unnecessary unit from the raw data
 
 def beautify_dom_info_dict(dom_info_dict, physical_port):
-    dom_info_dict['temperature'] = strip_unit_and_beautify(dom_info_dict['temperature'], TEMP_UNIT)
-    dom_info_dict['voltage'] = strip_unit_and_beautify(dom_info_dict['voltage'], VOLT_UNIT)
-    dom_info_dict['rx1power'] = strip_unit_and_beautify(dom_info_dict['rx1power'], POWER_UNIT)
-    dom_info_dict['rx2power'] = strip_unit_and_beautify(dom_info_dict['rx2power'], POWER_UNIT)
-    dom_info_dict['rx3power'] = strip_unit_and_beautify(dom_info_dict['rx3power'], POWER_UNIT)
-    dom_info_dict['rx4power'] = strip_unit_and_beautify(dom_info_dict['rx4power'], POWER_UNIT)
-    dom_info_dict['tx1bias'] = strip_unit_and_beautify(dom_info_dict['tx1bias'], BIAS_UNIT)
-    dom_info_dict['tx2bias'] = strip_unit_and_beautify(dom_info_dict['tx2bias'], BIAS_UNIT)
-    dom_info_dict['tx3bias'] = strip_unit_and_beautify(dom_info_dict['tx3bias'], BIAS_UNIT)
-    dom_info_dict['tx4bias'] = strip_unit_and_beautify(dom_info_dict['tx4bias'], BIAS_UNIT)
-    dom_info_dict['tx1power'] = strip_unit_and_beautify(dom_info_dict['tx1power'], POWER_UNIT)
-    dom_info_dict['tx2power'] = strip_unit_and_beautify(dom_info_dict['tx2power'], POWER_UNIT)
-    dom_info_dict['tx3power'] = strip_unit_and_beautify(dom_info_dict['tx3power'], POWER_UNIT)
-    dom_info_dict['tx4power'] = strip_unit_and_beautify(dom_info_dict['tx4power'], POWER_UNIT)
-    if 'rx5power' in dom_info_dict:
-        dom_info_dict['rx5power'] = strip_unit_and_beautify(dom_info_dict['rx5power'], POWER_UNIT)
-        dom_info_dict['rx6power'] = strip_unit_and_beautify(dom_info_dict['rx6power'], POWER_UNIT)
-        dom_info_dict['rx7power'] = strip_unit_and_beautify(dom_info_dict['rx7power'], POWER_UNIT)
-        dom_info_dict['rx8power'] = strip_unit_and_beautify(dom_info_dict['rx8power'], POWER_UNIT)
-        dom_info_dict['tx5bias'] = strip_unit_and_beautify(dom_info_dict['tx5bias'], BIAS_UNIT)
-        dom_info_dict['tx6bias'] = strip_unit_and_beautify(dom_info_dict['tx6bias'], BIAS_UNIT)
-        dom_info_dict['tx7bias'] = strip_unit_and_beautify(dom_info_dict['tx7bias'], BIAS_UNIT)
-        dom_info_dict['tx8bias'] = strip_unit_and_beautify(dom_info_dict['tx8bias'], BIAS_UNIT)
-        dom_info_dict['tx5power'] = strip_unit_and_beautify(dom_info_dict['tx5power'], POWER_UNIT)
-        dom_info_dict['tx6power'] = strip_unit_and_beautify(dom_info_dict['tx6power'], POWER_UNIT)
-        dom_info_dict['tx7power'] = strip_unit_and_beautify(dom_info_dict['tx7power'], POWER_UNIT)
-        dom_info_dict['tx8power'] = strip_unit_and_beautify(dom_info_dict['tx8power'], POWER_UNIT)
+    for k, v in dom_info_dict.items():
+        if k == 'temperature':
+            dom_info_dict[k] = strip_unit_and_beautify(v, TEMP_UNIT)
+        elif k == 'voltage':
+            dom_info_dict[k] = strip_unit_and_beautify(v, VOLT_UNIT)
+        elif re.match('^(tx|rx)[1-8]power$', k):
+            dom_info_dict[k] = strip_unit_and_beautify(v, POWER_UNIT)
+        elif re.match('^(tx|rx)[1-8]bias$', k):
+            dom_info_dict[k] = strip_unit_and_beautify(v, BIAS_UNIT)
+        elif type(v) is not str:
+            # For all the other keys:
+            dom_info_dict[k] = str(v)
 
 
 def beautify_dom_threshold_info_dict(dom_info_dict):
@@ -507,55 +493,8 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
                     dom_info_cache[physical_port] = dom_info_dict
             if dom_info_dict is not None:
                 beautify_dom_info_dict(dom_info_dict, physical_port)
-                if 'rx5power' in dom_info_dict:
-                    fvs = swsscommon.FieldValuePairs(
-                        [('temperature', dom_info_dict['temperature']),
-                         ('voltage', dom_info_dict['voltage']),
-                         ('rx1power', dom_info_dict['rx1power']),
-                         ('rx2power', dom_info_dict['rx2power']),
-                         ('rx3power', dom_info_dict['rx3power']),
-                         ('rx4power', dom_info_dict['rx4power']),
-                         ('rx5power', dom_info_dict['rx5power']),
-                         ('rx6power', dom_info_dict['rx6power']),
-                         ('rx7power', dom_info_dict['rx7power']),
-                         ('rx8power', dom_info_dict['rx8power']),
-                         ('tx1bias', dom_info_dict['tx1bias']),
-                         ('tx2bias', dom_info_dict['tx2bias']),
-                         ('tx3bias', dom_info_dict['tx3bias']),
-                         ('tx4bias', dom_info_dict['tx4bias']),
-                         ('tx5bias', dom_info_dict['tx5bias']),
-                         ('tx6bias', dom_info_dict['tx6bias']),
-                         ('tx7bias', dom_info_dict['tx7bias']),
-                         ('tx8bias', dom_info_dict['tx8bias']),
-                         ('tx1power', dom_info_dict['tx1power']),
-                         ('tx2power', dom_info_dict['tx2power']),
-                         ('tx3power', dom_info_dict['tx3power']),
-                         ('tx4power', dom_info_dict['tx4power']),
-                         ('tx5power', dom_info_dict['tx5power']),
-                         ('tx6power', dom_info_dict['tx6power']),
-                         ('tx7power', dom_info_dict['tx7power']),
-                         ('tx8power', dom_info_dict['tx8power'])
-                         ])
-                else:
-                    fvs = swsscommon.FieldValuePairs(
-                        [('temperature', dom_info_dict['temperature']),
-                         ('voltage', dom_info_dict['voltage']),
-                         ('rx1power', dom_info_dict['rx1power']),
-                         ('rx2power', dom_info_dict['rx2power']),
-                         ('rx3power', dom_info_dict['rx3power']),
-                         ('rx4power', dom_info_dict['rx4power']),
-                         ('tx1bias', dom_info_dict['tx1bias']),
-                         ('tx2bias', dom_info_dict['tx2bias']),
-                         ('tx3bias', dom_info_dict['tx3bias']),
-                         ('tx4bias', dom_info_dict['tx4bias']),
-                         ('tx1power', dom_info_dict['tx1power']),
-                         ('tx2power', dom_info_dict['tx2power']),
-                         ('tx3power', dom_info_dict['tx3power']),
-                         ('tx4power', dom_info_dict['tx4power'])
-                         ])
-
+                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in dom_info_dict.items()])
                 table.set(port_name, fvs)
-
             else:
                 return SFP_EEPROM_NOT_READY
 
