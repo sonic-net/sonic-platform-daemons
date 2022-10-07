@@ -1624,13 +1624,6 @@ def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict,
         # if there is a firmware download in progress, retreive the last known firmware
         mux_firmware_dict = {}
 
-        namespaces = multi_asic.get_front_end_namespaces()
-        for namespace in namespaces:
-            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            mux_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], MUX_CABLE_INFO_TABLE)
-
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
 
