@@ -4030,6 +4030,7 @@ class TestYCableScript(object):
         xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
         xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
         xcvrd_show_fw_res_tbl = mock_swsscommon_table
+        mux_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -4037,7 +4038,7 @@ class TestYCableScript(object):
         fvp = {"firmware_version": "null"}
 
         rc = handle_show_firmware_show_cmd_arg_tbl_notification(
-            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port, mux_tbl)
         assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
@@ -4056,6 +4057,7 @@ class TestYCableScript(object):
         xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
         xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
         xcvrd_show_fw_res_tbl = mock_swsscommon_table
+        mux_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -4063,7 +4065,7 @@ class TestYCableScript(object):
         fvp = {"down_firmware": "null"}
 
         rc = handle_show_firmware_show_cmd_arg_tbl_notification(
-            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port, mux)
         assert(rc == None)
 
     @patch('swsscommon.swsscommon.Table')
@@ -4086,6 +4088,7 @@ class TestYCableScript(object):
         xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
         xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
         xcvrd_show_fw_res_tbl = mock_swsscommon_table
+        mux_tbl = mock_swsscommon_table
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
@@ -4119,7 +4122,7 @@ class TestYCableScript(object):
 
             patched_util.get.return_value = PortInstanceHelper()
             rc = handle_show_firmware_show_cmd_arg_tbl_notification(
-                fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+                fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port, mux_tbl)
             assert(rc == None)
 
     @patch('swsscommon.swsscommon.Table')
@@ -4138,6 +4141,7 @@ class TestYCableScript(object):
         xcvrd_down_fw_rsp_tbl = mock_swsscommon_table
         xcvrd_acti_fw_cmd_arg_tbl = mock_swsscommon_table
         xcvrd_show_fw_res_tbl = mock_swsscommon_table
+        mux_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -4145,7 +4149,7 @@ class TestYCableScript(object):
         fvp = {"firmware_version": "null"}
 
         rc = handle_show_firmware_show_cmd_arg_tbl_notification(
-            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+            fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port, mux_tbl)
         assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
