@@ -107,13 +107,20 @@ class YcableInfoUpdateTask(object):
         state_db = {}
         mux_tbl = {}
         status_tbl = {}
+        y_cable_tbl, mux_tbl = {}, {}
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
             status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            y_cable_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            mux_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
         time.sleep(0.1)
         # Start loop to update ycable info in DB periodically
@@ -128,7 +135,7 @@ class YcableInfoUpdateTask(object):
 
                 if not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
                     if y_cable_presence[0] is True:
-                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name)
+                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name, y_cable_tbl, port_tbl)
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
