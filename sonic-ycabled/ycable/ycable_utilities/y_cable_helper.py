@@ -1152,18 +1152,6 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
 
 def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name):
 
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(
-            namespace)
-        state_db[asic_id] = daemon_base.db_connect(
-            "STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
     # fill the newly found entry
     read_y_cable_and_update_statedb_port_tbl(
         logical_port_name, y_cable_tbl[asic_index])
@@ -1279,18 +1267,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             else:
                                 # first create the state db y cable table and then fill in the entry
                                 y_cable_presence[:] = [True]
-                                namespaces = multi_asic.get_front_end_namespaces()
-                                for namespace in namespaces:
-                                    asic_id = multi_asic.get_asic_index_from_namespace(
-                                        namespace)
-                                    state_db[asic_id] = daemon_base.db_connect(
-                                        "STATE_DB", namespace)
-                                    y_cable_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                                    static_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-                                    mux_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], MUX_CABLE_INFO_TABLE)
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
@@ -1417,6 +1393,12 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
         hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
             state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+        y_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        static_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
@@ -1441,7 +1423,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             (status, cable_type) = check_mux_cable_port_type(logical_port_name, port_tbl, asic_index)
             if status and cable_type == "active-standby":
                 check_identifier_presence_and_update_mux_table_entry(
-                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                    state_db, port_tbl, hw_mux_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
             if status and cable_type == "active-active":
                 check_identifier_presence_and_setup_channel(
                     logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence)
@@ -1481,6 +1463,12 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
         hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
             state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+        y_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        static_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
+        mux_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
