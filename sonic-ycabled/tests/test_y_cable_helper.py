@@ -1805,16 +1805,39 @@ class TestYCableScript(object):
         mock_swsscommon_table.return_value = mock_table
 
         mock_logical_port_name = [""]
+        state_db = {}
+        test_db = "TEST_DB"
+        static_tbl = {}
+        mux_tbl = {}
+        port_tbl = {}
+        fvs = [('state', "auto"), ('read_side', 1)]
+        asic_index = 0
+        status = True
+        y_cable_tbl = {}
+        grpc_config = {}
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
+        static_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "STATIC_TABLE")
+        static_tbl[asic_index].get.return_value = (status, fvs)
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "MUX_TABLE")
+        mux_tbl[asic_index].get.return_value = (status, fvs)
 
-        def mock_get_asic_id(mock_logical_port_name):
-            return 0
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+        grpc_config[asic_index] = swsscommon.Table(
+            test_db[asic_index], "GRPC_CONFIG")
+
 
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
 
             patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
             patched_util.get_asic_id_for_logical_port.return_value = 0
 
-            rc = delete_ports_status_for_y_cable()
+            rc = delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, grpc_config)
 
             mock_swsscommon_table.assert_called()
 

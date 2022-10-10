@@ -255,6 +255,7 @@ class DaemonYcable(daemon_base.DaemonBase):
         self.loopback_keys = {}
         self.hw_mux_cable_tbl = {}
         self.hw_mux_cable_tbl_peer = {}
+        self.grpc_config = {}
 
         fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
         namespaces = multi_asic.get_front_end_namespaces()
@@ -281,6 +282,7 @@ class DaemonYcable(daemon_base.DaemonBase):
                 self.state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
             self.mux_tbl[asic_id] = swsscommon.Table(
                 self.state_db[asic_id], MUX_CABLE_INFO_TABLE)
+            self.grpc_config[asic_id] = swsscommon.Table(self.config_db[asic_id], "GRPCCLIENT")
 
     # Signal handler
     def signal_handler(self, sig, frame):
@@ -394,7 +396,7 @@ class DaemonYcable(daemon_base.DaemonBase):
                 continue
 
         if self.y_cable_presence[0] is True:
-            y_cable_helper.delete_ports_status_for_y_cable()
+            y_cable_helper.delete_ports_status_for_y_cable(self.y_cable_tbl, self.static_tbl, self.mux_tbl, self.port_tbl, self.grpc_config)
 
         global_values = globals()
         val = global_values.get('platform_chassis')
