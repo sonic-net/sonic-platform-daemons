@@ -54,6 +54,8 @@ PORT_CONFIG_LOAD_ERROR = 2
 NOT_IMPLEMENTED_ERROR = 3
 SFP_SYSTEM_ERROR = 4
 
+MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
+MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
 
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -99,29 +101,31 @@ class YcableInfoUpdateTask(object):
     def __init__(self):
         self.task_thread = None
         self.task_stopping_event = threading.Event()
-
-    def task_worker(self, y_cable_presence):
-        helper_logger.log_info("Start Ycable monitoring loop")
-
-        # Connect to STATE_DB and create transceiver ycable config table
-        state_db = {}
-        mux_tbl = {}
-        status_tbl = {}
-        y_cable_tbl, mux_tbl = {}, {}
+        self.state_db = {}
+        self.config_db = {}
+        self.mux_tbl = {}
+        self.port_tbl = {}
+        self.status_tbl = {}
+        self.y_cable_tbl = {} 
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-            status_tbl[asic_id] = swsscommon.Table(state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
-            y_cable_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            mux_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], MUX_CABLE_INFO_TABLE)
+            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
+            self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            self.y_cable_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            self.mux_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
+
+    def task_worker(self, y_cable_presence):
+        helper_logger.log_info("Start Ycable monitoring loop")
+
+        # Connect to STATE_DB and create transceiver ycable config table
         time.sleep(0.1)
         # Start loop to update ycable info in DB periodically
         while not self.task_stopping_event.wait(YCABLE_INFO_UPDATE_PERIOD_SECS):
@@ -133,9 +137,9 @@ class YcableInfoUpdateTask(object):
                     logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                if not detect_port_in_error_status(logical_port_name, status_tbl[asic_index]):
+                if not detect_port_in_error_status(logical_port_name, self.status_tbl[asic_index]):
                     if y_cable_presence[0] is True:
-                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name, y_cable_tbl, port_tbl)
+                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(self.state_db, self.mux_tbl, asic_index, logical_port_name, self.y_cable_tbl, self.port_tbl)
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
