@@ -1663,6 +1663,7 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_chassis')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
     @patch('swsscommon.swsscommon.Table')
+    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
     def test_init_ports_status_for_y_cable(self, platform_chassis, platform_sfp, mock_swsscommon_table):
 
         platform_sfp = MagicMock()
@@ -1678,9 +1679,35 @@ class TestYCableScript(object):
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
         mock_swsscommon_table.return_value = mock_table
+        state_db = {}
+        test_db = "TEST_DB"
+        static_tbl = {}
+        mux_tbl = {}
+        port_tbl = {}
+        port_table_keys = {}
+        loopback_keys = {}
+        hw_mux_cable_tbl, hw_mux_cable_tbl_peer = {}, {}
+        y_cable_presence = [True]
+        delete_change_event = [True]
+        fvs = [('state', "auto"), ('read_side', 1)]
+        asic_index = 0
+        status = True
+        y_cable_tbl = {}
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
+        static_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "STATIC_TABLE")
+        static_tbl[asic_index].get.return_value = (status, fvs)
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "MUX_TABLE")
+        mux_tbl[asic_index].get.return_value = (status, fvs)
 
-        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis,
-                                           y_cable_presence,  stop_event=threading.Event())
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+
+        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event())
 
         assert(rc == None)
 

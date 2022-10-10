@@ -1344,50 +1344,18 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event(), is_vs=False):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
     global y_cable_is_platform_vs
     global read_side
     # Connect to CONFIG_DB and create port status table inside state_db
-    config_db, state_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
-    static_tbl, mux_tbl = {}, {}
-    port_table_keys = {}
-    xcvrd_log_tbl = {}
-    loopback_tbl= {}
-    loopback_keys = {}
-    hw_mux_cable_tbl = {}
-    hw_mux_cable_tbl_peer = {}
 
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
     y_cable_is_platform_vs = is_vs
 
-    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        xcvrd_log_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "XCVRD_LOG")
-        xcvrd_log_tbl[asic_id].set("Y_CABLE", fvs_updated)
-        loopback_tbl[asic_id] = swsscommon.Table(
-            config_db[asic_id], "LOOPBACK_INTERFACE")
-        loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        hw_mux_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
-            state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
