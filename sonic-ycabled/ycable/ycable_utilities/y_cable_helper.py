@@ -2150,7 +2150,7 @@ def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl
                  ('version_nic_inactive', str(mux_info_dict["version_nic_inactive"])),
                  ('version_nic_next', str(mux_info_dict["version_nic_next"]))
                  ])
-            table.set(logical_port_name, fvs)
+            mux_tbl[asic_index].set(logical_port_name, fvs)
         else:
             return -1
 
