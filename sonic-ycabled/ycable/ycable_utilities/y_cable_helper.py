@@ -3433,21 +3433,171 @@ class YCableTableUpdateTask(object):
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
+        self.appl_db, self.state_db, self.config_db, self.status_tbl, self.status_tbl_peer = {}, {}, {}, {}, {}
+        self.hw_mux_cable_tbl, self.hw_mux_cable_tbl_peer = {}, {}
+        self.hw_mux_cable_tbl_keys = {}
+        self.port_tbl, self.port_table_keys = {}, {}
+        self.fwd_state_command_tbl, self.fwd_state_response_tbl, self.mux_cable_command_tbl = {}, {}, {}
+        self.mux_metrics_tbl = {}
+        self.y_cable_response_tbl = {}
+        self.xcvrd_log_tbl = {}
+        self.xcvrd_down_fw_cmd_tbl, self.xcvrd_down_fw_rsp_tbl, self.xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
+        self.xcvrd_down_fw_status_cmd_tbl, self.xcvrd_down_fw_status_rsp_tbl, self.xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
+        self.xcvrd_acti_fw_cmd_tbl, self.xcvrd_acti_fw_cmd_arg_tbl, self.xcvrd_acti_fw_rsp_tbl, self.xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
+        self.xcvrd_roll_fw_cmd_tbl, self.xcvrd_roll_fw_rsp_tbl, self.xcvrd_roll_fw_cmd_sts_tbl = {}, {}, {}
+        self.xcvrd_show_fw_cmd_tbl, self.xcvrd_show_fw_rsp_tbl, self.xcvrd_show_fw_cmd_sts_tbl, self.xcvrd_show_fw_res_tbl = {}, {}, {}, {}
+        self.xcvrd_show_hwmode_dir_cmd_tbl, self.xcvrd_show_hwmode_dir_rsp_tbl, self.xcvrd_show_hwmode_dir_res_tbl, self.xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}, {}
+        self.xcvrd_show_hwmode_swmode_cmd_tbl, self.xcvrd_show_hwmode_swmode_rsp_tbl, self.xcvrd_show_hwmode_swmode_cmd_sts_tbl = {}, {}, {}
+        self.xcvrd_config_hwmode_state_cmd_tbl, self.xcvrd_config_hwmode_state_rsp_tbl , self.xcvrd_config_hwmode_state_cmd_sts_tbl= {}, {}, {}
+        self.xcvrd_config_hwmode_swmode_cmd_tbl, self.xcvrd_config_hwmode_swmode_rsp_tbl , self.xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
+        self.xcvrd_config_prbs_cmd_tbl, self.xcvrd_config_prbs_cmd_arg_tbl, self.xcvrd_config_prbs_rsp_tbl , self.xcvrd_config_prbs_cmd_sts_tbl= {}, {}, {}, {}
+        self.xcvrd_config_loop_cmd_tbl, self.xcvrd_config_loop_cmd_arg_tbl, self.xcvrd_config_loop_rsp_tbl , self.xcvrd_config_loop_cmd_sts_tbl= {}, {}, {}, {}
+        self.xcvrd_show_event_cmd_tbl, self.xcvrd_show_event_rsp_tbl , self.xcvrd_show_event_cmd_sts_tbl, self.xcvrd_show_event_res_tbl= {}, {}, {}, {}
+        self.xcvrd_show_fec_cmd_tbl, self.xcvrd_show_fec_rsp_tbl , self.xcvrd_show_fec_cmd_sts_tbl, self.xcvrd_show_fec_res_tbl= {}, {}, {}, {}
+        self.xcvrd_show_ber_cmd_tbl, self.xcvrd_show_ber_cmd_arg_tbl, self.xcvrd_show_ber_rsp_tbl , self.xcvrd_show_ber_cmd_sts_tbl, self.xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
+
+
+        sel = swsscommon.Select()
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
 
+        namespaces = multi_asic.get_front_end_namespaces()
+        for namespace in namespaces:
+            # Open a handle to the Application database, in all namespaces
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.status_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
+            self.mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
+            self.mux_metrics_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
+            self.hw_mux_cable_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+            # TODO add definition inside app DB
+            self.status_tbl_peer[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "HW_FORWARDING_STATE_PEER")
+            self.fwd_state_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "FORWARDING_STATE_COMMAND")
+            self.fwd_state_response_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
+            self.hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+            self.y_cable_response_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "MUX_CABLE_RESPONSE_TABLE")
+            self.hw_mux_cable_tbl_keys[asic_id] = self.hw_mux_cable_tbl[asic_id].getKeys()
+            self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
+            self.port_table_keys[asic_id] = self.port_tbl[asic_id].getKeys()
+            self.xcvrd_log_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.config_db[asic_id], "XCVRD_LOG")
+            self.xcvrd_show_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
+            self.xcvrd_show_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
+            self.xcvrd_show_fw_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_SHOW_FW_RSP")
+            self.xcvrd_show_fw_res_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_SHOW_FW_RES")
+            self.xcvrd_down_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
+            self.xcvrd_down_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
+            self.xcvrd_down_fw_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_DOWN_FW_RSP")
+            self.xcvrd_down_fw_status_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_DOWN_FW_STATUS_CMD")
+            self.xcvrd_down_fw_status_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_DOWN_FW_STATUS_RSP")
+            self.xcvrd_acti_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
+            self.xcvrd_acti_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
+            self.xcvrd_acti_fw_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_ACTI_FW_CMD_ARG")
+            self.xcvrd_acti_fw_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_ACTI_FW_RSP")
+            self.xcvrd_roll_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
+            self.xcvrd_roll_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
+            self.xcvrd_roll_fw_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_ROLL_FW_RSP")
+            self.xcvrd_show_hwmode_dir_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
+            self.xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
+            self.xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
+            self.xcvrd_show_hwmode_dir_res_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RES")
+            self.xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
+            self.xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
+            self.xcvrd_config_hwmode_state_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_RSP")
+            self.xcvrd_config_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
+            self.xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
+            self.xcvrd_config_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_RSP")
+            self.xcvrd_show_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
+            self.xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
+            self.xcvrd_show_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_RSP")
+            self.xcvrd_config_prbs_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
+            self.xcvrd_config_prbs_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD_ARG")
+            self.xcvrd_config_prbs_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
+            self.xcvrd_config_prbs_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_CONFIG_PRBS_RSP")
+            self.xcvrd_config_loop_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
+            self.xcvrd_config_loop_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD_ARG")
+            self.xcvrd_config_loop_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
+            self.xcvrd_config_loop_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_CONFIG_LOOP_RSP")
+            self.xcvrd_show_event_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
+            self.xcvrd_show_event_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
+            self.xcvrd_show_event_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_EVENT_LOG_RSP")
+            self.xcvrd_show_event_res_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_EVENT_LOG_RES")
+            self.xcvrd_show_fec_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_GET_FEC_CMD")
+            self.xcvrd_show_fec_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_GET_FEC_CMD")
+            self.xcvrd_show_fec_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_GET_FEC_RSP")
+            self.xcvrd_show_fec_res_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_GET_FEC_RES")
+            self.xcvrd_show_ber_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
+                self.appl_db[asic_id], "XCVRD_GET_BER_CMD")
+            self.xcvrd_show_ber_cmd_arg_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_GET_BER_CMD_ARG")
+            self.xcvrd_show_ber_cmd_sts_tbl[asic_id] = swsscommon.Table(
+                self.appl_db[asic_id], "XCVRD_GET_BER_CMD")
+            self.xcvrd_show_ber_rsp_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_GET_BER_RSP")
+            self.xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], "XCVRD_GET_BER_RES")
+
     def task_worker(self):
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, state_db, config_db, status_tbl, status_tbl_peer = {}, {}, {}, {}, {}
-        hw_mux_cable_tbl, hw_mux_cable_tbl_peer = {}, {}
-        hw_mux_cable_tbl_keys = {}
-        port_tbl, port_table_keys = {}, {}
-        fwd_state_command_tbl, fwd_state_response_tbl, mux_cable_command_tbl = {}, {}, {}
-        mux_metrics_tbl = {}
-        y_cable_response_tbl = {}
 
         sel = swsscommon.Select()
 
@@ -3456,35 +3606,10 @@ class YCableTableUpdateTask(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            status_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
-            mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            mux_metrics_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
-            hw_mux_cable_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            # TODO add definition inside app DB
-            status_tbl_peer[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "HW_FORWARDING_STATE_PEER")
-            fwd_state_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "FORWARDING_STATE_COMMAND")
-            fwd_state_response_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
-            hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
-                state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
-            y_cable_response_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "MUX_CABLE_RESPONSE_TABLE")
-            hw_mux_cable_tbl_keys[asic_id] = hw_mux_cable_tbl[asic_id].getKeys()
-            port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-            port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-            sel.addSelectable(status_tbl[asic_id])
-            sel.addSelectable(status_tbl_peer[asic_id])
-            sel.addSelectable(fwd_state_command_tbl[asic_id])
-            sel.addSelectable(mux_cable_command_tbl[asic_id])
+            sel.addSelectable(self.status_tbl[asic_id])
+            sel.addSelectable(self.status_tbl_peer[asic_id])
+            sel.addSelectable(self.fwd_state_command_tbl[asic_id])
+            sel.addSelectable(self.mux_cable_command_tbl[asic_id])
 
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
@@ -3513,7 +3638,7 @@ class YCableTableUpdateTask(object):
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
 
             while True:
-                (port, op, fvp) = status_tbl[asic_index].pop()
+                (port, op, fvp) = self.status_tbl[asic_index].pop()
                 if not port:
                     break
 
@@ -3529,7 +3654,7 @@ class YCableTableUpdateTask(object):
                     if port not in hw_mux_cable_tbl_keys[asic_index]:
                         continue
 
-                    (status, cable_type) = check_mux_cable_port_type(port, port_tbl, asic_index)
+                    (status, cable_type) = check_mux_cable_port_type(port, self.port_tbl, asic_index)
 
                     if status:
 
@@ -3540,10 +3665,10 @@ class YCableTableUpdateTask(object):
                                 # got a state change
                                 new_status = fvp_dict["state"]
                                 requested_status = new_status
-                                (status, fvs) = hw_mux_cable_tbl[asic_index].get(port)
+                                (status, fvs) = self.hw_mux_cable_tbl[asic_index].get(port)
                                 if status is False:
                                     helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                        port, hw_mux_cable_tbl[asic_index].getTableName()))
+                                        port, self.hw_mux_cable_tbl[asic_index].getTableName()))
                                     continue
                                 mux_port_dict = dict(fvs)
                                 old_status = mux_port_dict.get("state", None)
@@ -3561,12 +3686,12 @@ class YCableTableUpdateTask(object):
                                 time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
                                 fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
                                                                           ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
-                                mux_metrics_tbl[asic_index].set(port, fvs_metrics)
+                                self.mux_metrics_tbl[asic_index].set(port, fvs_metrics)
 
                                 fvs_updated = swsscommon.FieldValuePairs([('state', new_status),
                                                                           ('read_side', str(read_side)),
                                                                           ('active_side', str(active_side))])
-                                hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
+                                self.hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
                             else:
                                 helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
                                     port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
@@ -3575,9 +3700,9 @@ class YCableTableUpdateTask(object):
 
                             if fvp:
                                 handle_hw_mux_cable_table_grpc_notification(
-                                    fvp, hw_mux_cable_tbl, asic_index, mux_metrics_tbl, False, port)
+                                    fvp, self.hw_mux_cable_tbl, asic_index, self.mux_metrics_tbl, False, port)
             while True:
-                (port_m, op_m, fvp_m) = mux_cable_command_tbl[asic_index].pop()
+                (port_m, op_m, fvp_m) = self.mux_cable_command_tbl[asic_index].pop()
 
                 if not port_m:
                     break
@@ -3585,7 +3710,7 @@ class YCableTableUpdateTask(object):
 
                 if fvp_m:
 
-                    if port_m not in hw_mux_cable_tbl_keys[asic_index]:
+                    if port_m not in self.hw_mux_cable_tbl_keys[asic_index]:
                         continue
 
                     fvp_dict = dict(fvp_m)
@@ -3600,67 +3725,47 @@ class YCableTableUpdateTask(object):
                             probe_identifier = fvp_dict["command"]
 
                             if probe_identifier == "probe":
-                                (status, fv) = hw_mux_cable_tbl[asic_index].get(port_m)
+                                (status, fv) = self.hw_mux_cable_tbl[asic_index].get(port_m)
                                 if status is False:
                                     helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                        port_m, hw_mux_cable_tbl[asic_index].getTableName()))
+                                        port_m, self.hw_mux_cable_tbl[asic_index].getTableName()))
                                     continue
                                 mux_port_dict = dict(fv)
                                 read_side = mux_port_dict.get("read_side")
-                                update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side), y_cable_response_tbl)
+                                update_appdb_port_mux_cable_response_table(port_m, asic_index, self.appl_db, int(read_side), self.y_cable_response_tbl)
 
             while True:
-                (port_m, op_m, fvp_m) = fwd_state_command_tbl[asic_index].pop()
+                (port_m, op_m, fvp_m) = self.fwd_state_command_tbl[asic_index].pop()
 
                 if not port_m:
                     break
 
                 helper_logger.log_debug("Y_CABLE_DEBUG: received a probe for Forwarding state using gRPC port status {} {}".format(port_m, threading.currentThread().getName()))
-                (status, cable_type) = check_mux_cable_port_type(port_m, port_tbl, asic_index)
+                (status, cable_type) = check_mux_cable_port_type(port_m, self.port_tbl, asic_index)
 
                 if status is False or cable_type != "active-active":
                     break
 
                 if fvp_m:
                     handle_fwd_state_command_grpc_notification(
-                        fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port_m, appl_db)
+                        fvp_m, self.hw_mux_cable_tbl, self.fwd_state_response_tbl, asic_index, port_m, self.appl_db)
 
             while True:
                 (port_n, op_n, fvp_n) = status_tbl_peer[asic_index].pop()
                 if not port_n:
                     break
 
-                (status, cable_type) = check_mux_cable_port_type(port_n, port_tbl, asic_index)
+                (status, cable_type) = check_mux_cable_port_type(port_n, self.port_tbl, asic_index)
 
                 if status is False or cable_type != "active-active":
                     break
 
                 if fvp_n:
                     handle_hw_mux_cable_table_grpc_notification(
-                        fvp_n, hw_mux_cable_tbl_peer, asic_index, mux_metrics_tbl, True, port_n)
+                        fvp_n, self.hw_mux_cable_tbl_peer, asic_index, self.mux_metrics_tbl, True, port_n)
 
 
     def task_cli_worker(self):
-
-        # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, config_db , state_db, y_cable_tbl = {}, {}, {}, {}
-        xcvrd_log_tbl = {}
-        xcvrd_down_fw_cmd_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
-        xcvrd_down_fw_status_cmd_tbl, xcvrd_down_fw_status_rsp_tbl, xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
-        xcvrd_acti_fw_cmd_tbl, xcvrd_acti_fw_cmd_arg_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
-        xcvrd_roll_fw_cmd_tbl, xcvrd_roll_fw_rsp_tbl, xcvrd_roll_fw_cmd_sts_tbl = {}, {}, {}
-        xcvrd_show_fw_cmd_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_res_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_swmode_cmd_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, xcvrd_show_hwmode_swmode_cmd_sts_tbl = {}, {}, {}
-        xcvrd_config_hwmode_state_cmd_tbl, xcvrd_config_hwmode_state_rsp_tbl , xcvrd_config_hwmode_state_cmd_sts_tbl= {}, {}, {}
-        xcvrd_config_hwmode_swmode_cmd_tbl, xcvrd_config_hwmode_swmode_rsp_tbl , xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
-        xcvrd_config_prbs_cmd_tbl, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_rsp_tbl , xcvrd_config_prbs_cmd_sts_tbl= {}, {}, {}, {}
-        xcvrd_config_loop_cmd_tbl, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_rsp_tbl , xcvrd_config_loop_cmd_sts_tbl= {}, {}, {}, {}
-        xcvrd_show_event_cmd_tbl, xcvrd_show_event_rsp_tbl , xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_res_tbl= {}, {}, {}, {}
-        xcvrd_show_fec_cmd_tbl, xcvrd_show_fec_rsp_tbl , xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl= {}, {}, {}, {}
-        xcvrd_show_ber_cmd_tbl, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl , xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
-        port_tbl, port_table_keys = {}, {}
-        mux_tbl = {}
 
 
         sel = swsscommon.Select()
@@ -3671,130 +3776,21 @@ class YCableTableUpdateTask(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            xcvrd_log_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                config_db[asic_id], "XCVRD_LOG")
-            xcvrd_show_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
-            xcvrd_show_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
-            xcvrd_show_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_FW_RSP")
-            xcvrd_show_fw_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_FW_RES")
-            xcvrd_down_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
-            xcvrd_down_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
-            xcvrd_down_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_DOWN_FW_RSP")
-            xcvrd_down_fw_status_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_DOWN_FW_STATUS_CMD")
-            xcvrd_down_fw_status_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_DOWN_FW_STATUS_RSP")
-            xcvrd_acti_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
-            xcvrd_acti_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
-            xcvrd_acti_fw_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD_ARG")
-            xcvrd_acti_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_ACTI_FW_RSP")
-            xcvrd_roll_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
-            xcvrd_roll_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
-            xcvrd_roll_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_ROLL_FW_RSP")
-            xcvrd_show_hwmode_dir_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
-            xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
-            xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
-            xcvrd_show_hwmode_dir_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RES")
-            xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
-            xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
-            xcvrd_config_hwmode_state_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_RSP")
-            xcvrd_config_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
-            xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
-            xcvrd_config_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_RSP")
-            xcvrd_show_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
-            xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
-            xcvrd_show_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_RSP")
-            xcvrd_config_prbs_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
-            xcvrd_config_prbs_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD_ARG")
-            xcvrd_config_prbs_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
-            xcvrd_config_prbs_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_PRBS_RSP")
-            xcvrd_config_loop_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
-            xcvrd_config_loop_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD_ARG")
-            xcvrd_config_loop_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
-            xcvrd_config_loop_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_LOOP_RSP")
-            xcvrd_show_event_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
-            xcvrd_show_event_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
-            xcvrd_show_event_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_EVENT_LOG_RSP")
-            xcvrd_show_event_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_EVENT_LOG_RES")
-            xcvrd_show_fec_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
-            xcvrd_show_fec_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
-            xcvrd_show_fec_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_FEC_RSP")
-            xcvrd_show_fec_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_FEC_RES")
-            xcvrd_show_ber_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD")
-            xcvrd_show_ber_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD_ARG")
-            xcvrd_show_ber_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD")
-            xcvrd_show_ber_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_BER_RSP")
-            xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_BER_RES")
-            mux_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], MUX_CABLE_INFO_TABLE)
-            port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-            port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-            sel.addSelectable(xcvrd_log_tbl[asic_id])
-            sel.addSelectable(xcvrd_down_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_down_fw_status_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_acti_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_roll_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_hwmode_dir_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_hwmode_state_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_prbs_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_loop_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_event_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_fec_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_ber_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_log_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_down_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_down_fw_status_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_acti_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_roll_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_hwmode_dir_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_config_hwmode_state_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_config_prbs_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_config_loop_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_event_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_fec_cmd_tbl[asic_id])
+            sel.addSelectable(self.xcvrd_show_ber_cmd_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
@@ -3822,7 +3818,7 @@ class YCableTableUpdateTask(object):
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
 
             while True:
-                (key, op_m, fvp_m) = xcvrd_log_tbl[asic_index].pop()
+                (key, op_m, fvp_m) = self.xcvrd_log_tbl[asic_index].pop()
 
                 if not key:
                     break
@@ -3834,140 +3830,140 @@ class YCableTableUpdateTask(object):
 
             while True:
                 # show muxcable hwmode state <port>
-                (port, op, fvp) = xcvrd_show_hwmode_dir_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_hwmode_dir_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
+                    handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, self.port_tbl, self.xcvrd_show_hwmode_dir_cmd_sts_tbl, self.xcvrd_show_hwmode_dir_rsp_tbl, self.xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
                     break
 
             while True:
                 # Config muxcable hwmode state <active/standby> <port>
-                (port, op, fvp) = xcvrd_config_hwmode_state_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_config_hwmode_state_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, self.xcvrd_config_hwmode_state_cmd_sts_tbl,  self.xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
                     break
 
 
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
-                (port, op, fvp) = xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_hwmode_swmode_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_swmode_cmd_sts_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, asic_index, port)
+                    handle_show_hwmode_swmode_cmd_arg_tbl_notification(fvp, self.xcvrd_show_hwmode_swmode_cmd_sts_tbl, self.xcvrd_show_hwmode_swmode_rsp_tbl, asic_index, port)
                     break
 
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
-                (port, op, fvp) = xcvrd_config_hwmode_swmode_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_config_hwmode_swmode_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                   handle_config_mux_switchmode_arg_tbl_notification(fvp, xcvrd_config_hwmode_swmode_cmd_sts_tbl, xcvrd_config_hwmode_swmode_rsp_tbl, asic_index, port)
+                   handle_config_mux_switchmode_arg_tbl_notification(fvp, self.xcvrd_config_hwmode_swmode_cmd_sts_tbl, self.xcvrd_config_hwmode_swmode_rsp_tbl, asic_index, port)
                    break
 
             while True:
-                (port, op, fvp) = xcvrd_down_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_down_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, self.task_download_firmware_thread)
+                    handle_config_firmware_down_cmd_arg_tbl_notification(fvp, self.xcvrd_down_fw_cmd_sts_tbl, self.xcvrd_down_fw_rsp_tbl, asic_index, port, self.task_download_firmware_thread)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, self.xcvrd_show_fw_cmd_sts_tbl, self.xcvrd_show_fw_rsp_tbl, self.xcvrd_show_fw_res_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_acti_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_acti_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_acti_fw_cmd_sts_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+                    handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, self.xcvrd_acti_fw_cmd_sts_tbl, self.xcvrd_acti_fw_rsp_tbl, self.xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
                     break
 
 
             while True:
-                (port, op, fvp) = xcvrd_roll_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_roll_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, xcvrd_roll_fw_cmd_sts_tbl, xcvrd_roll_fw_rsp_tbl, asic_index, port)
+                    handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, self.xcvrd_roll_fw_cmd_sts_tbl, self.xcvrd_roll_fw_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_config_prbs_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_config_prbs_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port)
+                    handle_config_prbs_cmd_arg_tbl_notification(fvp, self.xcvrd_config_prbs_cmd_arg_tbl, self.xcvrd_config_prbs_cmd_sts_tbl, self.xcvrd_config_prbs_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_config_loop_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_config_loop_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port)
+                    handle_config_loop_cmd_arg_tbl_notification(fvp, self.xcvrd_config_loop_cmd_arg_tbl, self.xcvrd_config_loop_cmd_sts_tbl, self.xcvrd_config_loop_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_event_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_event_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
 
-                    handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port)
+                    handle_show_event_cmd_arg_tbl_notification(fvp, self.xcvrd_show_event_cmd_sts_tbl, self.xcvrd_show_event_rsp_tbl, self.xcvrd_show_event_res_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_fec_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_fec_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
 
-                    handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port)
+                    handle_get_fec_cmd_arg_tbl_notification(fvp, self.xcvrd_show_fec_rsp_tbl, self.xcvrd_show_fec_cmd_sts_tbl, self.xcvrd_show_fec_res_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_ber_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.xcvrd_show_ber_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port)
+                    handle_show_ber_cmd_arg_tbl_notification(fvp, self.xcvrd_show_ber_cmd_arg_tbl, self.xcvrd_show_ber_rsp_tbl, self.xcvrd_show_ber_cmd_sts_tbl, self.xcvrd_show_ber_res_tbl, asic_index, port)
 
                     break
 
