@@ -3457,8 +3457,6 @@ class YCableTableUpdateTask(object):
         self.xcvrd_show_ber_cmd_tbl, self.xcvrd_show_ber_cmd_arg_tbl, self.xcvrd_show_ber_rsp_tbl , self.xcvrd_show_ber_cmd_sts_tbl, self.xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
 
 
-        sel = swsscommon.Select()
-
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
@@ -3489,7 +3487,6 @@ class YCableTableUpdateTask(object):
                 self.state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
             self.y_cable_response_tbl[asic_id] = swsscommon.Table(
                 self.appl_db[asic_id], "MUX_CABLE_RESPONSE_TABLE")
-            self.hw_mux_cable_tbl_keys[asic_id] = self.hw_mux_cable_tbl[asic_id].getKeys()
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.port_table_keys[asic_id] = self.port_tbl[asic_id].getKeys()
             self.xcvrd_log_tbl[asic_id] = swsscommon.SubscriberStateTable(
@@ -3606,6 +3603,7 @@ class YCableTableUpdateTask(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            self.hw_mux_cable_tbl_keys[asic_id] = self.hw_mux_cable_tbl[asic_id].getKeys()
             sel.addSelectable(self.status_tbl[asic_id])
             sel.addSelectable(self.status_tbl_peer[asic_id])
             sel.addSelectable(self.fwd_state_command_tbl[asic_id])
@@ -3651,7 +3649,7 @@ class YCableTableUpdateTask(object):
                     # This check might be redundant, to check, the presence of this Port in keys
                     # in logical_port_list but keep for now for coherency
                     # also skip checking in logical_port_list inside sfp_util
-                    if port not in hw_mux_cable_tbl_keys[asic_index]:
+                    if port not in self.hw_mux_cable_tbl_keys[asic_index]:
                         continue
 
                     (status, cable_type) = check_mux_cable_port_type(port, self.port_tbl, asic_index)
@@ -3715,7 +3713,7 @@ class YCableTableUpdateTask(object):
 
                     fvp_dict = dict(fvp_m)
 
-                    (status, cable_type) = check_mux_cable_port_type(port_m, port_tbl, asic_index)
+                    (status, cable_type) = check_mux_cable_port_type(port_m, self.port_tbl, asic_index)
 
                     if status:
 
