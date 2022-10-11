@@ -812,7 +812,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_dom_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
-    @patch('xcvrd.xcvrd.update_port_transceiver_status_table')
+    @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
     def test_SfpStateUpdateTask_task_worker(self, mock_updata_status, mock_post_sfp_info, mock_post_dom_info, mock_post_dom_th, mock_update_media_setting, mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill):
         port_mapping = PortMapping()
         retry_eeprom_set = set()
@@ -906,7 +906,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_dom_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
-    @patch('xcvrd.xcvrd.update_port_transceiver_status_table')
+    @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
     def test_SfpStateUpdateTask_on_add_logical_port(self, mock_updata_status, mock_post_sfp_info, mock_post_dom_info, mock_post_dom_th, mock_update_media_setting, mock_get_presence, mock_table_helper):
         class MockTable:
             pass
