@@ -3749,7 +3749,7 @@ class YCableTableUpdateTask(object):
                         fvp_m, self.hw_mux_cable_tbl, self.fwd_state_response_tbl, asic_index, port_m, self.appl_db)
 
             while True:
-                (port_n, op_n, fvp_n) = status_tbl_peer[asic_index].pop()
+                (port_n, op_n, fvp_n) = self.status_tbl_peer[asic_index].pop()
                 if not port_n:
                     break
 
