@@ -883,7 +883,8 @@ def update_port_transceiver_status_table_hw(logical_port_name, port_mapping,
 
 
 def delete_port_from_status_table_sw(logical_port_name, status_tbl):
-    status_tbl._del(logical_port_name)
+    for f in TRANSCEIVER_STATUS_TABLE_SW_FIELDS:
+        status_tbl.hdel(logical_port_name, f)
 
 # Delete port from SFP status table for HW fields which are fetched from EEPROM
 
@@ -894,7 +895,7 @@ def delete_port_from_status_table_hw(logical_port_name, port_mapping, status_tbl
         if not found:
             return
         status_dict = dict(fvs)
-        for f, _ in status_dict:
+        for f in status_dict.keys():
             if f in TRANSCEIVER_STATUS_TABLE_SW_FIELDS:
                 continue
             status_tbl.hdel(physical_port_name, f)
