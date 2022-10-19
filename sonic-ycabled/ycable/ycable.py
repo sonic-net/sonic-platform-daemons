@@ -155,7 +155,7 @@ class YcableInfoUpdateTask(threading.Thread):
         try:
             self.task_worker(self.y_cable_presence)
         except Exception as e:
-            helper_logger.log_error("Exception occured at child thread YcableInfoUpdateTask due to {} {}".format(repr(e)), traceback.format_exc())
+            helper_logger.log_error("Exception occured at child thread YcableInfoUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
 
             self.exc = e
 
@@ -463,7 +463,7 @@ class DaemonYcable(daemon_base.DaemonBase):
                         thread.join()
                     except Exception as e:
                         self.log_error("Exception occured at child thread {} to {}".format(thread.getName(), repr(e)))
-                    helper_logger.log_error("thread id {} is not running, exiting main loop".format(thread.getName()))
+                    self.log_error("thread id {} is not running, exiting main loop".format(thread.getName()))
                     os.kill(os.getpid(), signal.SIGKILL)
 
         self.log_error("Stop daemon main loop")
