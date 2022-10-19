@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 
 from importlib import import_module
 
@@ -484,35 +485,6 @@ def create_channel(type, level, kvp, soc_ip, port):
             # for connectivity state to FAILURE/IDLE report a failure
             fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
             fwd_state_response_tbl[asic_index].set(port, fvs_updated)
-<<<<<<< Updated upstream
-
-        if channel_connectivity == grpc.ChannelConnectivity.CONNECTING:
-            helper_logger.log_notice("gRPC port {} state changed to CONNECTING".format(port))
-        if channel_connectivity == grpc.ChannelConnectivity.READY:
-            helper_logger.log_notice("gRPC port {} state changed to READY".format(port))
-        if channel_connectivity == grpc.ChannelConnectivity.IDLE:
-            helper_logger.log_notice("gRPC port {} state changed to IDLE".format(port))
-            # for connectivity state to FAILURE/IDLE report a failure
-            fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
-            fwd_state_response_tbl[asic_index].set(port, fvs_updated) 
-
-        if channel_connectivity == grpc.ChannelConnectivity.SHUTDOWN:
-            helper_logger.log_notice("gRPC port {} state changed to SHUTDOWN".format(port))
-
-
-    if type == "secure": 
-        credential = get_grpc_credentials(level, kvp)
-        target_name = kvp.get("grpc_ssl_credential", None)
-        if credential is None or target_name is None:
-            return (None, None)
-
-        GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
-
-        channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
-    else:
-        channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
-
-=======
 
         if channel_connectivity == grpc.ChannelConnectivity.CONNECTING:
             helper_logger.log_notice("gRPC port {} state changed to CONNECTING".format(port))
@@ -3692,7 +3664,7 @@ class YCableTableUpdateTask(threading.Thread):
         try:
             self.task_worker()
         except Exception as e:
-            helper_logger.log_error("Exception occured at child thread YCableTableUpdateTask due to {}".format(repr(e)))
+            helper_logger.log_error("Exception occured at child thread YCableTableUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
             self.exc = e
 
     def join(self):
@@ -4050,7 +4022,7 @@ class YCableCliUpdateTask(threading.Thread):
         try:
             self.task_cli_worker()
         except Exception as e:
-            helper_logger.log_error("Exception occured at child thread YcableCliUpdateTask due to {}".format(repr(e)))
+            helper_logger.log_error("Exception occured at child thread YcableCliUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
             self.exc = e
 
     def join(self):

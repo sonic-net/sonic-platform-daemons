@@ -274,6 +274,8 @@ class DaemonYcable(daemon_base.DaemonBase):
         self.hw_mux_cable_tbl_peer = {}
         self.grpc_config = {}
 
+        self.threads = []
+
         fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
