@@ -40,7 +40,7 @@ class TestYcableScript(object):
         with patch('ycable.ycable.platform_sfputil') as patched_util:
             patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
             patched_util.get_asic_id_for_logical_port.return_value = 0
-            Y_cable_state_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence))
+            Y_cable_state_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
             Y_cable_state_task.task_process = MagicMock()
             Y_cable_state_task.task_stopping_event = MagicMock()
             stopping_event = MagicMock()
