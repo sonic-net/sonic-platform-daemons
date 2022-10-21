@@ -67,6 +67,7 @@ class TestYcableScript(object):
     @patch("swsscommon.swsscommon.Select.select", MagicMock())
     def test_ycable_helper_class_run_loop(self):
         Y_cable_task = YCableTableUpdateTask()
+        Y_cable_cli_task = YCableCliUpdateTask()
         Y_cable_task.task_stopping_event = MagicMock()
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
@@ -76,6 +77,9 @@ class TestYcableScript(object):
         Y_cable_task.task_worker()
         Y_cable_task.start()
         Y_cable_task.join()
+        Y_cable_cli_task.task_cli_worker()
+        Y_cable_cli_task.start()
+        Y_cable_cli_task.join()
 
     @patch("swsscommon.swsscommon.Select", MagicMock())
     @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock())
