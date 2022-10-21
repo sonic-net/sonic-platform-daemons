@@ -40,11 +40,11 @@ class TestYcableScript(object):
         with patch('ycable.ycable.platform_sfputil') as patched_util:
             patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
             patched_util.get_asic_id_for_logical_port.return_value = 0
+            stopping_event = MagicMock()
+            sfp_error_event = MagicMock()
             Y_cable_state_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
             Y_cable_state_task.task_process = MagicMock()
             Y_cable_state_task.task_stopping_event = MagicMock()
-            stopping_event = MagicMock()
-            sfp_error_event = MagicMock()
             y_cable_presence = [True]
             Y_cable_state_task.start()
             Y_cable_state_task.join()
@@ -71,9 +71,6 @@ class TestYcableScript(object):
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
         Y_cable_task.task_thread.join = MagicMock()
-        Y_cable_task.task_cli_thead = MagicMock()
-        Y_cable_task.task_cli_thead.start = MagicMock()
-        Y_cable_task.task_cli_thead.join = MagicMock()
         #Y_cable_task.task_stopping_event.return_value.is_set.return_value = False
         swsscommon.SubscriberStateTable.return_value.pop.return_value = (True, True, {"read_side": "2"})
         Y_cable_task.task_worker()
@@ -88,12 +85,8 @@ class TestYcableScript(object):
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
         Y_cable_task.task_thread.join = MagicMock()
-        Y_cable_task.task_cli_thead = MagicMock()
-        Y_cable_task.task_cli_thead.start = MagicMock()
-        Y_cable_task.task_cli_thead.join = MagicMock()
         Y_cable_task.task_stopping_event.return_value.is_set.return_value = True
         Y_cable_task.task_worker()
-        Y_cable_task.task_cli_worker()
         Y_cable_task.start()
         Y_cable_task.join()
 

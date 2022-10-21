@@ -1490,7 +1490,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
 
 def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, grpc_config):
 
-    state_db = {}
+    config_db, state_db
     y_cable_tbl_keys = {}
     static_tbl, mux_tbl = {}, {}
     grpc_config = {}
@@ -1499,6 +1499,7 @@ def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, 
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
         y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
         static_tbl[asic_id] = swsscommon.Table(
             state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
@@ -3442,6 +3443,8 @@ def handle_ycable_enable_disable_tel_notification(fvp_m, key):
 class YCableTableUpdateTask(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
+
+        self.exc = None
         self.task_thread = None
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
