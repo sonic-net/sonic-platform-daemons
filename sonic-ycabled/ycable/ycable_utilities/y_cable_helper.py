@@ -1490,7 +1490,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
 
 def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, grpc_config):
 
-    config_db, state_db
+    config_db, state_db = {}, {}
     y_cable_tbl_keys = {}
     static_tbl, mux_tbl = {}, {}
     grpc_config = {}

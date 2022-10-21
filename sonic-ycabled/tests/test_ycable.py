@@ -40,12 +40,12 @@ class TestYcableScript(object):
         with patch('ycable.ycable.platform_sfputil') as patched_util:
             patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
             patched_util.get_asic_id_for_logical_port.return_value = 0
+            y_cable_presence = [True]
             stopping_event = MagicMock()
             sfp_error_event = MagicMock()
             Y_cable_state_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
             Y_cable_state_task.task_process = MagicMock()
             Y_cable_state_task.task_stopping_event = MagicMock()
-            y_cable_presence = [True]
             Y_cable_state_task.start()
             Y_cable_state_task.join()
             Y_cable_task = YcableInfoUpdateTask(y_cable_presence)
@@ -283,9 +283,7 @@ class TestYcableScript(object):
     @patch('ycable.ycable.platform_sfputil', MagicMock())
     @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
     @patch('ycable.ycable.YcableInfoUpdateTask', MagicMock())
-    @patch('ycable.ycable.YcableInfoUpdateTask.task_run', MagicMock())
     @patch('ycable.ycable.YcableStateUpdateTask', MagicMock())
-    @patch('ycable.ycable.YcableStateUpdateTask.task_run', MagicMock())
     @patch('ycable.ycable_utilities.y_cable_helper.init_ports_status_for_y_cable', MagicMock())
     def test_DaemonYcable_init_deinit_full(self):
         ycable = DaemonYcable(SYSLOG_IDENTIFIER)
