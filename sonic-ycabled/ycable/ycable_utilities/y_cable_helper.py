@@ -4038,5 +4038,5 @@ class YCableCliUpdateTask(threading.Thread):
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")
 
-        if self.exc:
+        if self.exc is not None:
             raise self.exc
