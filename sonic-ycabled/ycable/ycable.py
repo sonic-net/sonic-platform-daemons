@@ -169,7 +169,7 @@ class YcableInfoUpdateTask(threading.Thread):
 # Process wrapper class to update sfp state info periodically
 
 
-class YcableStateUpdateTask(object):
+class YcableStateUpdateTask(threading.Thread):
     def __init__(self, sfp_error_event, y_cable_presence):
         threading.Thread.__init__(self)
         self.exc = None
