@@ -69,6 +69,7 @@ class TestYcableScript(object):
         Y_cable_task = YCableTableUpdateTask()
         Y_cable_cli_task = YCableCliUpdateTask()
         Y_cable_task.task_stopping_event = MagicMock()
+        Y_cable_cli_task.task_stopping_event = MagicMock()
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
         Y_cable_task.task_thread.join = MagicMock()
