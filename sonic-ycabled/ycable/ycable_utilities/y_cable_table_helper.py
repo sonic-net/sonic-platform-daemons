@@ -4,6 +4,8 @@
 """
 
 
+from sonic_py_common import daemon_base
+from sonic_py_common import multi_asic
 from swsscommon import swsscommon
 
 class YcableInfoUpdateTableHelper(object):
