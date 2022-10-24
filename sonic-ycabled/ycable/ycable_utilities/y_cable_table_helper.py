@@ -8,6 +8,9 @@ from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
 
+MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
+MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
+
 class YcableInfoUpdateTableHelper(object):
     def __init__(self):
 

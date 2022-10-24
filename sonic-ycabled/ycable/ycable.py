@@ -55,9 +55,6 @@ PORT_CONFIG_LOAD_ERROR = 2
 NOT_IMPLEMENTED_ERROR = 3
 SFP_SYSTEM_ERROR = 4
 
-MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
-MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
-
 # Global platform specific sfputil class instance
 platform_sfputil = None
 # Global chassis object based on new platform api
