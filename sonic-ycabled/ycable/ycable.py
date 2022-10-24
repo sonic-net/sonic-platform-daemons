@@ -48,7 +48,6 @@ SFP_STATUS_ERR_ENUM = Enum('SFP_STATUS_ERR_ENUM', ['SFP_STATUS_ERR_I2C_STUCK', '
 # Convert the error code to string and store them in a set for convenience
 errors_block_eeprom_reading = set(str(error_code.value) for error_code in SFP_STATUS_ERR_ENUM)
 
-TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
 
 SFPUTIL_LOAD_ERROR = 1
 PORT_CONFIG_LOAD_ERROR = 2
@@ -244,10 +243,10 @@ class DaemonYcable(daemon_base.DaemonBase):
         is_vs = False
 
 
-        (status, fvs) = self.table_helper.get_metadata_tbl[0].get("localhost")
+        (status, fvs) = self.table_helper.metadata_tbl[0].get("localhost")
 
         if status is False:
-            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.get_metadata_tbl[0].getTableName()))
+            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.metadata_tbl[0].getTableName()))
             return
 
         else:

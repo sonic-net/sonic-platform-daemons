@@ -10,6 +10,7 @@ from swsscommon import swsscommon
 
 MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
 MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
+TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
 
 class YcableInfoUpdateTableHelper(object):
     def __init__(self):
@@ -22,7 +23,6 @@ class YcableInfoUpdateTableHelper(object):
         self.mux_tbl = {}
 
         # Get the namespaces in the platform
-        fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
@@ -61,7 +61,6 @@ class YcableStateUpdateTableHelper(object):
         self.sub_status_tbl = {}
 
         # Get the namespaces in the platform
-        fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
