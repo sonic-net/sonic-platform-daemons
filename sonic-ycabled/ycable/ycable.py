@@ -116,9 +116,9 @@ class YcableInfoUpdateTask(object):
                     logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                if not detect_port_in_error_status(logical_port_name, self.table_helper.get_status_tbl[asic_index]):
+                if not detect_port_in_error_status(logical_port_name, self.table_helper.get_status_tbl()[asic_index]):
                     if y_cable_presence[0] is True:
-                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(self.table_helper.get_state_db, self.table_helper.get.mux_tbl, asic_index, logical_port_name, self.table_helper.get_y_cable_tbl, self.table_helper.get_port_tbl)
+                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(self.table_helper.get_state_db(), self.table_helper.get.mux_tbl(), asic_index, logical_port_name, self.table_helper.get_y_cable_tbl(), self.table_helper.get_port_tbl())
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
@@ -155,7 +155,7 @@ class YcableStateUpdateTask(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            sel.addSelectable(self.table_helper.get_sub_status_tbl[asic_id])
+            sel.addSelectable(self.table_helper.get_sub_status_tbl()[asic_id])
 
         while True:
 
@@ -180,7 +180,7 @@ class YcableStateUpdateTask(object):
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
 
             while True:
-                (port, op, fvp) = self.table_helper.get_sub_status_tbl[asic_index].pop()
+                (port, op, fvp) = self.table_helper.get_sub_status_tbl()[asic_index].pop()
                 if not port:
                     break
 
@@ -243,10 +243,10 @@ class DaemonYcable(daemon_base.DaemonBase):
         is_vs = False
 
 
-        (status, fvs) = self.table_helper.metadata_tbl[0].get("localhost")
+        (status, fvs) = self.table_helper.metadata_tbl()[0].get("localhost")
 
         if status is False:
-            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.metadata_tbl[0].getTableName()))
+            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.metadata_tbl()[0].getTableName()))
             return
 
         else:
@@ -317,7 +317,7 @@ class DaemonYcable(daemon_base.DaemonBase):
 
         # Init port y_cable status table
         y_cable_helper.init_ports_status_for_y_cable(
-            platform_sfputil, platform_chassis, self.y_cable_presence, self.table_helper.get_state_db , self.table_helper.get_port_tbl, self.table_helper.get_y_cable_tbl, self.table_helper.get_static_tbl, self.table_helper.get_mux_tbl, self.table_helper.port_table_keys,  self.table_helper.loopback_keys , self.table_helper.get_hw_mux_cable_tbl, self.table_helper.get_hw_mux_cable_tbl_peer, self.stop_event, is_vs)
+            platform_sfputil, platform_chassis, self.y_cable_presence, self.table_helper.get_state_db , self.table_helper.get_port_tbl(), self.table_helper.get_y_cable_tbl(), self.table_helper.get_static_tbl(), self.table_helper.get_mux_tbl(), self.table_helper.port_table_keys,  self.table_helper.loopback_keys , self.table_helper.get_hw_mux_cable_tbl(), self.table_helper.get_hw_mux_cable_tbl_peer(), self.stop_event, is_vs)
 
     # Deinitialize daemon
     def deinit(self):
@@ -333,7 +333,7 @@ class DaemonYcable(daemon_base.DaemonBase):
                 continue
 
         if self.y_cable_presence[0] is True:
-            y_cable_helper.delete_ports_status_for_y_cable(self.table_helper.get_y_cable_tbl, self.table_helper.get_static_tbl, self.table_helper.get_mux_tbl, self.table_helper.get_port_tbl, self.table_helper.get_grpc_config_tbl)
+            y_cable_helper.delete_ports_status_for_y_cable(self.table_helper.get_y_cable_tbl(), self.table_helper.get_static_tbl(), self.table_helper.get_mux_tbl(), self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl())
 
         global_values = globals()
         val = global_values.get('platform_chassis')
