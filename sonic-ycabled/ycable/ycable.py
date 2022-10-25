@@ -243,10 +243,10 @@ class DaemonYcable(daemon_base.DaemonBase):
         is_vs = False
 
 
-        (status, fvs) = self.table_helper.metadata_tbl()[0].get("localhost")
+        (status, fvs) = self.table_helper.get_metadata_tbl()[0].get("localhost")
 
         if status is False:
-            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.metadata_tbl()[0].getTableName()))
+            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format('localhost', self.table_helper.get_metadata_tbl()[0].getTableName()))
             return
 
         else:
