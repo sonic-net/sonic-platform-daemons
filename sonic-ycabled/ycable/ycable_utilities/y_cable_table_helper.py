@@ -247,6 +247,8 @@ class YcableCliUpdateTableHelper(object):
 
         self.appl_db, self.state_db, self.config_db = {}, {}, {}
         self.xcvrd_log_tbl = {}
+        self.port_tbl = {}
+        self.mux_tbl = {}
         self.xcvrd_down_fw_cmd_tbl, self.xcvrd_down_fw_rsp_tbl, self.xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
         self.xcvrd_down_fw_status_cmd_tbl, self.xcvrd_down_fw_status_rsp_tbl, self.xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
         self.xcvrd_acti_fw_cmd_tbl, self.xcvrd_acti_fw_cmd_arg_tbl, self.xcvrd_acti_fw_rsp_tbl, self.xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
@@ -373,6 +375,9 @@ class YcableCliUpdateTableHelper(object):
                 self.state_db[asic_id], "XCVRD_GET_BER_RSP")
             self.xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
                 self.state_db[asic_id], "XCVRD_GET_BER_RES")
+            self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
+            self.mux_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
     def get_state_db(self):
         return self.state_db

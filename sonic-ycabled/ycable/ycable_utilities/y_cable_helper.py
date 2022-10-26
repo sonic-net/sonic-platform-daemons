@@ -3746,7 +3746,7 @@ class YCableTableUpdateTask(object):
                     break
 
                 if fvp:
-                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_fw_rsp_tbl, self.cli_table_helper.xcvrd_show_fw_res_tbl, asic_index, port)
+                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_fw_rsp_tbl, self.cli_table_helper.xcvrd_show_fw_res_tbl, asic_index, port, self.cli_table_helper.mux_tbl)
                     break
 
             while True:
