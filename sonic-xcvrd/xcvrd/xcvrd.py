@@ -119,6 +119,7 @@ def get_physical_port_name_dict(logical_port_name, port_mapping):
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
         helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
+        return {}
 
     if len(physical_port_list) > 1:
         ganged_port = True
@@ -502,26 +503,12 @@ def post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, table,
 
 
 def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=threading.Event(), dom_info_cache=None):
-    ganged_port = False
-    ganged_member_num = 1
-
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
-
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
-    for physical_port in physical_port_list:
+    for physical_port, physical_port_name in get_physical_port_name_dict(logical_port_name, port_mapping).items():
         if stop_event.is_set():
             break
 
         if not _wrapper_get_presence(physical_port):
             continue
-
-        port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
-        ganged_member_num += 1
 
         try:
             if dom_info_cache is not None and physical_port in dom_info_cache:
@@ -535,7 +522,7 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
             if dom_info_dict is not None:
                 beautify_dom_info_dict(dom_info_dict, physical_port)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in dom_info_dict.items()])
-                table.set(port_name, fvs)
+                table.set(physical_port_name, fvs)
             else:
                 return SFP_EEPROM_NOT_READY
 
