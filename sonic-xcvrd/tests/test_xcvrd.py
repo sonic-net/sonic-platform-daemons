@@ -1173,6 +1173,20 @@ class TestXcvrdScript(object):
         assert not _wrapper_get_transceiver_dom_threshold_info(1)
 
     @patch('xcvrd.xcvrd.platform_chassis')
+    def test_wrapper_get_transceiver_status(self, mock_chassis):
+        mock_object = MagicMock()
+        mock_object.get_transceiver_status= MagicMock(return_value=True)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_object)
+        from xcvrd.xcvrd import _wrapper_get_transceiver_status
+        assert _wrapper_get_transceiver_status(1)
+
+        mock_object.get_transceiver_status = MagicMock(return_value=False)
+        assert not _wrapper_get_transceiver_status(1)
+
+        mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
+        assert _wrapper_get_transceiver_status(1) == {}
+
+    @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
     def test_wrapper_get_transceiver_change_event(self, mock_sfputil, mock_chassis):
         mock_chassis.get_change_event = MagicMock(return_value=(True, {'sfp': 1, 'sfp_error': 'N/A'}))

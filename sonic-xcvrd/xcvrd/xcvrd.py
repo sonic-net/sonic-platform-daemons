@@ -861,12 +861,12 @@ def update_port_transceiver_status_table_hw(logical_port_name, port_mapping,
 
         try:
             if transceiver_status_cache is not None and physical_port in transceiver_status_cache:
-                # If cache is enabled and dom information is in cache, just read from cache, no need read from EEPROM
+                # If cache is enabled and status info is in cache, just read from cache, no need read from EEPROM
                 transceiver_status_dict = transceiver_status_cache[physical_port]
             else:
                 transceiver_status_dict = _wrapper_get_transceiver_status(physical_port)
                 if transceiver_status_cache is not None:
-                    # If cache is enabled, put dom information to cache
+                    # If cache is enabled, put status info to cache
                     transceiver_status_cache[physical_port] = transceiver_status_dict
             if transceiver_status_dict is not None:
                 beautify_transceiver_status_dict(transceiver_status_dict, physical_port)
@@ -2145,7 +2145,7 @@ class SfpStateUpdateTask(object):
                     post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_tbl)
                     update_port_transceiver_status_table_hw(port_change_event.port_name,
                                                             self.port_mapping,
-                                                            self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id))
+                                                            status_tbl)
                     notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
             else:
                 status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
