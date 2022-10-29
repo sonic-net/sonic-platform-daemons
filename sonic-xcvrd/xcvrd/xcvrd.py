@@ -863,7 +863,7 @@ def update_port_transceiver_status_table_hw(logical_port_name, port_mapping,
                 return SFP_EEPROM_NOT_READY
 
         except NotImplementedError:
-            helper_logger.log_error("This functionality is currently not implemented for this platform")
+            helper_logger.log_error("get_transceiver_status is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 # Delete port from SFP status table
