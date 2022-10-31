@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import threading
+import subprocess
 
 from sonic_py_common import daemon_base, device_info, logger
 from swsscommon import swsscommon
@@ -156,6 +157,17 @@ class DaemonPcied(daemon_base.DaemonBase):
         err = 0
         if self.resultInfo is None:
             return
+
+        for result in self.resultInfo:
+            bus = int(result["bus"], 16)
+            device = int(result["dev"], 16)
+            func = int(result["fn"], 16)
+
+            pcieDeviceArgs = ("%02x:%02x.%d" % (bus, device, func))
+            pcieDeviceQueryResult = subprocess.run(['lspci', '-s', pcieDeviceArgs], stdout=subprocess.PIPE).stdout.decode('utf-8')
+            
+            if pcieDeviceQueryResult is None:
+                self.log_error("PCIe Peripheral {} -- Not Found".format(pcieDeviceQueryResult))
 
         for result in self.resultInfo:
             if result["result"] == "Failed":
