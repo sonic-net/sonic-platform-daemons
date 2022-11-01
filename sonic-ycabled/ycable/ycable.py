@@ -130,7 +130,7 @@ class YcableInfoUpdateTask(threading.Thread):
     def run(self):
         if self.task_stopping_event.is_set():
             return
- 
+
         try:
             self.task_worker(self.y_cable_presence)
         except Exception as e:
@@ -145,6 +145,7 @@ class YcableInfoUpdateTask(threading.Thread):
             raise self.exc
 
 # Process wrapper class to update sfp state info periodically
+
 
 
 
@@ -208,16 +209,16 @@ class YcableStateUpdateTask(threading.Thread):
     def run(self):
         if self.task_stopping_event.is_set():
             return
- 
+
         try:
             self.task_worker(self.task_stopping_event, self.sfp_error_event, self.y_cable_presence)
         except Exception as e:
             helper_logger.log_error("Exception occured at child thread YcableStateUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
             self.exc = e
- 
+
     def join(self):
         threading.Thread.join(self)
- 
+
         if self.exc:
             raise self.exc
 
@@ -369,7 +370,7 @@ class DaemonYcable(daemon_base.DaemonBase):
         ycable_info_update = YcableInfoUpdateTask(self.y_cable_presence)
         ycable_info_update.start()
         self.threads.append(ycable_info_update)
- 
+
         # Start the sfp state info update process
         ycable_state_update = YcableStateUpdateTask(self.sfp_error_event, self.y_cable_presence)
         ycable_state_update.start()
@@ -402,15 +403,15 @@ class DaemonYcable(daemon_base.DaemonBase):
 
 
         self.log_error("Stop daemon main loop")
- 
+
         # Stop the ycable periodic info info update thread
         if ycable_info_update.is_alive():
             ycable_info_update.join()
- 
+
         # Stop the ycable update process
         if ycable_state_update.is_alive():
             ycable_state_update.join()
- 
+
         # Stop the Y-cable state info update process
         if self.y_cable_presence[0] is True:
             if y_cable_state_worker_update.is_alive():
