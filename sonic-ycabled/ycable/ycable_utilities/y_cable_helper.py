@@ -3449,7 +3449,6 @@ class YCableTableUpdateTask(threading.Thread):
         self.hw_mux_cable_tbl_keys = {}
 
         self.table_helper =  y_cable_table_helper.YcableTableUpdateTableHelper()
-        self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
        
     def task_worker(self):
 
@@ -3645,6 +3644,7 @@ class YCableCliUpdateTask(threading.Thread):
         self.exc = None
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
+        self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
 
 
     def task_cli_worker(self):
