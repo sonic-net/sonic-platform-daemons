@@ -17,6 +17,13 @@ from sonic_y_cable import y_cable_vendor_mapping
 from swsscommon import swsscommon
 
 
+from . import y_cable_table_helper
+
+if sys.version_info.major == 3:
+    UNICODE_TYPE = str
+else:
+    UNICODE_TYPE = unicode
+
 SELECT_TIMEOUT = 1000
 
 y_cable_platform_sfputil = None
@@ -426,13 +433,9 @@ def update_tor_active_side(read_side, state, logical_port_name):
         return (-1, -1)
 
 
-def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, appl_db, read_side):
+def update_appdb_port_mux_cable_response_table(logical_port_name, asic_index, appl_db, read_side, y_cable_response_tbl):
 
     status = None
-    y_cable_response_tbl = {}
-
-    y_cable_response_tbl[asic_index] = swsscommon.Table(
-        appl_db[asic_index], "MUX_CABLE_RESPONSE_TABLE")
     physical_port_list = logical_port_name_to_physical_port_list(
         logical_port_name)
 
@@ -584,18 +587,6 @@ def read_y_cable_and_update_statedb_port_tbl(logical_port_name, mux_config_tbl):
 
 def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name):
 
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(
-            namespace)
-        state_db[asic_id] = daemon_base.db_connect(
-            "STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
     # fill the newly found entry
     read_y_cable_and_update_statedb_port_tbl(
         logical_port_name, y_cable_tbl[asic_index])
@@ -619,7 +610,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
             val = mux_table_dict.get("state", None)
 
-            if val in ["active", "auto", "manual", "standby"]:
+            if val in CONFIG_MUX_STATES:
 
                 # import the module and load the port instance
                 physical_port_list = logical_port_name_to_physical_port_list(
@@ -711,23 +702,12 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             else:
                                 # first create the state db y cable table and then fill in the entry
                                 y_cable_presence[:] = [True]
-                                namespaces = multi_asic.get_front_end_namespaces()
-                                for namespace in namespaces:
-                                    asic_id = multi_asic.get_asic_index_from_namespace(
-                                        namespace)
-                                    state_db[asic_id] = daemon_base.db_connect(
-                                        "STATE_DB", namespace)
-                                    y_cable_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                                    static_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-                                    mux_tbl[asic_id] = swsscommon.Table(
-                                        state_db[asic_id], MUX_CABLE_INFO_TABLE)
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
                                 post_port_mux_info_to_db(
                                     logical_port_name, mux_tbl[asic_index])
+                                    logical_port_name,  mux_tbl, asic_index, y_cable_tbl)
                                 post_port_mux_static_info_to_db(
                                     logical_port_name, static_tbl[asic_index])
                         else:
@@ -754,10 +734,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                 "Could not retreive state value inside mux_info_dict for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
-def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event):
-
-    y_cable_tbl = {}
-    static_tbl, mux_tbl = {}, {}
+def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl):
 
     # if there is No Y cable do not do anything here
     if y_cable_presence[0] is False:
@@ -775,14 +752,6 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
         if "state" in mux_table_dict:
             if y_cable_presence[0] is True:
                 # delete this entry in the y cable table found and update the delete event
-                namespaces = multi_asic.get_front_end_namespaces()
-                for namespace in namespaces:
-                    asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-                    state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-                    y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-                    static_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-                    mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
-                # fill the newly found entry
                 #We dont delete the values here, rather just update the values in state DB
                 (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
                 if status is False:
@@ -811,7 +780,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, stop_event=threading.Event(), is_vs=False):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
@@ -826,16 +795,6 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_chassis = platform_chassis
     y_cable_is_platform_vs = is_vs
 
-    fvs_updated = swsscommon.FieldValuePairs([('log_verbosity', 'notice')])
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        xcvrd_log_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "XCVRD_LOG")
-        xcvrd_log_tbl[asic_id].set("Y_CABLE", fvs_updated)
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -897,14 +856,14 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
                 check_identifier_presence_and_delete_mux_table_entry(
-                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
             else:
                 try:
                     # Now that the value is in bitmap format, let's convert it to number
                     event_bits = int(value)
                     if event_bits in errors_block_eeprom_reading:
                         check_identifier_presence_and_delete_mux_table_entry(
-                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event)
+                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
                 except (TypeError, ValueError) as e:
                     helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
 
@@ -927,24 +886,10 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                 break
 
 
-def delete_ports_status_for_y_cable():
+def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, grpc_config):
 
-    state_db, config_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
     y_cable_tbl_keys = {}
-    static_tbl, mux_tbl = {}, {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
+
 
     # delete PORTS on Y cable table if ports on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -976,20 +921,13 @@ def delete_ports_status_for_y_cable():
                     "Error: Retreived multiple ports for a Y cable port {} while deleting entries".format(logical_port_name))
 
 
-def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name):
+def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_index, logical_port_name, y_cable_tbl, port_tbl):
 
     global disable_telemetry
 
     if disable_telemetry == True:
        return
 
-    # Get the namespaces in the platform
-    config_db, port_tbl = {}, {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
 
@@ -1002,11 +940,11 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
             val = mux_table_dict.get("state", None)
-            if val in ["active", "auto", "manual", "standby"]:
+            if val in CONFIG_MUX_STATES:
 
                 if mux_tbl.get(asic_index, None) is not None:
                     # fill in the newly found entry
-                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl, asic_index, y_cable_tbl)
 
                 else:
                     # first create the state db y cable table and then fill in the entry
@@ -1015,27 +953,19 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
                         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
                         mux_tbl[asic_id] = swsscommon.Table(state_db[asic_id], MUX_CABLE_INFO_TABLE)
                     # fill the newly found entry
-                    post_port_mux_info_to_db(logical_port_name,  mux_tbl[asic_index])
+                    post_port_mux_info_to_db(logical_port_name,  mux_tbl, asic_index, y_cable_tbl)
             else:
                 helper_logger.log_warning(
                     "Could not retreive active or auto value for state kvp for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
-def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict, logical_port_name):
+def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict, logical_port_name, mux_tbl):
 
     result = {}
     if port_instance.download_firmware_status == port_instance.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS:
 
         # if there is a firmware download in progress, retreive the last known firmware
-        state_db, mux_tbl = {}, {}
         mux_firmware_dict = {}
-
-        namespaces = multi_asic.get_front_end_namespaces()
-        for namespace in namespaces:
-            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            mux_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], MUX_CABLE_INFO_TABLE)
 
         asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
             logical_port_name)
@@ -1150,10 +1080,9 @@ def get_muxcable_info_without_presence():
 
     return mux_info_dict
 
-def get_muxcable_info(physical_port, logical_port_name):
+def get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl):
 
     mux_info_dict = {}
-    y_cable_tbl, state_db = {}, {}
 
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
@@ -1163,14 +1092,7 @@ def get_muxcable_info(physical_port, logical_port_name):
     if port_instance.download_firmware_status == port_instance.FIRMWARE_DOWNLOAD_STATUS_INPROGRESS:
         helper_logger.log_warning("Warning: posting mux cable info while a download firmware in progress {}".format(logical_port_name))
 
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
-    asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
-        logical_port_name)
     if asic_index is None:
         helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
         return -1
@@ -1348,13 +1270,13 @@ def get_muxcable_info(physical_port, logical_port_name):
         else:
             mux_info_dict["link_status_nic"] = "down"
 
-    get_firmware_dict(physical_port, port_instance, port_instance.TARGET_NIC, "nic", mux_info_dict, logical_port_name)
+    get_firmware_dict(physical_port, port_instance, port_instance.TARGET_NIC, "nic", mux_info_dict, logical_port_name, mux_tbl)
     if read_side == 1:
-        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "self", mux_info_dict, logical_port_name)
-        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "peer", mux_info_dict, logical_port_name)
+        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "self", mux_info_dict, logical_port_name, mux_tbl)
+        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "peer", mux_info_dict, logical_port_name, mux_tbl)
     else:
-        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "peer", mux_info_dict, logical_port_name)
-        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict, logical_port_name)
+        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "peer", mux_info_dict, logical_port_name, mux_tbl)
+        get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict, logical_port_name, mux_tbl)
 
     with y_cable_port_locks[physical_port]:
         try:
@@ -1521,7 +1443,7 @@ def get_muxcable_static_info(physical_port, logical_port_name):
     return mux_static_info_dict
 
 
-def post_port_mux_info_to_db(logical_port_name, table):
+def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl):
 
     physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
@@ -1538,7 +1460,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
             helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))
             mux_info_dict = get_muxcable_info_without_presence()
         else:
-            mux_info_dict = get_muxcable_info(physical_port, logical_port_name)
+            mux_info_dict = get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
 
         if mux_info_dict is not None and mux_info_dict != -1:
             #transceiver_dict[physical_port] = port_info_dict
@@ -1571,7 +1493,7 @@ def post_port_mux_info_to_db(logical_port_name, table):
                  ('version_nic_inactive', str(mux_info_dict["version_nic_inactive"])),
                  ('version_nic_next', str(mux_info_dict["version_nic_next"]))
                  ])
-            table.set(logical_port_name, fvs)
+            mux_tbl[asic_index].set(logical_port_name, fvs)
         else:
             return -1
 
@@ -2257,7 +2179,7 @@ def handle_config_mux_switchmode_arg_tbl_notification(fvp, xcvrd_config_hwmode_s
             helper_logger.log_error("Error: Incorrect input param for cli cmd config mux hwmode setswitchmode logical port {}".format(port))
             set_result_and_delete_port('result', 'False', xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_swmode_rsp_tbl[asic_index], port)
 
-def handle_show_firmware_show_cmd_arg_tbl_notification(fvp, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port):
+def handle_show_firmware_show_cmd_arg_tbl_notification(fvp, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port, mux_tbl):
         fvp_dict = dict(fvp)
 
         mux_info_dict = {}
@@ -2306,13 +2228,13 @@ def handle_show_firmware_show_cmd_arg_tbl_notification(fvp, xcvrd_show_fw_cmd_st
                 return -1
 
 
-            get_firmware_dict(physical_port, port_instance, port_instance.TARGET_NIC, "nic", mux_info_dict, port)
+            get_firmware_dict(physical_port, port_instance, port_instance.TARGET_NIC, "nic", mux_info_dict, port, mux_tbl)
             if read_side == port_instance.TARGET_TOR_A:
-                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "self", mux_info_dict, port)
-                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "peer", mux_info_dict, port)
+                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "self", mux_info_dict, port, mux_tbl)
+                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "peer", mux_info_dict, port, mux_tbl)
             else:
-                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "peer", mux_info_dict, port)
-                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict, port)
+                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_A, "peer", mux_info_dict, port, mux_tbl)
+                get_firmware_dict(physical_port, port_instance, port_instance.TARGET_TOR_B, "self", mux_info_dict, port, mux_tbl)
 
             status = 'True'
             set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_res_tbl[asic_index])
@@ -2580,10 +2502,6 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_dir
             set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
             return -1
 
-        set_result_and_delete_port('state', state, xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
-    else:
-        helper_logger.log_warning("Error: Wrong input param for cli command show mux hwmode muxdirection logical port {}".format(port))
-        set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
 
 def handle_ycable_enable_disable_tel_notification(fvp_m, key):
 
@@ -2622,42 +2540,25 @@ class YCableTableUpdateTask(object):
         self.task_cli_thread = None
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
+        self.hw_mux_cable_tbl_keys = {}
 
-        if multi_asic.is_multi_asic():
-            # Load the namespace details first from the database_global.json file.
-            swsscommon.SonicDBConfig.initializeGlobalConfig()
-
+        self.table_helper =  y_cable_table_helper.YcableTableUpdateTableHelper()
+        self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
+       
     def task_worker(self):
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, state_db, config_db, status_tbl, y_cable_tbl = {}, {}, {}, {}, {}
-        y_cable_tbl_keys = {}
-        mux_cable_command_tbl, y_cable_command_tbl = {}, {}
-        mux_metrics_tbl = {}
-
-        sel = swsscommon.Select()
 
         # Get the namespaces in the platform
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            status_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
-            mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            y_cable_command_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], swsscommon.APP_MUX_CABLE_COMMAND_TABLE_NAME)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            y_cable_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            mux_metrics_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], swsscommon.STATE_MUX_METRICS_TABLE_NAME)
-            y_cable_tbl_keys[asic_id] = y_cable_tbl[asic_id].getKeys()
-            sel.addSelectable(status_tbl[asic_id])
-            sel.addSelectable(mux_cable_command_tbl[asic_id])
+            self.hw_mux_cable_tbl_keys[asic_id] = self.table_helper.get_hw_mux_cable_tbl()[asic_id].getKeys()
+            sel.addSelectable(self.table_helper.get_status_tbl()[asic_id])
+            sel.addSelectable(self.table_helper.get_status_tbl_peer()[asic_id])
+            sel.addSelectable(self.table_helper.get_fwd_state_command_tbl()[asic_id])
+            sel.addSelectable(self.table_helper.get_mux_cable_command_tbl()[asic_id])
 
 
         # Listen indefinitely for changes to the HW_MUX_CABLE_TABLE in the Application DB's
@@ -2686,7 +2587,7 @@ class YCableTableUpdateTask(object):
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
 
             while True:
-                (port, op, fvp) = status_tbl[asic_index].pop()
+                (port, op, fvp) = self.table_helper.get_status_tbl()[asic_index].pop()
                 if not port:
                     break
 
@@ -2699,48 +2600,52 @@ class YCableTableUpdateTask(object):
                     # This check might be redundant, to check, the presence of this Port in keys
                     # in logical_port_list but keep for now for coherency
                     # also skip checking in logical_port_list inside sfp_util
-                    if port not in y_cable_tbl_keys[asic_index]:
+                    if port not in self.hw_mux_cable_tbl_keys[asic_index]:
                         continue
 
-                    fvp_dict = dict(fvp)
+                    (status, cable_type) = check_mux_cable_port_type(port, self.table_helper.get_port_tbl(), asic_index)
 
-                    if "state" in fvp_dict:
-                        # got a state change
-                        new_status = fvp_dict["state"]
-                        requested_status = new_status
-                        (status, fvs) = y_cable_tbl[asic_index].get(port)
-                        if status is False:
-                            helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                port, y_cable_tbl[asic_index].getTableName()))
-                            continue
-                        mux_port_dict = dict(fvs)
-                        old_status = mux_port_dict.get("state", None)
-                        read_side = mux_port_dict.get("read_side", None)
-                        # Now whatever is the state requested, toggle the mux appropriately
-                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {} read side {}".format(port, old_status, new_status, read_side))
-                        (active_side, read_side) = update_tor_active_side(read_side, new_status, port)
-                        if active_side == -1:
-                            helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(
-                                port, old_status, new_status))
-                            new_status = 'unknown'
+                    if status:
 
-                        helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
-                        helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old state {} to new state {} read_side  {} thread id {}".format(port, requested_status, old_status, new_status, read_side, threading.currentThread().getName()))
-                        time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
-                        fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
-                                                                  ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
-                        mux_metrics_tbl[asic_index].set(port, fvs_metrics)
+                        fvp_dict = dict(fvp)
 
-                        fvs_updated = swsscommon.FieldValuePairs([('state', new_status),
-                                                                  ('read_side', str(read_side)),
-                                                                  ('active_side', str(active_side))])
-                        y_cable_tbl[asic_index].set(port, fvs_updated)
-                    else:
-                        helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
-                            port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
+                        if "state" in fvp_dict:
+                            # got a state change
+                            new_status = fvp_dict["state"]
+                            requested_status = new_status
+                            (status, fvs) = self.table_helper.get_hw_mux_cable_tbl()[asic_index].get(port)
+                            if status is False:
+                                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                                    port, self.table_helper.get_hw_mux_cable_tbl()[asic_index].getTableName()))
+                                continue
+                            mux_port_dict = dict(fvs)
+                            old_status = mux_port_dict.get("state", None)
+                            read_side = mux_port_dict.get("read_side", None)
+                            # Now whatever is the state requested, toggle the mux appropriately
+                            helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd trying to transition port {} from {} to {} read side {}".format(port, old_status, new_status, read_side))
+                            (active_side, read_side) = update_tor_active_side(read_side, new_status, port)
+                            if active_side == -1:
+                                helper_logger.log_warning("ERR: Got a change event for toggle but could not toggle the mux-direction for port {} state from {} to {}, writing unknown".format(
+                                    port, old_status, new_status))
+                                new_status = 'unknown'
+
+                            helper_logger.log_debug("Y_CABLE_DEBUG: xcvrd successful to transition port {} from {} to {} and write back to the DB {}".format(port, old_status, new_status, threading.currentThread().getName()))
+                            helper_logger.log_notice("Got a change event for toggle the mux-direction active side for port {} state requested {} from old state {} to new state {} read_side  {} thread id {}".format(port, requested_status, old_status, new_status, read_side, threading.currentThread().getName()))
+                            time_end = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+                            fvs_metrics = swsscommon.FieldValuePairs([('xcvrd_switch_{}_start'.format(new_status), str(time_start)),
+                                                                      ('xcvrd_switch_{}_end'.format(new_status), str(time_end))])
+                            self.table_helper.get_mux_metrics_tbl()[asic_index].set(port, fvs_metrics)
+
+                            fvs_updated = swsscommon.FieldValuePairs([('state', new_status),
+                                                                      ('read_side', str(read_side)),
+                                                                      ('active_side', str(active_side))])
+                            self.table_helper.get_hw_mux_cable_tbl()[asic_index].set(port, fvs_updated)
+                        else:
+                            helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
+                                port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))
 
             while True:
-                (port_m, op_m, fvp_m) = mux_cable_command_tbl[asic_index].pop()
+                (port_m, op_m, fvp_m) = self.table_helper.get_mux_cable_command_tbl()[asic_index].pop()
 
                 if not port_m:
                     break
@@ -2765,29 +2670,12 @@ class YCableTableUpdateTask(object):
                                 continue
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
-                            update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side))
 
+                            update_appdb_port_mux_cable_response_table(port_m, asic_index, self.appl_db, int(read_side), self.table_helper.get_y_cable_response_tbl())
 
 
     def task_cli_worker(self):
 
-        # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-        appl_db, config_db , state_db, y_cable_tbl = {}, {}, {}, {}
-        xcvrd_log_tbl = {}
-        xcvrd_down_fw_cmd_tbl, xcvrd_down_fw_rsp_tbl, xcvrd_down_fw_cmd_sts_tbl = {}, {}, {}
-        xcvrd_down_fw_status_cmd_tbl, xcvrd_down_fw_status_rsp_tbl, xcvrd_down_fw_status_cmd_sts_tbl = {}, {}, {}
-        xcvrd_acti_fw_cmd_tbl, xcvrd_acti_fw_cmd_arg_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_sts_tbl = {}, {}, {}, {}
-        xcvrd_roll_fw_cmd_tbl, xcvrd_roll_fw_rsp_tbl, xcvrd_roll_fw_cmd_sts_tbl = {}, {}, {}
-        xcvrd_show_fw_cmd_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_res_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_dir_cmd_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl = {}, {}, {}, {}
-        xcvrd_show_hwmode_swmode_cmd_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, xcvrd_show_hwmode_swmode_cmd_sts_tbl = {}, {}, {}
-        xcvrd_config_hwmode_state_cmd_tbl, xcvrd_config_hwmode_state_rsp_tbl , xcvrd_config_hwmode_state_cmd_sts_tbl= {}, {}, {}
-        xcvrd_config_hwmode_swmode_cmd_tbl, xcvrd_config_hwmode_swmode_rsp_tbl , xcvrd_config_hwmode_swmode_cmd_sts_tbl= {}, {}, {}
-        xcvrd_config_prbs_cmd_tbl, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_rsp_tbl , xcvrd_config_prbs_cmd_sts_tbl= {}, {}, {}, {}
-        xcvrd_config_loop_cmd_tbl, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_rsp_tbl , xcvrd_config_loop_cmd_sts_tbl= {}, {}, {}, {}
-        xcvrd_show_event_cmd_tbl, xcvrd_show_event_rsp_tbl , xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_res_tbl= {}, {}, {}, {}
-        xcvrd_show_fec_cmd_tbl, xcvrd_show_fec_rsp_tbl , xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl= {}, {}, {}, {}
-        xcvrd_show_ber_cmd_tbl, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl , xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
 
         sel = swsscommon.Select()
 
@@ -2797,126 +2685,21 @@ class YCableTableUpdateTask(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            xcvrd_log_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                config_db[asic_id], "XCVRD_LOG")
-            xcvrd_show_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
-            xcvrd_show_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_FW_CMD")
-            xcvrd_show_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_FW_RSP")
-            xcvrd_show_fw_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_FW_RES")
-            xcvrd_down_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
-            xcvrd_down_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_DOWN_FW_CMD")
-            xcvrd_down_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_DOWN_FW_RSP")
-            xcvrd_down_fw_status_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_DOWN_FW_STATUS_CMD")
-            xcvrd_down_fw_status_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_DOWN_FW_STATUS_RSP")
-            xcvrd_acti_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
-            xcvrd_acti_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD")
-            xcvrd_acti_fw_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ACTI_FW_CMD_ARG")
-            xcvrd_acti_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_ACTI_FW_RSP")
-            xcvrd_roll_fw_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
-            xcvrd_roll_fw_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_ROLL_FW_CMD")
-            xcvrd_roll_fw_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_ROLL_FW_RSP")
-            xcvrd_show_hwmode_dir_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
-            xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_CMD")
-            xcvrd_show_hwmode_dir_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RSP")
-            xcvrd_show_hwmode_dir_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_DIR_RES")
-            xcvrd_config_hwmode_state_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
-            xcvrd_config_hwmode_state_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_CMD")
-            xcvrd_config_hwmode_state_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_HWMODE_DIR_RSP")
-            xcvrd_config_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
-            xcvrd_config_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_CMD")
-            xcvrd_config_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_HWMODE_SWMODE_RSP")
-            xcvrd_show_hwmode_swmode_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
-            xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_CMD")
-            xcvrd_show_hwmode_swmode_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_SHOW_HWMODE_SWMODE_RSP")
-            xcvrd_config_prbs_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
-            xcvrd_config_prbs_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD_ARG")
-            xcvrd_config_prbs_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_PRBS_CMD")
-            xcvrd_config_prbs_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_PRBS_RSP")
-            xcvrd_config_loop_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
-            xcvrd_config_loop_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD_ARG")
-            xcvrd_config_loop_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_CONFIG_LOOP_CMD")
-            xcvrd_config_loop_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_CONFIG_LOOP_RSP")
-            xcvrd_show_event_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
-            xcvrd_show_event_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_EVENT_LOG_CMD")
-            xcvrd_show_event_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_EVENT_LOG_RSP")
-            xcvrd_show_event_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_EVENT_LOG_RES")
-            xcvrd_show_fec_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
-            xcvrd_show_fec_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_FEC_CMD")
-            xcvrd_show_fec_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_FEC_RSP")
-            xcvrd_show_fec_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_FEC_RES")
-            xcvrd_show_ber_cmd_tbl[asic_id] = swsscommon.SubscriberStateTable(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD")
-            xcvrd_show_ber_cmd_arg_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD_ARG")
-            xcvrd_show_ber_cmd_sts_tbl[asic_id] = swsscommon.Table(
-                appl_db[asic_id], "XCVRD_GET_BER_CMD")
-            xcvrd_show_ber_rsp_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_BER_RSP")
-            xcvrd_show_ber_res_tbl[asic_id] = swsscommon.Table(
-                state_db[asic_id], "XCVRD_GET_BER_RES")
-            sel.addSelectable(xcvrd_log_tbl[asic_id])
-            sel.addSelectable(xcvrd_down_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_down_fw_status_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_acti_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_roll_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_fw_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_hwmode_dir_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_hwmode_state_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_prbs_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_config_loop_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_event_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_fec_cmd_tbl[asic_id])
-            sel.addSelectable(xcvrd_show_ber_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_log_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_down_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_down_fw_status_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_acti_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_roll_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_fw_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_hwmode_dir_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_config_hwmode_state_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_hwmode_swmode_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_config_hwmode_swmode_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_config_prbs_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_config_loop_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_event_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_fec_cmd_tbl[asic_id])
+            sel.addSelectable(self.cli_table_helper.xcvrd_show_ber_cmd_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
         while True:
@@ -2944,7 +2727,7 @@ class YCableTableUpdateTask(object):
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
 
             while True:
-                (key, op_m, fvp_m) = xcvrd_log_tbl[asic_index].pop()
+                (key, op_m, fvp_m) = self.cli_table_helper.xcvrd_log_tbl[asic_index].pop()
 
                 if not key:
                     break
@@ -2956,140 +2739,139 @@ class YCableTableUpdateTask(object):
 
             while True:
                 # show muxcable hwmode state <port>
-                (port, op, fvp) = xcvrd_show_hwmode_dir_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_hwmode_dir_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_dir_cmd_sts_tbl, xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
+                    handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, self.cli_table_helper.port_tbl, self.cli_table_helper.xcvrd_show_hwmode_dir_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_hwmode_dir_rsp_tbl, self.cli_table_helper.xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
                     break
-
             while True:
                 # Config muxcable hwmode state <active/standby> <port>
-                (port, op, fvp) = xcvrd_config_hwmode_state_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_config_hwmode_state_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_hwmode_state_cmd_sts_tbl,  self.cli_table_helper.xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
                     break
 
 
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
-                (port, op, fvp) = xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_hwmode_swmode_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_hwmode_swmode_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_swmode_cmd_sts_tbl, xcvrd_show_hwmode_swmode_rsp_tbl, asic_index, port)
+                    handle_show_hwmode_swmode_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_hwmode_swmode_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_hwmode_swmode_rsp_tbl, asic_index, port)
                     break
 
             while True:
                 # Config muxcable hwmode setswitchmode <auto/manual> <port>
-                (port, op, fvp) = xcvrd_config_hwmode_swmode_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_config_hwmode_swmode_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                   handle_config_mux_switchmode_arg_tbl_notification(fvp, xcvrd_config_hwmode_swmode_cmd_sts_tbl, xcvrd_config_hwmode_swmode_rsp_tbl, asic_index, port)
+                   handle_config_mux_switchmode_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_hwmode_swmode_cmd_sts_tbl, self.cli_table_helper.xcvrd_config_hwmode_swmode_rsp_tbl, asic_index, port)
                    break
 
             while True:
-                (port, op, fvp) = xcvrd_down_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_down_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_down_cmd_arg_tbl_notification(fvp, xcvrd_down_fw_cmd_sts_tbl, xcvrd_down_fw_rsp_tbl, asic_index, port, self.task_download_firmware_thread)
+                    handle_config_firmware_down_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_down_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_down_fw_rsp_tbl, asic_index, port, self.task_download_firmware_thread)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, xcvrd_show_fw_cmd_sts_tbl, xcvrd_show_fw_rsp_tbl, xcvrd_show_fw_res_tbl, asic_index, port)
+                    handle_show_firmware_show_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_fw_rsp_tbl, self.cli_table_helper.xcvrd_show_fw_res_tbl, asic_index, port, self.cli_table_helper.mux_tbl)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_acti_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_acti_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, xcvrd_acti_fw_cmd_sts_tbl, xcvrd_acti_fw_rsp_tbl, xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
+                    handle_config_firmware_acti_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_acti_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_acti_fw_rsp_tbl, self.cli_table_helper.xcvrd_acti_fw_cmd_arg_tbl, asic_index, port)
                     break
 
 
             while True:
-                (port, op, fvp) = xcvrd_roll_fw_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_roll_fw_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, xcvrd_roll_fw_cmd_sts_tbl, xcvrd_roll_fw_rsp_tbl, asic_index, port)
+                    handle_config_firmware_roll_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_roll_fw_cmd_sts_tbl, self.cli_table_helper.xcvrd_roll_fw_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_config_prbs_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_config_prbs_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_prbs_cmd_arg_tbl_notification(fvp, xcvrd_config_prbs_cmd_arg_tbl, xcvrd_config_prbs_cmd_sts_tbl, xcvrd_config_prbs_rsp_tbl, asic_index, port)
+                    handle_config_prbs_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_prbs_cmd_arg_tbl, self.cli_table_helper.xcvrd_config_prbs_cmd_sts_tbl, self.cli_table_helper.xcvrd_config_prbs_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_config_loop_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_config_loop_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_config_loop_cmd_arg_tbl_notification(fvp, xcvrd_config_loop_cmd_arg_tbl, xcvrd_config_loop_cmd_sts_tbl, xcvrd_config_loop_rsp_tbl, asic_index, port)
+                    handle_config_loop_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_loop_cmd_arg_tbl, self.cli_table_helper.xcvrd_config_loop_cmd_sts_tbl, self.cli_table_helper.xcvrd_config_loop_rsp_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_event_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_event_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
 
-                    handle_show_event_cmd_arg_tbl_notification(fvp, xcvrd_show_event_cmd_sts_tbl, xcvrd_show_event_rsp_tbl, xcvrd_show_event_res_tbl, asic_index, port)
+                    handle_show_event_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_event_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_event_rsp_tbl, self.cli_table_helper.xcvrd_show_event_res_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_fec_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_fec_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
 
-                    handle_get_fec_cmd_arg_tbl_notification(fvp,xcvrd_show_fec_rsp_tbl, xcvrd_show_fec_cmd_sts_tbl, xcvrd_show_fec_res_tbl, asic_index, port)
+                    handle_get_fec_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_fec_rsp_tbl, self.cli_table_helper.xcvrd_show_fec_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_fec_res_tbl, asic_index, port)
                     break
 
             while True:
-                (port, op, fvp) = xcvrd_show_ber_cmd_tbl[asic_index].pop()
+                (port, op, fvp) = self.cli_table_helper.xcvrd_show_ber_cmd_tbl[asic_index].pop()
 
                 if not port:
                     break
 
                 if fvp:
-                    handle_show_ber_cmd_arg_tbl_notification(fvp, xcvrd_show_ber_cmd_arg_tbl, xcvrd_show_ber_rsp_tbl, xcvrd_show_ber_cmd_sts_tbl, xcvrd_show_ber_res_tbl, asic_index, port)
+                    handle_show_ber_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_ber_cmd_arg_tbl, self.cli_table_helper.xcvrd_show_ber_rsp_tbl, self.cli_table_helper.xcvrd_show_ber_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_ber_res_tbl, asic_index, port)
 
                     break
 
