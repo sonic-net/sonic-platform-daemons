@@ -1706,7 +1706,7 @@ class TestYCableScript(object):
             test_db[asic_index], "PORT_INFO_TABLE")
         port_tbl[asic_index].get.return_value = (status, fvs)
 
-        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event())
+        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, hw_mux_cable_tbl, stop_event=threading.Event())
 
         assert(rc == None)
 
