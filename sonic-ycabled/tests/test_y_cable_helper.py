@@ -1663,7 +1663,6 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_chassis')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
     @patch('swsscommon.swsscommon.Table')
-    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
     def test_init_ports_status_for_y_cable(self, platform_chassis, platform_sfp, mock_swsscommon_table):
 
         platform_sfp = MagicMock()
