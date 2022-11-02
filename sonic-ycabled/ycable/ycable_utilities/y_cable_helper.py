@@ -2665,10 +2665,10 @@ class YCableTableUpdateTask(threading.Thread):
                         probe_identifier = fvp_dict["command"]
 
                         if probe_identifier == "probe":
-                            (status, fv) = self.table_helper.get_y_cable_tbl()[asic_index].get(port_m)
+                            (status, fv) = self.table_helper.get_hw_mux_cable_tbl()[asic_index].get(port_m)
                             if status is False:
                                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                    port_m, self.table_helper.get_y_cable_tbl()[asic_index].getTableName()))
+                                    port_m, self.table_helper.get_hw_mux_cable_tbl()[asic_index].getTableName()))
                                 continue
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
