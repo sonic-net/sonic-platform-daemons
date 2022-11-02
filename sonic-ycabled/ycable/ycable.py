@@ -103,7 +103,6 @@ class YcableInfoUpdateTask(threading.Thread):
         threading.Thread.__init__(self)
         self.exc = None
         self.task_stopping_event = threading.Event()
-        self.sfp_error_event = sfp_error_event
         self.y_cable_presence = y_cable_presence
         self.table_helper =  y_cable_table_helper.YcableInfoUpdateTableHelper()
 
@@ -157,6 +156,7 @@ class YcableStateUpdateTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.sfp_insert_events = {}
+        self.sfp_error_event = sfp_error_event
         self.y_cable_presence = y_cable_presence
         self.table_helper =  y_cable_table_helper.YcableStateUpdateTableHelper()
 
