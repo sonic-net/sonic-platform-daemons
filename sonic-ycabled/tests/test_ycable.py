@@ -40,20 +40,20 @@ class TestYcableScript(object):
         with patch('ycable.ycable.platform_sfputil') as patched_util:
             patched_util.logical.return_value = ['Ethernet0', 'Ethernet4']
             patched_util.get_asic_id_for_logical_port.return_value = 0
-            Y_cable_state_task = YcableStateUpdateTask()
-            Y_cable_state_task.task_process = MagicMock()
-            Y_cable_state_task.task_stopping_event = MagicMock()
+            y_cable_presence = [True]
             stopping_event = MagicMock()
             sfp_error_event = MagicMock()
-            y_cable_presence = [True]
-            Y_cable_state_task.task_run(sfp_error_event, y_cable_presence)
-            Y_cable_state_task.task_stop()
-            Y_cable_task = YcableInfoUpdateTask()
+            Y_cable_state_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
+            Y_cable_state_task.task_process = MagicMock()
+            Y_cable_state_task.task_stopping_event = MagicMock()
+            Y_cable_state_task.start()
+            Y_cable_state_task.join()
+            Y_cable_task = YcableInfoUpdateTask(y_cable_presence)
             Y_cable_task.task_thread = MagicMock()
             Y_cable_task.task_stopping_event = MagicMock()
             Y_cable_task.task_stopping_event.is_set = MagicMock()
-            Y_cable_task.task_run(y_cable_presence)
-            Y_cable_task.task_stop()
+            Y_cable_task.start()
+            Y_cable_task.join()
             Y_cable_state_task.task_stopping_event.return_value.is_set.return_value = True
             #Y_cable_state_task.task_worker(stopping_event, sfp_error_event, y_cable_presence)
             # For now just check if exception is thrown for UT purposes
@@ -67,19 +67,20 @@ class TestYcableScript(object):
     @patch("swsscommon.swsscommon.Select.select", MagicMock())
     def test_ycable_helper_class_run_loop(self):
         Y_cable_task = YCableTableUpdateTask()
+        Y_cable_cli_task = YCableCliUpdateTask()
         Y_cable_task.task_stopping_event = MagicMock()
+        Y_cable_cli_task.task_stopping_event = MagicMock()
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
         Y_cable_task.task_thread.join = MagicMock()
-        Y_cable_task.task_cli_thead = MagicMock()
-        Y_cable_task.task_cli_thead.start = MagicMock()
-        Y_cable_task.task_cli_thead.join = MagicMock()
         #Y_cable_task.task_stopping_event.return_value.is_set.return_value = False
         swsscommon.SubscriberStateTable.return_value.pop.return_value = (True, True, {"read_side": "2"})
         Y_cable_task.task_worker()
-        Y_cable_task.task_cli_worker()
-        Y_cable_task.task_run()
-        Y_cable_task.task_stop()
+        Y_cable_task.start()
+        Y_cable_task.join()
+        Y_cable_cli_task.task_cli_worker()
+        Y_cable_cli_task.start()
+        Y_cable_cli_task.join()
 
     @patch("swsscommon.swsscommon.Select", MagicMock())
     @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock())
@@ -89,14 +90,10 @@ class TestYcableScript(object):
         Y_cable_task.task_thread = MagicMock()
         Y_cable_task.task_thread.start = MagicMock()
         Y_cable_task.task_thread.join = MagicMock()
-        Y_cable_task.task_cli_thead = MagicMock()
-        Y_cable_task.task_cli_thead.start = MagicMock()
-        Y_cable_task.task_cli_thead.join = MagicMock()
         Y_cable_task.task_stopping_event.return_value.is_set.return_value = True
         Y_cable_task.task_worker()
-        Y_cable_task.task_cli_worker()
-        Y_cable_task.task_run()
-        Y_cable_task.task_stop()
+        Y_cable_task.start()
+        Y_cable_task.join()
 
     def test_detect_port_in_error_status(self):
 
@@ -160,8 +157,18 @@ class TestYcableScript(object):
                                                                                                'version_peer_next': '1.7MS'}))
     def test_post_port_mux_info_to_db(self):
         logical_port_name = "Ethernet0"
-        mux_tbl = Table("STATE_DB", y_cable_helper.MUX_CABLE_INFO_TABLE)
-        rc = post_port_mux_info_to_db(logical_port_name, mux_tbl)
+        asic_index = 0
+        y_cable_tbl = {}
+        mux_tbl = {}
+        test_db = "TEST_DB"
+        status = True
+        fvs = [('state', "auto"), ('read_side', 1)]
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        rc = post_port_mux_info_to_db(logical_port_name, mux_tbl,asic_index, y_cable_tbl)
         assert(rc != -1)
 
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil', MagicMock(return_value=[0]))
@@ -281,9 +288,7 @@ class TestYcableScript(object):
     @patch('ycable.ycable.platform_sfputil', MagicMock())
     @patch('ycable.ycable.DaemonYcable.load_platform_util', MagicMock())
     @patch('ycable.ycable.YcableInfoUpdateTask', MagicMock())
-    @patch('ycable.ycable.YcableInfoUpdateTask.task_run', MagicMock())
     @patch('ycable.ycable.YcableStateUpdateTask', MagicMock())
-    @patch('ycable.ycable.YcableStateUpdateTask.task_run', MagicMock())
     @patch('ycable.ycable_utilities.y_cable_helper.init_ports_status_for_y_cable', MagicMock())
     def test_DaemonYcable_init_deinit_full(self):
         ycable = DaemonYcable(SYSLOG_IDENTIFIER)
