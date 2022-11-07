@@ -2697,6 +2697,7 @@ class YCableCliUpdateTask(threading.Thread):
         threading.Thread.__init__(self)
 
         self.exc = None
+        self.task_name = "YCableCliUpdate"
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
         self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
@@ -2922,7 +2923,7 @@ class YCableCliUpdateTask(threading.Thread):
         helper_logger.log_info("stopped all thread")
         if self.exc is not None:
  
-            assert self._thread is not None # prevent illegal false positive LGTM
+            assert self.task_name is not None # prevent illegal false positive LGTM
  
             raise self.exc
 

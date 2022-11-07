@@ -401,11 +401,11 @@ class DaemonYcable(daemon_base.DaemonBase):
                         thread.join()
                     except Exception as e:
                         self.log_error("Exception occured at child thread {} to {}".format(thread.getName(), repr(e)))
-                    self.log_error("thread id {} is not running, exiting main loop".format(thread.getName()))
+                    self.log_error("thread id {} is not running, exiting main ycabled".format(thread.getName()))
                     os.kill(os.getpid(), signal.SIGKILL)
 
 
-        self.log_error("Stop daemon main loop")
+        self.log_info("Stop daemon main loop")
 
         # Stop the ycable periodic info info update thread
         if ycable_info_update.is_alive():
