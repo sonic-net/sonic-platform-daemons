@@ -20,6 +20,7 @@ from swsscommon import swsscommon
 
 from . import y_cable_table_helper
 
+
 SELECT_TIMEOUT = 1000
 
 y_cable_platform_sfputil = None
@@ -2552,7 +2553,6 @@ class YCableTableUpdateTask(threading.Thread):
     def task_worker(self):
 
         # Connect to STATE_DB and APPL_DB and get both the HW_MUX_STATUS_TABLE info
-
         sel = swsscommon.Select()
 
         # Get the namespaces in the platform
@@ -2775,7 +2775,6 @@ class YCableCliUpdateTask(threading.Thread):
                 if fvp:
                     handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_hwmode_dir_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_hwmode_dir_rsp_tbl, self.cli_table_helper.xcvrd_show_hwmode_dir_res_tbl, asic_index, port)
                     break
-
             while True:
                 # Config muxcable hwmode state <active/standby> <port>
                 (port, op, fvp) = self.cli_table_helper.xcvrd_config_hwmode_state_cmd_tbl[asic_index].pop()
