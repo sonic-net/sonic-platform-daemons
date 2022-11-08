@@ -3870,8 +3870,6 @@ class YCableCliUpdateTask(threading.Thread):
         helper_logger.log_info("stopped all thread")
         if self.exc is not None:
  
-            assert self._thread is not None # prevent illegal false positive LGTM
- 
             raise self.exc
 
 
