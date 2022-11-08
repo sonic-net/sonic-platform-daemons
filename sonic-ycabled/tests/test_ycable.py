@@ -8,6 +8,7 @@ import copy
 import os
 import sys
 import time
+import traceback
 
 if sys.version_info >= (3, 3):
     from unittest.mock import MagicMock, patch
@@ -32,6 +33,17 @@ sys.path.insert(0, modules_path)
 
 os.environ["YCABLE_UNIT_TESTING"] = "1"
 
+exception_output_expected= """\
+  File "/sonic/src/sonic-platform-daemons/sonic-ycabled/tests/test_ycable.py", line 354, in test_ycable_helper_class_run_loop_with_exception
+    Y_cable_cli_task.task_cli_worker()
+  File "/sonic/src/sonic-platform-daemons/sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py", line 2709, in task_cli_worker
+    sel = swsscommon.Select()
+  File "/usr/lib/python3.7/unittest/mock.py", line 960, in __call__
+    return _mock_self._mock_call(*args, **kwargs)
+  File "/usr/lib/python3.7/unittest/mock.py", line 1020, in _mock_call
+    raise effect
+NotImplementedError
+"""
 
 class TestYcableScript(object):
 
@@ -322,3 +334,44 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
+
+
+class TestYcableScriptException(object):
+
+    @patch("swsscommon.swsscommon.Select", MagicMock(side_effect=NotImplementedError))
+    @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock(side_effect=NotImplementedError))
+    @patch("swsscommon.swsscommon.Select.select", MagicMock(side_effect=NotImplementedError))
+    def test_ycable_helper_class_run_loop_with_exception(self):
+
+
+
+        Y_cable_cli_task = YCableCliUpdateTask()
+        expected_exception_start = None
+        expected_exception_join = None
+        trace = None
+        try:
+            Y_cable_cli_task.start()
+            Y_cable_cli_task.task_cli_worker()
+        except Exception as e1:
+            expected_exception_start  = e1
+            trace = traceback.format_exc()
+
+
+        try:
+            Y_cable_cli_task.join()
+        except Exception as e2:
+            expected_exception_join = e2
+
+
+        """
+        Handy debug Helpers or else use import logging
+        f = open("newfile", "w")
+        f.write(format(e2))
+        f.write(format(m1))
+        f.write(trace)
+        """
+
+        assert(type(expected_exception_start) == type(expected_exception_join))
+        assert(expected_exception_start.args == expected_exception_join.args)
+        assert(exception_output_expected == str(trace))
+
