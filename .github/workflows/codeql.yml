@@ -1,0 +1,41 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "master", "201803", "201811", "201911", "202012", "202106", "202111", "202205", "active-active", "add_secure_channel", "add-new-api", "exception-handling-202012", "fix-somelogs", "grpc-improvements", "mem-leak", "shilong-test", "testcoverage_additions", "users/GitHubPolicyService/a21b7d80-ee77-4a19-9a8b-a122cf7f25a2", "x" ]
+  pull_request:
+    branches: [ "master" ]
+  schedule:
+    - cron: "53 9 * * 3"
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ python ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+          queries: +security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{ matrix.language }}"
