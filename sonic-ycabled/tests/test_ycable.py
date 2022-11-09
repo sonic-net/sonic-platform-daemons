@@ -35,9 +35,9 @@ os.environ["YCABLE_UNIT_TESTING"] = "1"
 
 exception_output_expected= """\
 Traceback (most recent call last):
-  File "/__w/1/s/sonic-platform-daemons/sonic-ycabled/tests/test_ycable.py", line 357, in test_ycable_helper_class_run_loop_with_exception
+  File "/__w/1/s/sonic-ycabled/tests/test_ycable.py", line 357, in test_ycable_helper_class_run_loop_with_exception
     Y_cable_cli_task.task_cli_worker()
-  File "/sonic/src/sonic-platform-daemons/sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py", line 3655, in task_cli_worker
+  File "/sonic-platform-daemons/sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py", line 3655, in task_cli_worker
     sel = swsscommon.Select()
   File "/usr/lib/python3.9/unittest/mock.py", line 1093, in __call__
     return self._mock_call(*args, **kwargs)
