@@ -2000,7 +2000,8 @@ class SfpStateUpdateTask(object):
                                     # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
                                     # The interface info remains in the DB since it is static.
                                     if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
-                                        del_port_sfp_dom_info_from_db(logical_port, self.port_mapping,
+                                        del_port_sfp_dom_info_from_db(logical_port,
+                                                                      self.port_mapping,
                                                                       None,
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_pm_tbl(asic_index))
