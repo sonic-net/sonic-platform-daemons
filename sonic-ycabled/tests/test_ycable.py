@@ -376,5 +376,5 @@ class TestYcableScriptException(object):
         assert(expected_exception_start.args == expected_exception_join.args)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
         assert("sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py" in str(trace))
-        assert("line 2709" in str(trace))
+        assert("line 2708" in str(trace))
 
