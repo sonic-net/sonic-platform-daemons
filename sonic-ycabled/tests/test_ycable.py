@@ -33,20 +33,6 @@ sys.path.insert(0, modules_path)
 
 os.environ["YCABLE_UNIT_TESTING"] = "1"
 
-exception_output_expected= """\
-Traceback (most recent call last):
-  File "/sonic/src/sonic-platform-daemons/sonic-ycabled/tests/test_ycable.py", line 357, in test_ycable_helper_class_run_loop_with_exception
-    Y_cable_cli_task.task_cli_worker()
-  File "/sonic/src/sonic-platform-daemons/sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py", line 3655, in task_cli_worker
-    sel = swsscommon.Select()
-  File "/usr/lib/python3.9/unittest/mock.py", line 1093, in __call__
-    return self._mock_call(*args, **kwargs)
-  File "/usr/lib/python3.9/unittest/mock.py", line 1097, in _mock_call
-    return self._execute_mock_call(*args, **kwargs)
-  File "/usr/lib/python3.9/unittest/mock.py", line 1152, in _execute_mock_call
-    raise effect
-NotImplementedError
-"""
 
 class TestYcableScript(object):
 
@@ -365,16 +351,17 @@ class TestYcableScriptException(object):
         except Exception as e2:
             expected_exception_join = e2
 
-
+        """
         #Handy debug Helpers or else use import logging
-        f = open("newfile", "w")
+        #f = open("newfile", "w")
         #f.write(format(e2))
         #f.write(format(m1))
-        f.write(trace)
+        #f.write(trace)
+        """
 
         assert(type(expected_exception_start) == type(expected_exception_join))
         assert(expected_exception_start.args == expected_exception_join.args)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
         assert("sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py" in str(trace))
-        assert("line 3655" in str(trace))
+        assert("swsscommon.Select" in str(trace))
 
