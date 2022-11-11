@@ -33,6 +33,7 @@ PCIED_MAIN_THREAD_SLEEP_SECS = 60
 
 PCIEUTIL_CONF_FILE_ERROR = 1
 PCIEUTIL_LOAD_ERROR = 2
+PLATFORM_PCIE_YAML_FILE = "/usr/share/sonic/platform/pcie.yaml"
 
 platform_pcieutil = None
 
@@ -158,16 +159,28 @@ class DaemonPcied(daemon_base.DaemonBase):
         if self.resultInfo is None:
             return
 
-        for result in self.resultInfo:
-            bus = int(result["bus"], 16)
-            device = int(result["dev"], 16)
-            func = int(result["fn"], 16)
+        try:
+            stream = open(PLATFORM_PCIE_YAML_FILE, 'r')
+            dictionary = yaml.safe_load(stream)
+            for elem in dictionary:
+                bus = int(elem.get('bus'), 16)
+                device = int(elem.get('dev'), 16)
+                func = int(elem.get('fn'), 16)
+                pcieDeviceID = elem.get('id')
 
-            pcieDeviceArgs = ("%02x:%02x.%d" % (bus, device, func))
-            pcieDeviceQueryResult = subprocess.run(['lspci', '-s', pcieDeviceArgs], stdout=subprocess.PIPE).stdout.decode('utf-8')
-            
-            if pcieDeviceQueryResult is None:
-                self.log_error("PCIe Peripheral {} -- Not Found".format(pcieDeviceQueryResult))
+                cmd = ("setpci -s %02x:%02x.%d 2.w" % (bus, device, func))
+                output, errs = subprocess.Popen(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE).communicate()
+                if errs:
+                    raise ValueError("subprocess command {} returned {}".format(cmd, errs))
+                pcieDeviceQueryResult = output.decode('utf8').rstrip()
+
+                if pcieDeviceQueryResult is None or "No devices selected" in pcieDeviceQueryResult:
+                    self.log_error("PCIe Peripheral {} -- Not Found".format(pcieDeviceQueryResult))
+                elif pcieDeviceQueryResult != pcieDeviceID:
+                    self.log_error("PCIe device %02x:%02x.%d ID DOES NOT match preconfigured YAML file" % (bus, device, func))
+        except Exception as ex:
+            self.log_error("PCIe Exception occurred: {}".format(ex))
+            pass
 
         for result in self.resultInfo:
             if result["result"] == "Failed":
