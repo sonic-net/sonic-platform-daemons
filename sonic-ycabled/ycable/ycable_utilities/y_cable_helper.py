@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+import traceback
 
 from importlib import import_module
 
@@ -785,7 +786,6 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     y_cable_platform_sfputil = platform_sfp
     y_cable_platform_chassis = platform_chassis
     y_cable_is_platform_vs = is_vs
-
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -2540,16 +2540,15 @@ def handle_ycable_enable_disable_tel_notification(fvp_m, key):
                 disable_telemetry = False
 
 # Thread wrapper class to update y_cable status periodically
-class YCableTableUpdateTask(object):
+class YCableTableUpdateTask(threading.Thread):
     def __init__(self):
-        self.task_thread = None
-        self.task_cli_thread = None
-        self.task_download_firmware_thread = {}
+        threading.Thread.__init__(self)
+
+        self.exc = None
         self.task_stopping_event = threading.Event()
         self.hw_mux_cable_tbl_keys = {}
 
         self.table_helper =  y_cable_table_helper.YcableTableUpdateTableHelper()
-        self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
        
     def task_worker(self):
 
@@ -2666,15 +2665,41 @@ class YCableTableUpdateTask(object):
                         probe_identifier = fvp_dict["command"]
 
                         if probe_identifier == "probe":
-                            (status, fv) = self.table_helper.get_y_cable_tbl()[asic_index].get(port_m)
+                            (status, fv) = self.table_helper.get_hw_mux_cable_tbl()[asic_index].get(port_m)
                             if status is False:
                                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
-                                    port_m, self.table_helper.get_y_cable_tbl()[asic_index].getTableName()))
+                                    port_m, self.table_helper.get_hw_mux_cable_tbl()[asic_index].getTableName()))
                                 continue
                             mux_port_dict = dict(fv)
                             read_side = mux_port_dict.get("read_side")
 
                             update_appdb_port_mux_cable_response_table(port_m, asic_index, self.table_helper.get_appl_db(), int(read_side), self.table_helper.get_y_cable_response_tbl())
+
+
+    def run(self):
+        if self.task_stopping_event.is_set():
+            return
+
+        try:
+            self.task_worker()
+        except Exception as e:
+            helper_logger.log_error("Exception occured at child thread YCableTableUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
+            self.exc = e
+
+    def join(self):
+        threading.Thread.join(self)
+
+        if self.exc:
+            raise self.exc
+
+class YCableCliUpdateTask(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+        self.exc = None
+        self.task_download_firmware_thread = {}
+        self.task_stopping_event = threading.Event()
+        self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
 
 
     def task_cli_worker(self):
@@ -2878,19 +2903,25 @@ class YCableTableUpdateTask(object):
 
                     break
 
-    def task_run(self):
-        self.task_thread = threading.Thread(target=self.task_worker)
-        self.task_cli_thread = threading.Thread(target=self.task_cli_worker)
-        self.task_thread.start()
-        self.task_cli_thread.start()
+    def run(self):
+        if self.task_stopping_event.is_set():
+            return
 
-    def task_stop(self):
-
-        self.task_stopping_event.set()
-        helper_logger.log_info("stopping the cli and probing task threads xcvrd")
-        self.task_thread.join()
-        self.task_cli_thread.join()
-
+        try:
+            self.task_cli_worker()
+        except Exception as e:
+            helper_logger.log_error("Exception occured at child thread YcableCliUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
+            self.exc = e
+ 
+    def join(self):
+ 
+        threading.Thread.join(self)
+ 
         for key, value in self.task_download_firmware_thread.items():
             self.task_download_firmware_thread[key].join()
         helper_logger.log_info("stopped all thread")
+        if self.exc is not None:
+ 
+            raise self.exc
+
+
