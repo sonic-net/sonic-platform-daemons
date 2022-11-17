@@ -58,7 +58,7 @@ PSU_INFO_VOLTAGE_MIN_TH_FIELD = 'voltage_min_threshold'
 PSU_INFO_CURRENT_FIELD = 'current'
 PSU_INFO_POWER_FIELD = 'power'
 PSU_INFO_POWER_OVERLOAD = 'power_overload'
-PSU_INFO_POWER_WARNING_THRESHOLD = 'power_warning_threshold'
+PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD = 'power_warning_suppress_threshold'
 PSU_INFO_POWER_CRITICAL_THRESHOLD = 'power_critical_threshold'
 PSU_INFO_FRU_FIELD = 'is_replaceable'
 PSU_INFO_IN_VOLTAGE_FIELD = 'input_voltage'
@@ -522,20 +522,20 @@ class DaemonPsud(daemon_base.DaemonBase):
             if psu_status.power_good:
                 # power_good has been updated and it is True, which means it was False
                 # Initialize power exceeding threshold state in this case
-                if (try_get(psu.get_psu_power_critical_threshold) and try_get(psu.get_psu_power_warning_threshold) and power != NOT_AVAILABLE):
+                if (try_get(psu.get_psu_power_critical_threshold) and try_get(psu.get_psu_power_warning_suppress_threshold) and power != NOT_AVAILABLE):
                     psu_status.check_psu_power_threshold = True
 
         power_exceeded_threshold = psu_status.power_exceeded_threshold
-        power_warning_threshold = try_get(psu.get_psu_power_warning_threshold, NOT_AVAILABLE)
+        power_warning_suppress_threshold = try_get(psu.get_psu_power_warning_suppress_threshold, NOT_AVAILABLE)
         power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
         if psu_status.check_psu_power_threshold:
-            if power_warning_threshold == NOT_AVAILABLE or power_critical_threshold == NOT_AVAILABLE:
-                self.log_error("PSU power thresholds become invalid: threshold {} critical threshold {}".format(power_warning_threshold, power_critical_threshold))
+            if power_warning_suppress_threshold == NOT_AVAILABLE or power_critical_threshold == NOT_AVAILABLE:
+                self.log_error("PSU power thresholds become invalid: threshold {} critical threshold {}".format(power_warning_suppress_threshold, power_critical_threshold))
                 psu_status.check_psu_power_threshold = False
                 psu_status.power_exceeded_threshold = False
             elif psu_status.power_exceeded_threshold:
                 # The failing threshold is the warning threshold
-                if power < power_warning_threshold:
+                if power < power_warning_suppress_threshold:
                     # Clear alarm
                     power_exceeded_threshold = False
             else:
@@ -579,7 +579,7 @@ class DaemonPsud(daemon_base.DaemonBase):
              (PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)),
              (PSU_INFO_CURRENT_FIELD, str(current)),
              (PSU_INFO_POWER_FIELD, str(power)),
-             (PSU_INFO_POWER_WARNING_THRESHOLD, str(power_warning_threshold)),
+             (PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD, str(power_warning_suppress_threshold)),
              (PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)),
              (PSU_INFO_POWER_OVERLOAD, str(power_exceeded_threshold)),
              (PSU_INFO_FRU_FIELD, str(is_replaceable)),

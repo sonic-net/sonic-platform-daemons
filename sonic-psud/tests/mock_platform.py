@@ -359,7 +359,7 @@ class MockPsu(psu_base.PsuBase):
     def get_psu_power_critical_threshold(self):
         raise NotImplementedError
 
-    def get_psu_power_warning_threshold(self):
+    def get_psu_power_warning_suppress_threshold(self):
         raise NotImplementedError
 
     # Methods inherited from DeviceBase class and related setters
