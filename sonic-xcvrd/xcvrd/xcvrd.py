@@ -558,28 +558,23 @@ def post_port_pm_info_to_db(logical_port_name, port_mapping, table, stop_event=t
         if not _wrapper_get_presence(physical_port):
             continue
 
-        try:
-            if pm_info_cache is not None and physical_port in pm_info_cache:
-                # If cache is enabled and pm info is in cache, just read from cache, no need read from EEPROM
-                pm_info_dict = pm_info_cache[physical_port]
-            else:
-                pm_info_dict = _wrapper_get_transceiver_pm(physical_port)
-                if pm_info_cache is not None:
-                    # If cache is enabled, put dom information to cache
-                    pm_info_cache[physical_port] = pm_info_dict
-            if pm_info_dict is not None:
-                # ignore if empty
-                if not pm_info_dict:
-                    continue
-                beautify_pm_info_dict(pm_info_dict, physical_port)
-                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
-                table.set(physical_port_name, fvs)
-            else:
-                return SFP_EEPROM_NOT_READY
-
-        except NotImplementedError:
-            helper_logger.log_error("get_transceiver_pm is currently not implemented for this platform")
-            sys.exit(NOT_IMPLEMENTED_ERROR)
+        if pm_info_cache is not None and physical_port in pm_info_cache:
+            # If cache is enabled and pm info is in cache, just read from cache, no need read from EEPROM
+            pm_info_dict = pm_info_cache[physical_port]
+        else:
+            pm_info_dict = _wrapper_get_transceiver_pm(physical_port)
+            if pm_info_cache is not None:
+                # If cache is enabled, put dom information to cache
+                pm_info_cache[physical_port] = pm_info_dict
+        if pm_info_dict is not None:
+            # Skip if empty (i.e. get_transceiver_pm API is not applicable for this xcvr)
+            if not pm_info_dict:
+                continue
+            beautify_pm_info_dict(pm_info_dict, physical_port)
+            fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
+            table.set(physical_port_name, fvs)
+        else:
+            return SFP_EEPROM_NOT_READY
 
 # Update port dom/sfp info in db
 
@@ -886,25 +881,23 @@ def update_port_transceiver_status_table_hw(logical_port_name, port_mapping,
         if not _wrapper_get_presence(physical_port):
             continue
 
-        try:
-            if transceiver_status_cache is not None and physical_port in transceiver_status_cache:
-                # If cache is enabled and status info is in cache, just read from cache, no need read from EEPROM
-                transceiver_status_dict = transceiver_status_cache[physical_port]
-            else:
-                transceiver_status_dict = _wrapper_get_transceiver_status(physical_port)
-                if transceiver_status_cache is not None:
-                    # If cache is enabled, put status info to cache
-                    transceiver_status_cache[physical_port] = transceiver_status_dict
-            if transceiver_status_dict is not None:
-                beautify_transceiver_status_dict(transceiver_status_dict, physical_port)
-                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_status_dict.items()])
-                table.set(physical_port_name, fvs)
-            else:
-                return SFP_EEPROM_NOT_READY
-
-        except NotImplementedError:
-            helper_logger.log_error("get_transceiver_status is currently not implemented for this platform")
-            sys.exit(NOT_IMPLEMENTED_ERROR)
+        if transceiver_status_cache is not None and physical_port in transceiver_status_cache:
+            # If cache is enabled and status info is in cache, just read from cache, no need read from EEPROM
+            transceiver_status_dict = transceiver_status_cache[physical_port]
+        else:
+            transceiver_status_dict = _wrapper_get_transceiver_status(physical_port)
+            if transceiver_status_cache is not None:
+                # If cache is enabled, put status info to cache
+                transceiver_status_cache[physical_port] = transceiver_status_dict
+        if transceiver_status_dict is not None:
+            # Skip if empty (i.e. get_transceiver_status API is not applicable for this xcvr)
+            if not transceiver_status_dict:
+                continue
+            beautify_transceiver_status_dict(transceiver_status_dict, physical_port)
+            fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_status_dict.items()])
+            table.set(physical_port_name, fvs)
+        else:
+            return SFP_EEPROM_NOT_READY
 
 # Delete port from SFP status table
 
