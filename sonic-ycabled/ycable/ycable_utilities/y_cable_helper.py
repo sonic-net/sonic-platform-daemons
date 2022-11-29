@@ -3590,7 +3590,7 @@ class YCableTableUpdateTask(threading.Thread):
                                     continue
                                 mux_port_dict = dict(fv)
                                 read_side = mux_port_dict.get("read_side")
-                                update_appdb_port_mux_cable_response_table(port_m, asic_index, self.appl_db, int(read_side), self.table_helper.get_y_cable_response_tbl())
+                                update_appdb_port_mux_cable_response_table(port_m, asic_index, self.table_helper.get_appl_db(), int(read_side), self.table_helper.get_y_cable_response_tbl())
 
             while True:
                 (port_m, op_m, fvp_m) = self.table_helper.get_fwd_state_command_tbl()[asic_index].pop()
