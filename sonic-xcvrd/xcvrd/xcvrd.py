@@ -433,7 +433,6 @@ def post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, table,
                 beautify_dom_threshold_info_dict(dom_info_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in dom_info_dict.items()])
                 table.set(port_name, fvs)
-                helper_logger.log_error("PATELMI Port {} fvs: {}".format(logical_port_name, table.get(port_name)))
             else:
                 return SFP_EEPROM_NOT_READY
 
