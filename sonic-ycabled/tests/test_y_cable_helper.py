@@ -5805,7 +5805,8 @@ class TestYCableScript(object):
         port_m = "Ethernet0"
         fvp_dict = [('command', "probe"), ('read_side', 1), ('cable_type','active-standby'), ('soc_ipv4','192.168.0.1')]
         hw_mux_cable_tbl = {}
-        y_cable__response_tbl = {}
+        y_cable_response_tbl = {}
+        asic_index = 0
         hw_mux_cable_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "PORT_INFO_TABLE")
         y_cable_response_tbl[asic_index] = swsscommon.Table(
