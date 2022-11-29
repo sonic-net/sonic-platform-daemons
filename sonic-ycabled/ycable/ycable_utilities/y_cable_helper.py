@@ -3428,11 +3428,11 @@ def handle_ycable_active_standby_probe_notification(cable_type, fvp_dict, appl_d
                     port_m, hw_mux_cable_tbl[asic_index].getTableName()))
                 return False
 
-                mux_port_dict = dict(fv)
-                read_side = mux_port_dict.get("read_side")
-                update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side), y_cable_response_tbl)
+            mux_port_dict = dict(fv)
+            read_side = mux_port_dict.get("read_side")
+            update_appdb_port_mux_cable_response_table(port_m, asic_index, appl_db, int(read_side), y_cable_response_tbl)
 
-                return True
+            return True
 
 def handle_ycable_enable_disable_tel_notification(fvp_m, key):
 
