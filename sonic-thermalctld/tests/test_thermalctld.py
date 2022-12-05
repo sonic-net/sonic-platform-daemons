@@ -416,6 +416,7 @@ class TestTemperatureUpdater(object):
         temp_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
         temp_updater.table._del = mock.MagicMock()
+        temp_updater.table.getKeys = mock.MagicMock()
 
         temp_updater.__del__()
         assert temp_updater.table._del.call_count == 2
