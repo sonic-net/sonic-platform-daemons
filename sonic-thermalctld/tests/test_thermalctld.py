@@ -411,17 +411,17 @@ class TestTemperatureUpdater(object):
     Test cases to cover functionality in TemperatureUpdater class
     """
     
-    """def test_deinit(self):
+    def test_deinit(self):
         chassis = MockChassis()
         temp_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
         temp_updater.table._del = mock.MagicMock()
 
-        temp_updater.deinit()
+        temp_updater.__del__()
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
-    """ 
+    
 
     def test_over_temper(self):
         chassis = MockChassis()
