@@ -80,6 +80,15 @@ class TestXcvrdScript(object):
         mock_get_sfp_type.return_value = 'QSFP_DD'
         post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
 
+    def test_post_port_dom_threshold_info_to_db(self, mock_get_sfp_type):
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        dom_threshold_tbl = Table("STATE_DB", TRANSCEIVER_DOM_THRESHOLD_TABLE)
+        post_port_dom_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
+        mock_get_sfp_type.return_value = 'QSFP_DD'
+        post_port_dom_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
+
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_pm', MagicMock(return_value={'prefec_ber_avg': '0.0003407240007014899',
@@ -103,9 +112,10 @@ class TestXcvrdScript(object):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
+        dom_threshold_tbl = Table("STATE_DB", TRANSCEIVER_DOM_THRESHOLD_TABLE)
         init_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
         pm_tbl = Table("STATE_DB", TRANSCEIVER_PM_TABLE)
-        del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, init_tbl, dom_tbl, pm_tbl)
+        del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, init_tbl, dom_tbl, dom_threshold_tbl, pm_tbl)
 
     @patch('xcvrd.xcvrd.get_physical_port_name_dict', MagicMock(return_value={0: 'Ethernet0'}))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -169,8 +179,8 @@ class TestXcvrdScript(object):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
-        post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
+        dom_threshold_tbl = Table("STATE_DB", TRANSCEIVER_DOM_THRESHOLD_TABLE)
+        post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -775,6 +785,7 @@ class TestXcvrdScript(object):
         mock_table_helper.get_status_tbl = MagicMock(return_value=mock_table)
         mock_table_helper.get_int_tbl = MagicMock(return_value=mock_table)
         mock_table_helper.get_dom_tbl = MagicMock(return_value=mock_table)
+        mock_table_helper.get_dom_threshold_tbl = MagicMock(return_value=mock_table)
         stopping_event = multiprocessing.Event()
         port_mapping = PortMapping()
         retry_eeprom_set = set()
@@ -831,6 +842,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=mock_table)
+        task.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_status_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_pm_tbl = MagicMock(return_value=mock_table)
@@ -1011,9 +1023,13 @@ class TestXcvrdScript(object):
         dom_tbl = MockTable()
         dom_tbl.get = MagicMock(return_value=(True, (('key3', 'value3'),)))
         dom_tbl.set = MagicMock()
+        dom_threshold_tbl = MockTable()
+        dom_threshold_tbl.get = MagicMock(return_value=(True, (('key4', 'value4'),)))
+        dom_threshold_tbl.set = MagicMock()
         mock_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
         mock_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
         mock_table_helper.get_dom_tbl = MagicMock(return_value=dom_tbl)
+        mock_table_helper.get_dom_threshold_tbl = MagicMock(return_value=dom_threshold_tbl)
 
         port_mapping = PortMapping()
         retry_eeprom_set = set()
@@ -1022,6 +1038,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
         task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
         task.xcvr_table_helper.get_dom_tbl = mock_table_helper.get_dom_tbl
+        task.xcvr_table_helper.get_dom_threshold_tbl = mock_table_helper.get_dom_threshold_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         task.port_mapping.handle_port_change_event(port_change_event)
         # SFP information is in the DB, copy the SFP information for the newly added logical port
@@ -1032,6 +1049,8 @@ class TestXcvrdScript(object):
         int_tbl.set.assert_called_with('Ethernet0', (('key2', 'value2'),))
         dom_tbl.get.assert_called_with('Ethernet0')
         dom_tbl.set.assert_called_with('Ethernet0', (('key3', 'value3'),))
+        dom_threshold_tbl.get.assert_called_with('Ethernet0')
+        dom_threshold_tbl.set.assert_called_with('Ethernet0', (('key4', 'value4'),))
 
         status_tbl.get.return_value = (False, ())
         mock_get_presence.return_value = True
@@ -1060,7 +1079,7 @@ class TestXcvrdScript(object):
         assert mock_post_dom_info.call_count == 1
         mock_post_dom_info.assert_called_with('Ethernet0', task.port_mapping, dom_tbl)
         assert mock_post_dom_th.call_count == 1
-        mock_post_dom_th.assert_called_with('Ethernet0', task.port_mapping, dom_tbl)
+        mock_post_dom_th.assert_called_with('Ethernet0', task.port_mapping, dom_threshold_tbl)
         assert mock_update_media_setting.call_count == 1
         assert 'Ethernet0' not in task.retry_eeprom_set
 
