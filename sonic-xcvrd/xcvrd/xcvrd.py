@@ -2394,7 +2394,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 class XcvrTableHelper:
     def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
-		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}
+		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
         for namespace in namespaces:
