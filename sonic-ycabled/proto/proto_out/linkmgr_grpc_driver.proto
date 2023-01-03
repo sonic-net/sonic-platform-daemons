@@ -62,18 +62,18 @@ message GracefulAdminRequest {
 enum GracefulRestartMsgType{
 
 
-   SERVICE_BEGIN = 1;
+   SERVICE_BEGIN = 0;
 
-   SERVICE_END = 2;// send this always from SoC Side even if not paired with Begin
+   SERVICE_END = 1;// send this always from SoC Side even if not paired with Begin
 }
 
 enum GracefulRestartNotifyType {
 
-   CONTROL_PLANE = 1;// need proper definitions
+   CONTROL_PLANE = 0;// need proper definitions
 
-   DATA_PLANE = 2;
+   DATA_PLANE = 1;
 
-   BOTH = 3;
+   BOTH = 2;
 
 }
 
