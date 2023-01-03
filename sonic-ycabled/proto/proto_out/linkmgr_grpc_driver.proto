@@ -45,3 +45,51 @@ message ServerVersionReply {
 }
 
 
+service GracefulRestart {
+
+  rpc NotifyGracefulRestartStart(GracefulAdminRequest) returns (stream GracefulAdminResponse) {}
+
+}
+
+
+
+message GracefulAdminRequest {
+
+  int32 portid = 1;
+
+}
+
+enum GracefulRestartMsgType{
+
+
+   SERVICE_BEGIN = 1;
+
+   SERVICE_END = 2;// send this always from SoC Side even if not paired with Begin
+}
+
+enum GracefulRestartNotifyType {
+
+   CONTROL_PLANE = 1;// need proper definitions
+
+   DATA_PLANE = 2;
+
+   BOTH = 3;
+
+}
+
+
+
+
+message GracefulAdminResponse {
+
+  GracefulRestartMsgType type = 1;
+
+  GracefulRestartNotifyType type = 2;
+
+  string guid = 3;
+
+  int32 period = 4;  // in seconds
+
+}
+
+
