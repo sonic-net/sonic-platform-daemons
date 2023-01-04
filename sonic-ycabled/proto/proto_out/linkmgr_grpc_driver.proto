@@ -82,9 +82,9 @@ enum GracefulRestartNotifyType {
 
 message GracefulAdminResponse {
 
-  GracefulRestartMsgType type = 1;
+  GracefulRestartMsgType msgtype = 1;
 
-  GracefulRestartNotifyType type = 2;
+  GracefulRestartNotifyType notifytype = 2;
 
   string guid = 3;
 
