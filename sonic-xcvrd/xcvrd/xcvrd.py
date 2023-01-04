@@ -2056,6 +2056,9 @@ class SfpStateUpdateTask(threading.Thread):
             self.exc = e
             self.main_thread_stop_event.set()
 
+    # SfpStateUpdateTask thread has a call to an API which could potentially sleep in the order of seconds and hence,
+    # could block the xcvrd daemon graceful shutdown process for a prolonged time. Raising an exception will allow us to
+    # interrupt the SfpStateUpdateTask thread while sleeping and will allow graceful shutdown of the thread
     def raise_exception(self):
         res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(self.thread_id),
               ctypes.py_object(SystemExit))
