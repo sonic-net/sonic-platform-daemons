@@ -3,6 +3,7 @@
     helper utlities configuring y_cable for xcvrd daemon
 """
 
+import asyncio
 import datetime
 import ipaddress
 import json
@@ -3882,4 +3883,24 @@ class YCableCliUpdateTask(threading.Thread):
  
             raise self.exc
 
+class GracefulRestartClient:
+    def __init__(self, channel: grpc.aio.insecure_channel):
+        self.stub = linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub(channel)
+        self.request_queue = asyncio.Queue()
+        self.response_queue = asyncio.Queue()
 
+    async def send_request(self):
+        while True:
+            tor = await self.request_queue.get()
+            request = linkmgr_grpc_driver_pb2.GracefulAdminRequest(tor=tor)
+            response_stream = self.stub.NotifyGracefulRestartStart(request)
+            async for response in response_stream:
+                await self.response_queue.put(response)
+
+    async def receive_response(self):
+        while True:
+            response = await self.response_queue.get()
+            print(response)
+            # do something with response
+            await asyncio.sleep(response.period)
+            await self.request_queue.put(response.tor)
