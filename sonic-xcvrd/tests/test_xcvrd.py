@@ -580,7 +580,6 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.stop_event.wait = MagicMock()
         xcvrd.run()
-        # TODO: more check
         assert mock_task_stop1.call_count == 1
         assert mock_task_stop2.call_count == 1
         assert mock_task_run1.call_count == 1
@@ -889,6 +888,9 @@ class TestXcvrdScript(object):
         retry_eeprom_set = set()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, retry_eeprom_set, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
+        task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
+        task.xcvr_table_helper.get_dom_tbl = mock_table_helper.get_dom_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
@@ -1424,8 +1426,6 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.init()
         xcvrd.deinit()
-        # TODO: fow now we only simply call xcvrd.init/deinit without any further check, it only makes sure that
-        # xcvrd.init/deinit will not raise unexpected exception. In future, probably more check will be added
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
