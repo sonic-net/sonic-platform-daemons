@@ -3884,7 +3884,8 @@ class YCableCliUpdateTask(threading.Thread):
             raise self.exc
 
 class GracefulRestartClient:
-    def __init__(self, channel: grpc.aio.insecure_channel):
+    def __init__(self, port, channel: grpc.aio.insecure_channel):
+        self.port = port
         self.stub = linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub(channel)
         self.request_queue = asyncio.Queue()
         self.response_queue = asyncio.Queue()
@@ -3894,13 +3895,63 @@ class GracefulRestartClient:
             tor = await self.request_queue.get()
             request = linkmgr_grpc_driver_pb2.GracefulAdminRequest(tor=tor)
             response_stream = self.stub.NotifyGracefulRestartStart(request)
-            async for response in response_stream:
+            index = 0
+            while True:
+                response = await response_stream.read()
+                if response == grpc.aio.EOF:
+                    break
+                helper_logger.log_notice("Async client received from direct read period {}:{} ".format(response.period, index, response.guid, response.notifytype, response.msgtype))
+                index = index+1
                 await self.response_queue.put(response)
 
     async def receive_response(self):
         while True:
             response = await self.response_queue.get()
-            print(response)
+            helper_logger.log_notice(" recieved a response from {}".format(self.port))
             # do something with response
             await asyncio.sleep(response.period)
-            await self.request_queue.put(response.tor)
+            tor = linkmgr_grpc_driver_pb2.ToRSide.UPPER_TOR
+            await self.request_queue.put(tor)
+
+    async def notify_graceful_restart_start(self, tor: linkmgr_grpc_driver_pb2.ToRSide):
+        await self.request_queue.put(tor)
+
+
+class YCableAsyncNotificationTask(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+        self.exc = None
+        self.task_stopping_event = threading.Event()
+
+    async def task_worker(self):
+        channel = grpc.aio.insecure_channel("localhost:50075")
+        client = GracefulRestartClient("Ethernet0", channel)
+        tasks = [
+            asyncio.create_task(client.send_request()),
+            asyncio.create_task(client.receive_response()),
+        ]
+
+        tor_side = pb.ToRSide.UPPER_TOR
+        tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
+
+        await asyncio.gather(*tasks) 
+
+    def run(self):
+        if self.task_stopping_event.is_set():
+            return
+
+        try:
+            asyncio.run(self.task_worker())
+        except Exception as e:
+            helper_logger.log_error("Exception occured at child thread YcableCliUpdateTask due to {} {}".format(repr(e), traceback.format_exc()))
+            self.exc = e
+ 
+    def join(self):
+ 
+        threading.Thread.join(self)
+ 
+        helper_logger.log_info("stopped all thread")
+        if self.exc is not None:
+ 
+            raise self.exc
