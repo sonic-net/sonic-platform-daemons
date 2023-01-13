@@ -1632,9 +1632,10 @@ class CmisManagerTask(threading.Thread):
 
     def join(self):
         self.task_stopping_event.set()
-        threading.Thread.join(self)
-        if self.exc:
-            raise self.exc
+        if not self.skip_cmis_mgr:
+            threading.Thread.join(self)
+            if self.exc:
+                raise self.exc
 
 # Thread wrapper class to update dom info periodically
 
@@ -2402,8 +2403,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start the CMIS manager
         cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr)
-        cmis_manager.start()
-        self.threads.append(cmis_manager)
+        if not self.skip_cmis_mgr:
+            cmis_manager.start()
+            self.threads.append(cmis_manager)
 
         # Start the dom sensor info update thread
         dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.stop_event)
@@ -2416,7 +2418,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.threads.append(sfp_state_update)
 
         # Start main loop
-        self.log_info("Start daemon main loop with thread count {}".format(len(self.threads)))
+        self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
+        for thread in self.threads:
+            self.log_notice("Started thread {}".format(thread.getName()))
 
         self.stop_event.wait()
 
