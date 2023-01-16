@@ -901,11 +901,7 @@ def toggle_mux_tor_direction_and_update_read_side(state, logical_port_name, phys
         helper_logger.log_error("Error: Could not get port instance for read side for while processing a toggle Y cable port {} {}".format(physical_port, threading.currentThread().getName()))
         return (-1, -1)
 
-    try:
-        read_side = port_instance.get_read_side()
-    except Exception as e:
-        read_side = None
-        helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {} from update_read_side".format(logical_port_name,repr(e)))
+    read_side = port_instance.get_read_side()
 
     if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
         helper_logger.log_error(
@@ -1664,6 +1660,98 @@ def get_muxcable_static_info_without_presence():
 
     return mux_info_static_dict
 
+def parse_grpc_response_link_and_oper_state(ret, response, read_side, query_type):
+    self_state = peer_state = 'unknown'
+
+    if ret is True and response is not None:
+        if len(response.portid) == 2 and len(response.state) == 2:
+            if int(read_side) == 0:
+                if response.state[0] == True:
+                    self_state = 'up'
+                elif response.state[0] == False:
+                    self_state = 'down'
+                # No other values expected, should we raise exception/msg
+                # TODO handle other responses
+                if response.state[1] == True:
+                    peer_state = 'up'
+                elif response.state[1] == False:
+                    peer_state = 'down'
+
+            elif int(read_side) == 1:
+                if response.state[1] == True:
+                    self_state = 'up'
+                elif response.state[1] == False:
+                    self_state = 'down'
+                if response.state[0] == True:
+                    peer_state = 'up'
+                elif response.state[0] == False:
+                    peer_state = 'down'
+
+        else:
+            helper_logger.log_warning("recieved an error port list while parsing response {} port state list size 0 {} {}".format(query_type, len(response.portid), len(response.state)))
+            self_state = 'unknown'
+            peer_state = 'unknown'
+    else:
+        self_state = 'unknown'
+        peer_state = 'unknown'
+
+    return (self_state, peer_state)
+
+
+
+def get_muxcable_info_for_active_active(physical_port, port, mux_tbl, asic_index, y_cable_tbl):
+    mux_info_dict = {}
+
+    time_post = datetime.datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")
+
+    (status, fvs) = y_cable_tbl[asic_index].get(port)
+    if status is False:
+        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
+        return -1
+
+    mux_port_dict = dict(fvs)
+    read_side = int(mux_port_dict.get("read_side"))
+
+    stub = grpc_port_stubs.get(port, None)
+    if stub is None:
+        #Can't make any RPC gRPC for this port, fill everything as unknown except cached values
+        mux_info_dict['self_link_state'] = "unknown"
+        mux_info_dict['peer_link_state'] = "unknown"
+        mux_info_dict['self_oper_state'] = "unknown"
+        mux_info_dict['peer_oper_state'] = "unknown"
+        mux_info_dict['server_version'] = "N/A"
+        return mux_info_dict
+
+
+    request = linkmgr_grpc_driver_pb2.LinkStateRequest(portid=DEFAULT_PORT_IDS)
+
+    ret, response = try_grpc(stub.QueryLinkState, QUERY_ADMIN_FORWARDING_TIMEOUT , request)
+
+    (self_link_state, peer_link_state) = parse_grpc_response_link_and_oper_state(ret, response, read_side, "link_state")
+
+    mux_info_dict['self_link_state'] = self_link_state
+    mux_info_dict['peer_link_state'] = peer_link_state
+
+    request = linkmgr_grpc_driver_pb2.OperationRequest(portid=DEFAULT_PORT_IDS)
+
+    ret, response = try_grpc(stub.QueryOperationPortState, QUERY_ADMIN_FORWARDING_TIMEOUT , request)
+
+    (self_oper_state, peer_oper_state) = parse_grpc_response_link_and_oper_state(ret, response, read_side, "oper_state")
+
+    mux_info_dict['self_oper_state'] = self_oper_state
+    mux_info_dict['peer_oper_state'] = peer_oper_state
+
+    request = linkmgr_grpc_driver_pb2.ServerVersionRequest(version="1.0")
+
+    ret, response = try_grpc(stub.QueryServerVersion, QUERY_ADMIN_FORWARDING_TIMEOUT , request)
+    if ret is True:
+        version = response.version
+    else:
+        version = "N/A"
+    mux_info_dict['server_version'] = version
+
+    return mux_info_dict
+
 def get_muxcable_info_without_presence():
     mux_info_dict = {}
 
@@ -1697,6 +1785,10 @@ def get_muxcable_info_without_presence():
     mux_info_dict['version_nic_next'] = 'N/A'
 
     return mux_info_dict
+
+
+
+
 
 def get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl):
 
@@ -1877,13 +1969,7 @@ def get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_c
                 mux_info_dict["link_status_peer"] = "down"
 
     with y_cable_port_locks[physical_port]:
-        try:
-            link_state_tor_nic = port_instance.is_link_active(port_instance.TARGET_NIC)
-        except Exception as e:
-            link_state_tor_nic = False
-            helper_logger.log_warning("Failed to execute the is_link_active NIC side API for port {} due to {}".format(physical_port,repr(e)))
-
-        if link_state_tor_nic:
+        if port_instance.is_link_active(port_instance.TARGET_NIC):
             mux_info_dict["link_status_nic"] = "up"
         else:
             mux_info_dict["link_status_nic"] = "down"
@@ -2074,9 +2160,11 @@ def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl
 
     for physical_port in physical_port_list:
 
-        if not y_cable_wrapper_get_presence(physical_port) or cable_type == 'active-active':
-            helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))
+        if not y_cable_wrapper_get_presence(physical_port):
             mux_info_dict = get_muxcable_info_without_presence()
+        elif cable_type == 'active-active'
+            helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))
+            mux_info_dict = get_muxcable_info_for_active_active(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
         else:
             mux_info_dict = get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
 
@@ -3038,7 +3126,7 @@ def handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode
                         status = -1
                         helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
         else:
-            set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+            set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
             helper_logger.log_error(
                 "Error: Could not get valid config read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
             return -1
