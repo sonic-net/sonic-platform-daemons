@@ -7,8 +7,7 @@ class Table:
         self.mock_dict = {}
 
     def _del(self, key):
-        if key in self.mock_dict:
-            del self.mock_dict[key]
+        del self.mock_dict[key]
         pass
 
     def set(self, key, fvs):
