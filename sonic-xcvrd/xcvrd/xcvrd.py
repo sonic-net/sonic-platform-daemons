@@ -1909,11 +1909,11 @@ class SfpStateUpdateTask(object):
                                 continue
 
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
-                                helper_logger.log_info("{}: Got SFP inserted event".format(logical_port))
+                                helper_logger.log_notice("{}: Got SFP inserted event".format(logical_port))
                                 # A plugin event will clear the error state.
                                 update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
-                                helper_logger.log_info("{}: received plug in and update port sfp status table.".format(logical_port))
+                                helper_logger.log_notice("{}: received plug in and update port sfp status table.".format(logical_port))
                                 rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
                                 # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                                 if rc == SFP_EEPROM_NOT_READY:
@@ -1932,10 +1932,10 @@ class SfpStateUpdateTask(object):
                                     notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
-                                helper_logger.log_info("{}: Got SFP removed event".format(logical_port))
+                                helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
                                 update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
-                                helper_logger.log_info("{}: received plug out and update port sfp status table.".format(logical_port))
+                                helper_logger.log_notice("{}: received plug out and update port sfp status table.".format(logical_port))
                                 del_port_sfp_dom_info_from_db(logical_port, self.port_mapping,
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
@@ -1945,7 +1945,7 @@ class SfpStateUpdateTask(object):
                             else:
                                 try:
                                     error_bits = int(value)
-                                    helper_logger.log_info("{}: Got SFP error event {}".format(logical_port, value))
+                                    helper_logger.log_error("{}: Got SFP error event {}".format(logical_port, value))
 
                                     error_descriptions = sfp_status_helper.fetch_generic_error_description(error_bits)
 
@@ -1959,7 +1959,7 @@ class SfpStateUpdateTask(object):
                                     # Add error info to database
                                     # Any existing error will be replaced by the new one.
                                     update_port_transceiver_status_table_sw(logical_port, self.xcvr_table_helper.get_status_tbl(asic_index), value, '|'.join(error_descriptions))
-                                    helper_logger.log_info("{}: Receive error update port sfp status table.".format(logical_port))
+                                    helper_logger.log_notice("{}: Receive error update port sfp status table.".format(logical_port))
                                     # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
                                     # The interface info remains in the DB since it is static.
                                     if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
