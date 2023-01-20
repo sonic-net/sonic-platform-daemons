@@ -5988,3 +5988,26 @@ class TestYCableScript(object):
         
         rc = parse_grpc_response_link_and_oper_state(True, response, 0, "link_state", "Ethernet4")
         assert(rc == ("up", "up"))
+        
+    def test_get_muxcable_info_for_active_active(self):
+        physical_port = 20
+
+        logical_port_name = "Ethernet20"
+        swsscommon.Table.return_value.get.return_value = (
+            True, {"read_side": "1"})
+        asic_index = 0
+        y_cable_tbl = {}
+        mux_tbl = {}
+        test_db = "TEST_DB"
+        status = True
+        fvs = [('state', "auto"), ('read_side', 1)]
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
+
+        rc = get_muxcable_info_for_active_active(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
+
+        assert(rc['self_mux_direction'] == 'unknown')
+        assert(rc['peer_mux_direction'] == 'uknown')
+        assert(rc['mux_direction_probe_count'] == 'unknown')
+        assert(rc['peer_mux_direction_probe_count'] == 'unknown')
