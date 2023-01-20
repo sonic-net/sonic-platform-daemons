@@ -5910,3 +5910,81 @@ class TestYCableScript(object):
         
         rc = parse_grpc_response_link_and_oper_state(True, response, 0, "oper_state", "Ethernet4")
         assert(rc == ("up", "up"))
+        
+    def test_parse_grpc_response_link_and_oper_state_down_down_read_side_zero_unknown(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(False, response, 0, "oper_state", "Ethernet4")
+        assert(rc == ("unknown", "unknown"))
+
+    def test_parse_grpc_response_link_and_oper_state_up_down_read_side_zero(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0]
+                self.state = [False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(True, response, 0, "oper_state", "Ethernet4")
+        assert(rc == ("unknown", "unknown"))
+
+    def test_parse_grpc_response_link_and_oper_state_up_up_read_side_zero(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(True, response, 0, "link_state", "Ethernet4")
+        assert(rc == ("unknown", "unknown"))
+        
+    def test_parse_grpc_response_link_and_oper_state_down_down_read_side_zero_link_state(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [False,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(True, response, 0, "link_state", "Ethernet4")
+        assert(rc == ("down", "down"))
+
+    def test_parse_grpc_response_link_and_oper_state_up_down_read_side_zero_link_state(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True,False]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(True, response, 0, "link_state", "Ethernet4")
+        assert(rc == ("up", "down"))
+
+    def test_parse_grpc_response_link_and_oper_state_up_up_read_side_zero_link_state(self):
+
+        class Response_Helper():
+            def __init__(self):
+                self.portid = [0,1]
+                self.state = [True, True]
+
+
+        response = Response_Helper()
+        
+        rc = parse_grpc_response_link_and_oper_state(True, response, 0, "link_state", "Ethernet4")
+        assert(rc == ("up", "up"))
