@@ -6008,6 +6008,6 @@ class TestYCableScript(object):
         rc = get_muxcable_info_for_active_active(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
 
         assert(rc['self_mux_direction'] == 'unknown')
-        assert(rc['peer_mux_direction'] == 'uknown')
+        assert(rc['peer_mux_direction'] == 'unknown')
         assert(rc['mux_direction_probe_count'] == 'unknown')
         assert(rc['peer_mux_direction_probe_count'] == 'unknown')
