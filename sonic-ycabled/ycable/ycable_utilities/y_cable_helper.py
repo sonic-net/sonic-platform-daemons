@@ -295,7 +295,7 @@ def check_mux_cable_port_type(logical_port_name, port_tbl, asic_index):
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_info(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return (False, None)
 
