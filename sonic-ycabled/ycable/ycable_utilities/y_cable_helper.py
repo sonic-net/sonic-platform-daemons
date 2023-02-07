@@ -2739,7 +2739,6 @@ def handle_config_mux_switchmode_arg_tbl_notification(fvp, xcvrd_config_hwmode_s
             config_mode = str(fvp_dict["config"])
 
             status = 'False'
-            result = None
             physical_port = get_ycable_physical_port_from_logical_port(port)
             if physical_port is None or physical_port == PHYSICAL_PORT_MAPPING_ERROR:
                 # error scenario update table accordingly
