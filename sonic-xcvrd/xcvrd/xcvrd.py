@@ -923,11 +923,11 @@ def init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event=threadi
 def is_fast_reboot_enabled():
     fastboot_enabled = False
     state_db_host =  daemon_base.db_connect("STATE_DB")
-    fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
+    fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_RESTART_ENABLE_TABLE')
     keys = fastboot_tbl.getKeys()
 
     if "system" in keys:
-        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'get', "FAST_REBOOT|system"], universal_newlines=True)
+        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'get', "FAST_RESTART_ENABLE_TABLE|system"], universal_newlines=True)
         if "enable" in output:
             fastboot_enabled = True
 
