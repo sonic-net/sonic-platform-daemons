@@ -346,17 +346,10 @@ def hook_grpc_nic_simulated(target, soc_ip):
 
     return wrapper
 
-def retry_setup_grpc_channel_for_port(port, asic_index):
+def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client):
 
     global grpc_port_stubs
     global grpc_port_channels
-
-    config_db, port_tbl = {}, {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
 
     (status, fvs) = port_tbl[asic_index].get(port)
     if status is False:
@@ -373,7 +366,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index):
             if soc_ipv4_full is not None:
                 soc_ipv4 = soc_ipv4_full.split('/')[0]
 
-            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4)
+            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, grpc_client)
             if channel is None or stub is None:
                 helper_logger.log_notice(
                     "stub is None, while reattempt setting up channels did not work {}".format(port))
@@ -543,7 +536,7 @@ def create_channel(type, level, kvp, soc_ip, port):
 
     return channel, stub
 
-def setup_grpc_channel_for_port(port, soc_ip):
+def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config):
 
     """
     Dummy values for lab for now
@@ -559,14 +552,6 @@ def setup_grpc_channel_for_port(port, soc_ip):
     """
     helper_logger.log_notice("Setting up gRPC channel for RPC's {} {}".format(port,soc_ip))
 
-    config_db,grpc_config = {}, {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPCCLIENT")
-
-    asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(port)
 
     #if no config from config DB, treat channel to be as insecure
     type = "insecure"
@@ -664,7 +649,7 @@ def process_loopback_interface_and_get_read_side(loopback_keys):
     return -1
 
 
-def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence):
+def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client):
 
     global grpc_port_stubs
     global grpc_port_channels
@@ -702,7 +687,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                         if prev_channel is not None and prev_stub is not None:
                             return
 
-                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4)
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client)
                         if channel is not None:
                             grpc_port_channels[logical_port_name] = channel
                             helper_logger.log_notice(
@@ -3444,7 +3429,7 @@ def parse_grpc_response_forwarding_state(ret, response, read_side, port):
     return (self_state, peer_state)
 
 
-def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, appl_db):
+def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, appl_db, port_tbl, grpc_client):
 
     helper_logger.log_debug("Y_CABLE_DEBUG:recevied the notification fwd state port {}".format(port))
     fvp_dict = dict(fvp_m)
@@ -3473,7 +3458,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
                 helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {}".format(port))
-                retry_setup_grpc_channel_for_port(port, asic_index)
+                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
                     helper_logger.log_warning(
@@ -3508,7 +3493,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
         helper_logger.log_warning("command key not present in the notification fwd state handling port {}".format(port))
 
 
-def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port):
+def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port, port_tbl, grpc_client):
 
     # entering this section signifies a gRPC start for state
     # change request from swss so initiate recording in mux_metrics table
@@ -3555,7 +3540,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
                 helper_logger.log_debug("Y_CABLE_DEBUG:stub is None for performing hw mux RPC port {}".format(port))
-                retry_setup_grpc_channel_for_port(port, asic_index)
+                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
                     helper_logger.log_warning(
@@ -3776,7 +3761,8 @@ class YCableTableUpdateTask(threading.Thread):
 
                             if fvp:
                                 handle_hw_mux_cable_table_grpc_notification(
-                                    fvp, self.table_helper.get_hw_mux_cable_tbl(), asic_index, self.table_helper.get_mux_metrics_tbl(), False, port)
+                                    fvp, self.table_helper.get_hw_mux_cable_tbl(), asic_index, self.table_helper.get_mux_metrics_tbl(), False, port, self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl())
+
             while True:
                 (port_m, op_m, fvp_m) = self.table_helper.get_mux_cable_command_tbl()[asic_index].pop()
 
@@ -3811,7 +3797,7 @@ class YCableTableUpdateTask(threading.Thread):
 
                 if fvp_m:
                     handle_fwd_state_command_grpc_notification(
-                        fvp_m, self.table_helper.get_hw_mux_cable_tbl(), self.table_helper.get_fwd_state_response_tbl(), asic_index, port_m, self.table_helper.get_appl_db())
+                        fvp_m, self.table_helper.get_hw_mux_cable_tbl(), self.table_helper.get_fwd_state_response_tbl(), asic_index, port_m, self.table_helper.get_appl_db(), self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl())
 
             while True:
                 (port_n, op_n, fvp_n) = self.table_helper.get_status_tbl_peer()[asic_index].pop()
@@ -4084,27 +4070,38 @@ class GracefulRestartClient:
         self.request_queue = asyncio.Queue()
         self.response_queue = asyncio.Queue()
 
-    async def send_request(self):
+    async def send_request_and_get_response(self):
         while True:
             tor = await self.request_queue.get()
             request = linkmgr_grpc_driver_pb2.GracefulAdminRequest(tor=tor)
-            response_stream = self.stub.NotifyGracefulRestartStart(request)
-            index = 0
-            while True:
-                response = await response_stream.read()
-                if response == grpc.aio.EOF:
-                    break
-                helper_logger.log_notice("Async client received from direct read period {}:{} ".format(response.period, index, response.guid, response.notifytype, response.msgtype))
+            response = None 
+            try:
+                response_stream = self.stub.NotifyGracefulRestartStart(request)
+                index = 0
+                for response in response_stream:
+                    helper_logger.log_notice("Async client received from direct read period port = {}: period = {} index = {} guid = {} notifytype {} msgtype = {}".format(self.port, response.period, index, response.guid, response.notifytype, response.msgtype))
+                    helper_logger.log_debug("Async Debug only :{} {}".format(dir(response_stream), dir(response)))
+                    index = index+1
+                    if response == grpc.aio.EOF:
+                        break
+                helper_logger.log_notice("Async client finished loop from direct read period port:{} ".format(self.port))
                 index = index+1
-                await self.response_queue.put(response)
+            except grpc.RpcError as e:
+                helper_logger.log_notice("Async client exception occured because of {} ".format(e.code()))
 
-    async def receive_response(self):
+            await self.response_queue.put(response)
+
+    async def process_response(self):
         while True:
             response = await self.response_queue.get()
-            helper_logger.log_notice(" recieved a response from {}".format(self.port))
+            helper_logger.log_debug("Async recieved a response from {} {}".format(self.port, response))
             # do something with response
-            await asyncio.sleep(response.period)
-            tor = linkmgr_grpc_driver_pb2.ToRSide.UPPER_TOR
+            if response is not None:
+                await asyncio.sleep(response.period)
+            else:
+                await asyncio.sleep(20)
+
+            tor = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
             await self.request_queue.put(tor)
 
     async def notify_graceful_restart_start(self, tor: linkmgr_grpc_driver_pb2.ToRSide):
@@ -4117,16 +4114,37 @@ class YCableAsyncNotificationTask(threading.Thread):
 
         self.exc = None
         self.task_stopping_event = threading.Event()
+        self.table_helper =  y_cable_table_helper.YcableAsyncNotificationTableHelper()
 
     async def task_worker(self):
-        channel = grpc.aio.insecure_channel("localhost:50075")
+
+        level = "server"
+        target_name = kvp.get("grpc_ssl_credential", None)
+        if credential is None or target_name is None:
+            helper_logger.log_error("could not create a channel ".format("10.50.144.157"))
+           
+        GRPC_CLIENT_OPTIONS_LOCAL = []
+
+        GRPC_CLIENT_OPTIONS_LOCAL.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
+
+        channel = grpc.secure_channel("{}:{}".format("10.50.144.157", GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS_LOCAL)
+
+        
+        logical_port_list = y_cable_platform_sfputil.logical
+        for logical_port_name in logical_port_list:
+            if stop_event.is_set():
+                break
+
+            # Get the asic to which this port belongs
+            asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
+
         client = GracefulRestartClient("Ethernet0", channel)
         tasks = [
-            asyncio.create_task(client.send_request()),
-            asyncio.create_task(client.receive_response()),
+            asyncio.create_task(client.send_request_and_get_response()),
+            asyncio.create_task(client.process_response()),
         ]
 
-        tor_side = pb.ToRSide.UPPER_TOR
+        tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
         tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
 
         await asyncio.gather(*tasks) 
