@@ -927,8 +927,8 @@ def is_fast_reboot_enabled():
     keys = fastboot_tbl.getKeys()
 
     if "system" in keys:
-        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'get', "FAST_RESTART_ENABLE_TABLE|system"], universal_newlines=True)
-        if "enable" in output:
+        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'hget', "FAST_RESTART_ENABLE_TABLE|system", 'enable'], universal_newlines=True)
+        if "true" in output:
             fastboot_enabled = True
 
     return fastboot_enabled
