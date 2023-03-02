@@ -346,7 +346,7 @@ def hook_grpc_nic_simulated(target, soc_ip):
 
     return wrapper
 
-def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client):
+def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, fwd_state_response_tbl):
 
     global grpc_port_stubs
     global grpc_port_channels
@@ -366,7 +366,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client):
             if soc_ipv4_full is not None:
                 soc_ipv4 = soc_ipv4_full.split('/')[0]
 
-            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, grpc_client)
+            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl)
             if channel is None or stub is None:
                 helper_logger.log_notice(
                     "stub is None, while reattempt setting up channels did not work {}".format(port))
@@ -466,20 +466,8 @@ def connect_channel(channel, stub, port):
         else:
             break
 
-def create_channel(type, level, kvp, soc_ip, port):
+def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl):
 
-
-    appl_db = {}
-    fwd_state_response_tbl = {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        # Open a handle to the Application database, in all namespaces
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-        fwd_state_response_tbl[asic_id] = swsscommon.Table(
-            appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
-
-    asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(port)
 
     # Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
@@ -536,7 +524,7 @@ def create_channel(type, level, kvp, soc_ip, port):
 
     return channel, stub
 
-def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config):
+def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config, fwd_state_response_tbl):
 
     """
     Dummy values for lab for now
@@ -578,7 +566,7 @@ def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config):
         kvp = dict(fvs)
 
 
-    channel, stub = create_channel(type, level, kvp, soc_ip, port) 
+    channel, stub = create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl) 
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
@@ -649,7 +637,7 @@ def process_loopback_interface_and_get_read_side(loopback_keys):
     return -1
 
 
-def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client):
+def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl):
 
     global grpc_port_stubs
     global grpc_port_channels
@@ -687,7 +675,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                         if prev_channel is not None and prev_stub is not None:
                             return
 
-                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client)
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl)
                         if channel is not None:
                             grpc_port_channels[logical_port_name] = channel
                             helper_logger.log_notice(
@@ -711,29 +699,10 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                     "DAC cable logical to physical port mapping returned more than one physical ports while Channel setup Port {}".format(logical_port_name))
 
 
-def setup_grpc_channels(stop_event):
+def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, port_tbl, loopback_tbl, port_table_keys, grpc_client, fwd_state_response_tbl):
 
     global read_side
     helper_logger.log_debug("Y_CABLE_DEBUG:setting up channels for active-active")
-    config_db, state_db, port_tbl, loopback_tbl, port_table_keys = {}, {}, {}, {}, {}
-    loopback_keys = {}
-    hw_mux_cable_tbl = {}
-    hw_mux_cable_tbl_peer = {}
-
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-        loopback_tbl[asic_id] = swsscommon.Table(
-            config_db[asic_id], "LOOPBACK_INTERFACE")
-        loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
-        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        hw_mux_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
-            state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
@@ -758,7 +727,7 @@ def setup_grpc_channels(stop_event):
 
         if logical_port_name in port_table_keys[asic_index]:
             check_identifier_presence_and_setup_channel(
-                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence)
+                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1385,7 +1354,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             if status and cable_type == "active-active":
                 grpc_port_stats[logical_port_name] = {}
                 check_identifier_presence_and_setup_channel(
-                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence)
+                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1455,7 +1424,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
                         state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
                 if status and cable_type == "active-active":
                     check_identifier_presence_and_setup_channel(
-                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence)
+                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
                 check_identifier_presence_and_delete_mux_table_entry(
@@ -3429,7 +3398,7 @@ def parse_grpc_response_forwarding_state(ret, response, read_side, port):
     return (self_state, peer_state)
 
 
-def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, appl_db, port_tbl, grpc_client):
+def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, port_tbl, grpc_client):
 
     helper_logger.log_debug("Y_CABLE_DEBUG:recevied the notification fwd state port {}".format(port))
     fvp_dict = dict(fvp_m)
@@ -3458,7 +3427,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
                 helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {}".format(port))
-                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client)
+                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, fwd_state_response_tbl)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
                     helper_logger.log_warning(
@@ -3493,7 +3462,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
         helper_logger.log_warning("command key not present in the notification fwd state handling port {}".format(port))
 
 
-def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port, port_tbl, grpc_client):
+def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_index, grpc_metrics_tbl, peer, port, port_tbl, grpc_client, fwd_state_response_tbl):
 
     # entering this section signifies a gRPC start for state
     # change request from swss so initiate recording in mux_metrics table
@@ -3540,7 +3509,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
                 helper_logger.log_debug("Y_CABLE_DEBUG:stub is None for performing hw mux RPC port {}".format(port))
-                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client)
+                retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, fwd_state_response_tbl)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
                     helper_logger.log_warning(
@@ -3761,7 +3730,7 @@ class YCableTableUpdateTask(threading.Thread):
 
                             if fvp:
                                 handle_hw_mux_cable_table_grpc_notification(
-                                    fvp, self.table_helper.get_hw_mux_cable_tbl(), asic_index, self.table_helper.get_mux_metrics_tbl(), False, port, self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl())
+                                    fvp, self.table_helper.get_hw_mux_cable_tbl(), asic_index, self.table_helper.get_mux_metrics_tbl(), False, port, self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl())
 
             while True:
                 (port_m, op_m, fvp_m) = self.table_helper.get_mux_cable_command_tbl()[asic_index].pop()
@@ -3811,7 +3780,7 @@ class YCableTableUpdateTask(threading.Thread):
 
                 if fvp_n:
                     handle_hw_mux_cable_table_grpc_notification(
-                        fvp_n, self.table_helper.get_hw_mux_cable_tbl_peer(), asic_index, self.table_helper.get_mux_metrics_tbl(), True, port_n)
+                        fvp_n, self.table_helper.get_hw_mux_cable_tbl_peer(), asic_index, self.table_helper.get_mux_metrics_tbl(), True, port_n, self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl())
 
     def run(self):
         if self.task_stopping_event.is_set():
@@ -4136,7 +4105,7 @@ class YCableAsyncNotificationTask(threading.Thread):
                 break
 
             # Get the asic to which this port belongs
-            asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
+            asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
 
         client = GracefulRestartClient("Ethernet0", channel)
         tasks = [
