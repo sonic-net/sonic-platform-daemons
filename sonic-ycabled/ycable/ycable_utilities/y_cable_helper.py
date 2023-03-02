@@ -376,20 +376,12 @@ def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, f
                 grpc_port_stubs[port] = stub
                 return True
 
-def apply_grpc_secrets_configuration(SECRETS_PATH):
+def apply_grpc_secrets_configuration(SECRETS_PATH, grpc_config):
 
 
     f = open(SECRETS_PATH, 'rb')
     parsed_data = json.load(f)
 
-    config_db, grpc_config = {}, {}
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        grpc_config[asic_id] = swsscommon.Table(config_db[asic_id], "GRPCCLIENT")
-
-   
     asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
     grpc_client_config = parsed_data.get("GRPCCLIENT", None)
     if grpc_client_config is not None:
@@ -707,7 +699,7 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            apply_grpc_secrets_configuration(SECRETS_PATH)
+            apply_grpc_secrets_configuration(SECRETS_PATH, grpc_client)
 
     helper_logger.log_debug("Y_CABLE_DEBUG:while setting up grpc channels read side = {}".format(read_side))
 
@@ -1126,7 +1118,7 @@ def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_t
     read_y_cable_and_update_statedb_port_tbl(
         logical_port_name, y_cable_tbl[asic_index])
     post_port_mux_static_info_to_db(
-        logical_port_name, static_tbl[asic_index])
+        logical_port_name, static_tbl[asic_index], y_cable_tbl)
 
 def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence):
 
@@ -1232,7 +1224,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
                                 post_port_mux_static_info_to_db(
-                                    logical_port_name, static_tbl[asic_index])
+                                    logical_port_name, static_tbl[asic_index], y_cable_tbl)
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
@@ -1243,7 +1235,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 post_port_mux_info_to_db(
                                     logical_port_name,  mux_tbl, asic_index, y_cable_tbl, 'active-standby')
                                 post_port_mux_static_info_to_db(
-                                    logical_port_name, static_tbl[asic_index])
+                                    logical_port_name, static_tbl[asic_index], y_cable_tbl)
                         else:
                             helper_logger.log_warning(
                                 "Error: Could not get transceiver info dict Y cable port {} while inserting entries".format(logical_port_name))
@@ -1314,7 +1306,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event(), is_vs=False):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_client, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
@@ -1330,7 +1322,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            apply_grpc_secrets_configuration(SECRETS_PATH)
+            apply_grpc_secrets_configuration(SECRETS_PATH, grpc_client)
 
     # Init PORT_STATUS table if ports are on Y cable
     logical_port_list = y_cable_platform_sfputil.logical
@@ -1363,45 +1355,16 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
                 "Could not retreive port inside config_db PORT table {} for Y-Cable initiation".format(logical_port_name))
 
 
-def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, stop_event=threading.Event()):
-    # Connect to CONFIG_DB and create port status table inside state_db
-    global read_side
-    config_db, state_db, port_tbl, y_cable_tbl = {}, {}, {}, {}
-    static_tbl, mux_tbl = {}, {}
-    port_table_keys = {}
-    delete_change_event = [False]
-    loopback_tbl= {}
-    loopback_keys = {}
-    hw_mux_cable_tbl = {}
-    hw_mux_cable_tbl_peer = {}
+def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, stop_event=threading.Event()):
 
-    # Get the namespaces in the platform
-    namespaces = multi_asic.get_front_end_namespaces()
-    # Get the keys from PORT table inside config db to prepare check for mux_cable identifier
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
-        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        loopback_tbl[asic_id] = swsscommon.Table(
-            config_db[asic_id], "LOOPBACK_INTERFACE")
-        loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        hw_mux_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
-            state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-        static_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_STATIC_INFO_TABLE)
-        mux_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], MUX_CABLE_INFO_TABLE)
+    global read_side
+    delete_change_event = [False]
+
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
         if os.path.isfile(SECRETS_PATH):
-            apply_grpc_secrets_configuration(SECRETS_PATH)
+            apply_grpc_secrets_configuration(SECRETS_PATH, grpc_client)
 
 
     # Init PORT_STATUS table if ports are on Y cable and an event is received
@@ -1447,12 +1410,15 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, st
     if y_cable_presence[0] is True and delete_change_event[0] is True:
 
         y_cable_presence[:] = [False]
+        state_db = {},
+        yc_hw_mux_cable_table = {}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(
                 namespace)
-            y_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            yc_hw_mux_cable_table[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
-            y_cable_table_size = len(y_cable_tbl[asic_id].getKeys())
+            y_cable_table_size = len(yc_hw_mux_cable_table[asic_id].getKeys())
             if y_cable_table_size > 0:
                 y_cable_presence[:] = [True]
                 break
@@ -2060,22 +2026,14 @@ def get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_c
     return mux_info_dict
 
 
-def get_muxcable_static_info(physical_port, logical_port_name):
+def get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl):
 
     mux_static_info_dict = {}
-    y_cable_tbl, state_db = {}, {}
 
     port_instance = y_cable_port_instances.get(physical_port)
     if port_instance is None:
         helper_logger.log_error("Error: Could not get port instance for muxcable info for Y cable port {}".format(logical_port_name))
         return -1
-
-    namespaces = multi_asic.get_front_end_namespaces()
-    for namespace in namespaces:
-        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-        y_cable_tbl[asic_id] = swsscommon.Table(
-            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
     asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(
         logical_port_name)
@@ -2089,6 +2047,7 @@ def get_muxcable_static_info(physical_port, logical_port_name):
         helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
             logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
+
     mux_port_dict = dict(fvs)
     read_side = int(mux_port_dict.get("read_side"))
 
@@ -2253,7 +2212,7 @@ def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl
             return -1
 
 
-def post_port_mux_static_info_to_db(logical_port_name, static_table):
+def post_port_mux_static_info_to_db(logical_port_name, static_table, y_cable_tbl):
 
     physical_port_list = logical_port_name_to_physical_port_list(
         logical_port_name)
@@ -2272,7 +2231,7 @@ def post_port_mux_static_info_to_db(logical_port_name, static_table):
             helper_logger.log_warning("Error: trying to post mux static info without presence of port {}".format(logical_port_name))
             mux_static_info_dict = get_muxcable_static_info_without_presence()
         else:
-            mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name)
+            mux_static_info_dict = get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl)
 
 
         if mux_static_info_dict is not None and mux_static_info_dict != -1:
@@ -3186,7 +3145,7 @@ def handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode
         helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
         set_result_and_delete_port('result', 'False', xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
 
-def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl,  xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, asic_index, port):
+def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl,  xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, hw_mux_cable_tbl, asic_index, port):
     state_db = {}
     hw_mux_cable_tbl = {}
 
@@ -3269,15 +3228,9 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
         elif cable_status and cable_type == "active-active":
 
 
-            namespaces = multi_asic.get_front_end_namespaces()
-            # Get the keys from PORT table inside config db to prepare check for mux_cable identifier
-            for namespace in namespaces:
-                asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-                state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-                hw_mux_cable_tbl[asic_id] = swsscommon.Table(
-                    state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
             (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
+
             if status is False:
                 helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table while responding to cli cmd show mux status {}".format(
                     port, hw_mux_cable_tbl[asic_index].getTableName()))
