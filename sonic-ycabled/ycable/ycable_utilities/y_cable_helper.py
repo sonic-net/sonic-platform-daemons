@@ -734,6 +734,7 @@ def setup_grpc_channels(stop_event):
     loopback_keys = {}
     hw_mux_cable_tbl = {}
     hw_mux_cable_tbl_peer = {}
+    mux_tbl = {}
 
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
