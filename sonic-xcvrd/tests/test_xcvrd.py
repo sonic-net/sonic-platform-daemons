@@ -2,6 +2,7 @@
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd import *
+import pytest
 import copy
 import os
 import sys
@@ -653,7 +654,14 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    def test_CmisManagerTask_get_cmis_host_lanes(self):
+    @pytest.mark.parametrize("host_lane_count, speed, channel, expected", [
+        (4, 100000, 1, 0xF),
+        (4, 100000, 2, 0xF0),
+        (8, 100000, 0, 0xFF),
+        (8, 400000, 0, 0xFF),
+        (4, 100000, 9, 0x0)
+    ])
+    def test_CmisManagerTask_get_cmis_host_lanes(self, host_lane_count, speed, channel, expected):
         appl_advert_dict = {
             1: {
                 'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
@@ -679,22 +687,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        host_lane_count = 4
-        speed = 100000
 
-        channel = 1
-        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xF
-
-        channel = 2
-        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xF0
-
-        host_lane_count = 8
-        speed = 400000
-        channel = 0
-        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xFF
-
-        channel = 9
-        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0x0
+        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == expected
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
