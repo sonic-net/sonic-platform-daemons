@@ -1023,6 +1023,8 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
             if 'tx_power' in port_change_event.port_dict:
                 self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
+            if 'channel' in port_change_event.port_dict:
+                self.port_dict[lport]['channel'] = int(port_change_event.port_dict['channel'])
 
             self.force_cmis_reinit(lport, 0)
         else:
@@ -1058,30 +1060,23 @@ class CmisManagerTask(threading.Thread):
             speed = 1000
         return speed
 
-    def get_cmis_application_desired(self, api, channel, speed):
+    def get_cmis_application_desired(self, api, host_lane_count, speed):
         """
         Get the CMIS application code that matches the specified host side configurations
 
         Args:
             api:
                 XcvrApi object
-            channel:
-                Integer, a bitmask of the lanes on the host side
-                e.g. 0x5 for lane 0 and lane 2.
+            host_lane_count:
+                Number of lanes on the host side
             speed:
                 Integer, the port speed of the host interface
 
         Returns:
             Integer, the transceiver-specific application code
         """
-        if speed == 0 or channel == 0:
+        if speed == 0 or host_lane_count == 0:
             return 0
-
-        host_lane_count = 0
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
-                continue
-            host_lane_count += 1
 
         appl_code = 0
         appl_dict = api.get_application_advertisement()
@@ -1102,13 +1097,63 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
-    def is_cmis_application_update_required(self, api, channel, speed):
+    def get_cmis_host_lanes(self, api, host_lane_count, channel, speed):
+        """
+        Retrieves bitmask of host lanes based on host lane count, channel and speed
+
+        Args:
+            api:
+                XcvrApi object
+            host_lane_count:
+                Integer, number of lanes on the host side
+            channel:
+                Integer, channel id of the group which the host lanes belong to (1 based)
+            speed:
+                Integer, the port speed of the host interface
+
+        Returns:
+            Integer, a bitmask of the lanes on the host side
+            e.g. 0x5 for lane 0 and lane 2.
+        """
+        host_lanes = 0
+
+        if channel > host_lane_count:
+            self.log_error("Failed to get host lanes as channel > host_lane_count!")
+            return host_lanes
+
+        if channel != 0:
+            appl = self.get_cmis_application_desired(api, host_lane_count, speed)
+            if appl < 1:
+                self.log_error("Failed to get host lanes as no suitable app for the port")
+                return host_lanes
+
+            host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
+            curr_channel_num = 0
+            for bit in range(8):
+                mask = 1 << bit
+                if host_lane_assignment_option & mask != 0:
+                    curr_channel_num += 1
+                    if curr_channel_num == channel:
+                        for i in range(host_lane_count):
+                            host_lanes |= mask
+                            mask = mask << 1
+                        break
+                mask = mask << 1
+        else:
+            for i in range(host_lane_count):
+                host_lanes |= (1 << i)
+
+        return host_lanes
+
+    def is_cmis_application_update_required(self, api, host_lane_count, channel, speed):
         """
         Check if the CMIS application update is required
 
         Args:
             api:
                 XcvrApi object
+            host_lane_count:
+                Number of lanes on the host side
             channel:
                 Integer, a bitmask of the lanes on the host side
                 e.g. 0x5 for lane 0 and lane 2.
@@ -1121,7 +1166,7 @@ class CmisManagerTask(threading.Thread):
         if speed == 0 or channel == 0 or api.is_flat_memory():
             return False
 
-        app_new = self.get_cmis_application_desired(api, channel, speed)
+        app_new = self.get_cmis_application_desired(api, host_lane_count, speed)
         if app_new != 1:
             self.log_notice("Non-default application is not supported")
 
@@ -1392,19 +1437,13 @@ class CmisManagerTask(threading.Thread):
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
                 lanes = info.get('lanes', "").strip()
+                channel = info.get('channel', 0)
                 if pport < 0 or speed == 0 or len(lanes) < 1:
                     continue
 
                 # Desired port speed on the host side
                 host_speed = speed
-
-                # Convert the physical lane list into a logical lanemask
-                #
-                # TODO: Add dynamic port breakout support by checking the physical lane offset
-                host_lanes = 0
-                phys_lanes = lanes.split(',')
-                for i in range(len(phys_lanes)):
-                    host_lanes |= (1 << i)
+                host_lane_count = len(lanes.split(','))
 
                 # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
@@ -1418,6 +1457,12 @@ class CmisManagerTask(threading.Thread):
                     if api is None:
                         self.log_error("{}: skipping CMIS state machine since no xcvr api!!!".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        continue
+
+                    host_lanes = self.get_cmis_host_lanes(api, host_lane_count, channel, speed)
+                    if host_lanes == 0:
+                        self.log_error("{}: skipping CMIS state machine since invalid host lanes!".format(lport))
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                         continue
 
                     # Skip if it's not a paged memory device
@@ -1477,13 +1522,13 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
+                        appl = self.get_cmis_application_desired(api, host_lane_count, host_speed)
                         if appl < 1:
                             self.log_error("{}: no suitable app for the port".format(lport))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                             continue
 
-                        need_update = self.is_cmis_application_update_required(api, host_lanes, host_speed)
+                        need_update = self.is_cmis_application_update_required(api, host_lane_count, host_lanes, host_speed)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
@@ -1510,11 +1555,11 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
 
-                        # TODO: Make sure this doesn't impact other datapaths
+                        #Sets module to high power mode and doesn't impact datapath if module is already in high power mode
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
-                        self.log_notice("{} DpDeinit duration {} secs".format(lport, dpDeinitDuration))
+                        self.log_notice("{}: DpDeinit duration {} secs".format(lport, dpDeinitDuration))
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpDeinitDuration)
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
@@ -1540,7 +1585,7 @@ class CmisManagerTask(threading.Thread):
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # D.1.3 Software Configuration and Initialization
-                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
+                        appl = self.get_cmis_application_desired(api, host_lane_count, host_speed)
                         if appl < 1:
                             self.log_error("{}: no suitable app for the port".format(lport))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1579,7 +1624,7 @@ class CmisManagerTask(threading.Thread):
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
-                        self.log_notice("{} DpInit duration {} secs".format(lport, dpInitDuration))
+                        self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:

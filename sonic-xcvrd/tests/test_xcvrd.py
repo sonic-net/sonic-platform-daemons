@@ -653,6 +653,49 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
+    def test_CmisManagerTask_get_cmis_host_lanes(self):
+        appl_advert_dict = {
+            1: {
+                'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
+                'module_media_interface_id': '400GBASE-DR4 (Cl 124)',
+                'media_lane_count': 4,
+                'host_lane_count': 8,
+                'host_lane_assignment_options': 1
+            },
+            2: {
+                'host_electrical_interface_id': 'CAUI-4 C2M (Annex 83E)',
+                'module_media_interface_id': 'Active Cable assembly with BER < 5x10^-5',
+                'media_lane_count': 4,
+                'host_lane_count': 4,
+                'host_lane_assignment_options': 17
+            }
+        }
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value=appl_advert_dict)
+
+        def get_host_lane_assignment_option_side_effect(app):
+            return appl_advert_dict[app]['host_lane_assignment_options']
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(side_effect=get_host_lane_assignment_option_side_effect)
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        host_lane_count = 4
+        speed = 100000
+
+        channel = 1
+        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xF
+
+        channel = 2
+        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xF0
+
+        host_lane_count = 8
+        speed = 400000
+        channel = 0
+        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0xFF
+
+        channel = 9
+        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == 0x0
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
