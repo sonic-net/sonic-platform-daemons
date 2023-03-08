@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import subprocess
+import yaml
 
 from sonic_py_common import daemon_base, device_info, logger
 from swsscommon import swsscommon
@@ -177,7 +178,10 @@ class DaemonPcied(daemon_base.DaemonBase):
                 if pcieDeviceQueryResult is None or "No devices selected" in pcieDeviceQueryResult:
                     self.log_error("PCIe Peripheral {} -- Not Found".format(pcieDeviceQueryResult))
                 elif pcieDeviceQueryResult != pcieDeviceID:
-                    self.log_error("PCIe device %02x:%02x.%d ID DOES NOT match preconfigured YAML file" % (bus, device, func))
+                    if pcieDeviceQueryResult == 'ffff':
+                        self.log_error("PCIe device {:02x}:{:02x}.{:01d} missing.".format(bus, device, func))
+                    else:
+                        self.log_error("PCIe device {:02x}:{:02x}.{:01d} ID mismatch. Expected {}, received {}".format(bus, device, func, pcieDeviceID, pcieDeviceQueryResult))
         except Exception as ex:
             self.log_error("PCIe Exception occurred: {}".format(ex))
             pass
