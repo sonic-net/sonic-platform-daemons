@@ -1596,14 +1596,6 @@ class CmisManagerTask(threading.Thread):
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if getattr(api, 'get_cmis_rev', None):
-                            # Check datapath init pending on module that supports CMIS 5.x
-                            majorRev = int(api.get_cmis_rev().split('.')[0])
-                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes):
-                                self.log_notice("{}: datapath init not pending".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
-                                continue
-
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
@@ -1611,6 +1603,14 @@ class CmisManagerTask(threading.Thread):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
+
+                        if getattr(api, 'get_cmis_rev', None):
+                            # Check datapath init pending on module that supports CMIS 5.x
+                            majorRev = int(api.get_cmis_rev().split('.')[0])
+                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes):
+                                self.log_notice("{}: datapath init not pending".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                continue
 
                         # Ensure the Datapath is NOT Activated unless the host Tx siganl is good.
                         # NOTE: Some CMIS compliant modules may have 'auto-squelch' feature where
