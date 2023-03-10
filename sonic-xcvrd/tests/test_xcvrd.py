@@ -655,13 +655,15 @@ class TestXcvrdScript(object):
         assert not cmis_manager.is_alive()
 
     @pytest.mark.parametrize("host_lane_count, speed, channel, expected", [
+        (8, 400000, 0, 0xFF),
         (4, 100000, 1, 0xF),
         (4, 100000, 2, 0xF0),
-        (8, 100000, 0, 0xFF),
-        (8, 400000, 0, 0xFF),
-        (4, 100000, 9, 0x0)
+        (4, 100000, 0, 0xF),
+        (4, 100000, 9, 0x0),
+        (1, 50000, 2, 0x2),
+        (1, 200000, 2, 0x0)
     ])
-    def test_CmisManagerTask_get_cmis_host_lanes(self, host_lane_count, speed, channel, expected):
+    def test_CmisManagerTask_get_cmis_host_lane_mask(self, host_lane_count, speed, channel, expected):
         appl_advert_dict = {
             1: {
                 'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
@@ -676,6 +678,13 @@ class TestXcvrdScript(object):
                 'media_lane_count': 4,
                 'host_lane_count': 4,
                 'host_lane_assignment_options': 17
+            },
+            3: {
+                'host_electrical_interface_id': '50GAUI-1 C2M',
+                'module_media_interface_id': '50GBASE-SR',
+                'media_lane_count': 1,
+                'host_lane_count': 1,
+                'host_lane_assignment_options': 255
             }
         }
         mock_xcvr_api = MagicMock()
@@ -688,7 +697,7 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
 
-        assert task.get_cmis_host_lanes(mock_xcvr_api, host_lane_count, channel, speed) == expected
+        assert task.get_cmis_host_lane_mask(mock_xcvr_api, host_lane_count, channel, speed) == expected
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))

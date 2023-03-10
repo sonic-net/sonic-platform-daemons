@@ -1097,9 +1097,9 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
-    def get_cmis_host_lanes(self, api, host_lane_count, channel, speed):
+    def get_cmis_host_lane_mask(self, api, host_lane_count, channel, speed):
         """
-        Retrieves bitmask of host lanes based on host lane count, channel and speed
+        Retrieves mask of active host lanes based on host lane count, channel and speed
 
         Args:
             api:
@@ -1112,20 +1112,22 @@ class CmisManagerTask(threading.Thread):
                 Integer, the port speed of the host interface
 
         Returns:
-            Integer, a bitmask of the lanes on the host side
+            Integer, a mask of the active lanes on the host side
             e.g. 0x5 for lane 0 and lane 2.
         """
-        host_lanes = 0
+        host_lane_mask = 0
 
-        if channel > host_lane_count:
-            self.log_error("Failed to get host lanes as channel > host_lane_count!")
-            return host_lanes
+        if host_lane_count <= 0 or channel < 0 or speed <= 0:
+            self.log_error("Invalid input to get host lane mask - host_lane_count {} channel {} speed {}!".format(
+                            host_lane_count, channel, speed))
+            return host_lane_mask
 
         if channel != 0:
             appl = self.get_cmis_application_desired(api, host_lane_count, speed)
             if appl < 1:
-                self.log_error("Failed to get host lanes as no suitable app for the port")
-                return host_lanes
+                self.log_error("Failed to get host lanes as no suitable app {} found host_lane_count {} speed {}".format(
+                                appl, host_lane_count, speed))
+                return host_lane_mask
 
             host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
             curr_channel_num = 0
@@ -1135,15 +1137,13 @@ class CmisManagerTask(threading.Thread):
                     curr_channel_num += 1
                     if curr_channel_num == channel:
                         for i in range(host_lane_count):
-                            host_lanes |= mask
+                            host_lane_mask |= mask
                             mask = mask << 1
                         break
-                mask = mask << 1
         else:
-            for i in range(host_lane_count):
-                host_lanes |= (1 << i)
+            host_lane_mask = (1 << host_lane_count) - 1
 
-        return host_lanes
+        return host_lane_mask
 
     def is_cmis_application_update_required(self, api, host_lane_count, channel, speed):
         """
@@ -1459,9 +1459,10 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    host_lanes = self.get_cmis_host_lanes(api, host_lane_count, channel, speed)
+                    host_lanes = self.get_cmis_host_lane_mask(api, host_lane_count, channel, speed)
                     if host_lanes == 0:
-                        self.log_error("{}: skipping CMIS state machine since invalid host lanes!".format(lport))
+                        self.log_error("{}: Invalid lane mask received host_lane_count {} channel {} speed {}!".format(
+                                        lport, host_lane_count, channel, speed))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                         continue
 
