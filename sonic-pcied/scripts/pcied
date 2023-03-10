@@ -169,10 +169,9 @@ class DaemonPcied(daemon_base.DaemonBase):
                 func = int(elem.get('fn'), 16)
                 pcieDeviceID = elem.get('id')
 
-                cmd = ("setpci -s %02x:%02x.%d 2.w" % (bus, device, func))
-                output, errs = subprocess.Popen(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE).communicate()
-                if errs:
-                    raise ValueError("subprocess command {} returned {}".format(cmd, errs))
+                pcie_device = ("{:02x}:{:02x}.{:01d}".format(bus, device, func))
+                cmd = ["setpci", "-s", pcie_device, "2.w"]
+                output = subprocess.check_output(cmd)
                 pcieDeviceQueryResult = output.decode('utf8').rstrip()
 
                 if pcieDeviceQueryResult is None or "No devices selected" in pcieDeviceQueryResult:
