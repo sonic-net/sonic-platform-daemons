@@ -1459,13 +1459,6 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    host_lanes = self.get_cmis_host_lane_mask(api, host_lane_count, channel, speed)
-                    if host_lanes == 0:
-                        self.log_error("{}: Invalid lane mask received host_lane_count {} channel {} speed {}!".format(
-                                        lport, host_lane_count, channel, speed))
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                        continue
-
                     # Skip if it's not a paged memory device
                     if api.is_flat_memory():
                         self.log_notice("{}: skipping CMIS state machine for flat memory xcvr".format(lport))
@@ -1476,6 +1469,13 @@ class CmisManagerTask(threading.Thread):
                     type = api.get_module_type_abbreviation()
                     if (type is None) or (type not in self.CMIS_MODULE_TYPES):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        continue
+
+                    host_lanes = self.get_cmis_host_lane_mask(api, host_lane_count, channel, speed)
+                    if host_lanes == 0:
+                        self.log_error("{}: Invalid lane mask received host_lane_count {} channel {} speed {}!".format(
+                                        lport, host_lane_count, channel, speed))
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                         continue
 
                     if api.is_coherent_module():
