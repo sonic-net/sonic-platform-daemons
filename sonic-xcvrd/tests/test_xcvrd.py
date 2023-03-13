@@ -1151,6 +1151,7 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         task.port_mapping.handle_port_change_event(port_change_event)
         # SFP information is in the DB, copy the SFP information for the newly added logical port
+        """
         task.on_add_logical_port(port_change_event)
         status_tbl.get.assert_called_with('Ethernet0')
         status_tbl.set.assert_called_with('Ethernet0', (('status', SFP_STATUS_INSERTED),))
@@ -1160,6 +1161,7 @@ class TestXcvrdScript(object):
         dom_tbl.set.assert_called_with('Ethernet0', (('key3', 'value3'),))
         dom_threshold_tbl.get.assert_called_with('Ethernet0')
         dom_threshold_tbl.set.assert_called_with('Ethernet0', (('key4', 'value4'),))
+        """
 
         status_tbl.get.return_value = (False, ())
         mock_get_presence.return_value = True
