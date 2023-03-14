@@ -3986,7 +3986,7 @@ class YCableCliUpdateTask(threading.Thread):
             raise self.exc
 
 class GracefulRestartClient:
-    def __init__(self, port, channel: grpc.aio.insecure_channel):
+    def __init__(self, port, channel: grpc.aio.secure_channel):
         self.port = port
         self.stub = linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub(channel)
         self.request_queue = asyncio.Queue()
@@ -4040,18 +4040,7 @@ class YCableAsyncNotificationTask(threading.Thread):
 
     async def task_worker(self):
 
-        level = "server"
-        target_name = kvp.get("grpc_ssl_credential", None)
-        if credential is None or target_name is None:
-            helper_logger.log_error("could not create a channel ".format("10.50.144.157"))
-           
-        GRPC_CLIENT_OPTIONS_LOCAL = []
-
-        GRPC_CLIENT_OPTIONS_LOCAL.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
-
-        channel = grpc.secure_channel("{}:{}".format("10.50.144.157", GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS_LOCAL)
-
-        
+        # Create tasks for all ports  
         logical_port_list = y_cable_platform_sfputil.logical
         for logical_port_name in logical_port_list:
             if stop_event.is_set():
@@ -4059,15 +4048,16 @@ class YCableAsyncNotificationTask(threading.Thread):
 
             # Get the asic to which this port belongs
             asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
+            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, self.table_helper.get_grpc_client(), self.table_helper.get_fwd_state_response_tbl())
 
-        client = GracefulRestartClient("Ethernet0", channel)
-        tasks = [
-            asyncio.create_task(client.send_request_and_get_response()),
-            asyncio.create_task(client.process_response()),
-        ]
+            client = GracefulRestartClient(port, channel)
+            tasks = [
+                asyncio.create_task(client.send_request_and_get_response()),
+                asyncio.create_task(client.process_response()),
+            ]
 
-        tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
-        tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
+            tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
+            tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
 
         await asyncio.gather(*tasks) 
 
