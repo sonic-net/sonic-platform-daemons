@@ -1423,12 +1423,30 @@ class TestXcvrdScript(object):
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
     @patch('swsscommon.swsscommon.WarmStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
-    def test_DaemonXcvrd_init_deinit(self):
+    def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.init()
-        xcvrd.deinit()
-        # TODO: fow now we only simply call xcvrd.init/deinit without any further check, it only makes sure that
-        # xcvrd.init/deinit will not raise unexpected exception. In future, probably more check will be added
+        with mock.patch("subprocess.check_output") as mock_run:
+            mock_run.return_value = "true"
+
+            xcvrd.init()
+            xcvrd.deinit()
+            # TODO: fow now we only simply call xcvrd.init/deinit without any further check, it only makes sure that
+            # xcvrd.init/deinit will not raise unexpected exception. In future, probably more check will be added
+
+
+    @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
+    def test_DaemonXcvrd_init_deinit_fastboot_disabled(self):
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        with mock.patch("subprocess.check_output") as mock_run:
+            mock_run.return_value = "false"
+
+            xcvrd.init()
+            xcvrd.deinit()
+            # TODO: fow now we only simply call xcvrd.init/deinit without any further check, it only makes sure that
+            # xcvrd.init/deinit will not raise unexpected exception. In future, probably more check will be added
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
