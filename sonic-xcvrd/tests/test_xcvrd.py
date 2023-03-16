@@ -1425,7 +1425,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        with patch("subprocess.check_output('sonic-db-cli STATE_DB hget \"FAST_RESTART_ENABLE_TABLE|system\" enable', shell=True, universal_newlines=True)") as mock_run:
+        with patch("subprocess.check_output") as mock_run:
             mock_run.return_value = "true"
 
             xcvrd.init()
@@ -1440,7 +1440,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit_fastboot_disabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        with patch("subprocess.check_output('sonic-db-cli STATE_DB hget \"FAST_RESTART_ENABLE_TABLE|system\" enable', shell=True, universal_newlines=True)") as mock_run:
+        with patch("subprocess.check_output") as mock_run:
             mock_run.return_value = "false"
 
             xcvrd.init()
