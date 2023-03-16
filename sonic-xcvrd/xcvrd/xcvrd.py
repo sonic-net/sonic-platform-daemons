@@ -1130,16 +1130,9 @@ class CmisManagerTask(threading.Thread):
                 return host_lane_mask
 
             host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
-            curr_channel_num = 0
-            for bit in range(8):
-                mask = 1 << bit
-                if host_lane_assignment_option & mask != 0:
-                    curr_channel_num += 1
-                    if curr_channel_num == channel:
-                        for i in range(host_lane_count):
-                            host_lane_mask |= mask
-                            mask = mask << 1
-                        break
+            host_lane_start_bit = (host_lane_count * (channel - 1))
+            if host_lane_assignment_option & (1 << host_lane_start_bit):
+                host_lane_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
         else:
             host_lane_mask = (1 << host_lane_count) - 1
 
