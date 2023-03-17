@@ -1097,13 +1097,15 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
-    def get_cmis_host_lane_mask(self, api, host_lane_count, channel, speed):
+    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, channel, speed):
         """
         Retrieves mask of active host lanes based on host lane count, channel and speed
 
         Args:
             api:
                 XcvrApi object
+            appl:
+                Integer, the transceiver-specific application code
             host_lane_count:
                 Integer, number of lanes on the host side
             channel:
@@ -1115,28 +1117,26 @@ class CmisManagerTask(threading.Thread):
             Integer, a mask of the active lanes on the host side
             e.g. 0x5 for lane 0 and lane 2.
         """
-        host_lane_mask = 0
+        host_lanes_mask = 0
 
-        if host_lane_count <= 0 or channel < 0 or speed <= 0:
-            self.log_error("Invalid input to get host lane mask - host_lane_count {} channel {} speed {}!".format(
-                            host_lane_count, channel, speed))
-            return host_lane_mask
+        if host_lane_count <= 0 or channel < 0 or speed <= 0 or appl < 1:
+            self.log_error("Invalid input to get host lane mask - host_lane_count {} "
+                            "channel {} speed {} appl {}!".format(
+                            host_lane_count, channel, speed, appl))
+            return host_lanes_mask
 
-        if channel != 0:
-            appl = self.get_cmis_application_desired(api, host_lane_count, speed)
-            if appl < 1:
-                self.log_error("Failed to get host lanes as no suitable app {} found host_lane_count {} speed {}".format(
-                                appl, host_lane_count, speed))
-                return host_lane_mask
-
-            host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
-            host_lane_start_bit = (host_lane_count * (channel - 1))
-            if host_lane_assignment_option & (1 << host_lane_start_bit):
-                host_lane_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
+        host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
+        host_lane_start_bit = (host_lane_count * (0 if channel == 0 else channel - 1))
+        if host_lane_assignment_option & (1 << host_lane_start_bit):
+            host_lanes_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
         else:
-            host_lane_mask = (1 << host_lane_count) - 1
+            self.log_error("Unable to find lowest host lane - host_lane_assignment_option {}"
+                            " host_lane_start_bit {} host_lane_count {} channel {} speed {}"
+                            " appl {}!".format(
+                            host_lane_assignment_option, host_lane_start_bit, host_lane_count,
+                            channel, speed, appl))
 
-        return host_lane_mask
+        return host_lanes_mask
 
     def is_cmis_application_update_required(self, api, host_lane_count, channel, speed):
         """
@@ -1464,10 +1464,17 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    host_lanes = self.get_cmis_host_lane_mask(api, host_lane_count, channel, speed)
-                    if host_lanes == 0:
-                        self.log_error("{}: Invalid lane mask received host_lane_count {} channel {} speed {}!".format(
-                                        lport, host_lane_count, channel, speed))
+                    appl = self.get_cmis_application_desired(api, host_lane_count, host_speed)
+                    if appl < 1:
+                        self.log_error("{}: no suitable app for the port".format(lport))
+                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                        continue
+
+                    host_lanes_mask = self.get_cmis_host_lanes_mask(api, appl, host_lane_count, channel, speed)
+                    if host_lanes_mask == 0:
+                        self.log_error("{}: Invalid lane mask received - host_lane_count {} channel {} "
+                                        "speed {} appl {}!".format(
+                                        lport, host_lane_count, channel, speed, appl))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                         continue
 
@@ -1489,8 +1496,8 @@ class CmisManagerTask(threading.Thread):
                 now = datetime.datetime.now()
                 expired = self.port_dict[lport].get('cmis_expired')
                 retries = self.port_dict[lport].get('cmis_retries', 0)
-                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, retries={}".format(
-                                lport, int(speed/1000), host_lanes, state, retries))
+                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, appl {} retries={}".format(
+                                lport, int(speed/1000), host_lanes_mask, state, appl, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1503,7 +1510,7 @@ class CmisManagerTask(threading.Thread):
                                 self.port_dict[lport]['admin_status'] != 'up':
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
-                           api.tx_disable_channel(host_lanes, True)
+                           api.tx_disable_channel(host_lanes_mask, True)
                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                            continue
                     # Configure the target output power if ZR module
@@ -1516,13 +1523,7 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-                        appl = self.get_cmis_application_desired(api, host_lane_count, host_speed)
-                        if appl < 1:
-                            self.log_error("{}: no suitable app for the port".format(lport))
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                            continue
-
-                        need_update = self.is_cmis_application_update_required(api, host_lane_count, host_lanes, host_speed)
+                        need_update = self.is_cmis_application_update_required(api, host_lane_count, host_lanes_mask, host_speed)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
@@ -1541,11 +1542,11 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
-                        api.set_datapath_deinit(host_lanes)
+                        api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
-                        if not api.tx_disable_channel(host_lanes, True):
-                            self.log_notice("{}: unable to turn off tx power".format(lport))
+                        if not api.tx_disable_channel(host_lanes_mask, True):
+                            self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
 
@@ -1563,7 +1564,7 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathDeactivated']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -1579,29 +1580,23 @@ class CmisManagerTask(threading.Thread):
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # D.1.3 Software Configuration and Initialization
-                        appl = self.get_cmis_application_desired(api, host_lane_count, host_speed)
-                        if appl < 1:
-                            self.log_error("{}: no suitable app for the port".format(lport))
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                            continue
-
-                        if not api.set_application(host_lanes, appl):
+                        if not api.set_application(host_lanes_mask, appl):
                             self.log_notice("{}: unable to set application".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
-                        if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
+                        if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
-
-                        if getattr(api, 'get_cmis_rev', None):
+                        
+                        if hasattr(api, 'get_cmis_rev'):
                             # Check datapath init pending on module that supports CMIS 5.x
                             majorRev = int(api.get_cmis_rev().split('.')[0])
-                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes):
+                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):
                                 self.log_notice("{}: datapath init not pending".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                                 continue
@@ -1616,24 +1611,24 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         # D.1.3 Software Configuration and Initialization
-                        api.set_datapath_init(host_lanes)
+                        api.set_datapath_init(host_lanes_mask)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
                         self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # Turn ON the laser
-                        api.tx_disable_channel(host_lanes, False)
+                        api.tx_disable_channel(host_lanes_mask, False)
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathActivated']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -1642,8 +1637,8 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: READY".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
 
-                except (NotImplementedError, AttributeError):
-                    self.log_error("{}: internal errors".format(lport))
+                except (NotImplementedError, AttributeError) as e:
+                    self.log_error("{}: internal errors due to {}".format(lport, e))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
 
         self.log_notice("Stopped")
