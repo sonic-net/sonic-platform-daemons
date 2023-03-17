@@ -162,20 +162,29 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         try:
             stream = open(PLATFORM_PCIE_YAML_FILE, 'r')
+
+            # Load contents of the PCIe YAML file into a dictionary object
             dictionary = yaml.safe_load(stream)
+            
+            # Iterate through each element in dict; extract the BDF information and device ID for that element
             for elem in dictionary:
                 bus = int(elem.get('bus'), 16)
                 device = int(elem.get('dev'), 16)
                 func = int(elem.get('fn'), 16)
                 pcieDeviceID = elem.get('id')
 
+                # Form the PCI device address from the BDF information above
                 pcie_device = ("{:02x}:{:02x}.{:01d}".format(bus, device, func))
+                
+                # Form and run the command to read the device ID from the PCI device
                 cmd = ["setpci", "-s", pcie_device, "2.w"]
                 output = subprocess.check_output(cmd)
                 pcieDeviceQueryResult = output.decode('utf8').rstrip()
 
+                # verify that the queried device ID matches what we have on file for the current PCI device
+                # If not, take appropriate action based on the queried value
                 if pcieDeviceQueryResult is None or "No devices selected" in pcieDeviceQueryResult:
-                    self.log_error("PCIe Peripheral {} -- Not Found".format(pcieDeviceQueryResult))
+                    self.log_error("Invalid PCIe Peripheral {:02x}:{:02x}.{:01d} - {}".format(bus, device, func, pcieDeviceQueryResult))
                 elif pcieDeviceQueryResult != pcieDeviceID:
                     if pcieDeviceQueryResult == 'ffff':
                         self.log_error("PCIe device {:02x}:{:02x}.{:01d} missing.".format(bus, device, func))
