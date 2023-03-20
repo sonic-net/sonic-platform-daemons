@@ -166,6 +166,11 @@ class DaemonPcied(daemon_base.DaemonBase):
         # '0xffff', it marks the device as missing as that is the only scenario
         # in which such a value is returned.
 
+        # Default, invalid BDF values to begin
+        bus = None
+        device = None
+        func = None
+
         try:
             stream = open(PLATFORM_PCIE_YAML_FILE, 'r')
 
@@ -196,8 +201,13 @@ class DaemonPcied(daemon_base.DaemonBase):
                         self.log_error("PCIe device {:02x}:{:02x}.{:01d} missing.".format(bus, device, func))
                     else:
                         self.log_error("PCIe device {:02x}:{:02x}.{:01d} ID mismatch. Expected {}, received {}".format(bus, device, func, pcieDeviceID, pcieDeviceQueryResult))
+
         except Exception as ex:
-            self.log_error("PCIe Exception occurred for PCIe device {:02x}:{:02x}.{:01d}: {}".format(bus, device, func, ex))
+            # Verify that none of the BDF objects are None. If condition evals to False, do not mention BDF information in error log
+            if not [i for i in (bus, device, func) if i is None]:
+                self.log_error("PCIe Exception occurred for PCIe device {:02x}:{:02x}.{:01d}: {}".format(bus, device, func, ex))
+            else:
+                self.log_error("PCIe Exception occurred: {}".format(ex))
             pass
 
         for result in self.resultInfo:
