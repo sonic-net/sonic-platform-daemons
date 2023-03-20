@@ -1103,10 +1103,10 @@ class CmisManagerTask(threading.Thread):
         return api.get_datapath_deinit_duration()/1000
 
     def get_cmis_module_power_up_duration_secs(self, api):
-        return api.get_module_up_duration()/1000
+        return api.get_module_pwr_up_duration()/1000
 
     def get_cmis_module_power_down_duration_secs(self, api):
-        return api.get_module_down_duration()/1000
+        return api.get_module_pwr_down_duration()/1000
 
     def is_cmis_application_update_required(self, api, channel, speed):
         """
