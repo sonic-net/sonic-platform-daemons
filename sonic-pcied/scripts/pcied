@@ -160,6 +160,12 @@ class DaemonPcied(daemon_base.DaemonBase):
         if self.resultInfo is None:
             return
 
+        # This block reads the PCIE YAML file, iterates through each device and 
+        # for each device runs a transaction check to verify that the device ID
+        # matches the one on file. In the event of an invalid device ID such as
+        # '0xffff', it marks the device as missing as that is the only scenario
+        # in which such a value is returned.
+
         try:
             stream = open(PLATFORM_PCIE_YAML_FILE, 'r')
 
@@ -191,7 +197,7 @@ class DaemonPcied(daemon_base.DaemonBase):
                     else:
                         self.log_error("PCIe device {:02x}:{:02x}.{:01d} ID mismatch. Expected {}, received {}".format(bus, device, func, pcieDeviceID, pcieDeviceQueryResult))
         except Exception as ex:
-            self.log_error("PCIe Exception occurred: {}".format(ex))
+            self.log_error("PCIe Exception occurred for PCIe device {:02x}:{:02x}.{:01d}: {}".format(bus, device, func, ex))
             pass
 
         for result in self.resultInfo:
