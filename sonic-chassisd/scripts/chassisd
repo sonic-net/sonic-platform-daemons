@@ -431,6 +431,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_error("Chassisd not supported for this platform")
             sys.exit(CHASSIS_NOT_SUPPORTED)
 
+        config_manager = None
         # Start configuration manager task on supervisor module
         if self.module_updater.supervisor_slot == self.module_updater.my_slot:
             config_manager = ConfigManagerTask()
