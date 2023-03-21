@@ -1164,7 +1164,9 @@ class CmisManagerTask(threading.Thread):
             if app_old == 0:
                 app_old = api.get_application(lane)
             elif app_old != api.get_application(lane):
-                self.log_notice("Not all the lanes are in the same application mode")
+                self.log_notice("Not all the lanes are in the same application mode "
+                                "app_old {} current app {} lane {} host_lanes_mask {}".format(
+                                app_old, api.get_application(lane), lane, host_lanes_mask))
                 self.log_notice("Forcing application update...")
                 return True
 
