@@ -2121,7 +2121,6 @@ class SfpStateUpdateTask(threading.Thread):
         #     just query transceiver information and DOM sensor information via platform API and update the data to DB; otherwise,
         #     just update TRANSCEIVER_STATUS table with the error.
         #  3. SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
-        logical_port_event_dict = {}
         status_tbl = self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id)
         int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
         dom_tbl = self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id)
@@ -2153,7 +2152,6 @@ class SfpStateUpdateTask(threading.Thread):
 
         # SFP information not in DB
         if _wrapper_get_presence(port_change_event.port_index) and read_eeprom:
-            logical_port_event_dict[port_change_event.port_name] = sfp_status_helper.SFP_STATUS_INSERTED
             transceiver_dict = {}
             status = sfp_status_helper.SFP_STATUS_INSERTED if not status else status
             rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
@@ -2170,9 +2168,7 @@ class SfpStateUpdateTask(threading.Thread):
                 notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
-        logical_port_event_dict[port_change_event.port_name] = status
         update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
-        return logical_port_event_dict
 
     def retry_eeprom_reading(self):
         """Retry EEPROM reading, if retry succeed, remove the logical port from the retry set
