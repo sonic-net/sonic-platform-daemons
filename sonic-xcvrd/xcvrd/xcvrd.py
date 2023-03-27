@@ -1023,8 +1023,8 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
             if 'tx_power' in port_change_event.port_dict:
                 self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
-            if 'channel' in port_change_event.port_dict:
-                self.port_dict[lport]['channel'] = int(port_change_event.port_dict['channel'])
+            if 'subport' in port_change_event.port_dict:
+                self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
             self.force_cmis_reinit(lport, 0)
         else:
@@ -1097,9 +1097,9 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
-    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, channel):
+    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
         """
-        Retrieves mask of active host lanes based on appl, host lane count and channel
+        Retrieves mask of active host lanes based on appl, host lane count and subport
 
         Args:
             api:
@@ -1108,8 +1108,8 @@ class CmisManagerTask(threading.Thread):
                 Integer, the transceiver-specific application code
             host_lane_count:
                 Integer, number of lanes on the host side
-            channel:
-                Integer, channel id of the group which the host lanes belong to (1 based),
+            subport:
+                Integer, subport id of the group which the host lanes belong to (1 based),
                 0 means port is a non-breakout port
 
         Returns:
@@ -1118,20 +1118,20 @@ class CmisManagerTask(threading.Thread):
         """
         host_lanes_mask = 0
 
-        if appl < 1 or host_lane_count <= 0 or channel < 0:
+        if appl < 1 or host_lane_count <= 0 or subport < 0:
             self.log_error("Invalid input to get host lane mask - appl {} host_lane_count {} "
-                            "channel {}!".format(appl, host_lane_count, channel))
+                            "subport {}!".format(appl, host_lane_count, subport))
             return host_lanes_mask
 
         host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
-        host_lane_start_bit = (host_lane_count * (0 if channel == 0 else channel - 1))
+        host_lane_start_bit = (host_lane_count * (0 if subport == 0 else subport - 1))
         if host_lane_assignment_option & (1 << host_lane_start_bit):
             host_lanes_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
         else:
             self.log_error("Unable to find starting host lane - host_lane_assignment_option {}"
-                            " host_lane_start_bit {} host_lane_count {} channel {} appl {}!".format(
+                            " host_lane_start_bit {} host_lane_count {} subport {} appl {}!".format(
                             host_lane_assignment_option, host_lane_start_bit, host_lane_count,
-                            channel, appl))
+                            subport, appl))
 
         return host_lanes_mask
 
@@ -1360,7 +1360,7 @@ class CmisManagerTask(threading.Thread):
         if chan % 3 != 0:
             self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
         if api.get_tuning_in_progress():
-            self.log_error("{} Tuning in progress, channel selection may fail!".format(lport))
+            self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
 
     def wait_for_port_config_done(self, namespace):
@@ -1429,8 +1429,8 @@ class CmisManagerTask(threading.Thread):
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
                 lanes = info.get('lanes', "").strip()
-                channel = info.get('channel', 0)
-                if pport < 0 or speed == 0 or len(lanes) < 1 or channel < 0:
+                subport = info.get('subport', 0)
+                if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
                     continue
 
                 # Desired port speed on the host side
@@ -1511,10 +1511,10 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: Setting appl={}".format(lport, appl))
 
                         self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
-                                                                        appl, host_lane_count, channel)
+                                                                        appl, host_lane_count, subport)
                         if self.port_dict[lport]['host_lanes_mask'] <= 0:
-                            self.log_error("{}: Invalid lane mask received - host_lane_count {} channel {} "
-                                            "appl {}!".format(lport, host_lane_count, channel, appl))
+                            self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
+                                            "appl {}!".format(lport, host_lane_count, subport, appl))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
