@@ -168,6 +168,7 @@ class YcableTableUpdateTableHelper(object):
         self.fwd_state_command_tbl, self.fwd_state_response_tbl, self.mux_cable_command_tbl = {}, {}, {}
         self.mux_metrics_tbl = {}
         self.grpc_config_tbl = {}
+        self.y_cable_response_tbl = {}
 
 
         if multi_asic.is_multi_asic():

@@ -244,7 +244,8 @@ class TestYCableScript(object):
     def test_post_port_mux_static_info_to_db(self):
         logical_port_name = "Ethernet0"
         mux_tbl = Table("STATE_DB", "Y_CABLE_STATIC_INFO_TABLE")
-        rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl)
+        y_cable_tbl = Table("STATE_DB", "Y_CABLE_STATIC_INFO_TABLE")
+        rc = post_port_mux_static_info_to_db(logical_port_name, mux_tbl, y_cable_tbl)
         assert(rc != -1)
 
     def test_y_cable_helper_format_mapping_identifier1(self):
@@ -1686,6 +1687,7 @@ class TestYCableScript(object):
         port_tbl = {}
         port_table_keys = {}
         loopback_keys = {}
+        grpc_config = {}
         hw_mux_cable_tbl, hw_mux_cable_tbl_peer = {}, {}
         y_cable_presence = [True]
         delete_change_event = [True]
@@ -1706,8 +1708,11 @@ class TestYCableScript(object):
         port_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "PORT_INFO_TABLE")
         port_tbl[asic_index].get.return_value = (status, fvs)
+        grpc_config[asic_index] = swsscommon.Table(
+            test_db[asic_index], "GRPC_CONFIG")
+        grpc_config[asic_index].get.return_value = (status, fvs)
 
-        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, stop_event=threading.Event())
+        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_config, stop_event=threading.Event())
 
         assert(rc == None)
 
@@ -2480,7 +2485,14 @@ class TestYCableScript(object):
         physical_port = 0
 
         logical_port_name = "Ethernet0"
+        test_db = "TEST_DB"
+        y_cable_tbl = {}
+        status = True
+        fvs = [('state', "auto"), ('read_side', 2)]
 
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
         platform_sfputil.get_asic_id_for_logical_port = 0
         swsscommon.Table.return_value.get.return_value = (
             True, {"read_side": "1"})
@@ -2512,7 +2524,7 @@ class TestYCableScript(object):
 
             with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
                 patched_util.get_asic_id_for_logical_port.return_value = 0
-                rc = get_muxcable_static_info(physical_port, logical_port_name)
+                rc = get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl)
 
                 assert (rc['read_side'] == 'tor1')
                 assert (rc['nic_lane1_precursor1'] == 1)
@@ -2558,6 +2570,13 @@ class TestYCableScript(object):
 
         logical_port_name = "Ethernet0"
 
+        test_db = "TEST_DB"
+        status = True
+        fvs = [('state', "auto"), ('read_side', 2)]
+
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
         #swsscommon.Table = MagicMock()
         # this patch is already done as global instance
         platform_sfputil.get_asic_id_for_logical_port = 0
@@ -2591,7 +2610,7 @@ class TestYCableScript(object):
 
             with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
                 patched_util.get_asic_id_for_logical_port.return_value = 0
-                rc = get_muxcable_static_info(physical_port, logical_port_name)
+                rc = get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl)
 
                 assert (rc['read_side'] == 'tor2')
                 assert (rc['nic_lane1_precursor1'] == 1)
@@ -2636,7 +2655,14 @@ class TestYCableScript(object):
         physical_port = 0
 
         logical_port_name = "Ethernet0"
+        test_db = "TEST_DB"
 
+        status = True
+        fvs = [('state', "auto"), ('read_side', 2)]
+
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "Y_CABLE_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
         #swsscommon.Table = MagicMock()
         # this patch is already done as global instance
         platform_sfputil.get_asic_id_for_logical_port = 0
@@ -2665,7 +2691,7 @@ class TestYCableScript(object):
 
             with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
                 patched_util.get_asic_id_for_logical_port.return_value = 0
-                rc = get_muxcable_static_info(physical_port, logical_port_name)
+                rc = get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl)
 
                 assert (rc['read_side'] == 'tor2')
                 assert (rc['nic_lane1_precursor1'] == "N/A")
