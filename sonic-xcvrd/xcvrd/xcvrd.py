@@ -1109,8 +1109,8 @@ class CmisManagerTask(threading.Thread):
             host_lane_count:
                 Integer, number of lanes on the host side
             subport:
-                Integer, subport id of the group which the host lanes belong to (1 based),
-                0 means port is a non-breakout port
+                Integer, 1-based logical port number of the physical port after breakout
+                         0 means port is a non-breakout port
 
         Returns:
             Integer, a mask of the active lanes on the host side
