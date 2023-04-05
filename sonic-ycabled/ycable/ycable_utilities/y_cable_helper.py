@@ -630,7 +630,6 @@ def process_loopback_interface_and_get_read_side(loopback_keys):
 
 
 def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl):
-
     global grpc_port_stubs
     global grpc_port_channels
 
@@ -668,6 +667,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                             return
 
                         channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl)
+                        post_port_mux_info_to_db(logical_port_name,  mux_tbl, asic_index, hw_mux_cable_tbl, 'pseudo-cable')
                         if channel is not None:
                             grpc_port_channels[logical_port_name] = channel
                             helper_logger.log_notice(
@@ -695,6 +695,28 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
 
     global read_side
     helper_logger.log_debug("Y_CABLE_DEBUG:setting up channels for active-active")
+    config_db, state_db, port_tbl, loopback_tbl, port_table_keys = {}, {}, {}, {}, {}
+    loopback_keys = {}
+    hw_mux_cable_tbl = {}
+    hw_mux_cable_tbl_peer = {}
+    mux_tbl = {}
+
+    namespaces = multi_asic.get_front_end_namespaces()
+    for namespace in namespaces:
+        asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
+        loopback_tbl[asic_id] = swsscommon.Table(
+            config_db[asic_id], "LOOPBACK_INTERFACE")
+        loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
+        port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
+        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        hw_mux_cable_tbl[asic_id] = swsscommon.Table(
+            state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
+        hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
+            state_db[asic_id], "HW_MUX_CABLE_TABLE_PEER")
+        mux_tbl[asic_id] = swsscommon.Table(
+                state_db[asic_id], "MUX_CABLE_INFO")
 
     if read_side == -1:
         read_side = process_loopback_interface_and_get_read_side(loopback_keys)
@@ -719,7 +741,7 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
 
         if logical_port_name in port_table_keys[asic_index]:
             check_identifier_presence_and_setup_channel(
-                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1346,7 +1368,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             if status and cable_type == "active-active":
                 grpc_port_stats[logical_port_name] = {}
                 check_identifier_presence_and_setup_channel(
-                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1387,7 +1409,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
                         state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
                 if status and cable_type == "active-active":
                     check_identifier_presence_and_setup_channel(
-                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl,mux_tbl,  y_cable_presence, grpc_client, fwd_state_response_tbl)
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
                 check_identifier_presence_and_delete_mux_table_entry(
@@ -2146,7 +2168,7 @@ def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl
 
     for physical_port in physical_port_list:
 
-        if not y_cable_wrapper_get_presence(physical_port):
+        if not y_cable_wrapper_get_presence(physical_port) or cable_type == 'pseudo-cable':
             mux_info_dict = get_muxcable_info_without_presence()
         elif cable_type == 'active-active':
             helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))

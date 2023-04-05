@@ -6383,8 +6383,11 @@ class TestYCableScript(object):
         hw_mux_cable_tbl_peer[asic_index] = swsscommon.Table(
             test_db[asic_index], "HW_TABLE2")
         grpc_client , fwd_state_response_tbl = {}, {}
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -6416,7 +6419,10 @@ class TestYCableScript(object):
             test_db[asic_index], "HW_TABLE2")
         grpc_client , fwd_state_response_tbl = {}, {}
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "MUX_INFO_TABLE")
+
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
         assert(rc == None)
 
 
@@ -6451,8 +6457,11 @@ class TestYCableScript(object):
         hw_mux_cable_tbl_peer[asic_index] = swsscommon.Table(
             test_db[asic_index], "HW_TABLE2")
         grpc_client , fwd_state_response_tbl = {}, {}
+        mux_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+
         assert(rc == None)
 
     @patch('proto_out.linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub', MagicMock(return_value=True))

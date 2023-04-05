@@ -449,10 +449,8 @@ def test_asic_presence():
     midplane_table = module_updater.midplane_table
     fvs = midplane_table.get(name)
     assert fvs == None
-    fvs = fabric_asic_table.get("asic4")
-    assert fvs == None
-    fvs = fabric_asic_table.get("asic5")
-    assert fvs == None
+    verify_fabric_asic("asic4", "0000:04:00.0", name, "0")
+    verify_fabric_asic("asic5", "0000:05:00.0", name, "1")
 
 def test_signal_handler():
     exit_code = 0
@@ -509,9 +507,20 @@ def test_signal_handler():
     assert daemon_chassisd.stop.set.call_count == 0
     assert exit_code == 0
 
-def test_daemon_run():
+def test_daemon_run_supervisor():
     # Test the chassisd run
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
+
+def test_daemon_run_linecard():
+    # Test the chassisd run
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+
+    import sonic_platform.platform
+    with patch.object(sonic_platform.platform.Chassis, 'get_my_slot') as mock:
+       mock.return_value = sonic_platform.platform.Platform().get_chassis().get_supervisor_slot() + 1
+       daemon_chassisd.run()
