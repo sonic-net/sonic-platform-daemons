@@ -1328,7 +1328,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                         "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_client, stop_event=threading.Event(), is_vs=False):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_client, fwd_state_response_tbl, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
@@ -3372,7 +3372,7 @@ def parse_grpc_response_forwarding_state(ret, response, read_side, port):
     return (self_state, peer_state)
 
 
-def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, port_tbl, grpc_client):
+def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_state_response_tbl, asic_index, port, appl_db, port_tbl, grpc_client):
 
     helper_logger.log_debug("Y_CABLE_DEBUG:recevied the notification fwd state port {}".format(port))
     fvp_dict = dict(fvp_m)
@@ -4030,7 +4030,7 @@ class GracefulRestartClient:
                 helper_logger.log_notice("Async client finished loop from direct read period port:{} ".format(self.port))
                 index = index+1
             except grpc.RpcError as e:
-                helper_logger.log_notice("Async client exception occured because of {} ".format(e.code()))
+                helper_logger.log_notice("Async client port = {} exception occured because of {} ".format(self.port, e.code()))
 
             await self.response_queue.put(response)
 
@@ -4058,27 +4058,47 @@ class YCableAsyncNotificationTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.table_helper =  y_cable_table_helper.YcableAsyncNotificationTableHelper()
+        self.read_side = process_loopback_interface_and_get_read_side(self.table_helper.loopback_keys)
 
     async def task_worker(self):
 
         # Create tasks for all ports  
         logical_port_list = y_cable_platform_sfputil.logical
         for logical_port_name in logical_port_list:
-            if stop_event.is_set():
+            if self.task_stopping_event.is_set():
                 break
 
             # Get the asic to which this port belongs
             asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
-            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, self.table_helper.get_grpc_client(), self.table_helper.get_fwd_state_response_tbl())
+            (status, fvs) = self.table_helper.get_port_tbl()[asic_index].get(logical_port_name)
+            if status is False:
+                helper_logger.log_warning(
+                    "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, self.table_helper.get_port_tbl()[asic_index].getTableName()))
+                continue
 
-            client = GracefulRestartClient(port, channel)
-            tasks = [
-                asyncio.create_task(client.send_request_and_get_response()),
-                asyncio.create_task(client.process_response()),
-            ]
+            else:
+                # Convert list of tuples to a dictionary
+                mux_table_dict = dict(fvs)
+                if "state" in mux_table_dict and "soc_ipv4" in mux_table_dict:
 
-            tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
-            tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
+                    soc_ipv4_full = mux_table_dict.get("soc_ipv4", None)
+                    if soc_ipv4_full is not None:
+                        soc_ipv4 = soc_ipv4_full.split('/')[0]
+
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl())
+
+                        client = GracefulRestartClient(logical_port_name, channel)
+                        tasks = [
+                            asyncio.create_task(client.send_request_and_get_response()),
+                            asyncio.create_task(client.process_response()),
+                        ]
+
+                        if self.read_side == 0:
+                            tor_side = linkmgr_grpc_driver_pb2.ToRSide.UPPER_TOR
+                        else:
+                            tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
+
+                        tasks.append(asyncio.create_task(client.notify_graceful_restart_start(tor_side)))
 
         await asyncio.gather(*tasks) 
 
