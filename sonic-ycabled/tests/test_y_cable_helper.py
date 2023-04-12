@@ -1711,8 +1711,9 @@ class TestYCableScript(object):
         grpc_config[asic_index] = swsscommon.Table(
             test_db[asic_index], "GRPC_CONFIG")
         grpc_config[asic_index].get.return_value = (status, fvs)
+        fwd_state_response_tbl = {}
 
-        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_config, stop_event=threading.Event())
+        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_config, fwd_state_response_tbl, stop_event=threading.Event())
 
         assert(rc == None)
 
@@ -1720,6 +1721,7 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.check_mux_cable_port_type', MagicMock(return_value=(True,"active-active")))
     @patch('ycable.ycable_utilities.y_cable_helper.check_identifier_presence_and_setup_channel', MagicMock(return_value=(None)))
+    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event(self, mock_swsscommon_table):
 
@@ -1751,6 +1753,7 @@ class TestYCableScript(object):
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.check_mux_cable_port_type', MagicMock(return_value=(True,"active-active")))
     @patch('ycable.ycable_utilities.y_cable_helper.check_identifier_presence_and_setup_channel', MagicMock(return_value=(None)))
+    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event_sfp_removed(self, mock_swsscommon_table):
 
@@ -1780,6 +1783,7 @@ class TestYCableScript(object):
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
     @patch('swsscommon.swsscommon.Table')
     def test_change_ports_status_for_y_cable_change_event_sfp_unknown(self, mock_swsscommon_table):
 
