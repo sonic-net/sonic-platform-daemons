@@ -921,17 +921,8 @@ def init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event=threadi
                 update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
 
 def is_fast_reboot_enabled():
-    fastboot_enabled = False
-    state_db_host =  daemon_base.db_connect("STATE_DB")
-    fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
-    keys = fastboot_tbl.getKeys()
-
-    if "system" in keys:
-        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'get', "FAST_REBOOT|system"], universal_newlines=True)
-        if "1" in output:
-            fastboot_enabled = True
-
-    return fastboot_enabled
+    fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
+    return "true" in fastboot_enabled
 
 #
 # Helper classes ===============================================================
@@ -944,7 +935,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'QSFP+C']
-    CMIS_NUM_CHANNELS    = 8
+    CMIS_MAX_HOST_LANES    = 8
 
     CMIS_STATE_UNKNOWN   = 'UNKNOWN'
     CMIS_STATE_INSERTED  = 'INSERTED'
@@ -1023,6 +1014,8 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
             if 'tx_power' in port_change_event.port_dict:
                 self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
+            if 'subport' in port_change_event.port_dict:
+                self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
             self.force_cmis_reinit(lport, 0)
         else:
@@ -1058,30 +1051,23 @@ class CmisManagerTask(threading.Thread):
             speed = 1000
         return speed
 
-    def get_cmis_application_desired(self, api, channel, speed):
+    def get_cmis_application_desired(self, api, host_lane_count, speed):
         """
         Get the CMIS application code that matches the specified host side configurations
 
         Args:
             api:
                 XcvrApi object
-            channel:
-                Integer, a bitmask of the lanes on the host side
-                e.g. 0x5 for lane 0 and lane 2.
+            host_lane_count:
+                Number of lanes on the host side
             speed:
                 Integer, the port speed of the host interface
 
         Returns:
             Integer, the transceiver-specific application code
         """
-        if speed == 0 or channel == 0:
+        if speed == 0 or host_lane_count == 0:
             return 0
-
-        host_lane_count = 0
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
-                continue
-            host_lane_count += 1
 
         appl_code = 0
         appl_dict = api.get_application_advertisement()
@@ -1108,37 +1094,76 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_module_power_down_duration_secs(self, api):
         return api.get_module_pwr_down_duration()/1000
 
-    def is_cmis_application_update_required(self, api, channel, speed):
+    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
+        """
+        Retrieves mask of active host lanes based on appl, host lane count and subport
+
+        Args:
+            api:
+                XcvrApi object
+            appl:
+                Integer, the transceiver-specific application code
+            host_lane_count:
+                Integer, number of lanes on the host side
+            subport:
+                Integer, 1-based logical port number of the physical port after breakout
+                         0 means port is a non-breakout port
+
+        Returns:
+            Integer, a mask of the active lanes on the host side
+            e.g. 0x3 for lane 0 and lane 1.
+        """
+        host_lanes_mask = 0
+
+        if appl < 1 or host_lane_count <= 0 or subport < 0:
+            self.log_error("Invalid input to get host lane mask - appl {} host_lane_count {} "
+                            "subport {}!".format(appl, host_lane_count, subport))
+            return host_lanes_mask
+
+        host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
+        host_lane_start_bit = (host_lane_count * (0 if subport == 0 else subport - 1))
+        if host_lane_assignment_option & (1 << host_lane_start_bit):
+            host_lanes_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
+        else:
+            self.log_error("Unable to find starting host lane - host_lane_assignment_option {}"
+                            " host_lane_start_bit {} host_lane_count {} subport {} appl {}!".format(
+                            host_lane_assignment_option, host_lane_start_bit, host_lane_count,
+                            subport, appl))
+
+        return host_lanes_mask
+
+    def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
         Check if the CMIS application update is required
 
         Args:
             api:
                 XcvrApi object
-            channel:
+            app_new:
+                Integer, the transceiver-specific application code for the new application
+            host_lanes_mask:
                 Integer, a bitmask of the lanes on the host side
                 e.g. 0x5 for lane 0 and lane 2.
-            speed:
-                Integer, the port speed of the host interface
 
         Returns:
             Boolean, true if application update is required otherwise false
         """
-        if speed == 0 or channel == 0 or api.is_flat_memory():
+        if api.is_flat_memory() or app_new <= 0 or host_lanes_mask <= 0:
+            self.log_error("Invalid input while checking CMIS update required - is_flat_memory {}"
+                            "app_new {} host_lanes_mask {}!".format(
+                            api.is_flat_memory(), app_new, host_lanes_mask))
             return False
 
-        app_new = self.get_cmis_application_desired(api, channel, speed)
-        if app_new != 1:
-            self.log_notice("Non-default application is not supported")
-
         app_old = 0
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
                 continue
             if app_old == 0:
                 app_old = api.get_application(lane)
             elif app_old != api.get_application(lane):
-                self.log_notice("Not all the lanes are in the same application mode")
+                self.log_notice("Not all the lanes are in the same application mode "
+                                "app_old {} current app {} lane {} host_lanes_mask {}".format(
+                                app_old, api.get_application(lane), lane, host_lanes_mask))
                 self.log_notice("Forcing application update...")
                 return True
 
@@ -1146,8 +1171,8 @@ class CmisManagerTask(threading.Thread):
             skip = True
             dp_state = api.get_datapath_state()
             conf_state = api.get_config_datapath_hostlane_status()
-            for lane in range(self.CMIS_NUM_CHANNELS):
-                if ((1 << lane) & channel) == 0:
+            for lane in range(self.CMIS_MAX_HOST_LANES):
+                if ((1 << lane) & host_lanes_mask) == 0:
                     continue
                 name = "DP{}State".format(lane + 1)
                 if dp_state[name] != 'DataPathActivated':
@@ -1183,14 +1208,14 @@ class CmisManagerTask(threading.Thread):
         """
         return api.get_module_state() in states
 
-    def check_config_error(self, api, channel, states):
+    def check_config_error(self, api, host_lanes_mask, states):
         """
         Check if the CMIS configuration states are in the specified state
 
         Args:
             api:
                 XcvrApi object
-            channel:
+            host_lanes_mask:
                 Integer, a bitmask of the lanes on the host side
                 e.g. 0x5 for lane 0 and lane 2.
             states:
@@ -1201,8 +1226,8 @@ class CmisManagerTask(threading.Thread):
         """
         done = True
         cerr = api.get_config_datapath_hostlane_status()
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
                 continue
             key = "ConfigStatusLane{}".format(lane + 1)
             if cerr[key] not in states:
@@ -1211,14 +1236,14 @@ class CmisManagerTask(threading.Thread):
 
         return done
 
-    def check_datapath_init_pending(self, api, channel):
+    def check_datapath_init_pending(self, api, host_lanes_mask):
         """
         Check if the CMIS datapath init is pending
 
         Args:
             api:
                 XcvrApi object
-            channel:
+            host_lanes_mask:
                 Integer, a bitmask of the lanes on the host side
                 e.g. 0x5 for lane 0 and lane 2.
 
@@ -1227,8 +1252,8 @@ class CmisManagerTask(threading.Thread):
         """
         pending = True
         dpinit_pending_dict = api.get_dpinit_pending()
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
                 continue
             key = "DPInitPending{}".format(lane + 1)
             if not dpinit_pending_dict[key]:
@@ -1237,14 +1262,14 @@ class CmisManagerTask(threading.Thread):
 
         return pending
 
-    def check_datapath_state(self, api, channel, states):
+    def check_datapath_state(self, api, host_lanes_mask, states):
         """
         Check if the CMIS datapath states are in the specified state
 
         Args:
             api:
                 XcvrApi object
-            channel:
+            host_lanes_mask:
                 Integer, a bitmask of the lanes on the host side
                 e.g. 0x5 for lane 0 and lane 2.
             states:
@@ -1255,8 +1280,8 @@ class CmisManagerTask(threading.Thread):
         """
         done = True
         dpstate = api.get_datapath_state()
-        for lane in range(self.CMIS_NUM_CHANNELS):
-            if ((1 << lane) & channel) == 0:
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
                 continue
             key = "DP{}State".format(lane + 1)
             if dpstate[key] not in states:
@@ -1332,7 +1357,7 @@ class CmisManagerTask(threading.Thread):
         if chan % 3 != 0:
             self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
         if api.get_tuning_in_progress():
-            self.log_error("{} Tuning in progress, channel selection may fail!".format(lport))
+            self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
 
     def wait_for_port_config_done(self, namespace):
@@ -1385,6 +1410,9 @@ class CmisManagerTask(threading.Thread):
                              self.CMIS_STATE_FAILED,
                              self.CMIS_STATE_READY,
                              self.CMIS_STATE_REMOVED]:
+                    if state != self.CMIS_STATE_READY:
+                        self.port_dict[lport]['appl'] = 0
+                        self.port_dict[lport]['host_lanes_mask'] = 0
                     continue
 
                 # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
@@ -1398,19 +1426,13 @@ class CmisManagerTask(threading.Thread):
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
                 lanes = info.get('lanes', "").strip()
-                if pport < 0 or speed == 0 or len(lanes) < 1:
+                subport = info.get('subport', 0)
+                if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
                     continue
 
                 # Desired port speed on the host side
                 host_speed = speed
-
-                # Convert the physical lane list into a logical lanemask
-                #
-                # TODO: Add dynamic port breakout support by checking the physical lane offset
-                host_lanes = 0
-                phys_lanes = lanes.split(',')
-                for i in range(len(phys_lanes)):
-                    host_lanes |= (1 << i)
+                host_lane_count = len(lanes.split(','))
 
                 # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
@@ -1456,8 +1478,17 @@ class CmisManagerTask(threading.Thread):
                 now = datetime.datetime.now()
                 expired = self.port_dict[lport].get('cmis_expired')
                 retries = self.port_dict[lport].get('cmis_retries', 0)
-                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, retries={}".format(
-                                lport, int(speed/1000), host_lanes, state, retries))
+                host_lanes_mask = self.port_dict[lport].get('host_lanes_mask', 0)
+                appl = self.port_dict[lport].get('appl', 0)
+                if state != self.CMIS_STATE_INSERTED and (host_lanes_mask <= 0 or appl < 1):
+                    self.log_error("{}: Unexpected value for host_lanes_mask {} or appl {} in "
+                                    "{} state".format(lport, host_lanes_mask, appl, state))
+                    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                    continue
+
+                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, appl {} host_lane_count {} "
+                                "retries={}".format(lport, int(speed/1000), host_lanes_mask,
+                                state, appl, host_lane_count, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1466,11 +1497,31 @@ class CmisManagerTask(threading.Thread):
                 try:
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
+                        self.port_dict[lport]['appl'] = self.get_cmis_application_desired(api,
+                                                                host_lane_count, host_speed)
+                        if self.port_dict[lport]['appl'] < 1:
+                            self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
+                                            "host_speed {}".format(lport, appl, host_lane_count, host_speed))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+                        appl = self.port_dict[lport]['appl']
+                        self.log_notice("{}: Setting appl={}".format(lport, appl))
+
+                        self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
+                                                                        appl, host_lane_count, subport)
+                        if self.port_dict[lport]['host_lanes_mask'] <= 0:
+                            self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
+                                            "appl {}!".format(lport, host_lane_count, subport, appl))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+                        host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
+                        self.log_notice("{}: Setting lanemask=0x{:x}".format(lport, host_lanes_mask))
+
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
-                           api.tx_disable_channel(host_lanes, True)
+                           api.tx_disable_channel(host_lanes_mask, True)
                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                            continue
                     # Configure the target output power if ZR module
@@ -1483,13 +1534,7 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
-                        if appl < 1:
-                            self.log_error("{}: no suitable app for the port".format(lport))
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                            continue
-
-                        need_update = self.is_cmis_application_update_required(api, host_lanes, host_speed)
+                        need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
@@ -1508,21 +1553,22 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
-                        api.set_datapath_deinit(host_lanes)
+                        api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
-                        if not api.tx_disable_channel(host_lanes, True):
-                            self.log_notice("{}: unable to turn off tx power".format(lport))
+                        if not api.tx_disable_channel(host_lanes_mask, True):
+                            self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
 
-                        # TODO: Make sure this doesn't impact other datapaths
+                        #Sets module to high power mode and doesn't impact datapath if module is already in high power mode
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
                         modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
-                        self.log_notice("{} DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
+                        self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
+
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1531,7 +1577,7 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathDeactivated']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -1547,32 +1593,26 @@ class CmisManagerTask(threading.Thread):
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # D.1.3 Software Configuration and Initialization
-                        appl = self.get_cmis_application_desired(api, host_lanes, host_speed)
-                        if appl < 1:
-                            self.log_error("{}: no suitable app for the port".format(lport))
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
-                            continue
-
-                        if not api.set_application(host_lanes, appl):
+                        if not api.set_application(host_lanes_mask, appl):
                             self.log_notice("{}: unable to set application".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if getattr(api, 'get_cmis_rev', None):
-                            # Check datapath init pending on module that supports CMIS 5.x
-                            majorRev = int(api.get_cmis_rev().split('.')[0])
-                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes):
-                                self.log_notice("{}: datapath init not pending".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
-                                continue
-
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                     elif state == self.CMIS_STATE_DP_INIT:
-                        if not self.check_config_error(api, host_lanes, ['ConfigSuccess']):
+                        if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
+
+                        if hasattr(api, 'get_cmis_rev'):
+                            # Check datapath init pending on module that supports CMIS 5.x
+                            majorRev = int(api.get_cmis_rev().split('.')[0])
+                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):
+                                self.log_notice("{}: datapath init not pending".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                continue
 
                         # Ensure the Datapath is NOT Activated unless the host Tx siganl is good.
                         # NOTE: Some CMIS compliant modules may have 'auto-squelch' feature where
@@ -1584,24 +1624,24 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         # D.1.3 Software Configuration and Initialization
-                        api.set_datapath_init(host_lanes)
+                        api.set_datapath_init(host_lanes_mask)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
-                        self.log_notice("{} DpInit duration {} secs".format(lport, dpInitDuration))
+                        self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathInitialized']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         # Turn ON the laser
-                        api.tx_disable_channel(host_lanes, False)
+                        api.tx_disable_channel(host_lanes_mask, False)
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
-                        if not self.check_datapath_state(api, host_lanes, ['DataPathActivated']):
+                        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -1610,8 +1650,8 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: READY".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
 
-                except (NotImplementedError, AttributeError):
-                    self.log_error("{}: internal errors".format(lport))
+                except (NotImplementedError, AttributeError) as e:
+                    self.log_error("{}: internal errors due to {}".format(lport, e))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
 
         self.log_notice("Stopped")
@@ -2122,99 +2162,60 @@ class SfpStateUpdateTask(threading.Thread):
             dict: key is logical port name, value is SFP status
         """
         # A logical port is created. There could be 3 cases:
-        #  1. SFP information is already in DB, which means that a logical port with the same physical index is in DB before.
-        #     Need copy the data from existing logical port and insert it into TRANSCEIVER_DOM_INFO, TRANSCEIVER_STATUS_INFO
-        #     and TRANSCEIVER_INFO table.
-        #  2. SFP information is not in DB and SFP is present with no SFP error. Need query the SFP status by platform API and
+        #  1. SFP is present with no SFP error. Need query the SFP status by platform API and
         #     insert the data to DB.
-        #  3. SFP information is not in DB and SFP is present with SFP error. If the SFP error does not block EEPROM reading,
+        #  2. SFP is present with SFP error. If the SFP error does not block EEPROM reading,
         #     just query transceiver information and DOM sensor information via platform API and update the data to DB; otherwise,
         #     just update TRANSCEIVER_STATUS table with the error.
-        #  4. SFP information is not in DB and SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
-        logical_port_event_dict = {}
-        sfp_status = None
-        sibling_port = None
+        #  3. SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
         status_tbl = self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id)
         int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
         dom_tbl = self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id)
         dom_threshold_tbl = self.xcvr_table_helper.get_dom_threshold_tbl(port_change_event.asic_id)
         pm_tbl = self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id)
-        physical_port_list = self.port_mapping.logical_port_name_to_physical_port_list(port_change_event.port_name)
 
-        # Try to find a logical port with same physical index in DB
-        for physical_port in physical_port_list:
-            logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
-            if not logical_port_list:
-                continue
+        error_description = 'N/A'
+        status = None
+        read_eeprom = True
+        if port_change_event.port_index in self.sfp_error_dict:
+            value, error_dict = self.sfp_error_dict[port_change_event.port_index]
+            status = value
+            error_bits = int(value)
+            helper_logger.log_info("Got SFP error event {}".format(value))
 
-            for logical_port in logical_port_list:
-                found, sfp_status = status_tbl.get(logical_port)
-                if found:
-                    sibling_port = logical_port
-                    break
+            error_descriptions = sfp_status_helper.fetch_generic_error_description(error_bits)
 
-            if sfp_status:
-                break
-
-        if sfp_status:
-            # SFP information is in DB
-            status_tbl.set(port_change_event.port_name, sfp_status)
-            logical_port_event_dict[port_change_event.port_name] = dict(sfp_status)['status']
-            found, sfp_info = int_tbl.get(sibling_port)
-            if found:
-                int_tbl.set(port_change_event.port_name, sfp_info)
-            found, dom_info = dom_tbl.get(sibling_port)
-            if found:
-                dom_tbl.set(port_change_event.port_name, dom_info)
-            found, dom_threshold_info = dom_threshold_tbl.get(sibling_port)
-            if found:
-                dom_threshold_tbl.set(port_change_event.port_name, dom_threshold_info)
-        else:
-            error_description = 'N/A'
-            status = None
-            read_eeprom = True
-            if port_change_event.port_index in self.sfp_error_dict:
-                value, error_dict = self.sfp_error_dict[port_change_event.port_index]
-                status = value
-                error_bits = int(value)
-                helper_logger.log_info("Got SFP error event {}".format(value))
-
-                error_descriptions = sfp_status_helper.fetch_generic_error_description(error_bits)
-
-                if sfp_status_helper.has_vendor_specific_error(error_bits):
-                    if error_dict:
-                        vendor_specific_error_description = error_dict.get(port_change_event.port_index)
-                    else:
-                        vendor_specific_error_description = _wrapper_get_sfp_error_description(port_change_event.port_index)
-                    error_descriptions.append(vendor_specific_error_description)
-
-                error_description = '|'.join(error_descriptions)
-                helper_logger.log_info("Receive error update port sfp status table.")
-                if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
-                    read_eeprom = False
-
-            # SFP information not in DB
-            if _wrapper_get_presence(port_change_event.port_index) and read_eeprom:
-                logical_port_event_dict[port_change_event.port_name] = sfp_status_helper.SFP_STATUS_INSERTED
-                transceiver_dict = {}
-                status = sfp_status_helper.SFP_STATUS_INSERTED if not status else status
-                rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
-                if rc == SFP_EEPROM_NOT_READY:
-                    # Failed to read EEPROM, put it to retry set
-                    self.retry_eeprom_set.add(port_change_event.port_name)
+            if sfp_status_helper.has_vendor_specific_error(error_bits):
+                if error_dict:
+                    vendor_specific_error_description = error_dict.get(port_change_event.port_index)
                 else:
-                    post_port_dom_info_to_db(port_change_event.port_name, self.port_mapping, dom_tbl)
-                    post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
-                    update_port_transceiver_status_table_hw(port_change_event.port_name,
-                                                            self.port_mapping,
-                                                            status_tbl)
-                    post_port_pm_info_to_db(port_change_event.port_name, self.port_mapping, pm_tbl)
-                    notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
+                    vendor_specific_error_description = _wrapper_get_sfp_error_description(port_change_event.port_index)
+                error_descriptions.append(vendor_specific_error_description)
+
+            error_description = '|'.join(error_descriptions)
+            helper_logger.log_info("Receive error update port sfp status table.")
+            if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
+                read_eeprom = False
+
+        # SFP information not in DB
+        if _wrapper_get_presence(port_change_event.port_index) and read_eeprom:
+            transceiver_dict = {}
+            status = sfp_status_helper.SFP_STATUS_INSERTED if not status else status
+            rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
+            if rc == SFP_EEPROM_NOT_READY:
+                # Failed to read EEPROM, put it to retry set
+                self.retry_eeprom_set.add(port_change_event.port_name)
             else:
-                status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
-            logical_port_event_dict[port_change_event.port_name] = status
-            update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
-        return logical_port_event_dict
+                post_port_dom_info_to_db(port_change_event.port_name, self.port_mapping, dom_tbl)
+                post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
+                update_port_transceiver_status_table_hw(port_change_event.port_name,
+                                                        self.port_mapping,
+                                                        status_tbl)
+                post_port_pm_info_to_db(port_change_event.port_name, self.port_mapping, pm_tbl)
+                notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
+        else:
+            status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
+        update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
 
     def retry_eeprom_reading(self):
         """Retry EEPROM reading, if retry succeed, remove the logical port from the retry set
