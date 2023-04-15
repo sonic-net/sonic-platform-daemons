@@ -366,7 +366,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, f
             if soc_ipv4_full is not None:
                 soc_ipv4 = soc_ipv4_full.split('/')[0]
 
-            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl)
+            channel, stub = setup_grpc_channel_for_port(port, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl, False)
             if channel is None or stub is None:
                 helper_logger.log_notice(
                     "stub is None, while reattempt setting up channels did not work {}".format(port))
@@ -458,8 +458,7 @@ def connect_channel(channel, stub, port):
         else:
             break
 
-def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl):
-
+def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async):
 
     # Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
@@ -496,15 +495,23 @@ def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_respons
 
         GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
 
-        channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+        if is_async:
+            channel = grpc.aio.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+        else:
+            channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+
+
     else:
-        channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
+        if is_async:
+            channel = grpc.aio.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+        else:
+            channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
 
 
     stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
 
-    if channel is not None:
+    if not is_async and channel is not None:
         channel.subscribe(wait_for_state_change)
 
     #connect_channel(channel, stub, port)
@@ -516,7 +523,7 @@ def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_respons
 
     return channel, stub
 
-def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config, fwd_state_response_tbl):
+def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config, fwd_state_response_tbl, is_async):
 
     """
     Dummy values for lab for now
@@ -558,7 +565,7 @@ def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config, fwd_state
         kvp = dict(fvs)
 
 
-    channel, stub = create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl) 
+    channel, stub = create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async) 
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
@@ -666,7 +673,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
                         if prev_channel is not None and prev_stub is not None:
                             return
 
-                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl)
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, grpc_client, fwd_state_response_tbl, False)
                         post_port_mux_info_to_db(logical_port_name,  mux_tbl, asic_index, hw_mux_cable_tbl, 'pseudo-cable')
                         if channel is not None:
                             grpc_port_channels[logical_port_name] = channel
@@ -4007,11 +4014,12 @@ class YCableCliUpdateTask(threading.Thread):
             raise self.exc
 
 class GracefulRestartClient:
-    def __init__(self, port, channel: grpc.aio.secure_channel):
+    def __init__(self, port, channel: grpc.aio.secure_channel, read_side):
         self.port = port
         self.stub = linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub(channel)
         self.request_queue = asyncio.Queue()
         self.response_queue = asyncio.Queue()
+        self.read_side = read_side
 
     async def send_request_and_get_response(self):
         while True:
@@ -4021,7 +4029,7 @@ class GracefulRestartClient:
             try:
                 response_stream = self.stub.NotifyGracefulRestartStart(request)
                 index = 0
-                for response in response_stream:
+                async for response in response_stream:
                     helper_logger.log_notice("Async client received from direct read period port = {}: period = {} index = {} guid = {} notifytype {} msgtype = {}".format(self.port, response.period, index, response.guid, response.notifytype, response.msgtype))
                     helper_logger.log_debug("Async Debug only :{} {}".format(dir(response_stream), dir(response)))
                     index = index+1
@@ -4044,8 +4052,11 @@ class GracefulRestartClient:
             else:
                 await asyncio.sleep(20)
 
-            tor = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
-            await self.request_queue.put(tor)
+            if self.read_side == 0:
+                tor_side = linkmgr_grpc_driver_pb2.ToRSide.UPPER_TOR
+            else:
+                tor_side = linkmgr_grpc_driver_pb2.ToRSide.LOWER_TOR
+            await self.request_queue.put(tor_side)
 
     async def notify_graceful_restart_start(self, tor: linkmgr_grpc_driver_pb2.ToRSide):
         await self.request_queue.put(tor)
@@ -4064,6 +4075,7 @@ class YCableAsyncNotificationTask(threading.Thread):
 
         # Create tasks for all ports  
         logical_port_list = y_cable_platform_sfputil.logical
+        tasks = []
         for logical_port_name in logical_port_list:
             if self.task_stopping_event.is_set():
                 break
@@ -4085,13 +4097,11 @@ class YCableAsyncNotificationTask(threading.Thread):
                     if soc_ipv4_full is not None:
                         soc_ipv4 = soc_ipv4_full.split('/')[0]
 
-                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl())
+                        channel, stub = setup_grpc_channel_for_port(logical_port_name, soc_ipv4, asic_index, self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl(), True)
 
-                        client = GracefulRestartClient(logical_port_name, channel)
-                        tasks = [
-                            asyncio.create_task(client.send_request_and_get_response()),
-                            asyncio.create_task(client.process_response()),
-                        ]
+                        client = GracefulRestartClient(logical_port_name, channel, read_side)
+                        tasks.append(asyncio.create_task(client.send_request_and_get_response()))
+                        tasks.append(asyncio.create_task(client.process_response()))
 
                         if self.read_side == 0:
                             tor_side = linkmgr_grpc_driver_pb2.ToRSide.UPPER_TOR

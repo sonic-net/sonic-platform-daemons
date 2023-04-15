@@ -6488,7 +6488,7 @@ class TestYCableScript(object):
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
-            (channel, stub) = setup_grpc_channel_for_port("Ethernet0", "192.168.0.1", asic_index, grpc_client, fwd_state_response_tbl)
+            (channel, stub) = setup_grpc_channel_for_port("Ethernet0", "192.168.0.1", asic_index, grpc_client, fwd_state_response_tbl, False)
 
         assert(stub == True)
         assert(channel != None)
@@ -7117,3 +7117,22 @@ class TestYCableScript(object):
         assert(rc['peer_mux_direction'] == 'unknown')
         assert(rc['mux_direction_probe_count'] == 'unknown')
         assert(rc['peer_mux_direction_probe_count'] == 'unknown')
+
+
+
+    @patch("grpc.aio.secure_channel")
+    @patch("proto_out.linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub")
+    def test_ycable_graceful_client(self, channel, stub):
+
+
+        mock_channel = MagicMock()
+        channel.return_value = mock_channel
+
+        mock_stub = MagicMock()
+        mock_stub.NotifyGracefulRestartStart = MagicMock(return_value=[4, 5])
+        stub.return_value = mock_stub
+
+
+        read_side = 1
+        Y_cable_restart_client = GracefulRestartClient("Ethernet48", None, read_side)
+
