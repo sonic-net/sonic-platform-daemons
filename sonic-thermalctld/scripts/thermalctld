@@ -439,8 +439,6 @@ class FanUpdater(logger.Logger):
 
 
 class TemperatureStatus(logger.Logger):
-    TEMPERATURE_DIFF_THRESHOLD = 10
-
     def __init__(self):
         super(TemperatureStatus, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -461,15 +459,7 @@ class TemperatureStatus(logger.Logger):
                 self.temperature = None
             return
 
-        if self.temperature is None:
-            self.temperature = temperature
-        else:
-            diff = abs(temperature - self.temperature)
-            if diff > TemperatureStatus.TEMPERATURE_DIFF_THRESHOLD:
-                self.log_warning(
-                    'Temperature of {} changed too fast, from {} to {}, please check your hardware'.format(
-                        name, self.temperature, temperature))
-            self.temperature = temperature
+        self.temperature = temperature
 
     def _check_temperature_value_available(self, temperature, threshold, current_status):
         if temperature == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
