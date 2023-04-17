@@ -205,10 +205,16 @@ class PsuChassisInfo(logger.Logger):
         for index, psu in enumerate(self.chassis.get_all_psus()):
             presence = try_get(psu.get_presence)
             if not presence:
+                name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
+                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name))
                 continue
 
             power_good = try_get(psu.get_powergood_status)
             if not power_good:
+                name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
+                supplied_power = 0.0
+                fvs[dict_index] = (CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name), str(supplied_power))
+                dict_index += 1
                 continue
 
             name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
@@ -220,6 +226,8 @@ class PsuChassisInfo(logger.Logger):
         for index, power_consumer in enumerate(self.chassis.get_all_fan_drawers()):
             presence = try_get(power_consumer.get_presence)
             if not presence:
+                name = try_get(power_consumer.get_name, 'FAN-DRAWER {}'.format(index))
+                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
                 continue
 
             name = try_get(power_consumer.get_name, 'FAN-DRAWER {}'.format(index))
@@ -231,6 +239,8 @@ class PsuChassisInfo(logger.Logger):
         for index, power_consumer in enumerate(self.chassis.get_all_modules()):
             presence = try_get(power_consumer.get_presence)
             if not presence:
+                name = try_get(power_consumer.get_name, 'MODULE {}'.format(index))
+                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
                 continue
 
             name = try_get(power_consumer.get_name, 'MODULE {}'.format(index))
