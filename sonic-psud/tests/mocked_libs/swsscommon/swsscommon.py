@@ -16,7 +16,7 @@ class Table:
         del self.mock_dict[key]
         pass
 
-    def hdel(self, key):
+    def hdel(self, key, value):
         del self.mock_dict[key]
         pass
 
