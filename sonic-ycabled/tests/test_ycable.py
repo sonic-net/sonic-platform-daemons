@@ -163,7 +163,7 @@ class TestYcableScript(object):
         mux_tbl = {}
         test_db = "TEST_DB"
         status = True
-        fvs = [('state', "auto"), ('read_side', 1)]
+        fvs = [('state', "auto"), ('read_side', 1), ('soc_ipv4', '192.168.0.1/32')]
         y_cable_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "Y_CABLE_TABLE")
         y_cable_tbl[asic_index].get.return_value = (status, fvs)
@@ -366,4 +366,37 @@ class TestYcableScriptException(object):
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
         assert("sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py" in str(trace))
         assert("swsscommon.Select" in str(trace))
+
+class TestYcableAsyncScript(object):
+
+    @patch("swsscommon.swsscommon.Select", MagicMock(side_effect=NotImplementedError))
+    @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock(side_effect=NotImplementedError))
+    @patch("swsscommon.swsscommon.Select.select", MagicMock(side_effect=NotImplementedError))
+    @patch("swsscommon.swsscommon.Table.get", MagicMock(
+                    return_value=[(True, (('state', "auto"), ("soc_ipv4", "192.168.0.1/32"))), (True, (('index', 2), ))]))
+    @patch("ycable.ycable_utilities.y_cable_helper.setup_grpc_channel_for_port", MagicMock(side_effect=NotImplementedError))
+    @patch("ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil")
+    def test_ycable_helper_async_client_run_loop_with_exception(self, sfputil):
+
+
+        sfputil.logical = ["Ethernet0", "Ethernet4"]
+        sfputil.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        Y_cable_async_task = YCableAsyncNotificationTask()
+        expected_exception_start = None
+        expected_exception_join = None
+        trace = None
+        try:
+            Y_cable_async_task.start()
+            Y_cable_async_task.task_worker()
+            Y_cable_async_task.join()
+        except Exception as e1:
+            expected_exception_start  = e1
+            trace = traceback.format_exc()
+
+
+         
+
+        assert("NotImplementedError" in str(trace) and "effect" in str(trace))
+        assert("sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py" in str(trace))
+        assert("setup_grpc_channel_for_port" in str(trace))
 
