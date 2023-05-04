@@ -1134,7 +1134,7 @@ class CmisManagerTask(threading.Thread):
 
    def get_cmis_media_lanes_mask(self, api, appl, lport, subport):
         """
-        Retrieves mask of active host lanes based on appl, host lane count and subport
+        Retrieves mask of active media lanes based on appl, lport and subport
 
         Args:
             api:
