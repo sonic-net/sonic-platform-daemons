@@ -1691,7 +1691,7 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         # Turn ON the laser
-			media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                         api.tx_disable_channel(media_lanes_mask, False)
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
