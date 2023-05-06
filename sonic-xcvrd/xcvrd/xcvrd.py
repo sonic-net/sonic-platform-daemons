@@ -1609,7 +1609,7 @@ class CmisManagerTask(threading.Thread):
                         api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
-			media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                         if not api.tx_disable_channel(media_lanes_mask, True):
                             self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
