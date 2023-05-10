@@ -1556,8 +1556,8 @@ class CmisManagerTask(threading.Thread):
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
 			
-                        self.port_dict[lport]['media_lane_count'] = api.get_media_lane_count(appl)
-                        self.port_dict[lport]['media_lane_assignment_options'] = api.get_media_lane_assignment_option(appl)
+                        self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
+                        self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
                         media_lane_assignment_options = self.port_dict[lport]['media_lane_assignment_options']
                         self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
