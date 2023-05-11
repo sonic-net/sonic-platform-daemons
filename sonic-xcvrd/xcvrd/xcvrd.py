@@ -1157,7 +1157,7 @@ class CmisManagerTask(threading.Thread):
 
         if appl < 1 or media_lane_count <= 0 or subport < 0:
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
-                            "subport {}!".format(appl, media_lane_count, subport))
+                            "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
 	
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
@@ -1165,9 +1165,9 @@ class CmisManagerTask(threading.Thread):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
         else:
             self.log_error("Unable to find starting media lane - media_lane_assignment_option {}"
-                            " media_lane_start_bit {} media_lane_count {} subport {} appl {}!".format(
+                            " media_lane_start_bit {} media_lane_count {} lport {} subport {} appl {}!".format(
                             media_lane_assignment_option, media_lane_start_bit, media_lane_count,
-                            subport, appl))
+                            lport, subport, appl))
 
         return media_lanes_mask
 
@@ -1563,8 +1563,9 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
                                                                         appl, lport, subport)
                         if self.port_dict[lport]['media_lanes_mask'] <= 0:
-                            self.log_error("{}: Invalid media lane mask received - media_lane_count {} subport {} "
-                                            "appl {}!".format(lport, media_lane_count, subport, appl))
+                            self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
+                                            "media_lane_assignment_options {} lport{} subport {}"
+                                            " appl {}!".format(media_lane_count,media_lane_assignment_options,lport,subport,appl))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                             continue
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
