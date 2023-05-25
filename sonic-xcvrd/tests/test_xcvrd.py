@@ -777,6 +777,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
         mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
@@ -795,14 +796,16 @@ class TestXcvrdScript(object):
                 'module_media_interface_id': '400GBASE-DR4 (Cl 124)',
                 'media_lane_count': 4,
                 'host_lane_count': 8,
-                'host_lane_assignment_options': 1
+                'host_lane_assignment_options': 1,
+                'media_lane_assignment_options': 1
             },
             2: {
                 'host_electrical_interface_id': '100GAUI-2 C2M (Annex 135G)',
                 'module_media_interface_id': '100G-FR/100GBASE-FR1 (Cl 140)',
                 'media_lane_count': 1,
                 'host_lane_count': 2,
-                'host_lane_assignment_options': 85
+                'host_lane_assignment_options': 85,
+                'media_lane_assignment_options': 15
             }
         })
         mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
@@ -1518,10 +1521,13 @@ class TestXcvrdScript(object):
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
     @patch('swsscommon.swsscommon.WarmStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
-    def test_DaemonXcvrd_init_deinit(self):
+    def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.init()
-        xcvrd.deinit()
+        with patch("subprocess.check_output") as mock_run:
+            mock_run.return_value = "true"
+
+            xcvrd.init()
+            xcvrd.deinit()
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):

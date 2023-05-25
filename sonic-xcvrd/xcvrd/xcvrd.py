@@ -921,17 +921,8 @@ def init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event=threadi
                 update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
 
 def is_fast_reboot_enabled():
-    fastboot_enabled = False
-    state_db_host =  daemon_base.db_connect("STATE_DB")
-    fastboot_tbl = swsscommon.Table(state_db_host, 'FAST_REBOOT')
-    keys = fastboot_tbl.getKeys()
-
-    if "system" in keys:
-        output = subprocess.check_output(['sonic-db-cli', 'STATE_DB', 'get', "FAST_REBOOT|system"], universal_newlines=True)
-        if "1" in output:
-            fastboot_enabled = True
-
-    return fastboot_enabled
+    fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
+    return "true" in fastboot_enabled
 
 #
 # Helper classes ===============================================================
@@ -1097,6 +1088,12 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
+    def get_cmis_module_power_up_duration_secs(self, api):
+        return api.get_module_pwr_up_duration()/1000
+
+    def get_cmis_module_power_down_duration_secs(self, api):
+        return api.get_module_pwr_down_duration()/1000
+
     def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
         """
         Retrieves mask of active host lanes based on appl, host lane count and subport
@@ -1134,6 +1131,45 @@ class CmisManagerTask(threading.Thread):
                             subport, appl))
 
         return host_lanes_mask
+
+    def get_cmis_media_lanes_mask(self, api, appl, lport, subport):
+        """
+        Retrieves mask of active media lanes based on appl, lport and subport
+
+        Args:
+            api:
+                XcvrApi object
+            appl:
+                Integer, the transceiver-specific application code
+            lport:
+                String, logical port name
+            subport:
+                Integer, 1-based logical port number of the physical port after breakout
+                         0 means port is a non-breakout port
+
+        Returns:
+            Integer, a mask of the active lanes on the media side
+            e.g. 0xf for lane 0, lane 1, lane 2 and lane 3.
+        """
+        media_lanes_mask = 0
+        media_lane_count = self.port_dict[lport]['media_lane_count']
+        media_lane_assignment_option = self.port_dict[lport]['media_lane_assignment_options']
+
+        if appl < 1 or media_lane_count <= 0 or subport < 0:
+            self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
+                            "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
+            return media_lanes_mask
+	
+        media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
+        if media_lane_assignment_option & (1 << media_lane_start_bit):
+            media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
+        else:
+            self.log_error("Unable to find starting media lane - media_lane_assignment_option {}"
+                            " media_lane_start_bit {} media_lane_count {} lport {} subport {} appl {}!".format(
+                            media_lane_assignment_option, media_lane_start_bit, media_lane_count,
+                            lport, subport, appl))
+
+        return media_lanes_mask
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
@@ -1518,13 +1554,28 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
-                        self.log_notice("{}: Setting lanemask=0x{:x}".format(lport, host_lanes_mask))
+                        self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
+			
+                        self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
+                        self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
+                        media_lane_count = self.port_dict[lport]['media_lane_count']
+                        media_lane_assignment_options = self.port_dict[lport]['media_lane_assignment_options']
+                        self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
+                                                                        appl, lport, subport)
+                        if self.port_dict[lport]['media_lanes_mask'] <= 0:
+                            self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
+                                            "media_lane_assignment_options {} lport{} subport {}"
+                                            " appl {}!".format(media_lane_count,media_lane_assignment_options,lport,subport,appl))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+                        media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
-                           api.tx_disable_channel(host_lanes_mask, True)
+                           api.tx_disable_channel(media_lanes_mask, True)
                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                            continue
                     # Configure the target output power if ZR module
@@ -1559,7 +1610,8 @@ class CmisManagerTask(threading.Thread):
                         api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
-                        if not api.tx_disable_channel(host_lanes_mask, True):
+                        media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        if not api.tx_disable_channel(media_lanes_mask, True):
                             self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
@@ -1568,8 +1620,10 @@ class CmisManagerTask(threading.Thread):
                         api.set_lpmode(False)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_AP_CONF
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
-                        self.log_notice("{}: DpDeinit duration {} secs".format(lport, dpDeinitDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpDeinitDuration)
+                        modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
+                        self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
+
                     elif state == self.CMIS_STATE_AP_CONF:
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
@@ -1638,7 +1692,8 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         # Turn ON the laser
-                        api.tx_disable_channel(host_lanes_mask, False)
+                        media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        api.tx_disable_channel(media_lanes_mask, False)
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:

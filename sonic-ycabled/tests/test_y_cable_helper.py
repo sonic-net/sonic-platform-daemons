@@ -2676,7 +2676,6 @@ class TestYCableScript(object):
 
         status = True
         fvs = [('state', "auto"), ('read_side', 2)]
-
         y_cable_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "Y_CABLE_TABLE")
         y_cable_tbl[asic_index].get.return_value = (status, fvs)
