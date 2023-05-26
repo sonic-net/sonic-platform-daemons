@@ -3094,10 +3094,11 @@ def handle_show_hwmode_swmode_cmd_arg_tbl_notification(fvp, xcvrd_show_hwmode_sw
         helper_logger.log_error("Error: Incorrect input param for cli cmd show mux hwmode switchmode logical port {}".format(port))
         set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_swmode_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_swmode_rsp_tbl[asic_index], port)
 
-def handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port):
+def handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port, port_tbl, hw_mux_cable_tbl):
 
     fvp_dict = dict(fvp)
 
+    helper_logger.log_notice("Y_CABLE_DEBUG:step 1 before fwd_state read_side = {}".format(port))
     if "config" in fvp_dict:
         config_state = str(fvp_dict["config"])
 
@@ -3110,69 +3111,118 @@ def handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, xcvrd_config_hwmode
             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
             return -1
 
-        port_instance = get_ycable_port_instance_from_logical_port(port)
-        if port_instance is None or port_instance in port_mapping_error_values:
-            # error scenario update table accordingly
-            helper_logger.log_error(
-                "Error: Could not get port instance for cli command config mux hwmode state active/standby Y cable port {}".format(port))
+        (cable_status, cable_type) = check_mux_cable_port_type(port, port_tbl, asic_index)
+
+        if cable_status and cable_type == "active-standby":
+
+            port_instance = get_ycable_port_instance_from_logical_port(port)
+            if port_instance is None or port_instance in port_mapping_error_values:
+                # error scenario update table accordingly
+                helper_logger.log_error(
+                    "Error: Could not get port instance for cli command config mux hwmode state active/standby Y cable port {}".format(port))
+                set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                return -1
+
+            with y_cable_port_locks[physical_port]:
+                try:
+                    read_side = port_instance.get_read_side()
+                except Exception as e:
+                    read_side = None
+                    helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {}".format(physical_port,repr(e)))
+
+            if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
+
+                status = 'False'
+                helper_logger.log_error(
+                    "Error: Could not get read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
+                set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                return -1
+
+            if read_side is port_instance.TARGET_TOR_A:
+                if config_state == "active":
+                    with y_cable_port_locks[physical_port]:
+                        try:
+                            status = port_instance.toggle_mux_to_tor_a()
+                        except Exception as e:
+                            status = -1
+                            helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
+                elif config_state == "standby":
+                    with y_cable_port_locks[physical_port]:
+                        try:
+                            status = port_instance.toggle_mux_to_tor_b()
+                        except Exception as e:
+                            status = -1
+                            helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
+            elif read_side is port_instance.TARGET_TOR_B:
+                if config_state == 'active':
+                    with y_cable_port_locks[physical_port]:
+                        try:
+                            status = port_instance.toggle_mux_to_tor_b()
+                        except Exception as e:
+                            status = -1
+                            helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
+                elif config_state == "standby":
+                    with y_cable_port_locks[physical_port]:
+                        try:
+                            status = port_instance.toggle_mux_to_tor_a()
+                        except Exception as e:
+                            status = -1
+                            helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
+            else:
+                set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                helper_logger.log_error(
+                    "Error: Could not get valid config read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
+                return -1
+
             set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-            return -1
+        elif cable_status and cable_type == "active-active":
 
-        with y_cable_port_locks[physical_port]:
-            try:
-                read_side = port_instance.get_read_side()
-            except Exception as e:
-                read_side = None
-                helper_logger.log_warning("Failed to execute the get_read_side API for port {} due to {}".format(physical_port,repr(e)))
+            (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
+            if status is False:
+                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table while responding to cli cmd show mux status {}".format(
+                    port, hw_mux_cable_tbl[asic_index].getTableName()))
+                set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+            if config_state is None:
+                set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                return
 
-        if read_side is None or read_side is port_instance.EEPROM_ERROR or read_side < 0:
+            mux_port_dict = dict(fv)
+            read_side = mux_port_dict.get("read_side", None)
 
-            status = 'False'
-            helper_logger.log_error(
-                "Error: Could not get read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
-            set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-            return -1
-
-        if read_side is port_instance.TARGET_TOR_A:
             if config_state == "active":
-                with y_cable_port_locks[physical_port]:
-                    try:
-                        status = port_instance.toggle_mux_to_tor_a()
-                    except Exception as e:
-                        status = -1
-                        helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
+                state_req = 1
             elif config_state == "standby":
-                with y_cable_port_locks[physical_port]:
-                    try:
-                        status = port_instance.toggle_mux_to_tor_b()
-                    except Exception as e:
-                        status = -1
-                        helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
-        elif read_side is port_instance.TARGET_TOR_B:
-            if config_state == 'active':
-                with y_cable_port_locks[physical_port]:
-                    try:
-                        status = port_instance.toggle_mux_to_tor_b()
-                    except Exception as e:
-                        status = -1
-                        helper_logger.log_warning("Failed to execute the toggle mux ToR B API for port {} due to {}".format(physical_port,repr(e)))
-            elif config_state == "standby":
-                with y_cable_port_locks[physical_port]:
-                    try:
-                        status = port_instance.toggle_mux_to_tor_a()
-                    except Exception as e:
-                        status = -1
-                        helper_logger.log_warning("Failed to execute the toggle mux ToR A API for port {} due to {}".format(physical_port,repr(e)))
-        else:
-            set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-            helper_logger.log_error(
-                "Error: Could not get valid config read side for cli command config mux hwmode state active/standby Y cable port {}".format(port))
-            return -1
+                state_req = 0
 
-        set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
-    else:
-        helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
-        set_result_and_delete_port('result', 'False', xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+            helper_logger.log_notice("Y_CABLE_DEBUG:before invoking RPC fwd_state read_side = {}".format(read_side))
+            request = linkmgr_grpc_driver_pb2.AdminRequest(portid=[int(read_side)], state=[state_req])
+            helper_logger.log_notice(
+                "Y_CABLE_DEBUG:calling RPC for getting cli forwarding state read_side portid = {} Ethernet port {}".format(read_side, port))
+
+            stub = grpc_port_stubs.get(port, None)
+            if stub is None:
+                helper_logger.log_warning("stub is None for getting forwarding state RPC port for cli query {}".format(port))
+                set_result_and_delete_port('result', status, xcvrd_show_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+                return
+
+            status, response = try_grpc(stub.SetAdminForwardingPortState, SET_ADMIN_FORWARDING_TIMEOUT, request)
+
+            if response is not None:
+                # Debug only, remove this section once Server side is Finalized
+                hw_response_port_ids = response.portid
+                hw_response_port_ids_state = response.state
+                helper_logger.log_notice(
+                    "Using Cli Set admin state RPC received response port {} port ids = {} read_side {}".format(port, hw_response_port_ids,read_side))
+                helper_logger.log_notice(
+                    "Using Cli Set admin state RPC received response port {} state values = {} read_side {}".format(port, hw_response_port_ids_state, read_side))
+            else:
+                helper_logger.log_notice("response was none hw_mux_cable_table_grpc_notification {} ".format(port))
+
+            set_result_and_delete_port('result', status, xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+        else:
+            helper_logger.log_error("Error: Wrong input param for cli command config mux hwmode state active/standby logical port {}".format(port))
+            set_result_and_delete_port('result', 'False', xcvrd_config_hwmode_state_cmd_sts_tbl[asic_index], xcvrd_config_hwmode_state_rsp_tbl[asic_index], port)
+
 
 def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_hwmode_dir_cmd_sts_tbl,  xcvrd_show_hwmode_dir_rsp_tbl, xcvrd_show_hwmode_dir_res_tbl, hw_mux_cable_tbl, asic_index, port):
     state_db = {}
@@ -3872,7 +3922,7 @@ class YCableCliUpdateTask(threading.Thread):
                     break
 
                 if fvp:
-                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_hwmode_state_cmd_sts_tbl,  self.cli_table_helper.xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                    handle_config_hwmode_state_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_config_hwmode_state_cmd_sts_tbl,  self.cli_table_helper.xcvrd_config_hwmode_state_rsp_tbl, asic_index, port, self.cli_table_helper.port_tbl , self.cli_table_helper.y_cable_tbl)
                     break
 
 

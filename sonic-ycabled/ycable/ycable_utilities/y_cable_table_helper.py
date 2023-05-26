@@ -345,7 +345,7 @@ class YcableCliUpdateTableHelper(object):
         self.xcvrd_show_event_cmd_tbl, self.xcvrd_show_event_rsp_tbl , self.xcvrd_show_event_cmd_sts_tbl, self.xcvrd_show_event_res_tbl= {}, {}, {}, {}
         self.xcvrd_show_fec_cmd_tbl, self.xcvrd_show_fec_rsp_tbl , self.xcvrd_show_fec_cmd_sts_tbl, self.xcvrd_show_fec_res_tbl= {}, {}, {}, {}
         self.xcvrd_show_ber_cmd_tbl, self.xcvrd_show_ber_cmd_arg_tbl, self.xcvrd_show_ber_rsp_tbl , self.xcvrd_show_ber_cmd_sts_tbl, self.xcvrd_show_ber_res_tbl= {}, {}, {}, {}, {}
-
+        self.y_cable_tbl = {}
 
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
@@ -460,6 +460,8 @@ class YcableCliUpdateTableHelper(object):
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.mux_tbl[asic_id] = swsscommon.Table(
                 self.state_db[asic_id], MUX_CABLE_INFO_TABLE)
+            self.y_cable_tbl[asic_id] = swsscommon.Table(
+                self.state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
 
     def get_state_db(self):
         return self.state_db
