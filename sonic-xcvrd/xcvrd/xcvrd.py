@@ -2413,6 +2413,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
 
+        self.log_notice("XCVRD INIT: After port config is done")
         return port_mapping.get_port_mapping(self.namespaces)
 
     # Deinitialize daemon
