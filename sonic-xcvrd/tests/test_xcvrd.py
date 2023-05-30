@@ -409,8 +409,10 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_init_port_sfp_status_tbl(self):
         port_mapping = PortMapping()
-        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
+        port_mapping.handle_port_change_event(port_change_event)
         stop_event = threading.Event()
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
