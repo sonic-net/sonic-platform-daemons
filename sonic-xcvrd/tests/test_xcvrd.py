@@ -394,7 +394,7 @@ class TestXcvrdScript(object):
                                                                                     'tx7power': '0.7',
                                                                                     'tx8power': '0.7', }))
     @patch('swsscommon.swsscommon.WarmStart', MagicMock())
-    def test_post_port_sfp_info_dom_thr_to_db_during_xcvrd_boootup(self):
+    def test_post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(self):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
@@ -402,7 +402,7 @@ class TestXcvrdScript(object):
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
-        task._post_port_sfp_info_dom_thr_to_db_during_xcvrd_boootup(port_mapping, xcvr_table_helper, stop_event)
+        task._post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(port_mapping, xcvr_table_helper, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))

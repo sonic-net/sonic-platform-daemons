@@ -1715,14 +1715,25 @@ class DomInfoUpdateTask(threading.Thread):
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index)):
                     try:
                         post_port_dom_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_dom_tbl(asic_index), self.task_stopping_event, dom_info_cache=dom_info_cache)
+                    except (KeyError, TypeError) as e:
+                        #continue to process next port since execption could be raised due to port reset, transceiver removal
+                        helper_logger.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
+                        continue
+                    try:
                         update_port_transceiver_status_table_hw(logical_port_name,
                                                                 self.port_mapping,
                                                                 self.xcvr_table_helper.get_status_tbl(asic_index),
                                                                 self.task_stopping_event,
                                                                 transceiver_status_cache=transceiver_status_cache)
-                        post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
-                    except (KeyError, TypeError):
+                    except (KeyError, TypeError) as e:
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
+                        helper_logger.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
+                        continue
+                    try:
+                        post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
+                    except (KeyError, TypeError) as e:
+                        #continue to process next port since execption could be raised due to port reset, transceiver removal
+                        helper_logger.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
                         continue
 
         helper_logger.log_info("Stop DOM monitoring loop")
@@ -1821,7 +1832,7 @@ class SfpStateUpdateTask(threading.Thread):
         return event
 
     # Update port sfp info and dom threshold in db during xcvrd bootup
-    def _post_port_sfp_info_dom_thr_to_db_during_xcvrd_boootup(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
+    def _post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
         # Connect to STATE_DB and create transceiver dom/sfp info tables
         transceiver_dict = {}
         retry_eeprom_set = set()
@@ -1887,7 +1898,7 @@ class SfpStateUpdateTask(threading.Thread):
         port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
 
         # Post all the current interface sfp/dom threshold info to STATE_DB
-        self.retry_eeprom_set = self._post_port_sfp_info_dom_thr_to_db_during_xcvrd_boootup(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
+        self.retry_eeprom_set = self._post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
         helper_logger.log_notice("SfpStateUpdateTask: Posted all port DOM/SFP info to DB")
 
         # Init port sfp status table
