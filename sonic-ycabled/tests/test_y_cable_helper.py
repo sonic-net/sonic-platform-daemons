@@ -5862,6 +5862,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
