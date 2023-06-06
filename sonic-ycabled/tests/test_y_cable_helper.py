@@ -1731,6 +1731,7 @@ class TestYCableScript(object):
             return 0
 
         y_cable_presence = [True]
+        state_db = {}
         logical_port_dict = {'Ethernet0': '1'}
 
         mock_table = MagicMock()
@@ -1745,7 +1746,7 @@ class TestYCableScript(object):
             patched_util.get_asic_id_for_logical_port.return_value = 0
 
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, stop_event=threading.Event())
+                logical_port_dict,  y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1764,6 +1765,7 @@ class TestYCableScript(object):
 
         y_cable_presence = [True]
         logical_port_dict = {'Ethernet0': '1'}
+        state_db = {}
 
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
@@ -1777,7 +1779,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl,stop_event=threading.Event())
+                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1794,6 +1796,7 @@ class TestYCableScript(object):
 
         y_cable_presence = [True]
         logical_port_dict = {'Ethernet0': '2'}
+        state_db = {}
 
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
@@ -1806,7 +1809,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, stop_event=threading.Event())
+                logical_port_dict,  y_cable_presence,port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
