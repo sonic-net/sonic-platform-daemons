@@ -412,6 +412,7 @@ class DaemonYcable(daemon_base.DaemonBase):
             y_cable_cli_worker_update = y_cable_helper.YCableCliUpdateTask()
             y_cable_cli_worker_update.start()
             self.threads.append(y_cable_cli_worker_update)
+            # enable async client only if there are active-active cables
             active_active_cable_presence = check_presence_for_active_active_cable_type(self.table_helper.get_port_tbl())
             if active_active_cable_presence is True:
                 y_cable_async_noti_worker = y_cable_helper.YCableAsyncNotificationTask()
