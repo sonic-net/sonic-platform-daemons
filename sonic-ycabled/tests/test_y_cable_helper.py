@@ -1730,8 +1730,8 @@ class TestYCableScript(object):
         def mock_get_asic_id(mock_logical_port_name):
             return 0
 
-        state_db = {}
         y_cable_presence = [True]
+        state_db = {}
         logical_port_dict = {'Ethernet0': '1'}
 
         mock_table = MagicMock()
