@@ -3788,6 +3788,7 @@ class YCableCliUpdateTask(threading.Thread):
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
         self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
+        self.name = "YCableCliUpdateTask"
 
 
     def task_cli_worker(self):
@@ -4070,7 +4071,7 @@ class YCableAsyncNotificationTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.table_helper =  y_cable_table_helper.YcableAsyncNotificationTableHelper()
         self.read_side = process_loopback_interface_and_get_read_side(self.table_helper.loopback_keys)
-        self.name = "xyz"
+        self.name = "YCableAsyncNotificationTask"
 
     async def task_worker(self):
 
