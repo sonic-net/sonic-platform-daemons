@@ -1384,7 +1384,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
                 "Could not retreive port inside config_db PORT table {} for Y-Cable initiation".format(logical_port_name))
 
 
-def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, stop_event=threading.Event()):
+def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event()):
 
     global read_side
     delete_change_event = [False]
@@ -4070,6 +4070,7 @@ class YCableAsyncNotificationTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.table_helper =  y_cable_table_helper.YcableAsyncNotificationTableHelper()
         self.read_side = process_loopback_interface_and_get_read_side(self.table_helper.loopback_keys)
+        self.name = "xyz"
 
     async def task_worker(self):
 
