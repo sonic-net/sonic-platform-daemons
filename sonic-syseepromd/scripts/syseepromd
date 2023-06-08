@@ -11,10 +11,17 @@
 import signal
 import sys
 import threading
+import os
+import psutil
 
 from sonic_py_common import daemon_base
 from swsscommon import swsscommon
+from sonic_platform_base.sonic_ssd.ssd_generic import SsdUtil
 
+
+STATE_DB = "STATE_DB"
+CPU_UTIL_ENTRY = "CPU_INFO|UTIL"
+DISK_INFO_ENTRY = "DISK_INFO|USAGE"
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the
 # name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
@@ -69,7 +76,7 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
             sys.exit(ERR_EEPROM_LOAD)
 
         # Connect to STATE_DB
-        state_db = daemon_base.db_connect("STATE_DB")
+        state_db = daemon_base.db_connect(STATE_DB)
         self.eeprom_tbl = swsscommon.Table(state_db, EEPROM_TABLE_NAME)
         self.eepromtbl_keys = []
 
@@ -115,6 +122,59 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
 
         return True
 
+    def post_values_to_state_db(self, key, values):
+        try: 
+            state_db = daemon_base.db_connect(STATE_DB)
+            for k,v in values.items():
+                state_db.hset(key, k, str(v))
+        except Exception as e:
+            self.log_error(f'writing {k}:{v} to db failed with {e}')
+
+    def post_cpu_stats_to_db(self):
+        # Get CPU utilization
+        cpu_stats = {}
+        # read cpus load in the last 5 minutes
+        _, load5, _ = psutil.getloadavg()
+        cpu_count = os.cpu_count()
+        if not cpu_count: cpu_count = 1
+        # divide load by number of cpus and calculate percentage
+        utilization = round((load5 * 100) / cpu_count)
+        if utilization not in range(0,100):
+            self.log_error(f"calculated utilization {utilization} out of range, "
+                          f"load5={load5} cpu_count={cpu_count}")
+            utilization = 'N/A'
+        cpu_stats["utilization"] = utilization
+
+        # Get free RAM
+        memory_usage = psutil.virtual_memory()
+        cpu_stats["free_ram"] = round((memory_usage.available / memory_usage.total) * 100)
+        
+        self.post_values_to_state_db(CPU_UTIL_ENTRY, cpu_stats)
+
+    def post_disk_stats_to_db(self):
+        hdd_stats = {}
+        hdd_stats['free_space'] = 100 - round(psutil.disk_usage('/').percent)
+
+        ssd = SsdUtil("/dev/sda")
+        hdd_stats['wear_level'] = ssd.get_health()
+        try:
+            hdd_stats['program_fail_count'] = int(ssd.get_program_fail_count())
+        except ValueError: pass
+        try:
+            hdd_stats['erase_fail_count'] = int(ssd.get_erase_fail_count())
+        except ValueError: pass
+        try:
+            hdd_stats['uncorrectable_error_count'] = int(ssd.get_uncorrectable_error_count())
+        except ValueError: pass
+        try:
+            hdd_stats['lba_written'] = int(ssd.get_logical_block_address_written())
+        except ValueError: pass
+        try:
+            hdd_stats['lba_read'] = int(ssd.get_logical_block_address_read())
+        except ValueError: pass
+
+        self.post_values_to_state_db(DISK_INFO_ENTRY, hdd_stats)
+
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
         FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
@@ -144,6 +204,11 @@ class DaemonSyseeprom(daemon_base.DaemonBase):
             rcs = self.post_eeprom_to_db()
             if rcs != ERR_NONE:
                 self.log_error("Failed to post EEPROM to database")
+        try:
+            self.post_cpu_stats_to_db()
+            self.post_disk_stats_to_db()
+        except Exception as e:
+            self.log_warning(f"caught exception {e} - ignoring")
 
         return True
 

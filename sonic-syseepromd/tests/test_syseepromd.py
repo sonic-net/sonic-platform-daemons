@@ -1,6 +1,7 @@
 import os
 import sys
 from imp import load_source  # Replace with importlib once we no longer need to support Python 2
+from collections import namedtuple
 
 import pytest
 
@@ -19,6 +20,26 @@ tests_path = os.path.dirname(os.path.abspath(__file__))
 mocked_libs_path = os.path.join(tests_path, 'mocked_libs')
 sys.path.insert(0, mocked_libs_path)
 
+def dummy_getloadavg():
+    return 10, 10, 10
+
+def dummy_virtual_memory():
+    mem = namedtuple('Memory', ['available', 'total'])
+    mem.available = 80
+    mem.total = 100
+    return mem
+
+def dummy_disk_usage(arg):
+    usage = namedtuple('Usage', ['percent'])
+    usage.percent = 15
+    return usage
+
+sys.modules['psutil'] = mock.Mock()
+sys.modules['psutil'].getloadavg = dummy_getloadavg
+sys.modules['psutil'].virtual_memory = dummy_virtual_memory
+sys.modules['psutil'].disk_usage = dummy_disk_usage
+
+
 from sonic_py_common import daemon_base
 daemon_base.db_connect = mock.MagicMock()
 
@@ -30,6 +51,7 @@ sys.path.insert(0, modules_path)
 load_source('syseepromd', os.path.join(scripts_path, 'syseepromd'))
 import syseepromd
 
+syseepromd.SsdUtil = mock.MagicMock()
 
 def test_post_eeprom_to_db_eeprom_read_fail():
     daemon_syseepromd = syseepromd.DaemonSyseeprom()
