@@ -244,6 +244,37 @@ def strip_unit_and_beautify(value, unit):
         return str(value)
 
 
+def notify_system_ready(fail_status=False, fail_reason='-'):
+    key = 'FEATURE|pmon'
+    statusvalue = {}
+
+    try:
+        state_db = swsscommon.SonicV2Connector()
+        state_db.connect(state_db.STATE_DB)
+    except Exception:
+        helper_logger.log_error('Failed to connect STATE_DB to report '
+                                f'{SYSLOG_IDENTIFIER} ready status')
+        return
+
+    if fail_status:
+        statusvalue['up_status'] = 'false'
+        statusvalue['fail_reason'] = fail_reason
+    else:
+        statusvalue['up_status'] = 'true'
+
+    if getattr(notify_system_ready, 'reported', False):
+        helper_logger.log_debug(
+            f'{SYSLOG_IDENTIFIER} ready status already reported. Tried to '
+            f'report status: {statusvalue}')
+        return
+
+    state_db.delete(state_db.STATE_DB, key)
+    state_db.hmset(state_db.STATE_DB, key, statusvalue)
+    helper_logger.log_info(f'Report {SYSLOG_IDENTIFIER} ready status: '
+                           f'{statusvalue}')
+    notify_system_ready.reported = True
+
+
 def _wrapper_get_presence(physical_port):
     if platform_chassis is not None:
         try:
@@ -2374,6 +2405,11 @@ class SfpStateUpdateTask(threading.Thread):
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
+
+        # If we were here and now retry_eeprom_set is empty, then we can state
+        # that all SFPs accessible
+        if not self.retry_eeprom_set:
+            notify_system_ready()
 
 
 #
