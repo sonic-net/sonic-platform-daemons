@@ -1832,7 +1832,7 @@ class SfpStateUpdateTask(threading.Thread):
         return event
 
     # Update port sfp info and dom threshold in db during xcvrd bootup
-    def _post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
+    def _post_port_sfp_info_and_dom_thr_to_db_once(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
         # Connect to STATE_DB and create transceiver dom/sfp info tables
         transceiver_dict = {}
         retry_eeprom_set = set()
@@ -1898,7 +1898,7 @@ class SfpStateUpdateTask(threading.Thread):
         port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
 
         # Post all the current interface sfp/dom threshold info to STATE_DB
-        self.retry_eeprom_set = self._post_port_sfp_info_dom_thr_to_db_during_xcvrd_bootup(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
+        self.retry_eeprom_set = self._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
         helper_logger.log_notice("SfpStateUpdateTask: Posted all port DOM/SFP info to DB")
 
         # Init port sfp status table
