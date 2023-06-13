@@ -47,7 +47,8 @@ class TestXcvrdThreadException(object):
     def test_CmisManagerTask_task_run_with_exception(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
         cmis_manager.wait_for_port_config_done = MagicMock(side_effect = NotImplementedError)
         exception_received = None
         trace = None
@@ -90,7 +91,8 @@ class TestXcvrdThreadException(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        sfp_state_update = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        sfp_state_update = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         exception_received = None
         trace = None
         try:
@@ -106,6 +108,7 @@ class TestXcvrdThreadException(object):
         assert("sonic-xcvrd/xcvrd/xcvrd.py" in str(trace))
         assert("subscribe_port_config_change" in str(trace))
 
+    @patch('xcvrd.xcvrd.DaemonXcvrd.subscribe_appl_proc_info_update', MagicMock(return_value = (None, None)))
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.CmisManagerTask.is_alive', MagicMock(return_value = False))
@@ -121,7 +124,7 @@ class TestXcvrdThreadException(object):
     def test_DaemonXcvrd_run_with_exception(self, mock_task_join1, mock_task_join2, mock_init, mock_os_kill):
         mock_init.return_value = (PortMapping(), set())
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.stop_event.wait = MagicMock()
+        xcvrd.stop_event.is_set = MagicMock(return_value = True)
         xcvrd.run()
 
         assert len(xcvrd.threads) == 3
@@ -401,7 +404,8 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping, xcvr_table_helper, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -416,7 +420,8 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
     def test_get_media_settings_key(self):
@@ -575,6 +580,7 @@ class TestXcvrdScript(object):
         xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
 
+    @patch('xcvrd.xcvrd.DaemonXcvrd.subscribe_appl_proc_info_update', MagicMock(return_value = (None, None)))
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
     @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
@@ -584,7 +590,7 @@ class TestXcvrdScript(object):
     def test_DaemonXcvrd_run(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init):
         mock_init.return_value = (PortMapping(), set())
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.stop_event.wait = MagicMock()
+        xcvrd.stop_event.is_set = MagicMock(return_value=True)
         xcvrd.run()
         assert mock_task_stop1.call_count == 1
         assert mock_task_stop2.call_count == 1
@@ -593,11 +599,43 @@ class TestXcvrdScript(object):
         assert mock_deinit.call_count == 1
         assert mock_init.call_count == 1
 
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('os.kill')
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    @patch('xcvrd.xcvrd.DaemonXcvrd.init')
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.start')
+    def test_xcvrd_kill_with_proc_info_del_command(self, mock_task_run1, mock_task_run2, mock_init, mock_select, mock_sub_table, mock_os_kill):
+        mock_init.return_value = (PortMapping())
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('XCVRD', swsscommon.DEL_COMMAND, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.stop_event.is_set = MagicMock(return_value=False)
+
+        # Since DEL event handling is done in a while loop, we need to raise an exception to break it
+        # and prevent the test script from getting killed
+        mock_os_kill.side_effect = Exception('os.kill() is called')
+
+        try:
+            xcvrd.run()
+        except Exception as e:
+            assert str(e) == "os.kill() is called"
+
+        assert mock_task_run1.call_count == 1
+        assert mock_task_run2.call_count == 1
+        assert mock_init.call_count == 1
+        assert mock_os_kill.call_count == 1
+
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_handle_port_change_event(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
@@ -625,7 +663,8 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_get_configured_freq(self, mock_table_helper):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.get = MagicMock(return_value=(True, (('laser_freq', 193100),)))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
@@ -636,7 +675,8 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_get_configured_tx_power_from_db(self, mock_table_helper):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.get = MagicMock(return_value=(True, (('tx_power', -10),)))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
@@ -653,7 +693,8 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
         cmis_manager.wait_for_port_config_done = MagicMock()
         cmis_manager.start()
         cmis_manager.join()
@@ -714,7 +755,8 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
@@ -759,7 +801,8 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_host_lane_assignment_option = MagicMock(side_effect=get_host_lane_assignment_option_side_effect)
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = MagicMock()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
 
         appl = task.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
@@ -865,7 +908,8 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_reinit_request_tbl = {'Ethernet0': True}
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, port_reinit_request_tbl)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -996,7 +1040,8 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
         port_mapping = PortMapping()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
         task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
@@ -1034,7 +1079,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.start()
         assert wait_until(5, 1, task.is_alive)
         task.raise_exception()
@@ -1050,7 +1096,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=mock_table)
@@ -1078,7 +1125,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         port_dict = {}
         assert task._mapping_event_from_change_event(False, port_dict) == SYSTEM_FAIL
         assert port_dict[EVENT_ON_ALL_SFP] == SYSTEM_FAIL
@@ -1114,7 +1162,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MagicMock()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         mock_change_event.return_value = (True, {0: 0}, {})
         mock_mapping_event.return_value = SYSTEM_NOT_READY
@@ -1224,7 +1273,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
+        port_reinit_request_tbl = MockTable()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
         task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
@@ -1490,6 +1540,7 @@ class TestXcvrdScript(object):
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
     @patch('swsscommon.swsscommon.WarmStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.xcvrd.init_appl_proc_info_tbl', MagicMock())
     def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         with patch("subprocess.check_output") as mock_run:
