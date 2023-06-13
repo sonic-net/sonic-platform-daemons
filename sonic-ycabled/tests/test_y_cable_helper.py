@@ -2676,7 +2676,6 @@ class TestYCableScript(object):
 
         status = True
         fvs = [('state', "auto"), ('read_side', 2)]
-
         y_cable_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "Y_CABLE_TABLE")
         y_cable_tbl[asic_index].get.return_value = (status, fvs)
@@ -5753,6 +5752,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -5760,7 +5760,7 @@ class TestYCableScript(object):
         fvp = {"config": "active"}
 
         rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
         assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
@@ -5777,6 +5777,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -5784,7 +5785,7 @@ class TestYCableScript(object):
         fvp = {"down_firmware": "null"}
 
         rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
         assert(rc == None)
 
     @patch('swsscommon.swsscommon.Table')
@@ -5805,6 +5806,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
@@ -5839,7 +5841,7 @@ class TestYCableScript(object):
 
             patched_util.get.return_value = PortInstanceHelper()
             rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
             assert(rc == None)
 
     @patch('swsscommon.swsscommon.Table')
@@ -5860,6 +5862,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
@@ -5894,7 +5897,7 @@ class TestYCableScript(object):
 
             patched_util.get.return_value = PortInstanceHelper()
             rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
             assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
@@ -5911,6 +5914,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
 
         asic_index = 0
         task_download_firmware_thread = {}
@@ -5918,7 +5922,7 @@ class TestYCableScript(object):
         fvp = {"config": "active"}
 
         rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+            fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
         assert(rc == -1)
 
     @patch('swsscommon.swsscommon.Table')
@@ -5939,6 +5943,7 @@ class TestYCableScript(object):
 
         xcvrd_config_hwmode_state_cmd_sts_tbl = mock_swsscommon_table
         xcvrd_config_hwmode_state_rsp_tbl = mock_swsscommon_table
+        hw_mux_cable_tbl = mock_swsscommon_table
         asic_index = 0
         task_download_firmware_thread = {}
         port = "Ethernet0"
@@ -5973,7 +5978,7 @@ class TestYCableScript(object):
 
             patched_util.get.return_value = PortInstanceHelper()
             rc = handle_config_hwmode_state_cmd_arg_tbl_notification(
-                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, asic_index, port)
+                fvp, xcvrd_config_hwmode_state_cmd_sts_tbl,  xcvrd_config_hwmode_state_rsp_tbl, hw_mux_cable_tbl, asic_index, port)
             assert(rc == None)
 
     @patch('swsscommon.swsscommon.Table')
@@ -7119,4 +7124,20 @@ class TestYCableScript(object):
         assert(rc['peer_mux_direction_probe_count'] == 'unknown')
 
 
+
+    @patch("grpc.aio.secure_channel")
+    @patch("proto_out.linkmgr_grpc_driver_pb2_grpc.GracefulRestartStub")
+    def test_ycable_graceful_client(self, channel, stub):
+
+
+        mock_channel = MagicMock()
+        channel.return_value = mock_channel
+
+        mock_stub = MagicMock()
+        mock_stub.NotifyGracefulRestartStart = MagicMock(return_value=[4, 5])
+        stub.return_value = mock_stub
+
+
+        read_side = 1
+        Y_cable_restart_client = GracefulRestartClient("Ethernet48", None, read_side)
 
