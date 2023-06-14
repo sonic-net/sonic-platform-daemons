@@ -937,7 +937,7 @@ class CmisManagerTask(threading.Thread):
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
-        self.port_reinit_request_tbl = port_reinit_request_tbl
+        self.port_reinit_request_tbl = copy.deepcopy(port_reinit_request_tbl)
 
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
@@ -1857,7 +1857,7 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_error_dict = {}
         self.sfp_insert_events = {}
         self.namespaces = namespaces
-        self.port_reinit_request_tbl = port_reinit_request_tbl
+        self.port_reinit_request_tbl = copy.deepcopy(port_reinit_request_tbl)
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
