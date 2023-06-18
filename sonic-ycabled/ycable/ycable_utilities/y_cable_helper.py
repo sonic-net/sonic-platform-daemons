@@ -3819,14 +3819,12 @@ class YCableCliUpdateTask(threading.Thread):
             sel.addSelectable(self.cli_table_helper.xcvrd_show_ber_cmd_tbl[asic_id])
 
         # Listen indefinitely for changes to the XCVRD_CMD_TABLE in the Application DB's
-        while True:
+        while not self.task_stopping_event.is_set():
             # Use timeout to prevent ignoring the signals we want to handle
             # in signal_handler() (e.g. SIGTERM for graceful shutdown)
 
-            if self.task_stopping_event.is_set():
-                break
-
             (state, selectableObj) = sel.select(SELECT_TIMEOUT)
+            self.exc = None
 
             if state == swsscommon.Select.TIMEOUT:
                 # Do not flood log when select times out
@@ -3842,6 +3840,7 @@ class YCableCliUpdateTask(threading.Thread):
             # Get the corresponding namespace from redisselect db connector object
             namespace = redisSelectObj.getDbConnector().getNamespace()
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
+
 
             while True:
                 (key, op_m, fvp_m) = self.cli_table_helper.xcvrd_log_tbl[asic_index].pop()
@@ -3992,6 +3991,8 @@ class YCableCliUpdateTask(threading.Thread):
                     handle_show_ber_cmd_arg_tbl_notification(fvp, self.cli_table_helper.xcvrd_show_ber_cmd_arg_tbl, self.cli_table_helper.xcvrd_show_ber_rsp_tbl, self.cli_table_helper.xcvrd_show_ber_cmd_sts_tbl, self.cli_table_helper.xcvrd_show_ber_res_tbl, asic_index, port)
 
                     break
+            """
+            """
 
     def run(self):
         if self.task_stopping_event.is_set():

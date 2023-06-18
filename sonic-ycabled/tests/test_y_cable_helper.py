@@ -7144,3 +7144,78 @@ class TestYCableScript(object):
         read_side = 1
         Y_cable_restart_client = GracefulRestartClient("Ethernet48", None, read_side)
 
+
+class TestYcableScriptExecution(object):
+
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.Select.TIMEOUT', MagicMock(return_value=None))
+    @patch('swsscommon.swsscommon.CastSelectableToRedisSelectObj', MagicMock())
+    #@patch('swsscommon.swsscommon.CastSelectableToRedisSelectObj.getDbConnector', MagicMock())
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_ycable_helper_cli_worker(self, mock_select, mock_sub_table):
+
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[(False, False, False), (False, False, False), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+
+        stop_event = threading.Event()
+        
+        asic_index = 0
+        Y_cable_cli_task = YCableCliUpdateTask()
+        Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        Y_cable_cli_task.cli_table_helper.xcvrd_show_hwmode_dir_cmd_tbl[asic_index].return_value = mock_selectable
+
+        #Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=False)
+
+        expected_exception_start = None
+        expected_exception_join = None
+        trace = None
+        try:
+            #Y_cable_cli_task.start()
+            Y_cable_cli_task.task_cli_worker()
+            time.sleep(5)
+            Y_cable_cli_task.task_stopping_event.clear()
+        except Exception as e1:
+            expected_exception_start  = e1
+            trace = traceback.format_exc()
+
+
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.Select.TIMEOUT', MagicMock(return_value=None))
+    @patch('swsscommon.swsscommon.CastSelectableToRedisSelectObj', MagicMock())
+    #@patch('swsscommon.swsscommon.CastSelectableToRedisSelectObj.getDbConnector', MagicMock())
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_ycable_helper_cli_worker_execution(self, mock_select, mock_sub_table):
+
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[(False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False) ,('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+
+        stop_event = threading.Event()
+        
+        asic_index = 0
+        Y_cable_cli_task = YCableCliUpdateTask()
+        Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        Y_cable_cli_task.cli_table_helper.xcvrd_show_hwmode_dir_cmd_tbl[asic_index].return_value = mock_selectable
+
+        #Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=False)
+
+        expected_exception_start = None
+        expected_exception_join = None
+        trace = None
+        try:
+            #Y_cable_cli_task.start()
+            Y_cable_cli_task.task_cli_worker()
+            time.sleep(5)
+            Y_cable_cli_task.task_stopping_event.clear()
+        except Exception as e1:
+            expected_exception_start  = e1
+            trace = traceback.format_exc()
+
+
