@@ -898,9 +898,9 @@ def init_appl_proc_info_tbl(namespaces, port_mapping_data, xcvr_table_helper):
         _, proc_info_xcvrd_fvs = proc_info_tbl.get('XCVRD')
         if proc_info_xcvrd_fvs is not None:
             proc_info_xcvrd_fvs_dict = dict(proc_info_xcvrd_fvs)
-            media_notify_rqd = proc_info_xcvrd_fvs_dict.get('MEDIA_NOTIFY_REQUIRED', 'true')
-            cmis_reinit_rqd = proc_info_xcvrd_fvs_dict.get('CMIS_REINIT_REQUIRED', 'true')
-            if media_notify_rqd == 'false' and cmis_reinit_rqd == 'false':
+            media_notify_rqd = proc_info_xcvrd_fvs_dict.get('MEDIA_NOTIFY_REQUIRED', 'True')
+            cmis_reinit_rqd = proc_info_xcvrd_fvs_dict.get('CMIS_REINIT_REQUIRED', 'True')
+            if media_notify_rqd == 'False' and cmis_reinit_rqd == 'False':
                 helper_logger.log_notice("Appl {} tbl media notify and cmis reinit not required for ASIC {}".format(APPL_PROC_INFO_TABLE, asic_id))
                 continue
         update_proc_info_xcvrd_to_db(asic_id, xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'True', 'CMIS_REINIT_REQUIRED' : 'True'})
