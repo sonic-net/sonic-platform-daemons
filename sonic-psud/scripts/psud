@@ -380,6 +380,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         self.psu_tbl = None
         self.psu_chassis_info = None
         self.first_run = True
+        self.psu_threshold_exceeded_logged = False
 
         global platform_psuutil
         global platform_chassis
@@ -458,6 +459,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         if not platform_chassis:
             return
 
+        self.psu_threshold_exceeded_logged = False
         for index, psu in enumerate(platform_chassis.get_all_psus()):
             try:
                 self._update_single_psu_data(index + 1, psu)
@@ -560,10 +562,12 @@ class DaemonPsud(daemon_base.DaemonBase):
                     # Raise alarm
                     power_exceeded_threshold = True
 
-            if psu_status.set_power_exceed_threshold(power_exceeded_threshold):
+            if psu_status.set_power_exceed_threshold(power_exceeded_threshold) and not self.psu_threshold_exceeded_logged:
+                # Since this is a system level PSU power exceeding check, we do not need to log it for each PSU
                 log_on_status_changed(self, not psu_status.power_exceeded_threshold,
-                                      'PSU power warning cleared: system power {} is back to normal, below {} warning suppress threshold {}.'.format(system_power, name, power_warning_suppress_threshold),
-                                      'PSU power warning: system power {} exceeds {} critical threshold {}.'.format(system_power, name, power_critical_threshold))
+                                      'PSU power warning cleared: system power {} is back to normal, below the warning suppress threshold {}.'.format(system_power, power_warning_suppress_threshold),
+                                      'PSU power warning: system power {} exceeds the critical threshold {}.'.format(system_power, power_critical_threshold))
+                self.psu_threshold_exceeded_logged = True
 
         if presence and psu_status.set_voltage(voltage, voltage_high_threshold, voltage_low_threshold):
             set_led = True
