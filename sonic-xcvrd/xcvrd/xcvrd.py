@@ -24,7 +24,6 @@ try:
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
-    from swsscommon.swsscommon import SonicV2Connector
 
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
@@ -136,6 +135,17 @@ def get_physical_port_name_dict(logical_port_name, port_mapping):
         port_name_dict[physical_port] = port_name
 
     return port_name_dict
+
+# Get dictionary of asic to set of corresponding logical ports
+def get_asic_to_logical_ports_dict(port_mapping):
+    asic_to_logical_ports_dict = {}
+    for logical_port_name in port_mapping.logical_port_list:
+        asic_id = port_mapping.get_asic_id_for_logical_port(logical_port_name)
+        if asic_id not in asic_to_logical_ports_dict:
+            asic_to_logical_ports_dict[asic_id] = set()
+        asic_to_logical_ports_dict[asic_id].add(logical_port_name)
+
+    return asic_to_logical_ports_dict
 
 # Strip units and beautify
 
@@ -307,6 +317,15 @@ def beautify_pm_info_dict(pm_info_dict, physical_port):
         if type(v) is str:
             continue
         pm_info_dict[k] = str(v)
+
+# Updates APPL_DB PROC_INFO:XCVRD table with the given input_dict
+def update_proc_info_xcvrd_to_db(asic_id, xcvr_table_helper, input_dict):
+    proc_info_tbl = xcvr_table_helper.get_appl_proc_info_tbl(asic_id)
+    if proc_info_tbl is None:
+        helper_logger.log_error("Appl {} tbl is None for asic_id {} while updating with dict {}".format(APPL_PROC_INFO_TABLE, asic_id, input_dict))
+        return
+    fvs = swsscommon.FieldValuePairs([(k, v) for k, v in input_dict.items()])
+    proc_info_tbl.set('XCVRD', fvs)
 
 # Update port sfp info in db
 
@@ -859,10 +878,12 @@ def delete_port_from_status_table_hw(logical_port_name, port_mapping, status_tbl
                 continue
             status_tbl.hdel(physical_port_name, f)
 
-# Initialize the APPL_DB PROC_INFO:XCVRD table with XCVRD_COLD_RESTART as the key
-# if not already populated and update the port_reinit_request_tbl accordingly
-# XCVRD_COLD_RESTART is the key which is used to determine if ports in a namespace
-# need to be reinitialized and media settings are to be renotified
+# Initialize the APPL_DB PROC_INFO:XCVRD table with MEDIA_NOTIFY_REQUIRED and
+# CMIS_REINIT_REQUIRED as the keys if not already populated.
+# If both the keys of these keys are set to False,
+# port_reinit_request_tbl will be set as False. In all other cases,
+# port_reinit_request_tbl will be set as True and so will be both the keys
+# Return value: port_reinit_request_tbls
 def init_appl_proc_info_tbl(namespaces, port_mapping_data, xcvr_table_helper):
     namespace_reinit_request_tbl = {}
     port_reinit_request_tbl = {}
@@ -870,20 +891,21 @@ def init_appl_proc_info_tbl(namespaces, port_mapping_data, xcvr_table_helper):
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         namespace_reinit_request_tbl[asic_id] = False
-        appl_db = SonicV2Connector(use_unix_socket_path=False, namespace=namespace)
-        if appl_db is None:
+        proc_info_tbl = xcvr_table_helper.get_appl_proc_info_tbl(asic_id)
+        if proc_info_tbl is None:
             helper_logger.log_error("Appl {} tbl is None for asic_id {} during init".format(APPL_PROC_INFO_TABLE, asic_id))
             continue
-        appl_db.connect(appl_db.APPL_DB)
-        APPL_PROC_INFO_XCVRD_TABLE = '{}:XCVRD'.format(APPL_PROC_INFO_TABLE)
-        proc_info_xcvrd_dict = appl_db.get_all(appl_db.APPL_DB, '{}'.format(APPL_PROC_INFO_XCVRD_TABLE))
-        if proc_info_xcvrd_dict is not None and 'XCVRD_COLD_RESTART' in proc_info_xcvrd_dict:
-            helper_logger.log_notice("Key XCVRD_COLD_RESTART already exists in {} tbl for asic {}!".format(APPL_PROC_INFO_XCVRD_TABLE, asic_id))
-        else:
-            appl_db.set(appl_db.APPL_DB, '{}:XCVRD'.format(APPL_PROC_INFO_TABLE), 'XCVRD_COLD_RESTART', 'true')
-            namespace_reinit_request_tbl[asic_id] = True
-            helper_logger.log_notice("Added {} tbl for asic {}!".format(APPL_PROC_INFO_XCVRD_TABLE, asic_id))
-        appl_db.close(appl_db.APPL_DB)
+        _, proc_info_xcvrd_fvs = proc_info_tbl.get('XCVRD')
+        if proc_info_xcvrd_fvs is not None:
+            proc_info_xcvrd_fvs_dict = dict(proc_info_xcvrd_fvs)
+            media_notify_rqd = proc_info_xcvrd_fvs_dict.get('MEDIA_NOTIFY_REQUIRED', 'true')
+            cmis_reinit_rqd = proc_info_xcvrd_fvs_dict.get('CMIS_REINIT_REQUIRED', 'true')
+            if media_notify_rqd == 'false' and cmis_reinit_rqd == 'false':
+                helper_logger.log_notice("Appl {} tbl media notify and cmis reinit not required for ASIC {}".format(APPL_PROC_INFO_TABLE, asic_id))
+                continue
+        update_proc_info_xcvrd_to_db(asic_id, xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'True', 'CMIS_REINIT_REQUIRED' : 'True'})
+        namespace_reinit_request_tbl[asic_id] = True
+        helper_logger.log_notice("Added {} tbl for asic {}!".format(APPL_PROC_INFO_TABLE, asic_id))
 
     for logical_port_name in port_mapping_data.logical_port_list:
         port_reinit_request_tbl[logical_port_name] = False
@@ -938,6 +960,9 @@ class CmisManagerTask(threading.Thread):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
         self.port_reinit_request_tbl = copy.deepcopy(port_reinit_request_tbl)
+
+    def log_info(self, message):
+        helper_logger.log_info("CMIS: {}".format(message))
 
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
@@ -1404,6 +1429,8 @@ class CmisManagerTask(threading.Thread):
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
 
+        asic_to_unprocessed_logical_ports_dict = get_asic_to_logical_ports_dict(self.port_mapping)
+
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
         while not self.task_stopping_event.is_set():
@@ -1426,6 +1453,14 @@ class CmisManagerTask(threading.Thread):
                              self.CMIS_STATE_FAILED,
                              self.CMIS_STATE_READY,
                              self.CMIS_STATE_REMOVED]:
+                    if self.port_reinit_request_tbl[lport] is True:
+                        self.log_info("{}: Setting port_reinit_request_tbl to True".format(lport))
+                        self.port_reinit_request_tbl[lport] = False
+                        asic_id = self.port_mapping.get_asic_id_for_logical_port(lport)
+                        asic_to_unprocessed_logical_ports_dict[asic_id].remove(lport)
+                        if len(asic_to_unprocessed_logical_ports_dict[asic_id]) == 0:
+                            self.log_notice("Setting CMIS_REINIT_REQUIRED to false for asic: {}".format(asic_id))
+                            update_proc_info_xcvrd_to_db(asic_id, self.xcvr_table_helper, {'CMIS_REINIT_REQUIRED' : 'False'})
                     if state != self.CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
                         self.port_dict[lport]['host_lanes_mask'] = 0
@@ -1502,9 +1537,9 @@ class CmisManagerTask(threading.Thread):
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                     continue
 
-                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, appl {} host_lane_count {} "
-                                "retries={}".format(lport, int(speed/1000), host_lanes_mask,
-                                state, appl, host_lane_count, retries))
+                self.log_notice("{}: {}G, lanemask=0x{:x}, CMIS state={}, Module state={} appl {} host_lane_count {} "
+                                "retries={}".format(lport, int(speed/1000), host_lanes_mask, state,
+                                api.get_module_state(), appl, host_lane_count, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1576,8 +1611,6 @@ class CmisManagerTask(threading.Thread):
                               need_update = True
 
                         if self.port_reinit_request_tbl[lport] == True:
-                            # To ensure forced CMIS init is done only once for a port after xcvrd boot-up
-                            self.port_reinit_request_tbl[lport] = False
                             need_update = True
                             self.log_notice("{}: Forcing CMIS init as port_reinit_request_tbl is True".format(lport))
 
@@ -1858,6 +1891,7 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_insert_events = {}
         self.namespaces = namespaces
         self.port_reinit_request_tbl = copy.deepcopy(port_reinit_request_tbl)
+        self.asic_to_unprocessed_logical_ports_dict = {}
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -1909,6 +1943,12 @@ class SfpStateUpdateTask(threading.Thread):
                     helper_logger.log_notice("Notify media setting during boot-up for {}".format(logical_port_name))
                     notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper.get_app_port_tbl(asic_index), port_mapping)
                     transceiver_dict.clear()
+                    self.port_reinit_request_tbl[logical_port_name] = False
+                    self.asic_to_unprocessed_logical_ports_dict[asic_index].remove(logical_port_name)
+                    if len(self.asic_to_unprocessed_logical_ports_dict[asic_index]) == 0:
+                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to false for asic: {}".format(asic_index))
+                        update_proc_info_xcvrd_to_db(asic_index, self.xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'False'})
+
             else:
                 retry_eeprom_set.add(logical_port_name)
 
@@ -1944,6 +1984,7 @@ class SfpStateUpdateTask(threading.Thread):
 
     def init(self):
         port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
+        self.asic_to_unprocessed_logical_ports_dict = get_asic_to_logical_ports_dict(self.port_mapping)
 
         # Post all the current interface sfp/dom threshold info to STATE_DB
         self.retry_eeprom_set = self._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
@@ -2356,6 +2397,13 @@ class SfpStateUpdateTask(threading.Thread):
                 post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
                 notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.port_mapping)
                 transceiver_dict.clear()
+                if logical_port in self.asic_to_unprocessed_logical_ports_dict[asic_index]:
+                    self.port_reinit_request_tbl[logical_port] = False
+                    self.asic_to_unprocessed_logical_ports_dict[asic_index].remove(logical_port)
+                    if len(self.asic_to_unprocessed_logical_ports_dict[asic_index]) == 0:
+                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to false during retry EEPROM read for asic: {}".format(asic_index))
+                        update_proc_info_xcvrd_to_db(asic_index, self.xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'False'})
+
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
@@ -2423,12 +2471,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         with open(media_settings_file_path, "r") as media_file:
             g_dict = json.load(media_file)
 
+# Subscribes APPL_DB PROC_INFO table events
     def subscribe_appl_proc_info_update(self):
         for namespace in self.namespaces:
             appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
-
-            sel = swsscommon.Select()
             proc_info_tbl = swsscommon.SubscriberStateTable(appl_db, APPL_PROC_INFO_TABLE)
+            sel = swsscommon.Select()
             sel.addSelectable(proc_info_tbl)
 
             return sel, proc_info_tbl
@@ -2462,6 +2510,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             except Exception as e:
                 self.log_error("Failed to load sfputil: {}".format(str(e)), True)
                 sys.exit(SFPUTIL_LOAD_ERROR)
+        # force main thread to cause underlying initialization of SFPs for platforms waiting to dynamically do so,
+        # since signal handlers can only be installed from within the context of the main thread
+        if platform_chassis is not None:
+            try:
+                platform_chassis.get_num_sfps()
+            except NotImplementedError:
+                pass
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
@@ -2548,6 +2603,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sel, proc_info_tbl = self.subscribe_appl_proc_info_update()
         self.log_notice("Subscribed to appl proc info update")
 
+        generate_sigabrt = False
         while not self.stop_event.is_set():
             (state, _) = sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
             if state == swsscommon.Select.TIMEOUT:
@@ -2559,10 +2615,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             (key, op, _) = proc_info_tbl.pop()
             self.log_info("APPL_DB subscriber: Received {}:{} key".format(key, op))
             if op == swsscommon.DEL_COMMAND and key == 'XCVRD':
-                self.log_notice("DEL_COMMAND received for {}:{} key. Killing main thread now!".format(APPL_PROC_INFO_TABLE, key))
-                os.kill(os.getpid(), signal.SIGKILL)
+                self.log_notice("DEL_COMMAND received for {}:{} key. Starting graceful restart to xcvrd!".format(APPL_PROC_INFO_TABLE, key))
+                generate_sigabrt = True
+                break
 
-        self.log_info("Stop daemon main loop")
+        self.log_notice("Stop daemon main loop")
 
         generate_sigkill = False
         # check all threads are alive
@@ -2599,6 +2656,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         if self.sfp_error_event.is_set():
             sys.exit(SFP_SYSTEM_ERROR)
+        elif generate_sigabrt is True:
+            self.log_notice("Sending SIGABRT to xcvrd!")
+            os.kill(os.getpid(), signal.SIGABRT)
 
 
 class XcvrTableHelper:

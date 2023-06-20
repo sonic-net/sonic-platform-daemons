@@ -604,9 +604,12 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
+    @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.start')
-    def test_xcvrd_kill_with_proc_info_del_command(self, mock_task_run1, mock_task_run2, mock_init, mock_select, mock_sub_table, mock_os_kill):
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.join')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.join')
+    def test_xcvrd_kill_with_proc_info_del_command(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init, mock_select, mock_sub_table, mock_os_kill):
         mock_init.return_value = (PortMapping())
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
@@ -616,18 +619,14 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.stop_event.is_set = MagicMock(return_value=False)
 
-        # Since DEL event handling is done in a while loop, we need to raise an exception to break it
-        # and prevent the test script from getting killed
-        mock_os_kill.side_effect = Exception('os.kill() is called')
+        xcvrd.run()
 
-        try:
-            xcvrd.run()
-        except Exception as e:
-            assert str(e) == "os.kill() is called"
-
+        assert mock_task_stop1.call_count == 1
+        assert mock_task_stop2.call_count == 1
         assert mock_task_run1.call_count == 1
         assert mock_task_run2.call_count == 1
         assert mock_init.call_count == 1
+        assert mock_deinit.call_count == 1
         assert mock_os_kill.call_count == 1
 
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
@@ -1088,12 +1087,14 @@ class TestXcvrdScript(object):
         assert wait_until(5, 1, lambda: task.is_alive() is False)
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.update_proc_info_xcvrd_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
-    def test_SfpStateUpdateTask_retry_eeprom_reading(self, mock_post_sfp_info):
+    def test_SfpStateUpdateTask_retry_eeprom_reading(self, mock_post_sfp_info, mock_update_proc_info_xcvrd_to_db):
         mock_table = MagicMock()
         mock_table.get = MagicMock(return_value=(False, None))
 
         port_mapping = PortMapping()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
         port_reinit_request_tbl = MagicMock()
@@ -1103,6 +1104,10 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=mock_table)
         task.xcvr_table_helper.get_status_tbl = MagicMock(return_value=mock_table)
+        asic_to_unprocessed_logical_ports_dict = {0: ['Ethernet0']}
+        task.asic_to_unprocessed_logical_ports_dict = MagicMock()
+        task.asic_to_unprocessed_logical_ports_dict.__getitem__.side_effect = asic_to_unprocessed_logical_ports_dict.__getitem__
+
         task.retry_eeprom_reading()
         assert mock_post_sfp_info.call_count == 0
 
@@ -1119,6 +1124,7 @@ class TestXcvrdScript(object):
         task.last_retry_eeprom_time = 0
         mock_post_sfp_info.return_value = None
         task.retry_eeprom_reading()
+        assert mock_update_proc_info_xcvrd_to_db.call_count == 1
         assert 'Ethernet0' not in task.retry_eeprom_set
 
     def test_SfpStateUpdateTask_mapping_event_from_change_event(self):
@@ -1273,7 +1279,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        port_reinit_request_tbl = MockTable()
+        port_reinit_request_tbl = MagicMock()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, port_reinit_request_tbl, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
@@ -1549,6 +1555,22 @@ class TestXcvrdScript(object):
             xcvrd.init()
             xcvrd.deinit()
 
+    @patch('sonic_py_common.multi_asic.get_asic_index_from_namespace', MagicMock(return_value=(0)))
+    def test_init_appl_proc_info_tbl(self):
+        class MockTable:
+            def get(self, key):
+                return [None, None]
+            def set(self, key, val):
+                pass
+
+        port_mapping = PortMapping()
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
+        port_mapping.handle_port_change_event(port_change_event)
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        xcvr_table_helper.get_appl_proc_info_tbl = MagicMock(return_value=MockTable())
+        port_reinit_request_tbl = init_appl_proc_info_tbl(DEFAULT_NAMESPACE, port_mapping, xcvr_table_helper)
+
+        assert port_reinit_request_tbl == dict({'Ethernet0' : True})
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
