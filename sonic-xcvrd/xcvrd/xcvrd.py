@@ -1459,7 +1459,7 @@ class CmisManagerTask(threading.Thread):
                         asic_id = self.port_mapping.get_asic_id_for_logical_port(lport)
                         asic_to_unprocessed_logical_ports_dict[asic_id].remove(lport)
                         if len(asic_to_unprocessed_logical_ports_dict[asic_id]) == 0:
-                            self.log_notice("Setting CMIS_REINIT_REQUIRED to false for asic: {}".format(asic_id))
+                            self.log_notice("Setting CMIS_REINIT_REQUIRED to False for asic: {}".format(asic_id))
                             update_proc_info_xcvrd_to_db(asic_id, self.xcvr_table_helper, {'CMIS_REINIT_REQUIRED' : 'False'})
                     if state != self.CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
@@ -1946,7 +1946,7 @@ class SfpStateUpdateTask(threading.Thread):
                     self.port_reinit_request_tbl[logical_port_name] = False
                     self.asic_to_unprocessed_logical_ports_dict[asic_index].remove(logical_port_name)
                     if len(self.asic_to_unprocessed_logical_ports_dict[asic_index]) == 0:
-                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to false for asic: {}".format(asic_index))
+                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to False for asic: {}".format(asic_index))
                         update_proc_info_xcvrd_to_db(asic_index, self.xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'False'})
 
             else:
@@ -2401,7 +2401,7 @@ class SfpStateUpdateTask(threading.Thread):
                     self.port_reinit_request_tbl[logical_port] = False
                     self.asic_to_unprocessed_logical_ports_dict[asic_index].remove(logical_port)
                     if len(self.asic_to_unprocessed_logical_ports_dict[asic_index]) == 0:
-                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to false during retry EEPROM read for asic: {}".format(asic_index))
+                        helper_logger.log_notice("Setting MEDIA_NOTIFY_REQUIRED to False during retry EEPROM read for asic: {}".format(asic_index))
                         update_proc_info_xcvrd_to_db(asic_index, self.xcvr_table_helper, {'MEDIA_NOTIFY_REQUIRED' : 'False'})
 
                 retry_success_set.add(logical_port)
