@@ -1335,6 +1335,25 @@ class CmisManagerTask(threading.Thread):
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
 
+    def post_port_active_apsel_to_db(self, api, lport, host_lanes_mask):
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+
+        try:
+            act_apsel = api.get_active_apsel_hostlane()
+            tuple_list = []
+            for lane in range(self.CMIS_MAX_HOST_LANES):
+                if ((1 << lane) & host_lanes_mask) == 0:
+                    continue
+                tuple_list.append(('active_apsel_hostlane{}'.format(lane + 1),
+                                   str(act_apsel['ActiveAppSelLane{}'.format(lane + 1)])))
+            fvs = swsscommon.FieldValuePairs(tuple_list)
+            intf_tbl.set(lport, fvs)
+            self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
+
+        except NotImplementedError:
+            helper_logger.log_error("This functionality is currently not implemented")
+
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
@@ -1641,6 +1660,7 @@ class CmisManagerTask(threading.Thread):
 
                         self.log_notice("{}: READY".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
 
                 except (NotImplementedError, AttributeError) as e:
                     self.log_error("{}: internal errors due to {}".format(lport, e))
