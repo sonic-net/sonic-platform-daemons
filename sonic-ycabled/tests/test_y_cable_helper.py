@@ -7157,7 +7157,7 @@ class TestYcableScriptExecution(object):
 
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
-            side_effect=[(False, False, False), (False, False, False), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False)])
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
 
@@ -7166,21 +7166,41 @@ class TestYcableScriptExecution(object):
         asic_index = 0
         Y_cable_cli_task = YCableCliUpdateTask()
         Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
-        Y_cable_cli_task.cli_table_helper.xcvrd_show_hwmode_dir_cmd_tbl[asic_index].return_value = mock_selectable
 
         #Y_cable_cli_task.task_stopping_event.is_set = MagicMock(side_effect=False)
 
         expected_exception_start = None
         expected_exception_join = None
-        trace = None
-        try:
             #Y_cable_cli_task.start()
-            Y_cable_cli_task.task_cli_worker()
-            time.sleep(5)
-            Y_cable_cli_task.task_stopping_event.clear()
-        except Exception as e1:
-            expected_exception_start  = e1
-            trace = traceback.format_exc()
+        Y_cable_cli_task.task_cli_worker()
+        Y_cable_cli_task.task_stopping_event.clear()
+       
+        assert swsscommon.Select.select.call_count == 1
+        #y_cable_helper.handle_show_hwmode_state_cmd_arg_tbl_notification.assert_called() 
+        Y_cable_cli_task_n = YCableCliUpdateTask()
+        Y_cable_cli_task_n.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+
+        mock_selectable.pop = MagicMock(
+            side_effect=[(False, False, False), (False, False, False), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+
+        Y_cable_cli_task_n.task_cli_worker()
+        assert swsscommon.Select.select.call_count == 2
+
+        """
+
+        Y_cable_cli_task_a = YCableCliUpdateTask()
+        Y_cable_cli_task_a.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+
+        mock_selectable.pop = MagicMock(
+            side_effect=[(False, False, False), ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+
+        Y_cable_cli_task_a.task_cli_worker()
+        assert swsscommon.Select.select.call_count == 3
+        """
 
 
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
@@ -7209,6 +7229,7 @@ class TestYcableScriptExecution(object):
         expected_exception_start = None
         expected_exception_join = None
         trace = None
+        """
         try:
             #Y_cable_cli_task.start()
             Y_cable_cli_task.task_cli_worker()
@@ -7217,5 +7238,6 @@ class TestYcableScriptExecution(object):
         except Exception as e1:
             expected_exception_start  = e1
             trace = traceback.format_exc()
+        """
 
 

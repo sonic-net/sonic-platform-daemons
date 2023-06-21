@@ -63,7 +63,6 @@ class TestYcableScript(object):
             except Exception as e:
                 pass
 
-    """
     @patch("swsscommon.swsscommon.Select", MagicMock())
     @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock())
     @patch("swsscommon.swsscommon.Select.select", MagicMock())
@@ -83,7 +82,6 @@ class TestYcableScript(object):
         Y_cable_cli_task.task_cli_worker()
         Y_cable_cli_task.start()
         Y_cable_cli_task.join()
-    """
 
 
     @patch("swsscommon.swsscommon.Select", MagicMock())
@@ -331,7 +329,7 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     return False
 
 
-"""class TestYcableScriptException(object):
+class TestYcableScriptException(object):
 
     @patch("swsscommon.swsscommon.Select", MagicMock(side_effect=NotImplementedError))
     @patch("swsscommon.swsscommon.Select.addSelectable", MagicMock(side_effect=NotImplementedError))
@@ -362,7 +360,6 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
         assert("sonic-ycabled/ycable/ycable_utilities/y_cable_helper.py" in str(trace))
         assert("swsscommon.Select" in str(trace))
-"""
 
 
 class TestYcableAsyncScript(object):
