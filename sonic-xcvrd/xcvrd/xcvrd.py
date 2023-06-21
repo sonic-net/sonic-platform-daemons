@@ -87,6 +87,12 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
+USR_SHARE_SONIC_PATH = "/usr/share/sonic"
+HOST_DEVICE_PATH = USR_SHARE_SONIC_PATH + "/device"
+CONTAINER_PLATFORM_PATH = USR_SHARE_SONIC_PATH + "/platform"
+PLATFORM_PMON_CTRL_FILENAME = "pmon_daemon_control.json"
+ENABLE_SFF_MGR_FLAG_NAME = "enable_xcvrd_sff_mgr"
+
 g_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -864,6 +870,361 @@ def is_fast_reboot_enabled():
 # Helper classes ===============================================================
 #
 
+# Thread wrapper class for SFF compliant transceiver management
+
+
+class SffManagerTask(threading.Thread):
+    # Subscribe to below tables in Redis DB
+    PORT_TBL_MAP = [
+        {
+            'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME
+        },
+        {
+            'STATE_DB': 'TRANSCEIVER_INFO',
+            'FILTER': ['type']
+        },
+        {
+            'STATE_DB': 'PORT_TABLE',
+            'FILTER': ['host_tx_ready']
+        },
+    ]
+    # Default number of channels for QSFP28/QSFP+ transceiver
+    DEFAULT_NUM_CHANNELS = 4
+
+    def __init__(self, namespaces, port_mapping, main_thread_stop_event):
+        threading.Thread.__init__(self)
+        self.name = "SffManagerTask"
+        self.exc = None
+        self.task_stopping_event = threading.Event()
+        self.main_thread_stop_event = main_thread_stop_event
+        self.port_dict = {}
+        # port_dict snapshot captured in the previous while loop
+        self.port_dict_prev = {}
+        self.port_mapping = copy.deepcopy(port_mapping)
+        self.xcvr_table_helper = XcvrTableHelper(namespaces)
+        self.namespaces = namespaces
+
+    def log_notice(self, message):
+        helper_logger.log_notice("SFF: {}".format(message))
+
+    def log_warning(self, message):
+        helper_logger.log_warning("SFF: {}".format(message))
+
+    def log_error(self, message):
+        helper_logger.log_error("SFF: {}".format(message))
+
+    def on_port_update_event(self, port_change_event):
+        if (port_change_event.event_type
+                not in [port_change_event.PORT_SET, port_change_event.PORT_DEL]):
+            return
+
+        lport = port_change_event.port_name
+        pport = port_change_event.port_index
+
+        # This thread doesn't need to expilictly wait on PortInitDone and
+        # PortConfigDone events, as xcvrd main thread waits on them before
+        # spawrning this thread.
+        if lport in ['PortInitDone']:
+            return
+
+        if lport in ['PortConfigDone']:
+            return
+
+        # Skip if it's not a physical port
+        if not lport.startswith('Ethernet'):
+            return
+
+        # Skip if the physical index is not available
+        if pport is None:
+            return
+
+        if port_change_event.port_dict is None:
+            return
+
+        if port_change_event.event_type == port_change_event.PORT_SET:
+            if lport not in self.port_dict:
+                self.port_dict[lport] = {}
+            if pport >= 0:
+                self.port_dict[lport]['index'] = pport
+            # This field comes from CONFIG_DB PORT_TABLE. This is the channel
+            # that blongs to this logical port, 0 means all channels. tx_disable
+            # API needs to know which channels to disable/enable for a
+            # particular physical port.
+            if 'channel' in port_change_event.port_dict:
+                self.port_dict[lport]['channel'] = port_change_event.port_dict['channel']
+            # This field comes from STATE_DB PORT_TABLE
+            if 'host_tx_ready' in port_change_event.port_dict:
+                self.port_dict[lport]['host_tx_ready'] = \
+                        port_change_event.port_dict['host_tx_ready']
+            # This field comes from STATE_DB TRANSCEIVER_INFO table.
+            # TRANSCEIVER_INFO has the same life cycle as a transceiver, if
+            # transceiver is inserted/removed, TRANSCEIVER_INFO is also
+            # created/deleted. Thus this filed can used to determine
+            # insertion/removal event.
+            if 'type' in port_change_event.port_dict:
+                self.port_dict[lport]['type'] = port_change_event.port_dict['type']
+        # CONFIG_DB PORT_TABLE DEL case:
+        elif port_change_event.db_name and \
+                port_change_event.db_name == 'CONFIG_DB':
+            # Only when port is removed from CONFIG, we consider this entry as deleted.
+            if lport in self.port_dict:
+                del self.port_dict[lport]
+        # STATE_DB TRANSCEIVER_INFO DEL case:
+        elif port_change_event.table_name and \
+                port_change_event.table_name == 'TRANSCEIVER_INFO':
+            # TRANSCEIVER_INFO DEL corresponds to transceiver removal (not
+            # port/interface removal), so we only remove 'type' field to help
+            # determine xcvr removal/insertion event
+            if lport in self.port_dict and 'type' in self.port_dict[lport]:
+                del self.port_dict[lport]['type']
+
+    def get_host_tx_status(self, lport):
+        host_tx_ready = 'false'
+
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+
+        found, port_info = state_port_tbl.get(lport)
+        if found and 'host_tx_ready' in dict(port_info):
+            host_tx_ready = dict(port_info)['host_tx_ready']
+        return host_tx_ready
+
+    def run(self):
+        if platform_chassis is None:
+            self.log_notice("Platform chassis is not available, stopping...")
+            return
+
+        try:
+            self.task_worker()
+        except Exception as e:
+            helper_logger.log_error("Exception occured at {} thread due to {}".format(
+                threading.current_thread().getName(), repr(e)))
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            for tb_line in msg:
+                for tb_line_split in tb_line.splitlines():
+                    helper_logger.log_error(tb_line_split)
+            self.exc = e
+            self.main_thread_stop_event.set()
+
+    def join(self):
+        self.task_stopping_event.set()
+        threading.Thread.join(self)
+        if self.exc:
+            raise self.exc
+
+    def calculate_tx_disable_delta_array(self, cur_tx_disable_array, tx_disable_flag, channel):
+        """
+        Calculate the delta between the current transmitter (TX) disable array
+        and a new TX disable flag for a specific channel. The function returns a
+        new array (delta_array) where each entry indicates whether there's a
+        difference for each corresponding channel in the TX disable array.
+
+        Args:
+            cur_tx_disable_array (list): Current array of TX disable flags for all channels.
+            tx_disable_flag (bool): The new TX disable flag that needs to be compared
+                                    with the current flags.
+            channel (int): The specific channel that needs to be checked. If channel is 0, all
+                                    channels are checked.
+
+        Returns:
+            list: A boolean array where each entry indicates whether there's a
+            change for the corresponding
+                  channel in the TX disable array. True means there's a change,
+                  False means no change.
+        """
+        delta_array = []
+        for i, cur_flag in enumerate(cur_tx_disable_array):
+            is_different = (tx_disable_flag != cur_flag) if channel in [i + 1, 0] else False
+            delta_array.append(is_different)
+        return delta_array
+
+    def convert_bool_array_to_bit_mask(self, bool_array):
+        """
+        Convert a boolean array into a bitmask. If a value in the boolean array
+        is True, the corresponding bit in the bitmask is set to 1, otherwise
+        it's set to 0. The function starts from the least significant bit for
+        the first item in the boolean array.
+
+        Args:
+            bool_array (list): An array of boolean values.
+
+        Returns:
+            int: A bitmask corresponding to the input boolean array.
+        """
+        mask = 0
+        for i, flag in enumerate(bool_array):
+            mask += (1 << i if flag else 0)
+        return mask
+
+    def task_worker(self):
+        '''
+        The goal of sff_mgr is to make sure SFF compliant modules are brought up
+        in a deterministc way, meaning TX is enabled only after host_tx_ready
+        becomes True, and TX will be disabled when host_tx_ready becomes False.
+        This will help eliminate link stability issue and potential interface
+        flap, also turning off TX reduces the power consumption and avoid any
+        lab hazard for admin shut interface.
+
+        sff_mgr will only proceed at two events: transceiver insertion event
+        (including bootup and hot plugin) and host_tx_ready change event, all
+        other cases are ignored. If either of these two events is detected,
+        sff_mgr will determine the target tx_disable value based on
+        host_tx_ready, and also check the current HW value of tx_disable/enable,
+        if it's already in target tx_disable/enable value, no need to take
+        action, otherwise, sff_mgr will set the target tx_disable/enable value
+        to HW.
+
+        To detect these two events, sff_mgr listens to below DB tables, and
+        mantains a local copy of those DB values, stored in self.port_dict. In
+        each round of task_worker while loop, sff_mgr will calculate the delta
+        between current self.port_dict and previous self.port_dict (i.e.
+        self.port_dict_prev), and determine whether there is a change event.
+            1. STATE_DB PORT_TABLE's 'host_tx_ready' field for host_tx_ready
+               change event.
+            2. STATE_DB TRANSCEIVER_INFO table's 'type' field for insesrtion
+               event. Since TRANSCEIVER_INFO table has the same life cycle of
+               transceiver module insertion/removal, its DB entry will get
+               created at xcvr insertion, and will get deleted at xcvr removal.
+               TRANSCEIVER_STATUS table can also be used to detect
+               insertion/removal event, but 'type' field of TRANSCEIVER_INFO
+               table can also be used to filter out unwanted xcvr type, thus
+               TRANSCEIVER_INFO table is used here.
+
+        On the other hand, sff_mgr also listens to CONFIG_DB PORT_TABLE for info
+        such as 'index'/etc.
+
+        Platform can decide whether to enable sff_mgr via platform
+        enable_sff_mgr flag. If enable_sff_mgr is False, sff_mgr will not run.
+
+        There is a behavior change (and requirement) for the platforms that
+        enable this sff_mgr feature: platform needs to keep TX in disabled state
+        after module coming out-of-reset, in either module insertion or bootup
+        cases. This is to make sure the module is not transmitting with TX
+        enabled before host_tx_ready is True. No impact for the platforms in
+        current deployment (since they don't enable it explictly.)
+
+        '''
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+
+        # CONFIG updates, and STATE_DB for insertion/removal, and host_tx_ready change
+        sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, self,
+                                                                     self.PORT_TBL_MAP)
+        while not self.task_stopping_event.is_set():
+            # Internally, handle_port_update_event will block for up to
+            # SELECT_TIMEOUT_MSECS until a message is received. A message is
+            # received when there is a Redis SET/DEL operation in the DB tables.
+            # Upon process restart, messages will be replayed for all fields, no
+            # need to explictly query the DB tables here.
+            port_mapping.handle_port_update_event(sel, asic_context, self.task_stopping_event, self,
+                                                  self.on_port_update_event)
+
+            for lport in list(self.port_dict.keys()):
+                if self.task_stopping_event.is_set():
+                    break
+                data = self.port_dict[lport]
+                pport = int(data.get('index', '-1'))
+                channel = int(data.get('channel', '0'))
+                xcvr_type = data.get('type', None)
+                xcvr_inserted = False
+                host_tx_ready_changed = False
+                if pport < 0 or channel < 0:
+                    continue
+
+                if xcvr_type is None:
+                    # TRANSCEIVER_INFO table's 'type' is not ready, meaning xcvr is not present
+                    continue
+
+                # Procced only for 100G/40G
+                if not (xcvr_type.startswith('QSFP28') or xcvr_type.startswith('QSFP+')):
+                    continue
+
+                # Handle the case when Xcvrd was NOT running when 'host_tx_ready'
+                # was updated or this is the first run so reconcile
+                if 'host_tx_ready' not in data:
+                    data['host_tx_ready'] = self.get_host_tx_status(lport)
+
+                # It's a xcvr insertion case if TRANSCEIVER_INFO 'type' doesn't exist
+                # in previous port_dict sanpshot
+                if lport not in self.port_dict_prev or 'type' not in self.port_dict_prev[lport]:
+                    xcvr_inserted = True
+                # Check if there's an diff between current and previous host_tx_ready
+                if (lport not in self.port_dict_prev or
+                        'host_tx_ready' not in self.port_dict_prev[lport] or
+                        self.port_dict_prev[lport]['host_tx_ready'] != data['host_tx_ready']):
+                    host_tx_ready_changed = True
+                # Only proceed on xcvr insertion case or the case of host_tx_ready getting changed
+                if (not xcvr_inserted) and (not host_tx_ready_changed):
+                    continue
+                self.log_notice("{}: xcvr_inserted={}, host_tx_ready_changed={}".format(
+                    lport, xcvr_inserted, host_tx_ready_changed))
+
+                # double-check the HW presence before moving forward
+                sfp = platform_chassis.get_sfp(pport)
+                if not sfp.get_presence():
+                    self.log_error("{}: module not present!".format(lport))
+                    del self.port_dict[lport]
+                    continue
+                try:
+                    # Skip if XcvrApi is not supported
+                    api = sfp.get_xcvr_api()
+                    if api is None:
+                        self.log_error(
+                            "{}: skipping sff_mgr since no xcvr api!".format(lport))
+                        continue
+
+                    # Skip if it's not a paged memory device
+                    if api.is_flat_memory():
+                        self.log_notice(
+                            "{}: skipping sff_mgr for flat memory xcvr".format(lport))
+                        continue
+
+                    # Skip if it's a copper cable
+                    if api.is_copper():
+                        self.log_notice(
+                            "{}: skipping sff_mgr for copper cable".format(lport))
+                        continue
+
+                    # Skip if tx_disable action is not supported for this xcvr
+                    if not api.get_tx_disable_support():
+                        self.log_notice(
+                            "{}: skipping sff_mgr due to tx_disable not supported".format(
+                                lport))
+                        continue
+                except AttributeError:
+                    # Skip if these essential routines are not available
+                    continue
+
+                target_tx_disable_flag = data['host_tx_ready'] == 'false'
+                # get_tx_disable API returns an array of bool, with tx_disable flag on each channel.
+                # True means tx disabled; False means tx enabled.
+                cur_tx_disable_array = api.get_tx_disable()
+                if cur_tx_disable_array is None:
+                    self.log_error("{}: Failed to get current tx_disable value".format(lport))
+                    # If reading current tx_disable/enable value failed (could be due to
+                    # read error), then set this variable to the opposite value of
+                    # target_tx_disable_flag, to let detla array to be True on
+                    # all the interested channels, to try best-effort TX disable/enable.
+                    cur_tx_disable_array = [not target_tx_disable_flag] * self.DEFAULT_NUM_CHANNELS
+                # Get an array of bool, where it's True only on the channels that need change.
+                delta_array = self.calculate_tx_disable_delta_array(cur_tx_disable_array,
+                                                                    target_tx_disable_flag, channel)
+                mask = self.convert_bool_array_to_bit_mask(delta_array)
+                if mask == 0:
+                    self.log_notice("{}: No change is needed for tx_disable value".format(lport))
+                    continue
+                if api.tx_disable_channel(mask, target_tx_disable_flag):
+                    self.log_notice("{}: TX was {} with channel mask: {}".format(
+                        lport, "disabled" if target_tx_disable_flag else "enabled", bin(mask)))
+                else:
+                    self.log_error("{}: Failed to {} TX with channel mask: {}".format(
+                        lport, "disable" if target_tx_disable_flag else "enable", bin(mask)))
+
+            # Take a snapshot for port_dict,
+            # this will be used to calculate diff in the next while loop
+            self.port_dict_prev = copy.deepcopy(self.port_dict)
+
+
 # Thread wrapper class for CMIS transceiver management
 
 class CmisManagerTask(threading.Thread):
@@ -1095,7 +1456,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-	
+
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -1317,9 +1678,9 @@ class CmisManagerTask(threading.Thread):
     def configure_tx_output_power(self, api, lport, tx_power):
         min_p, max_p = api.get_supported_power_config()
         if tx_power < min_p:
-           self.log_error("{} configured tx power {} < minimum power {} supported".format(lport, tx_power, min_p))
+            self.log_error("{} configured tx power {} < minimum power {} supported".format(lport, tx_power, min_p))
         if tx_power > max_p:
-           self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
+            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
     def configure_laser_frequency(self, api, lport, freq, grid=75):
@@ -1393,10 +1754,10 @@ class CmisManagerTask(threading.Thread):
                 # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
                 # was updated or this is the first run so reconcile the above two attributes
                 if 'host_tx_ready' not in self.port_dict[lport]:
-                   self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
+                    self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
 
                 if 'admin_status' not in self.port_dict[lport]:
-                   self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
+                    self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
@@ -1436,10 +1797,10 @@ class CmisManagerTask(threading.Thread):
                         continue
 
                     if api.is_coherent_module():
-                       if 'tx_power' not in self.port_dict[lport]:
-                           self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
-                       if 'laser_freq' not in self.port_dict[lport]:
-                           self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
+                        if 'tx_power' not in self.port_dict[lport]:
+                            self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
+                        if 'laser_freq' not in self.port_dict[lport]:
+                            self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
                 except AttributeError:
                     # Skip if these essential routines are not available
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
@@ -1491,7 +1852,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-			
+
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -1509,30 +1870,30 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
-                           self.log_notice("{} Forcing Tx laser OFF".format(lport))
-                           # Force DataPath re-init
-                           api.tx_disable_channel(media_lanes_mask, True)
-                           self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                           continue
+                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                            # Force DataPath re-init
+                            api.tx_disable_channel(media_lanes_mask, True)
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                            continue
                     # Configure the target output power if ZR module
                         if api.is_coherent_module():
-                           tx_power = self.port_dict[lport]['tx_power']
-                           # Prevent configuring same tx power multiple times
-                           if 0 != tx_power and tx_power != api.get_tx_config_power():
-                              if 1 != self.configure_tx_output_power(api, lport, tx_power):
-                                 self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
-                              else:
-                                 self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
+                            tx_power = self.port_dict[lport]['tx_power']
+                            # Prevent configuring same tx power multiple times
+                            if 0 != tx_power and tx_power != api.get_tx_config_power():
+                                if 1 != self.configure_tx_output_power(api, lport, tx_power):
+                                    self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
+                                else:
+                                    self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                           freq = self.port_dict[lport]['laser_freq']
-                           # If user requested frequency is NOT the same as configured on the module
-                           # force datapath re-initialization
-                           if 0 != freq and freq != api.get_laser_config_freq():
-                              need_update = True
+                            freq = self.port_dict[lport]['laser_freq']
+                            # If user requested frequency is NOT the same as configured on the module
+                            # force datapath re-initialization
+                            if 0 != freq and freq != api.get_laser_config_freq():
+                                need_update = True
 
                         if not need_update:
                             # No application updates
@@ -1575,13 +1936,13 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         if api.is_coherent_module():
-                        # For ZR module, configure the laser frequency when Datapath is in Deactivated state
-                           freq = self.port_dict[lport]['laser_freq']
-                           if 0 != freq:
+                            # For ZR module, configure the laser frequency when Datapath is in Deactivated state
+                            freq = self.port_dict[lport]['laser_freq']
+                            if 0 != freq:
                                 if 1 != self.configure_laser_frequency(api, lport, freq):
-                                   self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
+                                    self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
                                 else:
-                                   self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
+                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # D.1.3 Software Configuration and Initialization
                         if not api.set_application(host_lanes_mask, appl):
@@ -2328,6 +2689,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.enable_sff_mgr = False
         self.namespaces = ['']
         self.threads = []
 
@@ -2456,6 +2818,46 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         del globals()['platform_chassis']
 
+    def load_feature_flags(self):
+        """
+        Load feature enable/skip flags from platform files.
+        """
+        platform_pmon_ctrl_file_path = self.get_platform_pmon_ctrl_file_path()
+        if platform_pmon_ctrl_file_path is not None:
+            # Load the JSON file
+            with open(platform_pmon_ctrl_file_path) as file:
+                data = json.load(file)
+                if ENABLE_SFF_MGR_FLAG_NAME in data:
+                    enable_sff_mgr = data[ENABLE_SFF_MGR_FLAG_NAME]
+                    self.enable_sff_mgr = isinstance(enable_sff_mgr, bool) and enable_sff_mgr
+
+    def get_platform_pmon_ctrl_file_path(self):
+        """
+        Get the platform PMON control file path.
+
+        The method generates a list of potential file paths, prioritizing the container platform path.
+        It then checks these paths in order to find an existing file.
+
+        Returns:
+            str: The first found platform PMON control file path.
+            None: If no file path exists.
+        """
+        platform_env_conf_path_candidates = []
+
+        platform_env_conf_path_candidates.append(
+            os.path.join(CONTAINER_PLATFORM_PATH, PLATFORM_PMON_CTRL_FILENAME))
+
+        platform = device_info.get_platform()
+        if platform:
+            platform_env_conf_path_candidates.append(
+                os.path.join(HOST_DEVICE_PATH, platform, PLATFORM_PMON_CTRL_FILENAME))
+
+        for platform_env_conf_file_path in platform_env_conf_path_candidates:
+            if os.path.isfile(platform_env_conf_file_path):
+                return platform_env_conf_file_path
+
+        return None
+
     # Run daemon
 
     def run(self):
@@ -2463,6 +2865,16 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start daemon initialization sequence
         port_mapping_data = self.init()
+
+        self.load_feature_flags()
+        # Start the SFF manager
+        sff_manager = None
+        if self.enable_sff_mgr:
+            sff_manager = SffManagerTask(self.namespaces, port_mapping_data, self.stop_event)
+            sff_manager.start()
+            self.threads.append(sff_manager)
+        else:
+            self.log_notice("Skipping SFF Task Manager")
 
         # Start the CMIS manager
         cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr)
@@ -2503,6 +2915,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.log_error("Exiting main loop as child thread raised exception!")
             os.kill(os.getpid(), signal.SIGKILL)
 
+        # Stop the SFF manager
+        if sff_manager is not None:
+            if sff_manager.is_alive():
+                sff_manager.join()
+
         # Stop the CMIS manager
         if cmis_manager is not None:
             if cmis_manager.is_alive():
@@ -2529,7 +2946,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 class XcvrTableHelper:
     def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
-		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
+  self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
         for namespace in namespaces:
