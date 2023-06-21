@@ -921,15 +921,6 @@ class SffManagerTask(threading.Thread):
         lport = port_change_event.port_name
         pport = port_change_event.port_index
 
-        # This thread doesn't need to expilictly wait on PortInitDone and
-        # PortConfigDone events, as xcvrd main thread waits on them before
-        # spawrning this thread.
-        if lport in ['PortInitDone']:
-            return
-
-        if lport in ['PortConfigDone']:
-            return
-
         # Skip if it's not a physical port
         if not lport.startswith('Ethernet'):
             return
@@ -1110,12 +1101,22 @@ class SffManagerTask(threading.Thread):
         # CONFIG updates, and STATE_DB for insertion/removal, and host_tx_ready change
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, self,
                                                                      self.PORT_TBL_MAP)
+
+        # This thread doesn't need to expilictly wait on PortInitDone and
+        # PortConfigDone events, as xcvrd main thread waits on them before
+        # spawrning this thread.
         while not self.task_stopping_event.is_set():
+            # Take a snapshot for port_dict, this will be used to calculate diff
+            # later in the while loop to determine if there's really a value
+            # change on the notified Redis update.
+            self.port_dict_prev = copy.deepcopy(self.port_dict)
+
             # Internally, handle_port_update_event will block for up to
-            # SELECT_TIMEOUT_MSECS until a message is received. A message is
-            # received when there is a Redis SET/DEL operation in the DB tables.
-            # Upon process restart, messages will be replayed for all fields, no
-            # need to explictly query the DB tables here.
+            # SELECT_TIMEOUT_MSECS until a message is received(in select
+            # function). A message is received when there is a Redis SET/DEL
+            # operation in the DB tables. Upon process restart, messages will be
+            # replayed for all fields, no need to explictly query the DB tables
+            # here.
             port_mapping.handle_port_update_event(sel, asic_context, self.task_stopping_event, self,
                                                   self.on_port_update_event)
 
@@ -1219,10 +1220,6 @@ class SffManagerTask(threading.Thread):
                 else:
                     self.log_error("{}: Failed to {} TX with channel mask: {}".format(
                         lport, "disable" if target_tx_disable_flag else "enable", bin(mask)))
-
-            # Take a snapshot for port_dict,
-            # this will be used to calculate diff in the next while loop
-            self.port_dict_prev = copy.deepcopy(self.port_dict)
 
 
 # Thread wrapper class for CMIS transceiver management

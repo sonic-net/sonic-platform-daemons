@@ -13,7 +13,11 @@ DEFAULT_PORT_TBL_MAP = [
 
 
 class PortChangeEvent:
-    # Used for holding class-level thread-safe variable PORT_EVENT
+    # thread_local_data will be used to hold class-level local-safe variable
+    # PORT_EVENT (i.e. global variable to the local thread).
+    # thread_local_data.PORT_EVENT dict will be initialized in
+    # subscribe_port_update_event, and used to store the latest port change
+    # event for each key, to avoid duplicate event processing.
     thread_local_data = threading.local()
     PORT_ADD = 0
     PORT_REMOVE = 1
@@ -192,11 +196,14 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
             apply_filter_to_fvp(filter, fvp)
 
             if key in PortChangeEvent.thread_local_data.PORT_EVENT:
+                # Compare current event with last event on this key, to see if
+                # there's really a change on the contents.
                 diff = set(fvp.items()) - set(PortChangeEvent.thread_local_data.PORT_EVENT[key].items())
                 # Ignore duplicate events
                 if not diff:
                    PortChangeEvent.thread_local_data.PORT_EVENT[key] = fvp
                    continue
+            # Update the latest event to the cache
             PortChangeEvent.thread_local_data.PORT_EVENT[key] = fvp
 
             if fvp['op'] == swsscommon.SET_COMMAND:
