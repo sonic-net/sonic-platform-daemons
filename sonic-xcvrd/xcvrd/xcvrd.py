@@ -1144,9 +1144,11 @@ class SffManagerTask(threading.Thread):
                 if not (xcvr_type.startswith('QSFP28') or xcvr_type.startswith('QSFP+')):
                     continue
 
-                # Handle the case when Xcvrd was NOT running when 'host_tx_ready'
-                # was updated or this is the first run so reconcile
+                # Handle the case that host_tx_ready value in the local cache hasn't
+                # been updated via PortChangeEvent:
                 if 'host_tx_ready' not in data:
+                    # Fetch host_tx_ready status from STATE_DB (if not present
+                    # in DB, treat it as false), and update self.port_dict
                     data['host_tx_ready'] = self.get_host_tx_status(lport)
 
                 # It's a xcvr insertion case if TRANSCEIVER_INFO 'type' doesn't exist
