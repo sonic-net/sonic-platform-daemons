@@ -13,11 +13,11 @@ DEFAULT_PORT_TBL_MAP = [
 
 
 class PortChangeEvent:
-    # thread_local_data will be used to hold class-level local-safe variable
-    # PORT_EVENT (i.e. global variable to the local thread).
-    # thread_local_data.PORT_EVENT dict will be initialized in
-    # subscribe_port_update_event, and used to store the latest port change
-    # event for each key, to avoid duplicate event processing.
+    # thread_local_data will be used to hold class-scope thread-safe variables
+    # (i.e. global variable to the local thread), such as
+    # thread_local_data.PORT_EVENT. thread_local_data.PORT_EVENT dict will be
+    # initialized in subscribe_port_update_event, and used to store the latest
+    # port change event for each key, to avoid duplicate event processing.
     thread_local_data = threading.local()
     PORT_ADD = 0
     PORT_REMOVE = 1
@@ -127,6 +127,9 @@ def subscribe_port_update_event(namespaces, logger, port_tbl_map=DEFAULT_PORT_TB
        Format :
           { <DB name> : <Table name> , <field1>, <field2>, .. } where only field<n> update will be received
     """
+    # PORT_EVENT dict stores the latest port change event for each key, to avoid
+    # duplicate event processing. key in PORT_EVENT dict would be a combination
+    # of (key of redis DB entry, port_tbl.db_name, port_tbl.table_name)
     PortChangeEvent.thread_local_data.PORT_EVENT = {}
     sel = swsscommon.Select()
     asic_context = {}
