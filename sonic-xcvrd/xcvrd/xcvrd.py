@@ -897,8 +897,16 @@ class SffManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
+        # port_dict holds data per port entry with logical_port_name as key, it
+        # maintains local copy of the following DB fields:
+        #   CONFIG_DB PORT_TABLE 'index'
+        #   CONFIG_DB PORT_TABLE 'channel'
+        #   STATE_DB PORT_TABLE 'host_tx_ready'
+        #   STATE_DB TRANSCEIVER_INFO 'type'
+        # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
+        # Port entry's 'type' field will get deleted upon STATE_DB TRANSCEIVER_INFO DEL.
         self.port_dict = {}
-        # port_dict snapshot captured in the previous while loop
+        # port_dict snapshot captured in the previous event update loop
         self.port_dict_prev = {}
         self.port_mapping = copy.deepcopy(port_mapping)
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
@@ -1020,9 +1028,8 @@ class SffManagerTask(threading.Thread):
 
         Returns:
             list: A boolean array where each entry indicates whether there's a
-            change for the corresponding
-                  channel in the TX disable array. True means there's a change,
-                  False means no change.
+                  change for the corresponding channel in the TX disable array.
+                  True means there's a change, False means no change.
         """
         delta_array = []
         for i, cur_flag in enumerate(cur_tx_disable_array):
@@ -1083,7 +1090,7 @@ class SffManagerTask(threading.Thread):
                TRANSCEIVER_INFO table is used here.
 
         On the other hand, sff_mgr also listens to CONFIG_DB PORT_TABLE for info
-        such as 'index'/etc.
+        such as 'index', 'channel'/etc.
 
         Platform can decide whether to enable sff_mgr via platform
         enable_sff_mgr flag. If enable_sff_mgr is False, sff_mgr will not run.
@@ -1106,19 +1113,16 @@ class SffManagerTask(threading.Thread):
         # PortConfigDone events, as xcvrd main thread waits on them before
         # spawrning this thread.
         while not self.task_stopping_event.is_set():
-            # Take a snapshot for port_dict, this will be used to calculate diff
-            # later in the while loop to determine if there's really a value
-            # change on the notified Redis update.
-            self.port_dict_prev = copy.deepcopy(self.port_dict)
-
             # Internally, handle_port_update_event will block for up to
             # SELECT_TIMEOUT_MSECS until a message is received(in select
             # function). A message is received when there is a Redis SET/DEL
             # operation in the DB tables. Upon process restart, messages will be
             # replayed for all fields, no need to explictly query the DB tables
             # here.
-            port_mapping.handle_port_update_event(sel, asic_context, self.task_stopping_event, self,
-                                                  self.on_port_update_event)
+            if not port_mapping.handle_port_update_event(
+                    sel, asic_context, self.task_stopping_event, self, self.on_port_update_event):
+                # In the case of no real update, go back to the beginning of the loop
+                continue
 
             for lport in list(self.port_dict.keys()):
                 if self.task_stopping_event.is_set():
@@ -1220,6 +1224,11 @@ class SffManagerTask(threading.Thread):
                 else:
                     self.log_error("{}: Failed to {} TX with channel mask: {}".format(
                         lport, "disable" if target_tx_disable_flag else "enable", bin(mask)))
+
+            # Take a snapshot for port_dict, this will be used to calculate diff
+            # later in the while loop to determine if there's really a value
+            # change on the fields regarding to xcvr insertion and host_tx_ready.
+            self.port_dict_prev = copy.deepcopy(self.port_dict)
 
 
 # Thread wrapper class for CMIS transceiver management

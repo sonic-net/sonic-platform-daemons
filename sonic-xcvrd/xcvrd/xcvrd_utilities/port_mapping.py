@@ -157,14 +157,18 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
     """
     Select PORT update events, notify the observers upon a port update in CONFIG_DB
     or a XCVR insertion/removal in STATE_DB
+
+    Returns:
+        bool: True if there's at least one update event; False if there's no update event.
     """
+    has_event = False
     if not stop_event.is_set():
         (state, _) = sel.select(SELECT_TIMEOUT_MSECS)
         if state == swsscommon.Select.TIMEOUT:
-            return
+            return has_event
         if state != swsscommon.Select.OBJECT:
             logger.log_warning('sel.select() did not return swsscommon.Select.OBJECT')
-            return
+            return has_event
 
         port_event_cache = {}
         for port_tbl in asic_context.keys():
@@ -229,7 +233,10 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
             logger.log_warning("*** {} handle_port_update_event() fvp {}".format(
                 key, fvp))
             if port_change_event is not None:
-               port_change_event_handler(port_change_event)
+                has_event = True
+                port_change_event_handler(port_change_event)
+
+    return has_event
 
 
 def handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_change_event_handler):
