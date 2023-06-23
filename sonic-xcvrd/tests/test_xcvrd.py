@@ -46,9 +46,8 @@ class TestXcvrdThreadException(object):
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(side_effect = NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
-        port_mapping = PortMapping()
         stop_event = threading.Event()
-        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event)
         exception_received = None
         trace = None
         try:
@@ -622,9 +621,8 @@ class TestXcvrdScript(object):
         assert mock_init.call_count == 1
 
     def test_SffManagerTask_handle_port_change_event(self):
-        port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = SffManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -666,20 +664,16 @@ class TestXcvrdScript(object):
         mock_get_state_port_tbl.return_value.get.return_value = (True, {'host_tx_ready': 'true'})
 
         sff_manager_task = SffManagerTask(namespaces=DEFAULT_NAMESPACE,
-                                          port_mapping=PortMapping(),
                                           main_thread_stop_event=threading.Event())
-        sff_manager_task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=1)
-
         lport = 'Ethernet0'
-        assert sff_manager_task.get_host_tx_status(lport) == 'true'
-        sff_manager_task.port_mapping.get_asic_id_for_logical_port.assert_called_once_with(lport)
-        mock_get_state_port_tbl.assert_called_once_with(1)
+        assert sff_manager_task.get_host_tx_status(lport, 0) == 'true'
+        mock_get_state_port_tbl.assert_called_once_with(0)
         mock_get_state_port_tbl.return_value.get.assert_called_once_with(lport)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
            MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock(return_value=True))
     def test_SffManagerTask_task_worker(self, mock_chassis):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
@@ -695,12 +689,13 @@ class TestXcvrdScript(object):
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
         task = SffManagerTask(namespaces=DEFAULT_NAMESPACE,
-                              port_mapping=PortMapping(),
                               main_thread_stop_event=threading.Event())
 
         # TX enable case:
-        port_dict = {'type': 'QSFP28', 'channel': '0'}
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, port_dict)
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
+            'type': 'QSFP28',
+            'channel': '0'
+        })
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
         task.get_host_tx_status = MagicMock(return_value='true')

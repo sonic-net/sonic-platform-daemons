@@ -891,7 +891,7 @@ class SffManagerTask(threading.Thread):
     # Default number of channels for QSFP28/QSFP+ transceiver
     DEFAULT_NUM_CHANNELS = 4
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event):
+    def __init__(self, namespaces, main_thread_stop_event):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
         self.exc = None
@@ -903,12 +903,14 @@ class SffManagerTask(threading.Thread):
         #   CONFIG_DB PORT_TABLE 'channel'
         #   STATE_DB PORT_TABLE 'host_tx_ready'
         #   STATE_DB TRANSCEIVER_INFO 'type'
+        # plus 'asic_id' field which is used to identify the ASIC where the
+        # port is located. ('asic_id' always comes with every event in
+        # handle_port_update_event function)
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
         # Port entry's 'type' field will get deleted upon STATE_DB TRANSCEIVER_INFO DEL.
         self.port_dict = {}
         # port_dict snapshot captured in the previous event update loop
         self.port_dict_prev = {}
-        self.port_mapping = copy.deepcopy(port_mapping)
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.namespaces = namespaces
 
@@ -928,6 +930,7 @@ class SffManagerTask(threading.Thread):
 
         lport = port_change_event.port_name
         pport = port_change_event.port_index
+        asic_id = port_change_event.asic_id
 
         # Skip if it's not a physical port
         if not lport.startswith('Ethernet'):
@@ -962,6 +965,7 @@ class SffManagerTask(threading.Thread):
             # insertion/removal event.
             if 'type' in port_change_event.port_dict:
                 self.port_dict[lport]['type'] = port_change_event.port_dict['type']
+            self.port_dict[lport]['asic_id'] = asic_id
         # CONFIG_DB PORT_TABLE DEL case:
         elif port_change_event.db_name and \
                 port_change_event.db_name == 'CONFIG_DB':
@@ -977,10 +981,9 @@ class SffManagerTask(threading.Thread):
             if lport in self.port_dict and 'type' in self.port_dict[lport]:
                 del self.port_dict[lport]['type']
 
-    def get_host_tx_status(self, lport):
+    def get_host_tx_status(self, lport, asic_index):
         host_tx_ready = 'false'
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
         state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
 
         found, port_info = state_port_tbl.get(lport)
@@ -1093,7 +1096,8 @@ class SffManagerTask(threading.Thread):
         such as 'index', 'channel'/etc.
 
         Platform can decide whether to enable sff_mgr via platform
-        enable_sff_mgr flag. If enable_sff_mgr is False, sff_mgr will not run.
+        enable_sff_mgr flag. If enable_sff_mgr is False or not present, sff_mgr
+        will not run. By default, it's disabled.
 
         There is a behavior change (and requirement) for the platforms that
         enable this sff_mgr feature: platform needs to keep TX in disabled state
@@ -1149,7 +1153,9 @@ class SffManagerTask(threading.Thread):
                 if 'host_tx_ready' not in data:
                     # Fetch host_tx_ready status from STATE_DB (if not present
                     # in DB, treat it as false), and update self.port_dict
-                    data['host_tx_ready'] = self.get_host_tx_status(lport)
+                    data['host_tx_ready'] = self.get_host_tx_status(lport, data['asic_id'])
+                    self.log_notice("{}: fetched DB and updated host_tx_ready={} locally".format(
+                        lport, data['host_tx_ready']))
 
                 # It's a xcvr insertion case if TRANSCEIVER_INFO 'type' doesn't exist
                 # in previous port_dict sanpshot
@@ -1160,7 +1166,12 @@ class SffManagerTask(threading.Thread):
                         'host_tx_ready' not in self.port_dict_prev[lport] or
                         self.port_dict_prev[lport]['host_tx_ready'] != data['host_tx_ready']):
                     host_tx_ready_changed = True
-                # Only proceed on xcvr insertion case or the case of host_tx_ready getting changed
+                # Only proceed on xcvr insertion case or the case of
+                # host_tx_ready getting changed.
+                # Even though handle_port_update_event() filters out duplicate
+                # events, we still need to have this below extra check to ignore
+                # the event that is not related to insertrion or host_tx_ready
+                # change, such as CONFIG_DB related change.
                 if (not xcvr_inserted) and (not host_tx_ready_changed):
                     continue
                 self.log_notice("{}: xcvr_inserted={}, host_tx_ready_changed={}".format(
@@ -2878,7 +2889,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the SFF manager
         sff_manager = None
         if self.enable_sff_mgr:
-            sff_manager = SffManagerTask(self.namespaces, port_mapping_data, self.stop_event)
+            sff_manager = SffManagerTask(self.namespaces, self.stop_event)
             sff_manager.start()
             self.threads.append(sff_manager)
         else:
