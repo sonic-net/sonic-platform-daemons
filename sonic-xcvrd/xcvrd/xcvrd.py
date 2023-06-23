@@ -903,9 +903,8 @@ class SffManagerTask(threading.Thread):
         #   CONFIG_DB PORT_TABLE 'channel'
         #   STATE_DB PORT_TABLE 'host_tx_ready'
         #   STATE_DB TRANSCEIVER_INFO 'type'
-        # plus 'asic_id' field which is used to identify the ASIC where the
-        # port is located. ('asic_id' always comes with every event in
-        # handle_port_update_event function)
+        # plus 'asic_id' from PortChangeEvent.asic_id (asic_id always gets
+        # filled in handle_port_update_event function based on asic_context)
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
         # Port entry's 'type' field will get deleted upon STATE_DB TRANSCEIVER_INFO DEL.
         self.port_dict = {}
