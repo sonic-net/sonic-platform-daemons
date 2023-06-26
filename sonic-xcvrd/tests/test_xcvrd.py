@@ -1055,7 +1055,7 @@ class TestXcvrdScript(object):
         assert task.isPortConfigDone
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
-                                            {'speed': '400000', 'lanes': '1,2,3,4,5,6,7,8'})
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
 
