@@ -2,6 +2,8 @@
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd import *
+from xcvrd.sff_mgr import *
+from xcvrd.xcvrd_utilities.xcvr_table_helper import *
 import pytest
 import copy
 import os
@@ -43,11 +45,11 @@ media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = gl
 
 class TestXcvrdThreadException(object):
 
-    @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(side_effect = NotImplementedError))
+    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
+           MagicMock(side_effect = NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
         stop_event = threading.Event()
-        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event)
+        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
         exception_received = None
         trace = None
         try:
@@ -60,7 +62,7 @@ class TestXcvrdThreadException(object):
         assert not sff_mgr.is_alive()
         assert(type(exception_received) == NotImplementedError)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
-        assert("sonic-xcvrd/xcvrd/xcvrd.py" in str(trace))
+        assert("sonic-xcvrd/xcvrd/sff_mgr.py" in str(trace))
         assert("subscribe_port_update_event" in str(trace))
 
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
@@ -622,7 +624,7 @@ class TestXcvrdScript(object):
 
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
-        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event)
+        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -663,8 +665,11 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
         mock_get_state_port_tbl.return_value.get.return_value = (True, {'host_tx_ready': 'true'})
 
-        sff_manager_task = SffManagerTask(namespaces=DEFAULT_NAMESPACE,
-                                          main_thread_stop_event=threading.Event())
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                 threading.Event(),
+                                 MagicMock(),
+                                 helper_logger)
+
         lport = 'Ethernet0'
         assert sff_manager_task.get_host_tx_status(lport, 0) == 'true'
         mock_get_state_port_tbl.assert_called_once_with(0)
@@ -688,8 +693,10 @@ class TestXcvrdScript(object):
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        task = SffManagerTask(namespaces=DEFAULT_NAMESPACE,
-                              main_thread_stop_event=threading.Event())
+        task = SffManagerTask(DEFAULT_NAMESPACE,
+                              threading.Event(),
+                              mock_chassis,
+                              helper_logger)
 
         # TX enable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
