@@ -125,8 +125,8 @@ class SffManagerTask(threading.Thread):
         elif port_change_event.table_name and \
                 port_change_event.table_name == 'TRANSCEIVER_INFO':
             # TRANSCEIVER_INFO DEL corresponds to transceiver removal (not
-            # port/interface removal), so we only remove 'type' field to help
-            # determine xcvr removal/insertion event
+            # port/interface removal), in this case, remove 'type' field from
+            # self.port_dict
             if lport in self.port_dict and 'type' in self.port_dict[lport]:
                 del self.port_dict[lport]['type']
 
