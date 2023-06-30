@@ -493,19 +493,21 @@ def create_channel(type_chan, level, kvp, soc_ip, port, asic_index, fwd_state_re
         if credential is None or target_name is None:
             return (None, None)
 
-        GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
 
         if is_async:
-            channel = grpc.aio.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+            ASYNC_GRPC_CLIENT_OPTIONS = []
+            ASYNC_GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
+            channel = grpc.aio.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=ASYNC_GRPC_CLIENT_OPTIONS)
             stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
         else:
+            GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
             channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
             stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
 
     else:
         if is_async:
-            channel = grpc.aio.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
+            channel = grpc.aio.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT))
             stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
         else:
             channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
