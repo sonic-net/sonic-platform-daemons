@@ -88,6 +88,7 @@ POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
 g_dict = {}
+g_optics_si_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
 # Global chassis object based on new platform api
@@ -791,6 +792,135 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
         app_port_tbl.set(port_name, fvs)
 
+def get_optics_si_settings_value(physical_port, lane_speed, key):
+    GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
+    PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
+    DEFAULT_KEY = 'Default'
+    SPEED_KEY = lane_speed + 'G_SPEED'
+    RANGE_SEPARATOR = '-'
+    COMMA_SEPARATOR = ','
+    default_dict = {}
+
+    # Keys under global media settings can be a list or range or list of ranges
+    # of physical port numbers. Below are some examples
+    # 1-32
+    # 1,2,3,4,5
+    # 1-4,9-12
+
+    RANGE_SEPARATOR = '-'
+    COMMA_SEPARATOR = ','
+    default_dict = {}
+    optics_si_dict = {}
+
+    # Keys under global media settings can be a list or range or list of ranges
+    # of physical port numbers. Below are some examples
+    # 1-32
+    # 1,2,3,4,5
+    # 1-4,9-12
+
+    if GLOBAL_MEDIA_SETTINGS_KEY in g_optics_si_dict:
+        for keys in g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
+            if COMMA_SEPARATOR in keys:
+                port_list = keys.split(COMMA_SEPARATOR)
+                for port in port_list:
+                    if RANGE_SEPARATOR in port:
+                        if check_port_in_range(port, physical_port):
+                            optics_si_dict = g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                            break
+                    elif str(physical_port) == port:
+                        optics_si_dict = g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                        break
+
+            elif RANGE_SEPARATOR in keys:
+                if check_port_in_range(keys, physical_port):
+                    optics_si_dict = g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+
+            key_dict = {}
+            if SPEED_KEY in optics_si_dict:
+                if key in optics_si_dict[SPEED_KEY]:
+                    key_dict = optics_si_dict[SPEED_KEY]
+                    return  key_dict[key]
+                if DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
+                    key_dict = optics_si_dict[SPEED_KEY]
+                    default_dict = key_dict[DEFAULT_KEY]
+
+    optics_si_dict = {}
+    key_dict = {}
+
+    if PORT_MEDIA_SETTINGS_KEY in g_optics_si_dict:
+        for keys in g_optics_si_dict[PORT_MEDIA_SETTINGS_KEY]:
+            if int(keys) == physical_port:
+                optics_si_dict = g_optics_si_dict[PORT_MEDIA_SETTINGS_KEY][keys]
+                break
+
+        if len(optics_si_dict) == 0:
+            if len(default_dict) != 0:
+                return default_dict
+            else:
+                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+            return {}
+
+        if SPEED_KEY in optics_si_dict:
+            if key in optics_si_dict[SPEED_KEY]:
+                key_dict = optics_si_dict[SPEED_KEY]
+                return  key_dict[key]
+            if DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
+                key_dict = optics_si_dict[SPEED_KEY]
+                default_dict = key_dict[DEFAULT_KEY]
+            elif len(default_dict) != 0:
+                return default_dict
+    else:
+        if len(default_dict) != 0:
+            return default_dict
+
+    return {}
+
+def get_optics_si_settings_key(physical_port, transceiver_dict):
+    vendor_name_str = transceiver_dict['manufacturer']
+    vendor_pn_str = transceiver_dict['model']
+    vendor_key = vendor_name_str.upper().strip() + '-' + vendor_pn_str.strip()
+
+    return vendor_key
+
+def notify_optics_si_setting(logical_port_name, lane_speed, port_mapping):
+
+    if not g_optics_si_dict:
+        return
+
+    transceiver_dict = {}
+    ganged_port = False
+    ganged_member_num = 1
+    optics_si = {}
+
+    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
+    if physical_port_list is None:
+        helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
+        return PHYSICAL_PORT_NOT_EXIST
+
+    if len(physical_port_list) > 1:
+        ganged_port = True
+
+    for physical_port in physical_port_list:
+        logical_port_list = port_mapping.get_physical_to_logical(physical_port)
+        num_logical_ports = len(logical_port_list)
+        logical_idx = logical_port_list.index(logical_port_name)
+        if not _wrapper_get_presence(physical_port):
+            helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
+            continue
+        port_info_dict = _wrapper_get_transceiver_info(physical_port)
+        if port_info_dict is not None:
+            transceiver_dict[physical_port] = port_info_dict
+        if physical_port not in transceiver_dict:
+            helper_logger.log_error("Module {} eeprom not populated in transceiver dict".format(physical_port))
+            continue
+
+        port_name = get_physical_port_name(logical_port_name,
+                                           ganged_member_num, ganged_port)
+        ganged_member_num += 1
+        key = get_optics_si_settings_key(physical_port, transceiver_dict[physical_port])
+        optics_si = get_optics_si_settings_value(physical_port, lane_speed, key)
+
+        return optics_si
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
@@ -1398,6 +1528,9 @@ class CmisManagerTask(threading.Thread):
                 if 'admin_status' not in self.port_dict[lport]:
                    self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
+	        if 'optics_si_validated' not in self.port_dict[lport]:
+                    self.port_dict[lport]['optics_si_validated'] = False
+
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
                 lanes = info.get('lanes', "").strip()
@@ -1614,12 +1747,29 @@ class CmisManagerTask(threading.Thread):
                             self.log_notice("{} waiting for host tx ready...".format(lport))
                             continue
 
-                        # D.1.3 Software Configuration and Initialization
-                        api.set_datapath_init(host_lanes_mask)
-                        dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
-                        self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
+		        optics_si_dict = {}
+                        if not self.port_dict[lport]['optics_si_validated'] and g_optics_si_dict:
+                            # Apply module SI settings if applicable
+                            lane_speed = int(speed/1000)//host_lane_count
+                            optics_si_dict = notify_optics_si_setting(lport, lane_speed, self.port_mapping)
+
+                            if optics_si_dict:
+                                self.log_notice("{}: Optics SI found. Apply".format(lport))
+                                if not api.set_module_si_settings(host_lanes_mask, appl, optics_si_dict):
+                                    self.log_notice("{}: unable to apply SI settings and set application".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                    continue
+                                else:
+                                    # Recheck config errors
+                                    self.port_dict[lport]['optics_si_validated'] = True
+                                    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+                        else:
+                            # D.1.3 Software Configuration and Initialization
+                            api.set_datapath_init(host_lanes_mask)
+                            dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
+                            self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
+                            self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
@@ -2378,6 +2528,18 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         with open(media_settings_file_path, "r") as media_file:
             g_dict = json.load(media_file)
 
+    def load_optics_si_settings(self):
+        global g_optics_si_dict
+        (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+
+        optics_si_settings_file_path = os.path.join(platform_path, "optics_si_settings.json")
+        if not os.path.isfile(optics_si_settings_file_path):
+            self.log_info("xcvrd: No optics SI file exists")
+            return {}
+
+	with open(optics_si_settings_file_path, "r") as optics_si_file:
+            g_optics_si_dict = json.load(optics_si_file)
+		 
     # Initialize daemon
     def init(self):
         global platform_sfputil
@@ -2419,9 +2581,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         if is_fast_reboot_enabled():
-            self.log_info("Skip loading media_settings.json in case of fast-reboot")
+            self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
+	    self.load_optics_si_settings()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
