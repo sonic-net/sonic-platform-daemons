@@ -806,18 +806,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
     # 1-32
     # 1,2,3,4,5
     # 1-4,9-12
-
-    RANGE_SEPARATOR = '-'
-    COMMA_SEPARATOR = ','
-    default_dict = {}
-    optics_si_dict = {}
-
-    # Keys under global media settings can be a list or range or list of ranges
-    # of physical port numbers. Below are some examples
-    # 1-32
-    # 1,2,3,4,5
-    # 1-4,9-12
-
+   
     if GLOBAL_MEDIA_SETTINGS_KEY in g_optics_si_dict:
         for keys in g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
             if COMMA_SEPARATOR in keys:
