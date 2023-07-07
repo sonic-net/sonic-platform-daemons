@@ -796,7 +796,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
     DEFAULT_KEY = 'Default'
-    SPEED_KEY = lane_speed + 'G_SPEED'
+    SPEED_KEY = str(lane_speed) + 'G_SPEED'
     RANGE_SEPARATOR = '-'
     COMMA_SEPARATOR = ','
     default_dict = {}
@@ -871,7 +871,7 @@ def get_optics_si_settings_key(physical_port, transceiver_dict):
 
     return vendor_key
 
-def notify_optics_si_setting(logical_port_name, lane_speed, port_mapping):
+def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
 
     if not g_optics_si_dict:
         return
@@ -1662,6 +1662,7 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                             continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
+			self.port_dict[lport]['optics_si_validated'] = False
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
@@ -1740,7 +1741,7 @@ class CmisManagerTask(threading.Thread):
                         if not self.port_dict[lport]['optics_si_validated'] and g_optics_si_dict:
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
-                            optics_si_dict = notify_optics_si_setting(lport, lane_speed, self.port_mapping)
+                            optics_si_dict = fetch_optics_si_setting(lport, lane_speed, self.port_mapping)
 
                             if optics_si_dict:
                                 self.log_notice("{}: Optics SI found. Apply".format(lport))
