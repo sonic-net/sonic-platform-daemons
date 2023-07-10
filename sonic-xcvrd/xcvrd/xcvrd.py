@@ -792,7 +792,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
         app_port_tbl.set(port_name, fvs)
 
-def get_optics_si_settings_value(physical_port, lane_speed, key):
+def get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
     DEFAULT_KEY = 'Default'
@@ -800,6 +800,11 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
     RANGE_SEPARATOR = '-'
     COMMA_SEPARATOR = ','
     default_dict = {}
+    optics_si_dict = {}
+
+    vendor_name_str = transceiver_dict['manufacturer'].upper().strip()
+    vendor_pn_str = transceiver_dict['model'].upper().strip()
+    key = vendor_name_str + '-' + vendor_pn_str
 
     # Keys under global media settings can be a list or range or list of ranges
     # of physical port numbers. Below are some examples
@@ -829,13 +834,15 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
                 if key in optics_si_dict[SPEED_KEY]:
                     key_dict = optics_si_dict[SPEED_KEY]
                     return  key_dict[key]
-                if DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
+		elif vendor_name_str in optics_si_dict[SPEED_KEY]:
+                    key_dict = optics_si_dict[SPEED_KEY]
+                    return  key_dict[vendor_name_str]
+                elif DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
                     key_dict = optics_si_dict[SPEED_KEY]
                     default_dict = key_dict[DEFAULT_KEY]
 
     optics_si_dict = {}
-    key_dict = {}
-
+    
     if PORT_MEDIA_SETTINGS_KEY in g_optics_si_dict:
         for keys in g_optics_si_dict[PORT_MEDIA_SETTINGS_KEY]:
             if int(keys) == physical_port:
@@ -849,11 +856,15 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
                 helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
+	key_dict = {}
         if SPEED_KEY in optics_si_dict:
             if key in optics_si_dict[SPEED_KEY]:
                 key_dict = optics_si_dict[SPEED_KEY]
                 return  key_dict[key]
-            if DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
+	    elif vendor_name_str in optics_si_dict[SPEED_KEY]:
+                key_dict = optics_si_dict[SPEED_KEY]
+                return  key_dict[vendor_name_str]
+            elif DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
                 key_dict = optics_si_dict[SPEED_KEY]
                 default_dict = key_dict[DEFAULT_KEY]
             elif len(default_dict) != 0:
@@ -863,13 +874,6 @@ def get_optics_si_settings_value(physical_port, lane_speed, key):
             return default_dict
 
     return {}
-
-def get_optics_si_settings_key(physical_port, transceiver_dict):
-    vendor_name_str = transceiver_dict['manufacturer']
-    vendor_pn_str = transceiver_dict['model']
-    vendor_key = vendor_name_str.upper().strip() + '-' + vendor_pn_str.strip()
-
-    return vendor_key
 
 def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
 
@@ -906,8 +910,7 @@ def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
         port_name = get_physical_port_name(logical_port_name,
                                            ganged_member_num, ganged_port)
         ganged_member_num += 1
-        key = get_optics_si_settings_key(physical_port, transceiver_dict[physical_port])
-        optics_si = get_optics_si_settings_value(physical_port, lane_speed, key)
+        optics_si = get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict[physical_port])
 
         return optics_si
 
