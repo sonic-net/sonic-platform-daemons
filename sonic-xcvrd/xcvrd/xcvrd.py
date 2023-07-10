@@ -869,11 +869,8 @@ def get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict):
                 default_dict = key_dict[DEFAULT_KEY]
             elif len(default_dict) != 0:
                 return default_dict
-    else:
-        if len(default_dict) != 0:
-            return default_dict
 
-    return {}
+    return default_dict
 
 def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
 
@@ -1752,10 +1749,10 @@ class CmisManagerTask(threading.Thread):
                                     self.log_notice("{}: unable to apply SI settings and set application".format(lport))
                                     self.force_cmis_reinit(lport, retries + 1)
                                     continue
-                                else:
-                                    # Recheck config errors
-                                    self.port_dict[lport]['optics_si_validated'] = True
-                                    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+
+                            # Recheck config errors
+                            self.port_dict[lport]['optics_si_validated'] = True
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
                         else:
                             # D.1.3 Software Configuration and Initialization
                             api.set_datapath_init(host_lanes_mask)
