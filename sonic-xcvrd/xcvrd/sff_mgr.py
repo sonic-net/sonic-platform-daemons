@@ -49,8 +49,7 @@ class SffManagerTask(threading.Thread):
         self.platform_chassis = platform_chassis
         # port_dict holds data per port entry with logical_port_name as key, it
         # maintains local copy of the following DB fields:
-        #   CONFIG_DB PORT_TABLE 'index'
-        #   CONFIG_DB PORT_TABLE 'channel'
+        #   CONFIG_DB PORT_TABLE 'index', 'channel', 'admin_status'
         #   STATE_DB PORT_TABLE 'host_tx_ready'
         #   STATE_DB TRANSCEIVER_INFO 'type'
         # plus 'asic_id' from PortChangeEvent.asic_id (asic_id always gets
@@ -107,6 +106,15 @@ class SffManagerTask(threading.Thread):
             if 'host_tx_ready' in port_change_event.port_dict:
                 self.port_dict[lport]['host_tx_ready'] = \
                         port_change_event.port_dict['host_tx_ready']
+            # This field comes from CONFIG_DB PORT_TABLE
+            if 'admin_status' in port_change_event.port_dict and \
+                port_change_event.db_name and \
+                port_change_event.db_name == 'CONFIG_DB':
+                # Only consider admin_status from CONFIG_DB.
+                # Ignore admin_status from STATE_DB, which may have
+                # different value.
+                self.port_dict[lport]['admin_status'] = \
+                        port_change_event.port_dict['admin_status']
             # This field comes from STATE_DB TRANSCEIVER_INFO table.
             # TRANSCEIVER_INFO has the same life cycle as a transceiver, if
             # transceiver is inserted/removed, TRANSCEIVER_INFO is also
@@ -139,6 +147,16 @@ class SffManagerTask(threading.Thread):
         if found and 'host_tx_ready' in dict(port_info):
             host_tx_ready = dict(port_info)['host_tx_ready']
         return host_tx_ready
+
+    def get_admin_status(self, lport, asic_index):
+        admin_status = 'down'
+
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+
+        found, port_info = cfg_port_tbl.get(lport)
+        if found and 'admin_status' in dict(port_info):
+            admin_status = dict(port_info)['admin_status']
+        return admin_status
 
     def run(self):
         if self.platform_chassis is None:
@@ -216,39 +234,11 @@ class SffManagerTask(threading.Thread):
         flap, also turning off TX reduces the power consumption and avoid any
         lab hazard for admin shut interface.
 
-        sff_mgr will only proceed at two events: transceiver insertion event
-        (including bootup and hot plugin) and host_tx_ready change event, all
-        other cases are ignored. If either of these two events is detected,
-        sff_mgr will determine the target tx_disable value based on
-        host_tx_ready, and also check the current HW value of tx_disable/enable,
-        if it's already in target tx_disable/enable value, no need to take
-        action, otherwise, sff_mgr will set the target tx_disable/enable value
-        to HW.
-
-        To detect these two events, sff_mgr listens to below DB tables, and
-        mantains a local copy of those DB values, stored in self.port_dict. In
-        each round of task_worker while loop, sff_mgr will calculate the delta
-        between current self.port_dict and previous self.port_dict (i.e.
-        self.port_dict_prev), and determine whether there is a change event.
-            1. STATE_DB PORT_TABLE's 'host_tx_ready' field for host_tx_ready
-               change event.
-            2. STATE_DB TRANSCEIVER_INFO table's 'type' field for insesrtion
-               event. Since TRANSCEIVER_INFO table has the same life cycle of
-               transceiver module insertion/removal, its DB entry will get
-               created at xcvr insertion, and will get deleted at xcvr removal.
-               TRANSCEIVER_STATUS table can also be used to detect
-               insertion/removal event, but 'type' field of TRANSCEIVER_INFO
-               table can also be used to filter out unwanted xcvr type, thus
-               TRANSCEIVER_INFO table is used here.
-
-        On the other hand, sff_mgr also listens to CONFIG_DB PORT_TABLE for info
-        such as 'index', 'channel'/etc.
-
         Platform can decide whether to enable sff_mgr via platform
         enable_sff_mgr flag. If enable_sff_mgr is False or not present, sff_mgr
         will not run. By default, it's disabled.
 
-        There is a behavior change (and requirement) for the platforms that
+        There is a pre-requisite for the platforms that
         enable this sff_mgr feature: platform needs to keep TX in disabled state
         after module coming out-of-reset, in either module insertion or bootup
         cases. This is to make sure the module is not transmitting with TX
@@ -285,6 +275,7 @@ class SffManagerTask(threading.Thread):
                 xcvr_type = data.get('type', None)
                 xcvr_inserted = False
                 host_tx_ready_changed = False
+                admin_status_changed = False
                 if pport < 0 or channel < 0:
                     continue
 
@@ -304,26 +295,48 @@ class SffManagerTask(threading.Thread):
                     data['host_tx_ready'] = self.get_host_tx_status(lport, data['asic_id'])
                     self.log_notice("{}: fetched DB and updated host_tx_ready={} locally".format(
                         lport, data['host_tx_ready']))
+                # Handle the case that admin_status value in the local cache hasn't
+                # been updated via PortChangeEvent:
+                if 'admin_status' not in data:
+                    # Fetch admin_status from CONFIG_DB (if not present in DB,
+                    # treat it as false), and update self.port_dict
+                    data['admin_status'] = self.get_admin_status(lport, data['asic_id'])
+                    self.log_notice("{}: fetched DB and updated admin_status={} locally".format(
+                        lport, data['admin_status']))
 
+                # Check if there's a diff between current and previous 'type'
                 # It's a xcvr insertion case if TRANSCEIVER_INFO 'type' doesn't exist
                 # in previous port_dict sanpshot
                 if lport not in self.port_dict_prev or 'type' not in self.port_dict_prev[lport]:
                     xcvr_inserted = True
-                # Check if there's an diff between current and previous host_tx_ready
+                # Check if there's a diff between current and previous host_tx_ready
                 if (lport not in self.port_dict_prev or
                         'host_tx_ready' not in self.port_dict_prev[lport] or
                         self.port_dict_prev[lport]['host_tx_ready'] != data['host_tx_ready']):
                     host_tx_ready_changed = True
-                # Only proceed on xcvr insertion case or the case of
-                # host_tx_ready getting changed.
-                # Even though handle_port_update_event() filters out duplicate
-                # events, we still need to have this below extra check to ignore
-                # the event that is not related to insertrion or host_tx_ready
-                # change, such as CONFIG_DB related change.
-                if (not xcvr_inserted) and (not host_tx_ready_changed):
+                # Check if there's a diff between current and previous admin_status
+                if (lport not in self.port_dict_prev or
+                    'admin_status' not in self.port_dict_prev[lport] or
+                    self.port_dict_prev[lport]['admin_status'] != data['admin_status']):
+                    admin_status_changed = True
+                # Skip if neither of below cases happens:
+                # 1) xcvr insertion
+                # 2) host_tx_ready getting changed
+                # 3) admin_status getting changed
+                # In addition to handle_port_update_event()'s internal filter,
+                # this check serves as additional filter to ignore irrelevant
+                # event, such as CONFIG_DB change other than admin_status field.
+                if ((not xcvr_inserted) and
+                    (not host_tx_ready_changed) and
+                    (not admin_status_changed)):
                     continue
-                self.log_notice("{}: xcvr_inserted={}, host_tx_ready_changed={}".format(
-                    lport, xcvr_inserted, host_tx_ready_changed))
+                self.log_notice(("{}: xcvr=present(inserted={}), "
+                                 "host_tx_ready={}(changed={}), "
+                                 "admin_status={}(changed={})").format(
+                    lport,
+                    xcvr_inserted,
+                    data['host_tx_ready'], host_tx_ready_changed,
+                    data['admin_status'], admin_status_changed))
 
                 # double-check the HW presence before moving forward
                 sfp = self.platform_chassis.get_sfp(pport)
@@ -361,7 +374,9 @@ class SffManagerTask(threading.Thread):
                     # Skip if these essential routines are not available
                     continue
 
-                target_tx_disable_flag = data['host_tx_ready'] == 'false'
+                # Only turn on TX if both host_tx_ready is true and admin_status is up
+                target_tx_disable_flag = not (data['host_tx_ready'] == 'true'
+                                              and data['admin_status'] == 'up')
                 # get_tx_disable API returns an array of bool, with tx_disable flag on each channel.
                 # True means tx disabled; False means tx enabled.
                 cur_tx_disable_array = api.get_tx_disable()
@@ -388,6 +403,5 @@ class SffManagerTask(threading.Thread):
 
             # Take a snapshot for port_dict, this will be used to calculate diff
             # later in the while loop to determine if there's really a value
-            # change on the fields regarding to xcvr insertion and host_tx_ready.
+            # change on the fields related to the events we care about.
             self.port_dict_prev = copy.deepcopy(self.port_dict)
-

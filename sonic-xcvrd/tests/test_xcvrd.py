@@ -675,6 +675,20 @@ class TestXcvrdScript(object):
         mock_get_state_port_tbl.assert_called_once_with(0)
         mock_get_state_port_tbl.return_value.get.assert_called_once_with(lport)
 
+    @patch.object(XcvrTableHelper, 'get_cfg_port_tbl', return_value=MagicMock())
+    def test_SffManagerTask_get_admin_status(self, mock_get_cfg_port_tbl):
+        mock_get_cfg_port_tbl.return_value.get.return_value = (True, {'admin_status': 'up'})
+
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                 threading.Event(),
+                                 MagicMock(),
+                                 helper_logger)
+
+        lport = 'Ethernet0'
+        assert sff_manager_task.get_admin_status(lport, 0) == 'up'
+        mock_get_cfg_port_tbl.assert_called_once_with(0)
+        mock_get_cfg_port_tbl.return_value.get.assert_called_once_with(lport)
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
            MagicMock(return_value=(None, None)))
@@ -706,11 +720,13 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
         task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_admin_status = MagicMock(return_value='up')
         mock_xcvr_api.get_tx_disable = MagicMock(return_value=[True, True, True, True])
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
         assert task.get_host_tx_status.call_count == 1
+        assert task.get_admin_status.call_count == 1
 
         # TX disable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
