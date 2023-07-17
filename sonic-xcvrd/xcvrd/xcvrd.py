@@ -873,13 +873,10 @@ def get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict):
     return default_dict
 
 def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
-
     if not g_optics_si_dict:
         return
 
     transceiver_dict = {}
-    ganged_port = False
-    ganged_member_num = 1
     optics_si = {}
 
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
@@ -887,13 +884,7 @@ def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
         helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
         return PHYSICAL_PORT_NOT_EXIST
 
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
     for physical_port in physical_port_list:
-        logical_port_list = port_mapping.get_physical_to_logical(physical_port)
-        num_logical_ports = len(logical_port_list)
-        logical_idx = logical_port_list.index(logical_port_name)
         if not _wrapper_get_presence(physical_port):
             helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
             continue
@@ -904,9 +895,6 @@ def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
             helper_logger.log_error("Module {} eeprom not populated in transceiver dict".format(physical_port))
             continue
 
-        port_name = get_physical_port_name(logical_port_name,
-                                           ganged_member_num, ganged_port)
-        ganged_member_num += 1
         optics_si = get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict[physical_port])
 
         return optics_si
