@@ -1650,7 +1650,7 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                             continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
-			self.port_dict[lport]['optics_si_validated'] = False
+                        self.port_dict[lport]['optics_si_validated'] = False
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
@@ -1725,7 +1725,7 @@ class CmisManagerTask(threading.Thread):
                             self.log_notice("{} waiting for host tx ready...".format(lport))
                             continue
 
-		        optics_si_dict = {}
+                        optics_si_dict = {}
                         if not self.port_dict[lport]['optics_si_validated'] and g_optics_si_dict:
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
