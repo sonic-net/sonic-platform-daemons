@@ -2515,7 +2515,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.log_info("xcvrd: No optics SI file exists")
             return {}
 
-	with open(optics_si_settings_file_path, "r") as optics_si_file:
+        with open(optics_si_settings_file_path, "r") as optics_si_file:
             g_optics_si_dict = json.load(optics_si_file)
 		 
     # Initialize daemon
@@ -2562,7 +2562,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
-	    self.load_optics_si_settings()
+            self.load_optics_si_settings()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
