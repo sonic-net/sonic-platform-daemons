@@ -1505,7 +1505,7 @@ class CmisManagerTask(threading.Thread):
                 if 'admin_status' not in self.port_dict[lport]:
                    self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
-	        if 'optics_si_validated' not in self.port_dict[lport]:
+                if 'optics_si_validated' not in self.port_dict[lport]:
                     self.port_dict[lport]['optics_si_validated'] = False
 
                 pport = int(info.get('index', "-1"))
