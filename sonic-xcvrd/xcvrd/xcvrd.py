@@ -834,7 +834,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, transceiver_dict):
                 if key in optics_si_dict[SPEED_KEY]:
                     key_dict = optics_si_dict[SPEED_KEY]
                     return  key_dict[key]
-		elif vendor_name_str in optics_si_dict[SPEED_KEY]:
+                elif vendor_name_str in optics_si_dict[SPEED_KEY]:
                     key_dict = optics_si_dict[SPEED_KEY]
                     return  key_dict[vendor_name_str]
                 elif DEFAULT_KEY in optics_si_dict[SPEED_KEY]:
