@@ -7,7 +7,8 @@ class Table:
         self.mock_dict = {}
 
     def _del(self, key):
-        del self.mock_dict[key]
+        if key in self.mock_dict:
+            del self.mock_dict[key]
         pass
 
     def set(self, key, fvs):
@@ -29,3 +30,18 @@ class FieldValuePairs:
     def __init__(self, fvs):
         self.fv_dict = dict(fvs)
         pass
+
+class Select:
+    TIMEOUT = 1
+
+    def addSelectable(self, selectable):
+        pass
+
+    def removeSelectable(self, selectable):
+        pass
+
+    def select(self, timeout=-1, interrupt_on_signal=False):
+        return self.TIMEOUT, None
+
+class SubscriberStateTable(Table):
+    pass
