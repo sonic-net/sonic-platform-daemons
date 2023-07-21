@@ -27,6 +27,8 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
+    from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
+    from .pm_mgr import PmUpdateTask
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -57,6 +59,9 @@ DOM_INFO_UPDATE_PERIOD_SECS = 60
 STATE_MACHINE_UPDATE_PERIOD_MSECS = 60000
 TIME_FOR_SFP_READY_SECS = 1
 
+PM_INTERVAL_TIME = "pm_interval_time"
+DEFAULT_PM_INTERVAL_60SEC = 60
+
 EVENT_ON_ALL_SFP = '-1'
 # events definition
 SYSTEM_NOT_READY = 'system_not_ready'
@@ -86,6 +91,11 @@ TEMP_UNIT = 'C'
 VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
+
+USR_SHARE_SONIC_PATH = "/usr/share/sonic"
+HOST_DEVICE_PATH = USR_SHARE_SONIC_PATH + "/device"
+CONTAINER_PLATFORM_PATH = USR_SHARE_SONIC_PATH + "/platform"
+PLATFORM_PMON_CTRL_FILENAME = "pmon_daemon_control.json"
 
 g_dict = {}
 # Global platform specific sfputil class instance
@@ -197,15 +207,6 @@ def _wrapper_get_transceiver_status(physical_port):
     if platform_chassis is not None:
         try:
             return platform_chassis.get_sfp(physical_port).get_transceiver_status()
-        except NotImplementedError:
-            pass
-    return {}
-
-
-def _wrapper_get_transceiver_pm(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_pm()
         except NotImplementedError:
             pass
     return {}
@@ -515,35 +516,6 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
             helper_logger.log_error("This functionality is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
-# Update port pm info in db
-
-
-def post_port_pm_info_to_db(logical_port_name, port_mapping, table, stop_event=threading.Event(), pm_info_cache=None):
-    for physical_port, physical_port_name in get_physical_port_name_dict(logical_port_name, port_mapping).items():
-        if stop_event.is_set():
-            break
-
-        if not _wrapper_get_presence(physical_port):
-            continue
-
-        if pm_info_cache is not None and physical_port in pm_info_cache:
-            # If cache is enabled and pm info is in cache, just read from cache, no need read from EEPROM
-            pm_info_dict = pm_info_cache[physical_port]
-        else:
-            pm_info_dict = _wrapper_get_transceiver_pm(physical_port)
-            if pm_info_cache is not None:
-                # If cache is enabled, put dom information to cache
-                pm_info_cache[physical_port] = pm_info_dict
-        if pm_info_dict is not None:
-            # Skip if empty (i.e. get_transceiver_pm API is not applicable for this xcvr)
-            if not pm_info_dict:
-                continue
-            beautify_pm_info_dict(pm_info_dict, physical_port)
-            fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
-            table.set(physical_port_name, fvs)
-        else:
-            return SFP_EEPROM_NOT_READY
-
 # Delete port dom/sfp info from db
 
 
@@ -556,8 +528,6 @@ def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, int_tbl, dom_
                 dom_tbl._del(physical_port_name)
             if dom_threshold_tbl:
                 dom_threshold_tbl._del(physical_port_name)
-            if pm_tbl:
-                pm_tbl._del(physical_port_name)
 
         except NotImplementedError:
             helper_logger.log_error("This functionality is currently not implemented for this platform")
@@ -1764,12 +1734,6 @@ class DomInfoUpdateTask(threading.Thread):
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         helper_logger.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    try:
-                        post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        helper_logger.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
@@ -2359,6 +2323,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.pm_interval = DEFAULT_PM_INTERVAL_60SEC
         self.namespaces = ['']
         self.threads = []
 
@@ -2487,6 +2452,48 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         del globals()['platform_chassis']
 
+    def load_feature_flags(self):
+        """
+        Load feature enable/skip flags from platform files.
+        """
+        platform_pmon_ctrl_file_path = self.get_platform_pmon_ctrl_file_path()
+        if platform_pmon_ctrl_file_path is not None:
+            # Load the JSON file
+            with open(platform_pmon_ctrl_file_path) as file:
+                data = json.load(file)
+                self.pm_interval = DEFAULT_PM_INTERVAL_60SEC
+                if PM_INTERVAL_TIME in data:
+                    pm_interval = int(data[PM_INTERVAL_TIME])
+                    if(( pm_interval == 30) or (pm_interval == 60) or (pm_interval == 120)):
+                        self.pm_interval = pm_interval
+
+    def get_platform_pmon_ctrl_file_path(self):
+        """
+        Get the platform PMON control file path.
+
+        The method generates a list of potential file paths, prioritizing the container platform path.
+        It then checks these paths in order to find an existing file.
+
+        Returns:
+            str: The first found platform PMON control file path.
+            None: If no file path exists.
+        """
+        platform_env_conf_path_candidates = []
+
+        platform_env_conf_path_candidates.append(
+            os.path.join(CONTAINER_PLATFORM_PATH, PLATFORM_PMON_CTRL_FILENAME))
+
+        platform = device_info.get_platform()
+        if platform:
+            platform_env_conf_path_candidates.append(
+                os.path.join(HOST_DEVICE_PATH, platform, PLATFORM_PMON_CTRL_FILENAME))
+
+        for platform_env_conf_file_path in platform_env_conf_path_candidates:
+            if os.path.isfile(platform_env_conf_file_path):
+                return platform_env_conf_file_path
+
+        return None
+
     # Run daemon
 
     def run(self):
@@ -2495,6 +2502,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start daemon initialization sequence
         port_mapping_data = self.init()
 
+        self.load_feature_flags()
         # Start the CMIS manager
         cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr)
         if not self.skip_cmis_mgr:
@@ -2510,6 +2518,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.stop_event, self.sfp_error_event)
         sfp_state_update.start()
         self.threads.append(sfp_state_update)
+
+        # Start the Performance monitoring update thread
+        pm_mgr = PmUpdateTask(self.namespaces, port_mapping_data, self.stop_event, platform_chassis, helper_logger, 0, self.pm_interval)
+        pm_mgr.start()
+        self.threads.append(pm_mgr)
 
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
@@ -2547,6 +2560,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if sfp_state_update.is_alive():
             sfp_state_update.raise_exception()
             sfp_state_update.join()
+        
+        # Stop the SFF manager
+        if pm_mgr is not None:
+            if pm_mgr.is_alive():
+                pm_mgr.join()
 
         # Start daemon deinitialization sequence
         self.deinit()
@@ -2556,53 +2574,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if self.sfp_error_event.is_set():
             sys.exit(SFP_SYSTEM_ERROR)
 
-
-class XcvrTableHelper:
-    def __init__(self, namespaces):
-        self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
-		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
-        self.state_db = {}
-        self.cfg_db = {}
-        for namespace in namespaces:
-            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            self.int_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
-            self.dom_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_SENSOR_TABLE)
-            self.dom_threshold_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_THRESHOLD_TABLE)
-            self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
-            self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
-            self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
-            appl_db = daemon_base.db_connect("APPL_DB", namespace)
-            self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-            self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
-
-    def get_intf_tbl(self, asic_id):
-        return self.int_tbl[asic_id]
-
-    def get_dom_tbl(self, asic_id):
-        return self.dom_tbl[asic_id]
-
-    def get_dom_threshold_tbl(self, asic_id):
-        return self.dom_threshold_tbl[asic_id]
-
-    def get_status_tbl(self, asic_id):
-        return self.status_tbl[asic_id]
-
-    def get_pm_tbl(self, asic_id):
-        return self.pm_tbl[asic_id]
-
-    def get_app_port_tbl(self, asic_id):
-        return self.app_port_tbl[asic_id]
-
-    def get_state_db(self, asic_id):
-        return self.state_db[asic_id]
-
-    def get_cfg_port_tbl(self, asic_id):
-        return self.cfg_port_tbl[asic_id]
-
-    def get_state_port_tbl(self, asic_id):
-        return self.state_port_tbl[asic_id]
 
 #
 # Main =========================================================================
