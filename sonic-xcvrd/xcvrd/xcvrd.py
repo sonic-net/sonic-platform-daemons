@@ -519,7 +519,7 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
 # Delete port dom/sfp info from db
 
 
-def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, int_tbl, dom_tbl, dom_threshold_tbl, pm_tbl):
+def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, int_tbl, dom_tbl, dom_threshold_tbl):
     for physical_port_name in get_physical_port_name_dict(logical_port_name, port_mapping).values():
         try:
             if int_tbl:
@@ -1776,8 +1776,7 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.port_mapping,
                                       None,
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
-                                      None,
-                                      self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id))
+                                      None)
         delete_port_from_status_table_hw(port_change_event.port_name,
                                       self.port_mapping,
                                       self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id))
@@ -2090,8 +2089,7 @@ class SfpStateUpdateTask(threading.Thread):
                                 del_port_sfp_dom_info_from_db(logical_port, self.port_mapping,
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_pm_tbl(asic_index))
+                                                              self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
                                 delete_port_from_status_table_hw(logical_port, self.port_mapping, self.xcvr_table_helper.get_status_tbl(asic_index))
                             else:
                                 try:
@@ -2118,8 +2116,7 @@ class SfpStateUpdateTask(threading.Thread):
                                                                       self.port_mapping,
                                                                       None,
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_pm_tbl(asic_index))
+                                                                      self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
                                         delete_port_from_status_table_hw(logical_port, self.port_mapping, self.xcvr_table_helper.get_status_tbl(asic_index))
                                 except (TypeError, ValueError) as e:
                                     helper_logger.log_error("{}: Got unrecognized event {}, ignored".format(logical_port, value))
@@ -2215,8 +2212,7 @@ class SfpStateUpdateTask(threading.Thread):
                                       self.port_mapping,
                                       self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_threshold_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id))
+                                      self.xcvr_table_helper.get_dom_threshold_tbl(port_change_event.asic_id))
         delete_port_from_status_table_sw(port_change_event.port_name, self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id))
         delete_port_from_status_table_hw(port_change_event.port_name,
                                          self.port_mapping,
@@ -2444,8 +2440,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data,
                                           self.xcvr_table_helper.get_intf_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                          self.xcvr_table_helper.get_pm_tbl(asic_index))
+                                          self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
             delete_port_from_status_table_sw(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index))
             delete_port_from_status_table_hw(logical_port_name, port_mapping_data, self.xcvr_table_helper.get_status_tbl(asic_index))
 
