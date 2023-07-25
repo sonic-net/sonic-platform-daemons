@@ -1552,9 +1552,6 @@ class CmisManagerTask(threading.Thread):
                 if 'admin_status' not in self.port_dict[lport]:
                    self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
-                if 'optics_si_validated' not in self.port_dict[lport]:
-                    self.port_dict[lport]['optics_si_validated'] = False
-
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
                 lanes = info.get('lanes', "").strip()
@@ -1697,7 +1694,6 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                             continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
-                        self.port_dict[lport]['optics_si_validated'] = False
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
