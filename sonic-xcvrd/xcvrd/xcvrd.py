@@ -907,7 +907,7 @@ def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
             helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
             continue
 
-	vendor_key, vendor_name = get_module_vendor_key(physical_port)
+        vendor_key, vendor_name = get_module_vendor_key(physical_port)
         if vendor_key is None:
             helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
             continue
