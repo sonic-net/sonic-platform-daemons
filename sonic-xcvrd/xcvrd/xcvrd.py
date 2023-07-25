@@ -1747,7 +1747,11 @@ class CmisManagerTask(threading.Thread):
 
                             if optics_si_dict:
                                 self.log_notice("{}: Optics SI found. Apply".format(lport))
-                                api.stage_custom_si_settings(host_lanes_mask, optics_si_dict)
+                                if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
+                                    self.log_notice("{}: unable to stage custom SI settings ".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                    continue
+
                                 #Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
 			    
