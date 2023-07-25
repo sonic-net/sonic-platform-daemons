@@ -496,16 +496,24 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': 'QSFP-DD Double Density 8X Pluggable Transceiver',
-                                                                                'vendor_rev': '0.5',
-                                                                                'serial': '0.7',
-                                                                                'manufacturer': 'Credo',
-                                                                                'model': 'CAC82X321M2MC0HW'}))
+    @patch('xcvrd.xcvrd.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
     def _check_fetch_optics_si_setting(self, index):
         logical_port_name = 'Ethernet0'
         port_mapping = PortMapping()
         lane_speed = 100
         fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping)
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_get_module_vendor_key(self, mock_chassis):
+        mock_sfp = MagicMock()
+        mock_xcvr_api = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='Credo ')
+        mock_xcvr_api.get_model = MagicMock(return_value='CAC82X321HW')
+        result = get_module_vendor_key(1)
+        assert result == ('CREDO-CAC82X321HW','CREDO')
 
     def test_detect_port_in_error_status(self):
         class MockTable:
