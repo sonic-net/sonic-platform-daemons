@@ -891,30 +891,21 @@ def get_module_vendor_key(physical_port):
 
     return vendor_name.upper().strip() + '-' + vendor_sn.upper().strip(), vendor_name.upper().strip()
 
-def fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping):
+def fetch_optics_si_setting(physical_port, lane_speed):
     if not g_optics_si_dict:
         return
 
     optics_si = {}
 
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
-
-    for physical_port in physical_port_list:
-        if not _wrapper_get_presence(physical_port):
-            helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
-            continue
-
-        vendor_key, vendor_name = get_module_vendor_key(physical_port)
-        if vendor_key is None:
-            helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
-            continue
-
-        optics_si = get_optics_si_settings_value(physical_port, lane_speed, vendor_key, vendor_name)
-
+    if not _wrapper_get_presence(physical_port):
+        helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
         return optics_si
+    vendor_key, vendor_name = get_module_vendor_key(physical_port)
+    if vendor_key is None:
+        helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
+        return optics_si
+    optics_si = get_optics_si_settings_value(physical_port, lane_speed, vendor_key, vendor_name)
+    return optics_si
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
@@ -1743,7 +1734,7 @@ class CmisManagerTask(threading.Thread):
                         if g_optics_si_dict:
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
-                            optics_si_dict = fetch_optics_si_setting(lport, lane_speed, self.port_mapping)
+                            optics_si_dict = fetch_optics_si_setting(pport, lane_speed)
 
                             if optics_si_dict:
                                 self.log_notice("{}: Optics SI found. Apply".format(lport))
