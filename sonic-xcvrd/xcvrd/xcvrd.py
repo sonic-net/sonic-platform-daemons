@@ -807,7 +807,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str
     # 1-32
     # 1,2,3,4,5
     # 1-4,9-12
-   
+
     if GLOBAL_MEDIA_SETTINGS_KEY in g_optics_si_dict:
         for keys in g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
             if COMMA_SEPARATOR in keys:
@@ -838,7 +838,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str
                     default_dict = key_dict[DEFAULT_KEY]
 
     optics_si_dict = {}
-    
+
     if PORT_MEDIA_SETTINGS_KEY in g_optics_si_dict:
         for keys in g_optics_si_dict[PORT_MEDIA_SETTINGS_KEY]:
             if int(keys) == physical_port:
@@ -1745,9 +1745,9 @@ class CmisManagerTask(threading.Thread):
 
                                 #Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
-			    
+
                         # D.1.3 Software Configuration and Initialization
-                        api.set_application(host_lanes_mask, appl, ec)         
+                        api.set_application(host_lanes_mask, appl, ec)
                         if not api.stage_datapath_init(host_lanes_mask):
                             self.log_notice("{}: unable to set application and stage DP init".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
@@ -2554,7 +2554,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         with open(optics_si_settings_file_path, "r") as optics_si_file:
             g_optics_si_dict = json.load(optics_si_file)
-		 
+
     # Initialize daemon
     def init(self):
         global platform_sfputil
