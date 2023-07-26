@@ -494,14 +494,12 @@ class TestXcvrdScript(object):
     def test_fetch_optics_si_setting_with_port(self):
        self._check_fetch_optics_si_setting(1)
 
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
     def _check_fetch_optics_si_setting(self, index):
-        logical_port_name = 'Ethernet0'
-        port_mapping = PortMapping()
+        port = 1
         lane_speed = 100
-        fetch_optics_si_setting(logical_port_name, lane_speed, port_mapping)
+        fetch_optics_si_setting(port, lane_speed)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_get_module_vendor_key(self, mock_chassis):
