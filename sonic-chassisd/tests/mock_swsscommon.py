@@ -2,8 +2,9 @@ STATE_DB = ''
 
 
 class Table:
-    def __init__(self, db, table_name):
-        self.table_name = table_name
+    def __init__(self, *argv):
+        self.db_or_pipe = argv[0]
+        self.table_name = argv[1]
         self.mock_dict = {}
 
     def _del(self, key):
@@ -45,3 +46,12 @@ class Select:
 
 class SubscriberStateTable(Table):
     pass
+
+class RedisPipeline:
+    def __init__(self, db):
+        self.db = db
+
+    def loadRedisScript(self, script):
+        self.script = script
+        self.script_mock_sha = 'd79033d1cab85249929e8c069f6784474d71cc43'
+        return self.script_mock_sha
