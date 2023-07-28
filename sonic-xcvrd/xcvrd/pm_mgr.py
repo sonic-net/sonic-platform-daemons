@@ -11,6 +11,7 @@ try:
     import threading
     import time
     import traceback
+    import sched
 
     from swsscommon import swsscommon
     from .xcvrd_utilities import sfp_status_helper
@@ -381,64 +382,70 @@ class PmUpdateTask(threading.Thread):
     def task_worker(self):
         self.log_notice("Start Performance monitoring for 400G ZR modules")
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, self, self.PORT_TBL_MAP)
+        #Schedule the PM 
+        self.scheduler = sched.scheduler(time.time, time.sleep)
+        self.scheduler.enter(self.pm_interval, 1, self.pm_update_task_worker) 
 
-        # Start loop to update PM stats info to DB periodically for PM interval time, default is 60sec
-        while not self.task_stopping_event.wait(self.pm_interval):
+        #Run all scheduled events and handle port events
+        while not self.task_stopping_event.is_set():
+            port_mapping.handle_port_update_event(sel, asic_context, self.task_stopping_event, self.helper_logger, self.on_port_update_event)
+            self.scheduler.run(blocking=False)
 
-            # Handle port change event from main thread
-            port_mapping.handle_port_update_event(sel, asic_context, self.task_stopping_event, self, self.on_port_update_event)
-            for lport in self.pm_port_list:
-                asic_index = self.port_mapping_data.get_asic_id_for_logical_port(lport)
-                if asic_index is None:
+    def pm_update_task_worker(self):
+       
+        # Schedule the next run with pm_interval
+        self.scheduler.enter(self.pm_interval, 1, self.pm_update_task_worker) 
+        #Iterate the ZR-400G port list for pm window update
+        for lport in self.pm_port_list:
+            asic_index = self.port_mapping_data.get_asic_id_for_logical_port(lport)
+            if asic_index is None:
+                continue
+            
+            physical_port = self.port_mapping_data.get_logical_to_physical(lport)[0]
+            if not physical_port:
+                continue
+
+            #skip if sfp obj or sfp is not present
+            sfp = self.platform_chassis.get_sfp(physical_port)
+            if sfp is not None:
+                if not sfp.get_presence():
                     continue
-                
-                physical_port = self.port_mapping_data.get_logical_to_physical(lport)[0]
-                if not physical_port:
+            else:
+                continue
+
+            if self.get_port_admin_status(lport) != 'up':
+                continue
+
+            if not sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_tbl(asic_index)):
+                try:
+                    pm_hw_data = self.get_transceiver_pm(physical_port)
+                except (KeyError, TypeError) as e:
+                    #continue to process next port since execption could be raised due to port reset, transceiver removal
+                    self.log_warning("Got exception {} while reading pm stats for port {}, ignored".format(repr(e), lport))
                     continue
 
-                #skip if sfp obj or sfp is not present
-                sfp = self.platform_chassis.get_sfp(physical_port)
-                if sfp is not None:
-                    if not sfp.get_presence():
-                        continue
-                else:
-                    continue
+            if not pm_hw_data:
+                continue
 
-                if self.get_port_admin_status(lport) != 'up':
-                    continue
+            self.beautify_pm_info_dict(pm_hw_data, physical_port)
 
-                if not sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_tbl(asic_index)):
-                    try:
-                        pm_hw_data = self.get_transceiver_pm(physical_port)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while reading pm stats for port {}, ignored".format(repr(e), lport))
-                        continue
+            # Update 60Sec PM time window slots
+            start_window = WINDOW_60SEC_START_NUM
+            end_window = WINDOW_60SEC_END_NUM 
+            pm_win_itrvl_in_secs = TIME_60SEC_IN_SECS
+            self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
-                if not pm_hw_data:
-                    continue
+            # Update 15min PM time window slots
+            start_window = WINDOW_15MIN_START_NUM
+            end_window = WINDOW_15MIN_END_NUM 
+            pm_win_itrvl_in_secs = TIME_15MIN_IN_SECS
+            self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
-                self.beautify_pm_info_dict(pm_hw_data, physical_port)
-
-                # Update 60Sec PM time window slots
-                start_window = WINDOW_60SEC_START_NUM
-                end_window = WINDOW_60SEC_END_NUM 
-                pm_win_itrvl_in_secs = TIME_60SEC_IN_SECS
-                self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
-
-                # Update 15min PM time window slots
-                start_window = WINDOW_15MIN_START_NUM
-                end_window = WINDOW_15MIN_END_NUM 
-                pm_win_itrvl_in_secs = TIME_15MIN_IN_SECS
-                self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
-  
-                # Update 24hrs PM time window slots
-                start_window = WINDOW_24HRS_START_NUM
-                end_window = WINDOW_24HRS_END_NUM 
-                pm_win_itrvl_in_secs = TIME_24HRS_IN_SECS
-                self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
-
-        self.log_notice("Stop Performance Monitoring")
+            # Update 24hrs PM time window slots
+            start_window = WINDOW_24HRS_START_NUM
+            end_window = WINDOW_24HRS_END_NUM 
+            pm_win_itrvl_in_secs = TIME_24HRS_IN_SECS
+            self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
     def run(self):
         if self.task_stopping_event.is_set():
