@@ -20,6 +20,3 @@ class Chassis(ChassisBase):
 
     def get_eeprom(self):
         return self._eeprom
-
-    def get_thermal_manager(self):
-        return self._thermal_manager

@@ -1,9 +1,9 @@
 import os
 import sys
 import multiprocessing
-from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
-# TODO: Clean this up once we no longer need to support Python 2
+# Python 2 support
+from imp import load_source
 if sys.version_info.major == 3:
     from unittest import mock
 else:
@@ -16,15 +16,15 @@ tests_path = os.path.dirname(os.path.abspath(__file__))
 mocked_libs_path = os.path.join(tests_path, 'mocked_libs')
 sys.path.insert(0, mocked_libs_path)
 
-
 import swsscommon
+
 # Check we are using the mocked package
 assert len(swsscommon.__path__) == 1
 assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, 'swsscommon')))
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockThermal, MockVsensor, MockIsensor
+from .mock_platform import MockChassis, MockVsensor, MockIsensor
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
