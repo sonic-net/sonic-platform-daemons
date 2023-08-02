@@ -3,12 +3,12 @@ from setuptools import setup
 setup(
     name='sonic-sensormond',
     version='1.0',
-    description='Sensor Monitor Daemon for SONiC',
+    description='Sensor Monitor daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Mridul Bajpai'
+    maintainer='Mridul Bajpai',
     maintainer_email='mridul@cisco.com',
     packages=[
         'tests'

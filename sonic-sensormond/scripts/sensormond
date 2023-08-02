@@ -86,7 +86,6 @@ class SensorStatus(logger.Logger):
         :return: True if over threshold status changed else False
         """
         if value == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
-            self.log_warning('Value/threshold of {} became unavailable {}/{}'.format(self.name, value, threshold))
             old_status = self.over_threshold
             self.over_threshold = False
             return old_status != self.over_threshold
@@ -342,8 +341,12 @@ class CurrentUpdater(logger.Logger):
         """
         if normal_status:
             self.log_notice(normal_log)
+            print(normal_log)
         else:
             self.log_warning(abnormal_log)
+            print(abnormal_log)
+            print(vars(self))
+            print(sys.path)
 
     def update(self):
         """
@@ -410,11 +413,12 @@ class CurrentUpdater(logger.Logger):
                 low_critical_threshold = try_get(isensor.get_low_critical_threshold)
 
             warning = False
+            print(current_status)
             if current != NOT_AVAILABLE and current_status.set_over_threshold(current, high_threshold):
                 self._log_on_status_changed(not current_status.over_threshold,
-                                            'High current warning cleared: {} current restored to {}mA, high threshold {}mA'.
+                                            'High Current warning cleared: {} current restored to {}mA, high threshold {}mA'.
                                             format(name, current, high_threshold),
-                                            'High current warning: {} current current {}mA, high threshold {}mA'.
+                                            'High Current warning: {} current Current {}mA, high threshold {}mA'.
                                             format(name, current, high_threshold)
                                             )
             warning = warning | current_status.over_threshold
@@ -549,8 +553,6 @@ def main():
         pass
 
     sensor_control.log_info("Shutting down with exit code {}...".format(exit_code))
-
-    sensor_control.deinit()
 
     return exit_code
 
