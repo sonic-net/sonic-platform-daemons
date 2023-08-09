@@ -2,13 +2,13 @@ from sonic_platform_base import chassis_base
 from sonic_platform_base import module_base
 from sonic_platform_base import sensor_base
 
-class MockVsensor(sensor_base.VsensorBase):
+class MockVoltageSensor(sensor_base.VoltageSensorBase):
     def __init__(self, index=None):
-        super(MockVsensor, self).__init__()
-        self._name = 'Vsensor {}'.format(index) if index != None else None
+        super(MockVoltageSensor, self).__init__()
+        self._name = 'Voltage sensor {}'.format(index) if index != None else None
         self._presence = True
-        self._model = 'Vsensor Model'
-        self._serial = 'Vsensor Serial'
+        self._model = 'Voltage sensor model'
+        self._serial = 'Voltage sensor serial'
         self._status = True
         self._position_in_parent = 1
         self._replaceable = False
@@ -85,13 +85,13 @@ class MockVsensor(sensor_base.VsensorBase):
     def is_replaceable(self):
         return self._replaceable
 
-class MockIsensor(sensor_base.IsensorBase):
+class MockCurrentSensor(sensor_base.CurrentSensorBase):
     def __init__(self, index=None):
-        super(MockIsensor, self).__init__()
-        self._name = 'Isensor {}'.format(index) if index != None else None
+        super(MockCurrentSensor, self).__init__()
+        self._name = 'Current sensor {}'.format(index) if index != None else None
         self._presence = True
-        self._model = 'Isensor Model'
-        self._serial = 'Isensor Serial'
+        self._model = 'Current sensor model'
+        self._serial = 'Current sensor serial'
         self._status = True
         self._position_in_parent = 1
         self._replaceable = False
@@ -168,11 +168,11 @@ class MockIsensor(sensor_base.IsensorBase):
     def is_replaceable(self):
         return self._replaceable
 
-class MockErrorVsensor(MockVsensor):
+class MockErrorVoltageSensor(MockVoltageSensor):
     def get_value(self):
         raise Exception('Failed to get voltage')
 
-class MockErrorIsensor(MockIsensor):
+class MockErrorCurrentSensor(MockCurrentSensor):
     def get_value(self):
         raise Exception('Failed to get current')
 
@@ -190,43 +190,43 @@ class MockChassis(chassis_base.ChassisBase):
         self._is_chassis_system = False
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
 
-    def make_over_threshold_vsensor(self):
-        vsensor = MockVsensor()
-        vsensor.make_over_threshold()
-        self._vsensor_list.append(vsensor)
+    def make_over_threshold_voltage_sensor(self):
+        voltage_sensor = MockVoltageSensor()
+        voltage_sensor.make_over_threshold()
+        self._voltage_sensor_list.append(voltage_sensor)
 
-    def make_under_threshold_vsensor(self):
-        vsensor = MockVsensor()
-        vsensor.make_under_threshold()
-        self._vsensor_list.append(vsensor)
+    def make_under_threshold_voltage_sensor(self):
+        voltage_sensor = MockVoltageSensor()
+        voltage_sensor.make_under_threshold()
+        self._voltage_sensor_list.append(voltage_sensor)
 
-    def make_error_vsensor(self):
-        vsensor = MockErrorVsensor()
-        self._vsensor_list.append(vsensor)
+    def make_error_voltage_sensor(self):
+        voltage_sensor = MockErrorVoltageSensor()
+        self._voltage_sensor_list.append(voltage_sensor)
 
-    def make_module_vsensor(self):
+    def make_module_voltage_sensor(self):
         module = MockModule()
         self._module_list.append(module)
-        module._vsensor_list.append(MockVsensor())
+        module._voltage_sensor_list.append(MockVoltageSensor())
 
-    def make_over_threshold_isensor(self):
-        isensor = MockIsensor()
-        isensor.make_over_threshold()
-        self._isensor_list.append(isensor)
+    def make_over_threshold_current_sensor(self):
+        current_sensor = MockCurrentSensor()
+        current_sensor.make_over_threshold()
+        self._current_sensor_list.append(current_sensor)
 
-    def make_under_threshold_isensor(self):
-        isensor = MockIsensor()
-        isensor.make_under_threshold()
-        self._isensor_list.append(isensor)
+    def make_under_threshold_current_sensor(self):
+        current_sensor = MockCurrentSensor()
+        current_sensor.make_under_threshold()
+        self._current_sensor_list.append(current_sensor)
 
-    def make_error_isensor(self):
-        isensor = MockErrorIsensor()
-        self._isensor_list.append(isensor)
+    def make_error_current_sensor(self):
+        current_sensor = MockErrorCurrentSensor()
+        self._current_sensor_list.append(current_sensor)
 
-    def make_module_isensor(self):
+    def make_module_current_sensor(self):
         module = MockModule()
         self._module_list.append(module)
-        module._isensor_list.append(MockIsensor())
+        module._current_sensor_list.append(MockCurrentSensor())
 
     def is_modular_chassis(self):
         return self._is_chassis_system

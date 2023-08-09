@@ -1,19 +1,17 @@
 #!/usr/bin/python3
 
-"""
+'''
     sensormond
     Sensor monitor daemon for SONiC
-"""
+'''
 
 import signal
 import sys
 import threading
 import time
-from datetime import datetime
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger
-from sonic_py_common.task_base import ProcessTaskBase
 from swsscommon import swsscommon
 
 
@@ -24,22 +22,19 @@ INVALID_SLOT      = -1
 
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 
-# Python2 support.
-SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
-                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
-
-# Exit with non-zero exit code so supervisord will restart Sensormon.
-exit_code = 1
+# Exit with non-zero exit code by default so supervisord will restart Sensormon.
+SENSORMON_ERROR_EXIT = 1
+exit_code = SENSORMON_ERROR_EXIT
 
 # Utility functions
 
 def try_get(callback, default=NOT_AVAILABLE):
-    """
+    '''
     Handy function to invoke the callback and catch NotImplementedError
     :param callback: Callback to be invoked
     :param default: Default return value if exception occur
     :return: Default return value if exception occur else return value of the callback
-    """
+    '''
     try:
         ret = callback()
         if ret is None:
@@ -65,11 +60,11 @@ class SensorStatus(logger.Logger):
         self.under_threshold = False
 
     def set_value(self, name, value):
-        """
+        '''
         Record sensor changes.
         :param name: Name of the sensor.
         :param value: New value.
-        """
+        '''
         if value == NOT_AVAILABLE:
             if self.value is not None:
                 self.log_warning('Value of {} became unavailable'.format(name))
@@ -79,12 +74,12 @@ class SensorStatus(logger.Logger):
         self.value = value
 
     def set_over_threshold(self, value, threshold):
-        """
+        '''
         Set over threshold status
         :param value: value
         :param threshold: High threshold
         :return: True if over threshold status changed else False
-        """
+        '''
         if value == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
             old_status = self.over_threshold
             self.over_threshold = False
@@ -98,12 +93,12 @@ class SensorStatus(logger.Logger):
         return True
 
     def set_under_threshold(self, value, threshold):
-        """
+        '''
         Set under value status
         :param value: value
         :param threshold: Low threshold
         :return: True if under threshold status changed else False
-        """
+        '''
         if value == NOT_AVAILABLE or threshold == NOT_AVAILABLE:
             old_status = self.under_threshold
             self.under_threshold = False
@@ -125,22 +120,22 @@ class VoltageUpdater(logger.Logger):
     VOLTAGE_INFO_TABLE_NAME = 'VOLTAGE_INFO'
 
     def __init__(self, chassis):
-        """
+        '''
         Initializer of VoltageUpdater
         :param chassis: Object representing a platform chassis
-        """
+        '''
         super(VoltageUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
         self.voltage_status_dict = {}
         state_db = daemon_base.db_connect("STATE_DB")
-        self.table = swsscommon.Table(state_db, VoltageUpdater.VOLTAGE_INFO_TABLE_NAME)
+        self.table = swsscommon.Table(state_db, self.VOLTAGE_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None
 
         self.is_chassis_system = chassis.is_modular_chassis()
         if self.is_chassis_system:
-            self.module_vsensors = set()
+            self.module_voltage_sensors = set()
             my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
             if my_slot != INVALID_SLOT:
                 try:
@@ -164,58 +159,56 @@ class VoltageUpdater(logger.Logger):
                 self.phy_entity_table._del(pek)
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
-        """
+        '''
         Log when any status changed
         :param normal_status: Expected status.
         :param normal_log: Log string for expected status.
         :param abnormal_log: Log string for unexpected status
         :return:
-        """
+        '''
         if normal_status:
             self.log_notice(normal_log)
         else:
             self.log_warning(abnormal_log)
 
     def update(self):
-        """
+        '''
         Update all voltage information to database
         :return:
-        """
+        '''
         self.log_debug("Start voltage update")
-        for index, voltage_sensor in enumerate(self.chassis.get_all_vsensors()):
+        for index, voltage_sensor in enumerate(self.chassis.get_all_voltage_sensors()):
 
-            print(index, voltage_sensor)
             self._refresh_voltage_status(CHASSIS_INFO_KEY, voltage_sensor, index)
 
         if self.is_chassis_system:
-            available_vsensors = set()
+            available_voltage_sensors = set()
             for module_index, module in enumerate(self.chassis.get_all_modules()):
                 module_name = try_get(module.get_name, 'Module {}'.format(module_index + 1))
                 
-                for vsensor_index, vsensor in enumerate(module.get_all_vsensors()):
-                    available_vsensors.add((vsensor, module_name, vsensor_index))
-                    self._refresh_voltage_status(module_name, vsensor, vsensor_index)
+                for voltage_sensor_index, voltage_sensor in enumerate(module.get_all_voltage_sensors()):
+                    available_voltage_sensors.add((voltage_sensor, module_name, voltage_sensor_index))
+                    self._refresh_voltage_status(module_name, voltage_sensor, voltage_sensor_index)
 
-            vsensors_to_remove = self.module_vsensors - available_vsensors
-            self.module_vsensors = available_vsensors
-            for vsensor, parent_name, vsensor_index in vsensors_to_remove:
-                self._remove_vsensor_from_db(vsensor, parent_name, vsensor_index)
+            voltage_sensors_to_remove = self.module_voltage_sensors - available_voltage_sensors
+            self.module_voltage_sensors = available_voltage_sensors
+            for voltage_sensor, parent_name, voltage_sensor_index in voltage_sensors_to_remove:
+                self._remove_voltage_sensor_from_db(voltage_sensor, parent_name, voltage_sensor_index)
                 
         self.log_debug("End Voltage updating")
 
-    def _refresh_voltage_status(self, parent_name, vsensor, vsensor_index):
-        """
+    def _refresh_voltage_status(self, parent_name, voltage_sensor, voltage_sensor_index):
+        '''
         Get voltage status by platform API and write to database
-        :param parent_name: Name of parent device of the vsensor object
-        :param vsensor: Object representing a platform voltage vsensor
-        :param vsensor_index: Index of the vsensor object in platform chassis
+        :param parent_name: Name of parent device of the voltage_sensor object
+        :param voltage_sensor: Object representing a platform voltage voltage_sensor
+        :param voltage_sensor_index: Index of the voltage_sensor object in platform chassis
         :return:
-        """
+        '''
         try:
-            name = try_get(vsensor.get_name, '{} vsensor {}'.format(parent_name, vsensor_index + 1))
-            print(name)
+            name = try_get(voltage_sensor.get_name, '{} voltage_sensor {}'.format(parent_name, voltage_sensor_index + 1))
 
-            update_entity_info(self.phy_entity_table, parent_name, name, vsensor, vsensor_index + 1)
+            update_entity_info(self.phy_entity_table, parent_name, name, voltage_sensor, voltage_sensor_index + 1)
 
             if name not in self.voltage_status_dict:
                 self.voltage_status_dict[name] = SensorStatus()
@@ -228,17 +221,16 @@ class VoltageUpdater(logger.Logger):
             low_critical_threshold = NOT_AVAILABLE
             maximum_voltage = NOT_AVAILABLE
             minimum_voltage = NOT_AVAILABLE
-            voltage = try_get(vsensor.get_value)
-            print("Voltage Read: ", voltage)
-            is_replaceable = try_get(vsensor.is_replaceable, False)
+            voltage = try_get(voltage_sensor.get_value)
+            is_replaceable = try_get(voltage_sensor.is_replaceable, False)
             if voltage != NOT_AVAILABLE:
                 voltage_status.set_value(name, voltage)
-                minimum_voltage = try_get(vsensor.get_minimum_recorded)
-                maximum_voltage = try_get(vsensor.get_maximum_recorded)
-                high_threshold = try_get(vsensor.get_high_threshold)
-                low_threshold = try_get(vsensor.get_low_threshold)
-                high_critical_threshold = try_get(vsensor.get_high_critical_threshold)
-                low_critical_threshold = try_get(vsensor.get_low_critical_threshold)
+                minimum_voltage = try_get(voltage_sensor.get_minimum_recorded)
+                maximum_voltage = try_get(voltage_sensor.get_maximum_recorded)
+                high_threshold = try_get(voltage_sensor.get_high_threshold)
+                low_threshold = try_get(voltage_sensor.get_low_threshold)
+                high_critical_threshold = try_get(voltage_sensor.get_high_critical_threshold)
+                low_critical_threshold = try_get(voltage_sensor.get_low_critical_threshold)
 
             warning = False
             if voltage != NOT_AVAILABLE and voltage_status.set_over_threshold(voltage, high_threshold):
@@ -269,17 +261,17 @@ class VoltageUpdater(logger.Logger):
                 ('critical_high_threshold', str(high_critical_threshold)),
                 ('critical_low_threshold', str(low_critical_threshold)),
                 ('is_replaceable', str(is_replaceable)),
-                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S'))
+                ('timestamp', time.strftime('%Y%m%d %H:%M:%S'))
                 ])
 
             self.table.set(name, fvs)
             if self.is_chassis_system and self.chassis_table is not None:
                 self.chassis_table.set(name, fvs)
         except Exception as e:
-            self.log_warning('Failed to update vsensor status for {} - {}'.format(name, repr(e)))
+            self.log_warning('Failed to update voltage_sensor status for {} - {}'.format(name, repr(e)))
 
-    def _remove_vsensor_from_db(self, vsensor, parent_name, vsensor_index):
-        name = try_get(vsensor.get_name, '{} vsensor {}'.format(parent_name, vsensor_index + 1))
+    def _remove_voltage_sensor_from_db(self, voltage_sensor, parent_name, voltage_sensor_index):
+        name = try_get(voltage_sensor.get_name, '{} voltage_sensor {}'.format(parent_name, voltage_sensor_index + 1))
         self.table._del(name)
 
         if self.chassis_table is not None:
@@ -293,22 +285,22 @@ class CurrentUpdater(logger.Logger):
     CURRENT_INFO_TABLE_NAME = 'CURRENT_INFO'
 
     def __init__(self, chassis):
-        """
+        '''
         Initializer of CurrentUpdater
         :param chassis: Object representing a platform chassis
-        """
+        '''
         super(CurrentUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
         self.current_status_dict = {}
         state_db = daemon_base.db_connect("STATE_DB")
-        self.table = swsscommon.Table(state_db, CurrentUpdater.CURRENT_INFO_TABLE_NAME)
+        self.table = swsscommon.Table(state_db, self.CURRENT_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None
 
         self.is_chassis_system = chassis.is_modular_chassis()
         if self.is_chassis_system:
-            self.module_isensors = set()
+            self.module_current_sensors = set()
             my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
             if my_slot != INVALID_SLOT:
                 try:
@@ -332,62 +324,56 @@ class CurrentUpdater(logger.Logger):
                 self.phy_entity_table._del(pek)
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
-        """
+        '''
         Log when any status changed
         :param normal_status: Expected status.
         :param normal_log: Log string for expected status.
         :param abnormal_log: Log string for unexpected status
         :return:
-        """
+        '''
         if normal_status:
             self.log_notice(normal_log)
-            print(normal_log)
         else:
             self.log_warning(abnormal_log)
-            print(abnormal_log)
-            print(vars(self))
-            print(sys.path)
 
     def update(self):
-        """
+        '''
         Update all current information to database
         :return:
-        """
+        '''
         self.log_debug("Start current updating")
-        for index, current_sensor in enumerate(self.chassis.get_all_isensors()):
+        for index, current_sensor in enumerate(self.chassis.get_all_current_sensors()):
 
-            print(index, current_sensor)
             self._refresh_current_status(CHASSIS_INFO_KEY, current_sensor, index)
 
         if self.is_chassis_system:
-            available_isensors = set()
+            available_current_sensors = set()
             for module_index, module in enumerate(self.chassis.get_all_modules()):
                 module_name = try_get(module.get_name, 'Module {}'.format(module_index + 1))
                 
-                for isensor_index, isensor in enumerate(module.get_all_isensors()):
-                    available_isensors.add((isensor, module_name, isensor_index))
-                    self._refresh_current_status(module_name, isensor, isensor_index)
+                for current_sensor_index, current_sensor in enumerate(module.get_all_current_sensors()):
+                    available_current_sensors.add((current_sensor, module_name, current_sensor_index))
+                    self._refresh_current_status(module_name, current_sensor, current_sensor_index)
 
-            isensors_to_remove = self.module_isensors - available_isensors
-            self.module_isensors = available_isensors
-            for isensor, parent_name, isensor_index in isensors_to_remove:
-                self._remove_isensor_from_db(isensor, parent_name, isensor_index)
+            current_sensors_to_remove = self.module_current_sensors - available_current_sensors
+            self.module_current_sensors = available_current_sensors
+            for current_sensor, parent_name, current_sensor_index in current_sensors_to_remove:
+                self._remove_current_sensor_from_db(current_sensor, parent_name, current_sensor_index)
                 
         self.log_debug("End Current updating")
 
-    def _refresh_current_status(self, parent_name, isensor, isensor_index):
-        """
+    def _refresh_current_status(self, parent_name, current_sensor, current_sensor_index):
+        '''
         Get current status by platform API and write to database
-        :param parent_name: Name of parent device of the isensor object
-        :param isensor: Object representing a platform current isensor
-        :param isensor_index: Index of the isensor object in platform chassis
+        :param parent_name: Name of parent device of the current_sensor object
+        :param current_sensor: Object representing a platform current current_sensor
+        :param current_sensor_index: Index of the current_sensor object in platform chassis
         :return:
-        """
+        '''
         try:
-            name = try_get(isensor.get_name, '{} isensor {}'.format(parent_name, isensor_index + 1))
-            print(name)
+            name = try_get(current_sensor.get_name, '{} current_sensor {}'.format(parent_name, current_sensor_index + 1))
 
-            update_entity_info(self.phy_entity_table, parent_name, name, isensor, isensor_index + 1)
+            update_entity_info(self.phy_entity_table, parent_name, name, current_sensor, current_sensor_index + 1)
 
             if name not in self.current_status_dict:
                 self.current_status_dict[name] = SensorStatus()
@@ -400,20 +386,18 @@ class CurrentUpdater(logger.Logger):
             low_critical_threshold = NOT_AVAILABLE
             maximum_current = NOT_AVAILABLE
             minimum_current = NOT_AVAILABLE
-            current = try_get(isensor.get_value)
-            print("Current Read: ", current)
-            is_replaceable = try_get(isensor.is_replaceable, False)
+            current = try_get(current_sensor.get_value)
+            is_replaceable = try_get(current_sensor.is_replaceable, False)
             if current != NOT_AVAILABLE:
                 current_status.set_value(name, current)
-                minimum_current = try_get(isensor.get_minimum_recorded)
-                maximum_current = try_get(isensor.get_maximum_recorded)
-                high_threshold = try_get(isensor.get_high_threshold)
-                low_threshold = try_get(isensor.get_low_threshold)
-                high_critical_threshold = try_get(isensor.get_high_critical_threshold)
-                low_critical_threshold = try_get(isensor.get_low_critical_threshold)
+                minimum_current = try_get(current_sensor.get_minimum_recorded)
+                maximum_current = try_get(current_sensor.get_maximum_recorded)
+                high_threshold = try_get(current_sensor.get_high_threshold)
+                low_threshold = try_get(current_sensor.get_low_threshold)
+                high_critical_threshold = try_get(current_sensor.get_high_critical_threshold)
+                low_critical_threshold = try_get(current_sensor.get_low_critical_threshold)
 
             warning = False
-            print(current_status)
             if current != NOT_AVAILABLE and current_status.set_over_threshold(current, high_threshold):
                 self._log_on_status_changed(not current_status.over_threshold,
                                             'High Current warning cleared: {} current restored to {}mA, high threshold {}mA'.
@@ -442,17 +426,17 @@ class CurrentUpdater(logger.Logger):
                 ('critical_high_threshold', str(high_critical_threshold)),
                 ('critical_low_threshold', str(low_critical_threshold)),
                 ('is_replaceable', str(is_replaceable)),
-                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S'))
+                ('timestamp', time.strftime('%Y%m%d %H:%M:%S'))
                 ])
 
             self.table.set(name, fvs)
             if self.is_chassis_system and self.chassis_table is not None:
                 self.chassis_table.set(name, fvs)
         except Exception as e:
-            self.log_warning('Failed to update isensor status for {} - {}'.format(name, repr(e)))
+            self.log_warning('Failed to update current_sensor status for {} - {}'.format(name, repr(e)))
 
-    def _remove_isensor_from_db(self, isensor, parent_name, isensor_index):
-        name = try_get(isensor.get_name, '{} isensor {}'.format(parent_name, isensor_index + 1))
+    def _remove_current_sensor_from_db(self, current_sensor, parent_name, current_sensor_index):
+        name = try_get(current_sensor.get_name, '{} current_sensor {}'.format(parent_name, current_sensor_index + 1))
         self.table._del(name)
 
         if self.chassis_table is not None:
@@ -471,9 +455,9 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
     UPDATE_ELAPSED_THRESHOLD = 30
 
     def __init__(self):
-        """
+        '''
         Initializer of SensorMonitorDaemon
-        """
+        '''
         super(SensorMonitorDaemon, self).__init__(SYSLOG_IDENTIFIER)
 
         # Set minimum logging level to INFO
@@ -485,7 +469,10 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         self.interval  = self.UPDATE_INTERVAL
 
-        self.chassis = sonic_platform.platform.Platform().get_chassis()
+        try:
+            self.chassis = sonic_platform.platform.Platform().get_chassis()
+        except Exception as e:
+            self.log_error("Failed to get chassis info, err: {}".format(repr(e)))
 
         self.voltage_updater = VoltageUpdater(self.chassis)
 
@@ -494,32 +481,32 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
-        """
+        '''
         Signal handler
         :param sig: Signal number
         :param frame: not used
         :return:
-        """
+        '''
         FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
         NONFATAL_SIGNALS = [signal.SIGHUP]
 
         global exit_code
 
         if sig in FATAL_SIGNALS:
-            self.log_info("Caught signal '{}' - exiting...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_info("Caught signal '{}' - exiting...".format(signal.Signals(sig).name))
             exit_code = 128 + sig  # Make sure we exit with a non-zero code so that supervisor will try to restart us
             self.stop_event.set()
         elif sig in NONFATAL_SIGNALS:
-            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_info("Caught signal '{}' - ignoring...".format(signal.Signals(sig).name))
         else:
-            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(signal.Signals(sig).name))
 
     # Main daemon logic
     def run(self):
-        """
+        '''
         Run main logical of this daemon
         :return:
-        """
+        '''
         if self.stop_event.wait(self.wait_time):
             # We received a fatal signal
             return False
@@ -552,7 +539,7 @@ def main():
     while sensor_control.run():
         pass
 
-    sensor_control.log_info("Shutting down with exit code {}...".format(exit_code))
+    sensor_control.log_info("Shutting down with exit code {}".format(exit_code))
 
     return exit_code
 

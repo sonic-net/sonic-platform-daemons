@@ -28,7 +28,6 @@ setup(
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
-        'Environment :: No Input/Output (Daemon)',
         'Intended Audience :: Developers',
         'Intended Audience :: Information Technology',
         'Intended Audience :: System Administrators',
