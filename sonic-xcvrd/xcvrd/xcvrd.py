@@ -1748,7 +1748,7 @@ class CmisManagerTask(threading.Thread):
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
-                        if not api.stage_datapath_init(host_lanes_mask):
+                        if not api.scs_apply_datapath_init(host_lanes_mask):
                             self.log_notice("{}: unable to set application and stage DP init".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
