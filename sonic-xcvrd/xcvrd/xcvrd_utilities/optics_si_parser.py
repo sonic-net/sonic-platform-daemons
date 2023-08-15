@@ -1,9 +1,7 @@
 import json
 import os
 
-from sonic_py_common import daemon_base, device_info, logger
-from xcvrd.xcvrd_utilities import sfp_status_helper
-from xcvrd.xcvrd_utilities import port_mapping
+from sonic_py_common import device_info, logger
 from xcvrd import xcvrd
 
 g_optics_si_dict = {}
@@ -114,7 +112,7 @@ def fetch_optics_si_setting(physical_port, lane_speed, sfp):
         helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
         return optics_si
     vendor_key, vendor_name = get_module_vendor_key(physical_port, sfp)
-    if vendor_key is None:
+    if vendor_key is None or vendor_name is None:
         helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
         return optics_si
     optics_si = get_optics_si_settings_value(physical_port, lane_speed, vendor_key, vendor_name)
