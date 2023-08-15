@@ -88,7 +88,6 @@ POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
 g_dict = {}
-g_optics_si_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
 # Global chassis object based on new platform api
@@ -791,6 +790,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             index += 1
 
         app_port_tbl.set(port_name, fvs)
+
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
@@ -1591,8 +1591,11 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == self.CMIS_STATE_AP_CONF:
-                        # Explicit control bit to apply custom Host SI settings
+                        # Explicit control bit to apply custom Host SI settings. 
+                        # It will set to 1 and applied via set_application if 
+                        # custom SI settings is applicable
                         ec = 0
+
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
                             if (expired is not None) and (expired <= now):
