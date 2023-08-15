@@ -1,8 +1,5 @@
 import json
 import os
-import sonic_platform.platform
-import sonic_platform_base.sonic_sfp.sfputilhelper
-platform_chassis = sonic_platform.platform.Platform().get_chassis()
 
 from sonic_py_common import daemon_base, device_info, logger
 from xcvrd.xcvrd_utilities import sfp_status_helper
@@ -89,12 +86,7 @@ def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str
 
     return default_dict
 
-def get_module_vendor_key(physical_port):
-    sfp = platform_chassis.get_sfp(physical_port)
-    if not sfp.get_presence():
-        helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
-        return None
-
+def get_module_vendor_key(physical_port, sfp):
     api = sfp.get_xcvr_api()
     if api is None:
         helper_logger.log_info("Module {} xcvrd api not found".format(physical_port))
@@ -112,7 +104,7 @@ def get_module_vendor_key(physical_port):
 
     return vendor_name.upper().strip() + '-' + vendor_sn.upper().strip(), vendor_name.upper().strip()
 
-def fetch_optics_si_setting(physical_port, lane_speed):
+def fetch_optics_si_setting(physical_port, lane_speed, sfp):
     if not g_optics_si_dict:
         return
 
@@ -121,7 +113,7 @@ def fetch_optics_si_setting(physical_port, lane_speed):
     if not xcvrd._wrapper_get_presence(physical_port):
         helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
         return optics_si
-    vendor_key, vendor_name = get_module_vendor_key(physical_port)
+    vendor_key, vendor_name = get_module_vendor_key(physical_port, sfp)
     if vendor_key is None:
         helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
         return optics_si
@@ -132,7 +124,6 @@ def load_optics_si_settings():
     global g_optics_si_dict
     (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
 
-    helper_logger.log_error("ANOOP parse optics json file {}".format(platform_path))
     optics_si_settings_file_path = os.path.join(platform_path, "optics_si_settings.json")
     if not os.path.isfile(optics_si_settings_file_path):
         helper_logger.log_error("No optics SI file exists")
@@ -140,7 +131,6 @@ def load_optics_si_settings():
 
     with open(optics_si_settings_file_path, "r") as optics_si_file:
         g_optics_si_dict = json.load(optics_si_file)
-        helper_logger.log_error("ANOOP parsed optics json file {}".format(g_optics_si_dict))
 
 def optics_si_present():
     if g_optics_si_dict:
