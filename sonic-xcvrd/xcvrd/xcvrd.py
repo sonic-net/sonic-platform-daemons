@@ -27,6 +27,7 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
+    from .xcvrd_utilities import optics_si_parser
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -1623,7 +1624,7 @@ class CmisManagerTask(threading.Thread):
                         if optics_si_parser.optics_si_present():
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
-                            optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed)
+                            optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
 
                             if optics_si_dict:
                                 self.log_notice("{}: Optics SI found. Apply".format(lport))
