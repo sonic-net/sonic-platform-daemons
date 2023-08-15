@@ -1593,7 +1593,7 @@ class CmisManagerTask(threading.Thread):
 
                     elif state == self.CMIS_STATE_AP_CONF:
                         # Explicit control bit to apply custom Host SI settings. 
-                        # It will set to 1 and applied via set_application if 
+                        # It will be set to 1 and applied via set_application if 
                         # custom SI settings is applicable
                         ec = 0
 
@@ -1620,8 +1620,8 @@ class CmisManagerTask(threading.Thread):
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # Stage custom SI settings
-                        optics_si_dict = {}
                         if optics_si_parser.optics_si_present():
+                            optics_si_dict = {}
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
@@ -2477,7 +2477,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
-            self.load_optics_si_settings()
+            optics_si_parser.load_optics_si_settings()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
