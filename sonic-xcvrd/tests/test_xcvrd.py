@@ -1,6 +1,7 @@
 #from unittest.mock import DEFAULT
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
+from xcvrd.xcvrd_utilities.optics_si_parser import *
 from xcvrd.xcvrd import *
 import pytest
 import copy
@@ -478,39 +479,37 @@ class TestXcvrdScript(object):
         port_mapping.handle_port_change_event(port_change_event)
         notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
 
-    @patch('xcvrd.xcvrd.g_optics_si_dict', optics_si_settings_dict)
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_fetch_optics_si_setting(self):
         self._check_fetch_optics_si_setting(1)
 
-    @patch('xcvrd.xcvrd.g_optics_si_dict', optics_si_settings_with_comma_dict)
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_with_comma_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_fetch_optics_si_setting_with_comma(self):
         self._check_fetch_optics_si_setting(1)
         self._check_fetch_optics_si_setting(6)
 
-    @patch('xcvrd.xcvrd.g_optics_si_dict', port_optics_si_settings)
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', port_optics_si_settings)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_fetch_optics_si_setting_with_port(self):
        self._check_fetch_optics_si_setting(1)
 
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
     def _check_fetch_optics_si_setting(self, index):
         port = 1
         lane_speed = 100
-        fetch_optics_si_setting(port, lane_speed)
+        mock_sfp = MagicMock()
+        optics_si_parser.fetch_optics_si_setting(port, lane_speed, mock_sfp)
 
-    @patch('xcvrd.xcvrd.platform_chassis')
-    def test_get_module_vendor_key(self, mock_chassis):
+    def test_get_module_vendor_key(self):
         mock_sfp = MagicMock()
         mock_xcvr_api = MagicMock()
-        mock_sfp.get_presence = MagicMock(return_value=True)
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
-        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_xcvr_api.get_manufacturer = MagicMock(return_value='Credo ')
         mock_xcvr_api.get_model = MagicMock(return_value='CAC82X321HW')
-        result = get_module_vendor_key(1)
+        result = get_module_vendor_key(1, mock_sfp)
         assert result == ('CREDO-CAC82X321HW','CREDO')
 
     def test_detect_port_in_error_status(self):
