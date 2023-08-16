@@ -1627,7 +1627,8 @@ class CmisManagerTask(threading.Thread):
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
 
                             if optics_si_dict:
-                                self.log_notice("{}: Optics SI found. Apply".format(lport))
+                                self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
+                                                 format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
                                 if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
                                     self.log_notice("{}: unable to stage custom SI settings ".format(lport))
                                     self.force_cmis_reinit(lport, retries + 1)
