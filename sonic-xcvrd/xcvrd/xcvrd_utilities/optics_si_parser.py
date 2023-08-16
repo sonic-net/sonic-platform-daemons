@@ -95,12 +95,12 @@ def get_module_vendor_key(physical_port, sfp):
         helper_logger.log_info("Module {} vendor name not found".format(physical_port))
         return None
 
-    vendor_sn = api.get_model()
-    if vendor_sn is None:
-        helper_logger.log_info("Module {} vendor serial number not found".format(physical_port))
+    vendor_pn = api.get_model()
+    if vendor_pn is None:
+        helper_logger.log_info("Module {} vendor part number not found".format(physical_port))
         return None
 
-    return vendor_name.upper().strip() + '-' + vendor_sn.upper().strip(), vendor_name.upper().strip()
+    return vendor_name.upper().strip() + '-' + vendor_pn.upper().strip(), vendor_name.upper().strip()
 
 def fetch_optics_si_setting(physical_port, lane_speed, sfp):
     if not g_optics_si_dict:
@@ -124,7 +124,7 @@ def load_optics_si_settings():
 
     optics_si_settings_file_path = os.path.join(platform_path, "optics_si_settings.json")
     if not os.path.isfile(optics_si_settings_file_path):
-        helper_logger.log_error("No optics SI file exists")
+        helper_logger.log_info("No optics SI file exists")
         return {}
 
     with open(optics_si_settings_file_path, "r") as optics_si_file:
