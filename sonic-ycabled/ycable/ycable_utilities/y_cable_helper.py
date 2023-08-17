@@ -1444,8 +1444,9 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
     if y_cable_presence[0] is True and delete_change_event[0] is True:
 
         y_cable_presence[:] = [False]
-        state_db = {},
+        state_db = {}
         yc_hw_mux_cable_table = {}
+        namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(
                 namespace)

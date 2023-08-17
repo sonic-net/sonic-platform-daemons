@@ -1624,6 +1624,7 @@ class TestYCableScript(object):
                 state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
             assert(rc == None)
 
+
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_delete_mux_table_entry(self):
@@ -1660,6 +1661,8 @@ class TestYCableScript(object):
             rc = check_identifier_presence_and_delete_mux_table_entry(
                 state_db, port_tbl, asic_index, logical_port_name, y_cable_presence,  delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
             assert(rc == None)
+        
+
 
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_chassis')
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil')
@@ -1826,6 +1829,62 @@ class TestYCableScript(object):
                 logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
+
+
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
+    @patch('ycable.ycable_utilities.y_cable_helper.check_mux_cable_port_type', MagicMock(return_value=(True,"active-active")))
+    @patch('ycable.ycable_utilities.y_cable_helper.check_identifier_presence_and_setup_channel', MagicMock(return_value=(None)))
+    @patch('ycable.ycable_utilities.y_cable_helper.process_loopback_interface_and_get_read_side',MagicMock(return_value=0))
+    @patch('swsscommon.swsscommon.Table')
+    def test_change_ports_status_for_y_cable_change_event_sfp_removed_with_removal(self, mock_swsscommon_table):
+
+        mock_logical_port_name = [""]
+
+        def mock_get_asic_id(mock_logical_port_name):
+            return 0
+
+        y_cable_presence = [True]
+        logical_port_dict = {'Ethernet0': '0'}
+        state_db = {}
+
+        mock_table = MagicMock()
+        mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
+        mock_table.get = MagicMock(
+            side_effect=[(True, (('index', 1),  ('state', "auto"), ('read_side', 1))), (True, (('index', 2), ('state', "auto"), ('read_side', 1)))])
+        mock_swsscommon_table.return_value = mock_table
+
+        fvs = [('state', "auto"), ('read_side', 1)]
+        test_db = "TEST_DB"
+        port_tbl ,y_cable_tbl = {}, {}
+        asic_index = 0
+        status = True
+        port_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        port_tbl[asic_index].get.return_value = (status, fvs)
+        y_cable_tbl[asic_index] = swsscommon.Table(
+            test_db[asic_index], "PORT_INFO_TABLE")
+        y_cable_tbl[asic_index].get.return_value = (status, fvs)
+
+        port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
+        port_table_keys[0] = ['Ethernet0']
+
+        with patch('ycable.ycable_utilities.y_cable_helper.y_cable_platform_sfputil') as patched_util:
+
+            patched_util.get_asic_id_for_logical_port.return_value = 0
+            rc = change_ports_status_for_y_cable_change_event(
+                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+
+            assert(rc == None)
+
+
+
+
+
+
+
+
+
 
     
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
