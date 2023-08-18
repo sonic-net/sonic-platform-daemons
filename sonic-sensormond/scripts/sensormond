@@ -113,36 +113,33 @@ class SensorStatus(logger.Logger):
 
 
 #
-# voltageUpdater  ======================================================================
+# SensorUpdater  ======================================================================
 #
-class VoltageUpdater(logger.Logger):
-    # Voltage information table name in database
-    VOLTAGE_INFO_TABLE_NAME = 'VOLTAGE_INFO'
+class SensorUpdater(logger.Logger):
 
-    def __init__(self, chassis):
+    def __init__(self, table_name, chassis):
         '''
-        Initializer of VoltageUpdater
+        Initializer of SensorUpdater
+        :param table_name: Name of sensor table
         :param chassis: Object representing a platform chassis
         '''
-        super(VoltageUpdater, self).__init__(SYSLOG_IDENTIFIER)
+        super(SensorUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
-        self.voltage_status_dict = {}
         state_db = daemon_base.db_connect("STATE_DB")
-        self.table = swsscommon.Table(state_db, self.VOLTAGE_INFO_TABLE_NAME)
+        self.table = swsscommon.Table(state_db, table_name)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None
 
         self.is_chassis_system = chassis.is_modular_chassis()
         if self.is_chassis_system:
-            self.module_voltage_sensors = set()
             my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
             if my_slot != INVALID_SLOT:
                 try:
                     # Modular chassis may not have table CHASSIS_STATE_DB.
-                    table_name = VoltageUpdater.VOLTAGE_INFO_TABLE_NAME+'_'+str(my_slot)
+                    slot_table_name = table_name + '_' + str(my_slot)
                     chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
-                    self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
+                    self.chassis_table = swsscommon.Table(chassis_state_db, slot_table_name)
                 except Exception as e:
                     self.chassis_table = None
 
@@ -170,6 +167,25 @@ class VoltageUpdater(logger.Logger):
             self.log_notice(normal_log)
         else:
             self.log_warning(abnormal_log)
+
+#
+# VoltageUpdater  ======================================================================
+#
+class VoltageUpdater(SensorUpdater):
+    # Voltage information table name in database
+    VOLTAGE_INFO_TABLE_NAME = 'VOLTAGE_INFO'
+
+    def __init__(self, chassis):
+        '''
+        Initializer of VoltageUpdater
+        :param chassis: Object representing a platform chassis
+        '''
+        super(VoltageUpdater, self).__init__(self.VOLTAGE_INFO_TABLE_NAME, chassis)
+
+        self.voltage_status_dict = {}
+
+        if self.is_chassis_system:
+            self.module_voltage_sensors = set()
 
     def update(self):
         '''
@@ -278,9 +294,9 @@ class VoltageUpdater(logger.Logger):
             self.chassis_table._del(name)
     
 #
-# currentUpdater  ======================================================================
+# CurrentUpdater  ======================================================================
 #
-class CurrentUpdater(logger.Logger):
+class CurrentUpdater(SensorUpdater):
     # Current information table name in database
     CURRENT_INFO_TABLE_NAME = 'CURRENT_INFO'
 
@@ -289,52 +305,11 @@ class CurrentUpdater(logger.Logger):
         Initializer of CurrentUpdater
         :param chassis: Object representing a platform chassis
         '''
-        super(CurrentUpdater, self).__init__(SYSLOG_IDENTIFIER)
+        super(CurrentUpdater, self).__init__(self.CURRENT_INFO_TABLE_NAME, chassis)
 
-        self.chassis = chassis
         self.current_status_dict = {}
-        state_db = daemon_base.db_connect("STATE_DB")
-        self.table = swsscommon.Table(state_db, self.CURRENT_INFO_TABLE_NAME)
-        self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
-        self.chassis_table = None
-
-        self.is_chassis_system = chassis.is_modular_chassis()
         if self.is_chassis_system:
             self.module_current_sensors = set()
-            my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
-            if my_slot != INVALID_SLOT:
-                try:
-                    # Modular chassis may not have table CHASSIS_STATE_DB.
-                    table_name = CurrentUpdater.CURRENT_INFO_TABLE_NAME+'_'+str(my_slot)
-                    chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
-                    self.chassis_table = swsscommon.Table(chassis_state_db, table_name)
-                except Exception as e:
-                    self.chassis_table = None
-
-    def __del__(self):
-        if self.table:
-            table_keys = self.table.getKeys()
-            for tk in table_keys:
-                self.table._del(tk)
-                if self.is_chassis_system and self.chassis_table is not None:
-                    self.chassis_table._del(tk)
-        if self.phy_entity_table:
-            phy_entity_keys = self.phy_entity_table.getKeys()
-            for pek in phy_entity_keys:
-                self.phy_entity_table._del(pek)
-
-    def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
-        '''
-        Log when any status changed
-        :param normal_status: Expected status.
-        :param normal_log: Log string for expected status.
-        :param abnormal_log: Log string for unexpected status
-        :return:
-        '''
-        if normal_status:
-            self.log_notice(normal_log)
-        else:
-            self.log_warning(abnormal_log)
 
     def update(self):
         '''
