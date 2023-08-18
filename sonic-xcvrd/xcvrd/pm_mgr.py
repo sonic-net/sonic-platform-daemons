@@ -81,6 +81,22 @@ class PmUpdateTask(threading.Thread):
             except NotImplementedError:
                 pass
             return {}
+    
+    def freeze_vdm_stats(self, physical_port):
+        if self.platform_chassis is not None:
+            try:
+                return self.platform_chassis.get_sfp(physical_port).freeze_vdm_stats()
+            except NotImplementedError:
+                pass
+            return {}
+
+    def unfreeze_vdm_stats(self, physical_port):
+        if self.platform_chassis is not None:
+            try:
+                return self.platform_chassis.get_sfp(physical_port).unfreeze_vdm_stats()
+            except NotImplementedError:
+                pass
+            return {}
 
     def get_port_admin_status(self, lport):
         admin_status = 'down'
@@ -121,7 +137,6 @@ class PmUpdateTask(threading.Thread):
             return
            
         physical_port = self.port_mapping_data.get_logical_to_physical(lport)[0]
-        self.log_notice("PM port event type:{} for lport: {} table name: {}".format(port_change_event.event_type, lport, port_change_event.table_name))
         if port_change_event.event_type == port_change_event.PORT_SET:
             if (True if "ZR" not in str(port_change_event.port_dict.get('media_interface_code', None)) else False):
                 return
@@ -418,7 +433,16 @@ class PmUpdateTask(threading.Thread):
 
             if not sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_tbl(asic_index)):
                 try:
+                    if self.freeze_vdm_stats(physical_port):
+                        self.log_error("vdm freeze failed for port {}".format(lport))
+                        continue
+                    freeze_time = time.time()
                     pm_hw_data = self.get_transceiver_pm(physical_port)
+                    pm_hw_data['pm_win_end_time'] = freeze_time
+
+                    if self.unfreeze_vdm_stats(physical_port):
+                        self.log_error("vdm unfreeze failed for port {}, pm data for the port is not current".format(lport))
+
                 except (KeyError, TypeError) as e:
                     #continue to process next port since execption could be raised due to port reset, transceiver removal
                     self.log_warning("Got exception {} while reading pm stats for port {}, ignored".format(repr(e), lport))
