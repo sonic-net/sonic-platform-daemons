@@ -453,21 +453,22 @@ class PmUpdateTask(threading.Thread):
 
             self.beautify_pm_info_dict(pm_hw_data, physical_port)
 
-            # Update 60Sec PM time window slots
-            start_window = WINDOW_60SEC_START_NUM
-            end_window = WINDOW_60SEC_END_NUM 
-            pm_win_itrvl_in_secs = TIME_60SEC_IN_SECS
-            self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
+            if self.pm_interval <= PM_INFO_UPDATE_PERIOD_SECS:
+                # Update 60Sec PM time window slots
+                start_window = WINDOW_60SEC_START_NUM
+                end_window = WINDOW_60SEC_END_NUM
+                pm_win_itrvl_in_secs = TIME_60SEC_IN_SECS
+                self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
             # Update 15min PM time window slots
             start_window = WINDOW_15MIN_START_NUM
-            end_window = WINDOW_15MIN_END_NUM 
+            end_window = WINDOW_15MIN_END_NUM
             pm_win_itrvl_in_secs = TIME_15MIN_IN_SECS
             self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
             # Update 24hrs PM time window slots
             start_window = WINDOW_24HRS_START_NUM
-            end_window = WINDOW_24HRS_END_NUM 
+            end_window = WINDOW_24HRS_END_NUM
             pm_win_itrvl_in_secs = TIME_24HRS_IN_SECS
             self.pm_window_update_to_DB(lport, asic_index, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data)
 
