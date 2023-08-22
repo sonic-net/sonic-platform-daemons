@@ -5,6 +5,7 @@ from imp import load_source
 from unittest import mock
 import pytest
 from sonic_py_common import daemon_base
+from swsscommon import swsscommon
 
 # Setup load paths for mocked modules
 
@@ -17,18 +18,19 @@ sys.path.insert(0, modules_path)
 
 # Import mocked modules
 
-from swsscommon.swsscommon import Table
+from .mock_swsscommon import Table, FieldValuePairs
 from .mock_platform import MockChassis, MockVoltageSensor, MockCurrentSensor
 
 # Load file under test
 load_source('sensormond', os.path.join(scripts_path, 'sensormond'))
 import sensormond
 
+daemon_base.db_connect = mock.MagicMock()
+swsscommon.Table = Table
+swsscommon.FieldValuePairs = FieldValuePairs
 
 VOLTAGE_INFO_TABLE_NAME = 'VOLTAGE_INFO'
 CURRENT_INFO_TABLE_NAME = 'CURRENT_INFO'
-
-daemon_base.db_connect = mock.MagicMock()
 
 @pytest.fixture(scope='function', autouse=True)
 def configure_mocks():
@@ -437,6 +439,13 @@ def test_signal_handler():
 
 
 def test_daemon_run():
+
+    import sonic_platform.platform
+    class MyPlatform():
+        def get_chassis(self):
+            return MockChassis()
+    sonic_platform.platform.Platform = MyPlatform
+
     daemon_sensormond = sensormond.SensorMonitorDaemon()
     daemon_sensormond.stop_event.wait = mock.MagicMock(return_value=True)
     ret = daemon_sensormond.run()

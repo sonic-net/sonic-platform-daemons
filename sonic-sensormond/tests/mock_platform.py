@@ -1,10 +1,8 @@
 from sonic_platform_base import chassis_base
 from sonic_platform_base import module_base
-from sonic_platform_base import sensor_base
 
-class MockVoltageSensor(sensor_base.VoltageSensorBase):
+class MockVoltageSensor():
     def __init__(self, index=None):
-        super(MockVoltageSensor, self).__init__()
         self._name = 'Voltage sensor {}'.format(index) if index != None else None
         self._presence = True
         self._model = 'Voltage sensor model'
@@ -85,9 +83,8 @@ class MockVoltageSensor(sensor_base.VoltageSensorBase):
     def is_replaceable(self):
         return self._replaceable
 
-class MockCurrentSensor(sensor_base.CurrentSensorBase):
+class MockCurrentSensor():
     def __init__(self, index=None):
-        super(MockCurrentSensor, self).__init__()
         self._name = 'Current sensor {}'.format(index) if index != None else None
         self._presence = True
         self._model = 'Current sensor model'
@@ -186,9 +183,23 @@ class MockChassis(chassis_base.ChassisBase):
         self._status = True
         self._position_in_parent = 1
         self._replaceable = False
+        self._current_sensor_list = []
+        self._voltage_sensor_list = []
 
         self._is_chassis_system = False
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
+
+    def get_num_voltage_sensors(self):
+        return len(self._voltage_sensor_list)
+
+    def get_num_current_sensors(self):
+        return len(self._current_sensor_list)
+
+    def get_all_voltage_sensors(self):
+        return self._voltage_sensor_list
+
+    def get_all_current_sensors(self):
+        return self._current_sensor_list
 
     def make_over_threshold_voltage_sensor(self):
         voltage_sensor = MockVoltageSensor()
@@ -272,3 +283,12 @@ class MockChassis(chassis_base.ChassisBase):
 class MockModule(module_base.ModuleBase):
     def __init__(self):
         super(MockModule, self).__init__()
+        self._current_sensor_list = []
+        self._voltage_sensor_list = []
+
+    def get_all_voltage_sensors(self):
+        return self._voltage_sensor_list
+
+    def get_all_current_sensors(self):
+        return self._current_sensor_list
+
