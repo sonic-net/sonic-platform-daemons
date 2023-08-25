@@ -18,7 +18,10 @@ class Table:
 
     def get(self, key):
         if key in self.mock_dict:
-            return self.mock_dict[key]
+            rv = []
+            rv.append(True)
+            rv.append(tuple(self.mock_dict[key].items()))
+            return rv
         return None
 
     def getKeys(self):

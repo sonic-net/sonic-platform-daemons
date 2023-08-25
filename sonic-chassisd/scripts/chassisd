@@ -70,6 +70,7 @@ CHASSIS_MODULE_HOSTNAME_TABLE = 'CHASSIS_MODULE_TABLE'
 CHASSIS_MODULE_INFO_HOSTNAME_FIELD = 'hostname'
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
+CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD = 30 # Minutes
 
 CHASSIS_LOAD_ERROR = 1
 CHASSIS_NOT_SUPPORTED = 2
@@ -279,6 +280,7 @@ class ModuleUpdater(logger.Logger):
                     # long time like 30 mins.
                     # If the down_module_key is None, hostname is not avaiable for the linecard. i.e., The module was not 
                     # up before. So No need to do cleanup when hostname is not available at the time module detected down
+                    self.log_warning("Module {} went off-line!".format(key))
                     if (down_module_key is not None) and (down_module_key not in self.down_modules):
                         self.down_modules[down_module_key] = {}
                         self.down_modules[down_module_key]['down_time'] = time.time()
@@ -287,6 +289,7 @@ class ModuleUpdater(logger.Logger):
                 else:
                     # Module is operational. Remove it from down time tracking.
                     if down_module_key in self.down_modules:
+                        self.log_notice("Module {} recoverecd on-line!".format(key))
                         del self.down_modules[down_module_key]
 
                 for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
@@ -466,7 +469,7 @@ class ModuleUpdater(logger.Logger):
             if self.down_modules[module]['cleaned'] == False:
                 down_time = self.down_modules[module]['down_time']
                 delta = (time_now - down_time) / 60
-                if delta >= 30:
+                if delta >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD:
                     # Module is down for more than 30 minutes. Do the chassis clean up
                     self.log_notice("Module {} is down for long time. Initiating chassis app db clean up".format(module))
                     self._cleanup_chassis_app_db(module)
