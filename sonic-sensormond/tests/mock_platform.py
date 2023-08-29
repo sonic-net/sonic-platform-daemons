@@ -22,6 +22,9 @@ class MockVoltageSensor():
     def get_value(self):
         return self._value
 
+    def get_unit(self):
+        return "mV"
+
     def get_minimum_recorded(self):
         return self._minimum_value
 
@@ -103,6 +106,9 @@ class MockCurrentSensor():
 
     def get_value(self):
         return self._value
+
+    def get_unit(self):
+        return "mA"
 
     def get_minimum_recorded(self):
         return self._minimum_value

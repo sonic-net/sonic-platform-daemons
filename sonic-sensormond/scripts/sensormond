@@ -237,10 +237,12 @@ class VoltageUpdater(SensorUpdater):
             low_critical_threshold = NOT_AVAILABLE
             maximum_voltage = NOT_AVAILABLE
             minimum_voltage = NOT_AVAILABLE
+            unit = NOT_AVAILABLE
             voltage = try_get(voltage_sensor.get_value)
             is_replaceable = try_get(voltage_sensor.is_replaceable, False)
             if voltage != NOT_AVAILABLE:
                 voltage_status.set_value(name, voltage)
+                unit = try_get(voltage_sensor.get_unit)
                 minimum_voltage = try_get(voltage_sensor.get_minimum_recorded)
                 maximum_voltage = try_get(voltage_sensor.get_maximum_recorded)
                 high_threshold = try_get(voltage_sensor.get_high_threshold)
@@ -251,24 +253,25 @@ class VoltageUpdater(SensorUpdater):
             warning = False
             if voltage != NOT_AVAILABLE and voltage_status.set_over_threshold(voltage, high_threshold):
                 self._log_on_status_changed(not voltage_status.over_threshold,
-                                            'High voltage warning cleared: {} voltage restored to {}mV, high threshold {}mV'.
-                                            format(name, voltage, high_threshold),
-                                            'High voltage warning: {} current voltage {}mV, high threshold {}mV'.
-                                            format(name, voltage, high_threshold)
+                                            'High voltage warning cleared: {} voltage restored to {}{}, high threshold {}{}'.
+                                            format(name, voltage, unit, high_threshold, unit),
+                                            'High voltage warning: {} current voltage {}{}, high threshold {}{}'.
+                                            format(name, voltage, unit, high_threshold, unit)
                                             )
             warning = warning | voltage_status.over_threshold
 
             if voltage != NOT_AVAILABLE and voltage_status.set_under_threshold(voltage, low_threshold):
                 self._log_on_status_changed(not voltage_status.under_threshold,
-                                            'Low voltage warning cleared: {} voltage restored to {}mV, low threshold {}mV'.
-                                            format(name, voltage, low_threshold),
-                                            'Low voltage warning: {} current voltage {}mV, low threshold {}mV'.
-                                            format(name, voltage, low_threshold)
+                                            'Low voltage warning cleared: {} voltage restored to {}{}, low threshold {}{}'.
+                                            format(name, voltage, unit, low_threshold, unit),
+                                            'Low voltage warning: {} current voltage {}{}, low threshold {}{}'.
+                                            format(name, voltage, unit, low_threshold, unit)
                                             )
             warning = warning | voltage_status.under_threshold
 
             fvs = swsscommon.FieldValuePairs(
                 [('voltage', str(voltage)),
+                ('unit', unit),
                 ('minimum_voltage', str(minimum_voltage)),
                 ('maximum_voltage', str(maximum_voltage)),
                 ('high_threshold', str(high_threshold)),
@@ -355,6 +358,7 @@ class CurrentUpdater(SensorUpdater):
 
             current_status = self.current_status_dict[name]
 
+            unit = NOT_AVAILABLE
             high_threshold = NOT_AVAILABLE
             low_threshold = NOT_AVAILABLE
             high_critical_threshold = NOT_AVAILABLE
@@ -365,6 +369,7 @@ class CurrentUpdater(SensorUpdater):
             is_replaceable = try_get(current_sensor.is_replaceable, False)
             if current != NOT_AVAILABLE:
                 current_status.set_value(name, current)
+                unit = try_get(current_sensor.get_unit)
                 minimum_current = try_get(current_sensor.get_minimum_recorded)
                 maximum_current = try_get(current_sensor.get_maximum_recorded)
                 high_threshold = try_get(current_sensor.get_high_threshold)
@@ -375,24 +380,25 @@ class CurrentUpdater(SensorUpdater):
             warning = False
             if current != NOT_AVAILABLE and current_status.set_over_threshold(current, high_threshold):
                 self._log_on_status_changed(not current_status.over_threshold,
-                                            'High Current warning cleared: {} current restored to {}mA, high threshold {}mA'.
-                                            format(name, current, high_threshold),
-                                            'High Current warning: {} current Current {}mA, high threshold {}mA'.
-                                            format(name, current, high_threshold)
+                                            'High Current warning cleared: {} current restored to {}{}, high threshold {}{}'.
+                                            format(name, current, unit, high_threshold, unit),
+                                            'High Current warning: {} current Current {}{}, high threshold {}{}'.
+                                            format(name, current, unit, high_threshold, unit)
                                             )
             warning = warning | current_status.over_threshold
 
             if current != NOT_AVAILABLE and current_status.set_under_threshold(current, low_threshold):
                 self._log_on_status_changed(not current_status.under_threshold,
-                                            'Low current warning cleared: {} current restored to {}mA, low threshold {}mA'.
-                                            format(name, current, low_threshold),
-                                            'Low current warning: {} current current {}mA, low threshold {}mA'.
-                                            format(name, current, low_threshold)
+                                            'Low current warning cleared: {} current restored to {}{}, low threshold {}{}'.
+                                            format(name, current, unit, low_threshold, unit),
+                                            'Low current warning: {} current current {}{}, low threshold {}{}'.
+                                            format(name, current, unit, low_threshold, unit)
                                             )
             warning = warning | current_status.under_threshold
 
             fvs = swsscommon.FieldValuePairs(
                 [('current', str(current)),
+                ('unit', unit),
                 ('minimum_current', str(minimum_current)),
                 ('maximum_current', str(maximum_current)),
                 ('high_threshold', str(high_threshold)),
