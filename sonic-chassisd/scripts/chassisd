@@ -9,12 +9,12 @@
 
 try:
     import os
+    import re
     import signal
+    import subprocess
     import sys
     import threading
     import time
-    import subprocess
-    import re
 
     from sonic_py_common import daemon_base, logger, device_info
     from sonic_py_common.task_base import ProcessTaskBase
@@ -289,7 +289,7 @@ class ModuleUpdater(logger.Logger):
                 else:
                     # Module is operational. Remove it from down time tracking.
                     if down_module_key in self.down_modules:
-                        self.log_notice("Module {} recoverecd on-line!".format(key))
+                        self.log_notice("Module {} recovered on-line!".format(key))
                         del self.down_modules[down_module_key]
 
                 for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
@@ -309,8 +309,8 @@ class ModuleUpdater(logger.Logger):
            hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
            hostname = try_get(device_info.get_hostname, default="None")
            hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, self.my_slot), 
-                                                      (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
-                                                      (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
+                                                        (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
+                                                        (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
            self.hostname_table.set(hostname_key, hostname_fvs)
 
         # Asics that are on the "not online" modules need to be cleaned up
