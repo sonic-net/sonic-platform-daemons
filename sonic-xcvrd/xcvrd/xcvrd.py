@@ -1683,6 +1683,7 @@ class DomInfoUpdateTask(threading.Thread):
         transceiver_status_cache = {}
         pm_info_cache = {}
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
+        temperature_status = {}
 
         # Start loop to update dom info in DB periodically
         while not self.task_stopping_event.wait(DOM_INFO_UPDATE_PERIOD_SECS):
@@ -1735,6 +1736,8 @@ class DomInfoUpdateTask(threading.Thread):
                         helper_logger.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
                         continue
 
+                    self.check_transceiver_temperature(logical_port_name, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index), dom_info_cache, temperature_status)
+
         helper_logger.log_info("Stop DOM monitoring loop")
 
     def run(self):
@@ -1757,6 +1760,64 @@ class DomInfoUpdateTask(threading.Thread):
         threading.Thread.join(self)
         if self.exc:
             raise self.exc
+
+    def check_transceiver_temperature(self, logical_port_name, th_table, dom_info_cache, temperature_status):
+        TEMP_NORMAL = 0
+        TEMP_HIGH_ALARM = 1
+        TEMP_LOW_ALARM = 2
+        TEMP_HIGH_WARNING = 3
+        TEMP_LOW_WARNING = 4
+
+        TEMP_ERROR_TO_DESCRIPTION_DICT = {
+            TEMP_NORMAL: "normal",
+            TEMP_HIGH_ALARM: "temperature high alarm",
+            TEMP_LOW_ALARM: "temperature low alarm",
+            TEMP_HIGH_WARNING: "temperature high warning",
+            TEMP_LOW_WARNING: "temperature low warning"
+        }
+
+        for physical_port, physical_port_name in get_physical_port_name_dict(logical_port_name, self.port_mapping).items():
+            ori_temp_status = temperature_status.get(physical_port)
+            if ori_temp_status is None:
+                ori_temp_status = TEMP_NORMAL
+                temperature_status[physical_port] = ori_temp_status
+            new_temp_status = TEMP_NORMAL
+
+            dom_info_dict = dom_info_cache.get(physical_port)
+            presence, threshold = th_table.get(physical_port_name)
+            if presence:
+                dom_th_info_dict = dict(threshold)
+            else:
+                dom_th_info_dict = None
+            if dom_info_dict is not None and dom_th_info_dict is not None:
+                temperature = dom_info_dict.get("temperature")
+                temphighalarm = dom_th_info_dict.get("temphighalarm")
+                templowalarm = dom_th_info_dict.get("templowalarm")
+                temphighwarning = dom_th_info_dict.get("temphighwarning")
+                templowwarning = dom_th_info_dict.get("templowwarning")
+                if temperature != 'N/A' and temphighalarm != 'N/A' and templowalarm != 'N/A' and \
+                   temphighwarning != 'N/A' and templowwarning != 'N/A':
+                    if float(temperature) > float(temphighalarm):
+                        new_temp_status = TEMP_HIGH_ALARM
+                    elif float(temperature) > float(temphighwarning):
+                        new_temp_status = TEMP_HIGH_WARNING
+                    elif float(temperature) < float(templowalarm):
+                        new_temp_status = TEMP_LOW_ALARM
+                    elif float(temperature) < float(templowwarning):
+                        new_temp_status = TEMP_LOW_WARNING
+                    else:
+                        new_temp_status = TEMP_NORMAL
+
+                if ori_temp_status != new_temp_status:
+                    temperature_status[physical_port] = new_temp_status
+                    helper_logger.log_notice("{}: temperature status change from {} to {}".format(
+                                             physical_port_name,
+                                             TEMP_ERROR_TO_DESCRIPTION_DICT[ori_temp_status],
+                                             TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
+                elif new_temp_status > 0:
+                    helper_logger.log_notice("{}: {}".format(physical_port_name, TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
+            else:
+                temperature_status[physical_port] = TEMP_NORMAL
 
     def on_port_config_change(self, port_change_event):
         if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:
