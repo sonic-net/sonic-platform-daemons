@@ -193,8 +193,6 @@ class ModuleUpdater(logger.Logger):
         if self._is_supervisor():
             self.asic_table = swsscommon.Table(self.chassis_state_db, 
                                             CHASSIS_FABRIC_ASIC_INFO_TABLE)
-            self.lc_asic_table = swsscommon.Table(self.chassis_state_db, 
-                                                  CHASSIS_ASIC_INFO_TABLE)
         else:
             self.asic_table = swsscommon.Table(self.chassis_state_db, 
                                             CHASSIS_ASIC_INFO_TABLE)
@@ -271,17 +269,17 @@ class ModuleUpdater(logger.Logger):
                     hostname = fvs[CHASSIS_MODULE_INFO_HOSTNAME_FIELD]
                     down_module_key = key+'|'+hostname
                 else:
-                    down_module_key = None
+                    down_module_key = key+'|'
 
                 if module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] != str(ModuleBase.MODULE_STATUS_ONLINE):
                     notOnlineModules.append(key)
                     # Record the time when the module down was detected to track the
                     # module down time. Used for chassis db cleanup for all asics of the module if the module is down for a 
                     # long time like 30 mins.
-                    # If the down_module_key is None, hostname is not avaiable for the linecard. i.e., The module was not 
-                    # up before. So No need to do cleanup when hostname is not available at the time module detected down
-                    self.log_warning("Module {} went off-line!".format(key))
-                    if (down_module_key is not None) and (down_module_key not in self.down_modules):
+                    # All down modules including supervisor are added to the down modules dictionary. This is to help
+                    # identifying module operational status change. But the clean up will not be attempted for supervisor
+                    if down_module_key not in self.down_modules:
+                        self.log_warning("Module {} went off-line!".format(key))
                         self.down_modules[down_module_key] = {}
                         self.down_modules[down_module_key]['down_time'] = time.time()
                         self.down_modules[down_module_key]['cleaned'] = False
@@ -379,14 +377,15 @@ class ModuleUpdater(logger.Logger):
             # Generate syslog for the loss of midplane connectivity when midplane connectivity
             # loss is detected for the first time
             current_midplane_state = 'False'
-            if midplane_access is False:
-                fvs = self.midplane_table.get(module_key)
-                if isinstance(fvs, list) and fvs[0] is True:
-                    fvs = dict(fvs[-1])
-                    current_midplane_state = fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+            fvs = self.midplane_table.get(module_key)
+            if isinstance(fvs, list) and fvs[0] is True:
+                fvs = dict(fvs[-1])
+                current_midplane_state = fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-                if current_midplane_state == 'True':
-                    self.log_notice("Module {} lost midplane connectivity".format(module_key))
+            if midplane_access is False and current_midplane_state == 'True':
+                self.log_warning("Module {} lost midplane connectivity".format(module_key))
+            elif midplane_access is True and current_midplane_state == 'False':
+                self.log_notice("Module {} midplane connectivity is up".format(module_key))
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -440,6 +439,11 @@ class ModuleUpdater(logger.Logger):
         # Get the module key and host name from down_modules key
         module, lc = re.split('\|', module_host)
 
+        if lc == '':
+            # Host name is not available for this module. No clean up is needed
+            self.log_notice("Host name is not available for Module {}. Chassis db clean up not done!".format(module))
+            return
+
         # Get number of asics in the module
         fvs = self.hostname_table.get(module)
         if isinstance(fvs, list) and fvs[0] is True:
@@ -470,9 +474,10 @@ class ModuleUpdater(logger.Logger):
                 down_time = self.down_modules[module]['down_time']
                 delta = (time_now - down_time) / 60
                 if delta >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD:
-                    # Module is down for more than 30 minutes. Do the chassis clean up
-                    self.log_notice("Module {} is down for long time. Initiating chassis app db clean up".format(module))
-                    self._cleanup_chassis_app_db(module)
+                    if module.startswith(ModuleBase.MODULE_TYPE_LINE):
+                        # Module is down for more than 30 minutes. Do the chassis clean up
+                        self.log_notice("Module {} is down for long time. Initiating chassis app db clean up".format(module))
+                        self._cleanup_chassis_app_db(module)
                     self.down_modules[module]['cleaned'] = True
 
 

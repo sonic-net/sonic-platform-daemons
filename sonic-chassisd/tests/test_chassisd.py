@@ -332,7 +332,17 @@ def test_midplane_presence_modules():
     assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #Set access of line-card to down
+    #Set access of line-card to Up (midplane connectivity is down initially)
+    module.set_midplane_reachable(True)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of line-card to Down (to mock midplane connectivity state change)
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
@@ -582,7 +592,7 @@ def test_chassis_db_cleanup():
     supervisor.set_midplane_ip()
     chassis.module_list.append(supervisor)
 
-    #Linecard
+    #Linecard 0. Host name will be pushed for this to make clean up happen
     index = 1
     lc_name = "LINE-CARD0"
     desc = "36 port 400G card"
@@ -593,11 +603,22 @@ def test_chassis_db_cleanup():
     module.set_midplane_ip()
     chassis.module_list.append(module)
 
+    #Linecard 1. Host name will not be pushed for this so that clean up will not happen
+    index = 2
+    lc2_name = "LINE-CARD1"
+    desc = "36 port 400G card"
+    lc2_slot = 2
+    serial = "LC2000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module2 = MockModule(index, lc2_name, desc, module_type, lc2_slot, serial)
+    module2.set_midplane_ip()
+    chassis.module_list.append(module2)
+
     # Supervisor ModuleUpdater
     sup_module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
     sup_module_updater.modules_num_update()
-    # Mock hostname table update for the line card
-    hostname = "lc-host-00"
+    # Mock hostname table update for the line card LINE-CARD0
+    hostname = "lc1-host-00"
     num_asics = 1
     hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(lc_slot)), 
                                     (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
@@ -624,8 +645,13 @@ def test_chassis_db_cleanup():
         fvs = dict(fvs[-1])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
-    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD0
     down_module_key = lc_name+"|"+hostname
+    module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
+    sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
+
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD1
+    down_module_key = lc2_name+"|"
     module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
     sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
 
