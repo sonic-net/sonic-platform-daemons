@@ -1,6 +1,7 @@
 #from unittest.mock import DEFAULT
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
+from xcvrd.xcvrd_utilities.optics_si_parser import *
 from xcvrd.xcvrd import *
 import pytest
 import copy
@@ -40,6 +41,14 @@ with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
 media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
+
+with open(os.path.join(test_path, 'optics_si_settings.json'), 'r') as fn:
+    optics_si_settings_dict = json.load(fn)
+port_optics_si_settings = {}
+optics_si_settings_with_comma_dict = copy.deepcopy(optics_si_settings_dict)
+global_optics_si_settings = optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+port_optics_si_settings['PORT_MEDIA_SETTINGS'] = optics_si_settings_with_comma_dict.pop('PORT_MEDIA_SETTINGS')
+optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['0-5,6,7-20,21-31'] = global_optics_si_settings
 
 class TestXcvrdThreadException(object):
 
@@ -470,6 +479,39 @@ class TestXcvrdScript(object):
         port_mapping.handle_port_change_event(port_change_event)
         notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
 
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting(self):
+        self._check_fetch_optics_si_setting(1)
+
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_with_comma_dict)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting_with_comma(self):
+        self._check_fetch_optics_si_setting(1)
+        self._check_fetch_optics_si_setting(6)
+
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', port_optics_si_settings)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting_with_port(self):
+       self._check_fetch_optics_si_setting(1)
+
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
+    def _check_fetch_optics_si_setting(self, index):
+        port = 1
+        lane_speed = 100
+        mock_sfp = MagicMock()
+        optics_si_parser.fetch_optics_si_setting(port, lane_speed, mock_sfp)
+
+    def test_get_module_vendor_key(self):
+        mock_sfp = MagicMock()
+        mock_xcvr_api = MagicMock()
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='Credo ')
+        mock_xcvr_api.get_model = MagicMock(return_value='CAC82X321HW')
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result == ('CREDO-CAC82X321HW','CREDO')
+
     def test_detect_port_in_error_status(self):
         class MockTable:
             def get(self, key):
@@ -763,6 +805,89 @@ class TestXcvrdScript(object):
 
         appl = task.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
+
+    def test_CmisManagerTask_post_port_active_apsel_to_db(self):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(side_effect=[
+            {
+             'ActiveAppSelLane1': 1,
+             'ActiveAppSelLane2': 1,
+             'ActiveAppSelLane3': 1,
+             'ActiveAppSelLane4': 1,
+             'ActiveAppSelLane5': 1,
+             'ActiveAppSelLane6': 1,
+             'ActiveAppSelLane7': 1,
+             'ActiveAppSelLane8': 1
+            },
+            {
+             'ActiveAppSelLane1': 2,
+             'ActiveAppSelLane2': 2,
+             'ActiveAppSelLane3': 2,
+             'ActiveAppSelLane4': 2,
+             'ActiveAppSelLane5': 2,
+             'ActiveAppSelLane6': 2,
+             'ActiveAppSelLane7': 2,
+             'ActiveAppSelLane8': 2
+            },
+            NotImplementedError
+        ])
+        mock_xcvr_api.get_application_advertisement = MagicMock(side_effect=[
+            {
+                1: {
+                    'media_lane_count': 4,
+                    'host_lane_count': 8
+                }
+            },
+            {
+                2: {
+                    'media_lane_count': 1,
+                    'host_lane_count': 2
+                }
+            }
+        ])
+
+        int_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+
+        # case: partial lanes update
+        lport = "Ethernet0"
+        host_lanes_mask = 0xc
+        ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == ["Ethernet0"]
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+                                                        'active_apsel_hostlane4': '1',
+                                                        'host_lane_count': '8',
+                                                        'media_lane_count': '4'}
+        # case: full lanes update
+        lport = "Ethernet8"
+        host_lanes_mask = 0xff
+        task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8"]
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+                                                        'active_apsel_hostlane4': '1',
+                                                        'host_lane_count': '8',
+                                                        'media_lane_count': '4'}
+        assert dict(int_tbl.mock_dict["Ethernet8"]) == {'active_apsel_hostlane1': '2',
+                                                        'active_apsel_hostlane2': '2',
+                                                        'active_apsel_hostlane3': '2',
+                                                        'active_apsel_hostlane4': '2',
+                                                        'active_apsel_hostlane5': '2',
+                                                        'active_apsel_hostlane6': '2',
+                                                        'active_apsel_hostlane7': '2',
+                                                        'active_apsel_hostlane8': '2',
+                                                        'host_lane_count': '2',
+                                                        'media_lane_count': '1'}
+
+        # case: NotImplementedError
+        int_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)     # a new empty table
+        lport = "Ethernet0"
+        host_lanes_mask = 0xf
+        ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == []
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
