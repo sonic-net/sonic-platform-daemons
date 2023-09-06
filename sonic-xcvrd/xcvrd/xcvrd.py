@@ -1097,7 +1097,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-
+	
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -1319,9 +1319,9 @@ class CmisManagerTask(threading.Thread):
     def configure_tx_output_power(self, api, lport, tx_power):
         min_p, max_p = api.get_supported_power_config()
         if tx_power < min_p:
-            self.log_error("{} configured tx power {} < minimum power {} supported".format(lport, tx_power, min_p))
+           self.log_error("{} configured tx power {} < minimum power {} supported".format(lport, tx_power, min_p))
         if tx_power > max_p:
-            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
+           self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
     def configure_laser_frequency(self, api, lport, freq, grid=75):
@@ -1395,10 +1395,10 @@ class CmisManagerTask(threading.Thread):
                 # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
                 # was updated or this is the first run so reconcile the above two attributes
                 if 'host_tx_ready' not in self.port_dict[lport]:
-                    self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
+                   self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
 
                 if 'admin_status' not in self.port_dict[lport]:
-                    self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
+                   self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
 
                 pport = int(info.get('index', "-1"))
                 speed = int(info.get('speed', "0"))
@@ -1438,10 +1438,10 @@ class CmisManagerTask(threading.Thread):
                         continue
 
                     if api.is_coherent_module():
-                        if 'tx_power' not in self.port_dict[lport]:
-                            self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
-                        if 'laser_freq' not in self.port_dict[lport]:
-                            self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
+                       if 'tx_power' not in self.port_dict[lport]:
+                           self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
+                       if 'laser_freq' not in self.port_dict[lport]:
+                           self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
                 except AttributeError:
                     # Skip if these essential routines are not available
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
@@ -1493,7 +1493,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-
+			
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -1511,30 +1511,30 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
-                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
-                            # Force DataPath re-init
-                            api.tx_disable_channel(media_lanes_mask, True)
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                            continue
+                           self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                           # Force DataPath re-init
+                           api.tx_disable_channel(media_lanes_mask, True)
+                           self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                           continue
                     # Configure the target output power if ZR module
                         if api.is_coherent_module():
-                            tx_power = self.port_dict[lport]['tx_power']
-                            # Prevent configuring same tx power multiple times
-                            if 0 != tx_power and tx_power != api.get_tx_config_power():
-                                if 1 != self.configure_tx_output_power(api, lport, tx_power):
-                                    self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
-                                else:
-                                    self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
+                           tx_power = self.port_dict[lport]['tx_power']
+                           # Prevent configuring same tx power multiple times
+                           if 0 != tx_power and tx_power != api.get_tx_config_power():
+                              if 1 != self.configure_tx_output_power(api, lport, tx_power):
+                                 self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
+                              else:
+                                 self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                            freq = self.port_dict[lport]['laser_freq']
-                            # If user requested frequency is NOT the same as configured on the module
-                            # force datapath re-initialization
-                            if 0 != freq and freq != api.get_laser_config_freq():
-                                need_update = True
+                           freq = self.port_dict[lport]['laser_freq']
+                           # If user requested frequency is NOT the same as configured on the module
+                           # force datapath re-initialization
+                           if 0 != freq and freq != api.get_laser_config_freq():
+                              need_update = True
 
                         if not need_update:
                             # No application updates
@@ -1577,13 +1577,13 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         if api.is_coherent_module():
-                            # For ZR module, configure the laser frequency when Datapath is in Deactivated state
-                            freq = self.port_dict[lport]['laser_freq']
-                            if 0 != freq:
+                        # For ZR module, configure the laser frequency when Datapath is in Deactivated state
+                           freq = self.port_dict[lport]['laser_freq']
+                           if 0 != freq:
                                 if 1 != self.configure_laser_frequency(api, lport, freq):
-                                    self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
+                                   self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
                                 else:
-                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
+                                   self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
                         # D.1.3 Software Configuration and Initialization
                         if not api.set_application(host_lanes_mask, appl):
