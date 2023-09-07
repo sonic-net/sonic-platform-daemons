@@ -173,16 +173,42 @@ class PmUpdateTask(threading.Thread):
                 state_pm_win_stats_tbl._del(lport)
                 self.log_notice("Port delete event:{} deleted from pm port list".format(port_change_event.port_name))
 
-    # Update the PM statistics in string format to respective window key to 
-    # TRANSCEIVER_PM_WINDOW_STATS_TABLE in state DB.
     def set_pm_stats_in_pm_win_stats_tbl(self, asic, lport, window, pm_data_str):
+        """
+
+        Update the PM statistics in string format to respective window number to
+        TRANSCEIVER_PM_WINDOW_STATS_TABLE in state DB.
+        Retrieve the PM statistics for a respective window number from
+        TRANSCEIVER_PM_WINDOW_STATS table.
+
+        Args:
+            asic index:
+                Switch ASIC number.
+            logical port:
+                Front panel interface id.
+            window:
+                PM window number.
+        """
+
         state_pm_win_stats_tbl = self.xcvr_table_helper.get_pm_window_stats_tbl(asic)
         fvs = swsscommon.FieldValuePairs([(window, str(pm_data_str))])
         state_pm_win_stats_tbl.set(lport, fvs)
 
-    # Retrieve the PM statistics from respective window key from.
-    # TRANSCEIVER_PM_WINDOW_STATS_TABLE - state DB.
     def get_pm_stats_in_pm_win_stats_tbl(self, asic, lport, window):
+        """
+
+        Retrieve the PM statistics for a respective window number from
+        TRANSCEIVER_PM_WINDOW_STATS table.
+
+        Args:
+            asic index:
+                Switch ASIC number.
+            logical port:
+                Front panel interface id.
+            window:
+                PM window number.
+        """
+
         state_pm_win_stats_tbl = self.xcvr_table_helper.get_pm_window_stats_tbl(asic)
         status, fvs = state_pm_win_stats_tbl.get(str(lport))
         stats_tbl_tuple = dict((k, v) for k, v in fvs)
@@ -191,12 +217,24 @@ class PmUpdateTask(threading.Thread):
         else:
             return None
 
-    # 
-    # input args: asic index, logical port, start and end window number of a PM window granularity, 
-    # PM window granularity in secs, pm stats read from module.
-    #
-    # Algorithm to sample and update the PM stats to the appropriate PM window in TRANSCEIVER_PM_WINDOW_STATS_TABLE.
     def pm_window_update_to_DB(self, asic, lport, start_window, end_window, pm_win_itrvl_in_secs, pm_hw_data):
+        """
+
+        Algorithm to sample and update the PM stats to the appropriate PM window in TRANSCEIVER_PM_WINDOW_STATS table.
+
+        Args:
+            asic index:
+                Switch ASIC number.
+            logical port:
+                Front panel interface id.
+            start window:
+                start PM window number of the PM window size.
+            end window number:
+                end PM window number of the PM window size.
+            pm_hw_data:
+                PM info collected from transciever module.
+        """
+
         window_num = start_window
         while window_num < (end_window + 1):
             #Retrieve PM data from DB
@@ -322,7 +360,6 @@ class PmUpdateTask(threading.Thread):
     def average_of_two_val(self, val1, val2):
         return((val1+val2)/2)
     
-    # perform min, max and average of relevant PM stats parameter between two dictionary
     def pm_data_sampling(self, pm_data_dict1, pm_data_dict2):
         sampled_pm_dict = {}
         try:
