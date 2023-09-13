@@ -776,6 +776,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_tx_config_power = MagicMock(return_value=0)
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        mock_xcvr_api.get_supported_freq_config = MagicMock(return_value=(0xA0,0,0,191300,196100))
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
@@ -876,7 +877,6 @@ class TestXcvrdScript(object):
         task.get_configured_tx_power_from_db = MagicMock(return_value=-13)
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
-        task.verify_config_laser_frequency = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
         # Case 1: Module Inserted --> DP_DEINIT
