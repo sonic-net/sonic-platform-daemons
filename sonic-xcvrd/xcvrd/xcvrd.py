@@ -1390,18 +1390,28 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
-    def configure_laser_frequency(self, api, lport, freq, grid=75):
+    def verify_config_laser_frequency(self, api, lport, freq, grid=75):
         _, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
+            return False
         if freq > highf:
             self.log_error("{} configured freq:{} GHz is higher than the supported freq:{} GHz".format(lport, freq, highf))
-        chan = int(round((freq - 193100)/25))
-        if chan % 3 != 0:
-            self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+            return False
+        if grid == 75:
+            chan = int(round((freq - 193100)/25))
+            if chan % 3 != 0:
+                self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+                return False
+        return True
+
+    def configure_laser_frequency(self, api, lport, freq, grid=75):
         if api.get_tuning_in_progress():
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
-        return api.set_laser_freq(freq, grid)
+        try:
+            return api.set_laser_freq(freq, grid)
+        except:
+            return False
 
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
@@ -1596,11 +1606,12 @@ class CmisManagerTask(threading.Thread):
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                           freq = self.port_dict[lport]['laser_freq']
-                           # If user requested frequency is NOT the same as configured on the module
-                           # force datapath re-initialization
-                           if 0 != freq and freq != api.get_laser_config_freq():
-                              need_update = True
+                            freq = self.port_dict[lport]['laser_freq']
+                            # If user requested frequency is NOT the same as configured on the module
+                            # force datapath re-initialization
+                            if 0 != freq and freq != api.get_laser_config_freq():
+                                if self.verify_config_laser_frequency(api, lport, freq) == True:
+                                    need_update = True
 
                         if not need_update:
                             # No application updates

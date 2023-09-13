@@ -876,6 +876,7 @@ class TestXcvrdScript(object):
         task.get_configured_tx_power_from_db = MagicMock(return_value=-13)
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
+        task.verify_config_laser_frequency = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
         # Case 1: Module Inserted --> DP_DEINIT
