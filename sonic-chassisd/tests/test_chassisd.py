@@ -32,6 +32,7 @@ CHASSIS_MODULE_INFO_NAME_FIELD = 'name'
 CHASSIS_MODULE_INFO_DESC_FIELD = 'desc'
 CHASSIS_MODULE_INFO_SLOT_FIELD = 'slot'
 CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = 'oper_status'
+CHASSIS_MODULE_INFO_SERIAL_FIELD = 'serial'
 
 CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
 CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
@@ -55,8 +56,9 @@ def test_moduleupdater_check_valid_fields():
     name = "FABRIC-CARD0"
     desc = "Switch Fabric Module"
     slot = 10
+    serial = "FC1000101"
     module_type = ModuleBase.MODULE_TYPE_FABRIC
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -68,9 +70,12 @@ def test_moduleupdater_check_valid_fields():
                                    module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
     assert slot == int(fvs[CHASSIS_MODULE_INFO_SLOT_FIELD])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
 
 def test_moduleupdater_check_invalid_name():
@@ -79,8 +84,9 @@ def test_moduleupdater_check_invalid_name():
     name = "TEST-CARD0"
     desc = "36 port 400G card"
     slot = 2
+    serial = "TS1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_PRESENT
@@ -101,8 +107,9 @@ def test_moduleupdater_check_status_update():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -113,6 +120,8 @@ def test_moduleupdater_check_status_update():
                                    module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     print('Initial DB-entry {}'.format(fvs))
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
@@ -120,15 +129,21 @@ def test_moduleupdater_check_status_update():
     status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
     fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     print('Not updated DB-entry {}'.format(fvs))
     assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Update status and db
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     print('Updated DB-entry {}'.format(fvs))
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
+    # Run chassis db clean up from LC.
+    module_updater.module_down_chassis_db_cleanup()
 
 def test_moduleupdater_check_deinit():
     chassis = MockChassis()
@@ -136,8 +151,9 @@ def test_moduleupdater_check_deinit():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -149,6 +165,8 @@ def test_moduleupdater_check_deinit():
     module_updater.modules_num_update()
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     module_table = module_updater.module_table
@@ -163,8 +181,9 @@ def test_configupdater_check_valid_names():
     name = "TEST-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "TC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -185,8 +204,9 @@ def test_configupdater_check_valid_index():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -207,8 +227,9 @@ def test_configupdater_check_admin_state():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
@@ -231,8 +252,9 @@ def test_configupdater_check_num_modules():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
 
     # No modules
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
@@ -245,6 +267,8 @@ def test_configupdater_check_num_modules():
     chassis.module_list.append(module)
     module_updater.modules_num_update()
     fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert chassis.get_num_modules() == int(fvs[CHASSIS_INFO_CARD_NUM_FIELD])
 
     module_updater.deinit()
@@ -259,8 +283,9 @@ def test_midplane_presence_modules():
     name = "SUPERVISOR0"
     desc = "Supervisor card"
     slot = 16
+    serial = "RP1000101"
     module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
-    supervisor = MockModule(index, name, desc, module_type, slot)
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
     supervisor.set_midplane_ip()
     chassis.module_list.append(supervisor)
 
@@ -269,8 +294,9 @@ def test_midplane_presence_modules():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
     chassis.module_list.append(module)
 
@@ -279,8 +305,9 @@ def test_midplane_presence_modules():
     name = "FABRIC-CARD0"
     desc = "Switch fabric card"
     slot = 17
+    serial = "FC1000101"
     module_type = ModuleBase.MODULE_TYPE_FABRIC
-    fabric = MockModule(index, name, desc, module_type, slot)
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
     chassis.module_list.append(fabric)
 
     #Run on supervisor
@@ -300,14 +327,28 @@ def test_midplane_presence_modules():
     name = "LINE-CARD0"
     fvs = midplane_table.get(name)
     assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #Set access of line-card to down
+    #Set access of line-card to Up (midplane connectivity is down initially)
+    module.set_midplane_reachable(True)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of line-card to Down (to mock midplane connectivity state change)
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
     assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
@@ -324,8 +365,9 @@ def test_midplane_presence_supervisor():
     name = "SUPERVISOR0"
     desc = "Supervisor card"
     slot = 16
+    serial = "RP1000101"
     module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
-    supervisor = MockModule(index, name, desc, module_type, slot)
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
     supervisor.set_midplane_ip()
     chassis.module_list.append(supervisor)
 
@@ -334,8 +376,9 @@ def test_midplane_presence_supervisor():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
     chassis.module_list.append(module)
 
@@ -344,8 +387,9 @@ def test_midplane_presence_supervisor():
     name = "FABRIC-CARD0"
     desc = "Switch fabric card"
     slot = 17
+    serial = "FC1000101"
     module_type = ModuleBase.MODULE_TYPE_FABRIC
-    fabric = MockModule(index, name, desc, module_type, slot)
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
     chassis.module_list.append(fabric)
 
     #Run on supervisor
@@ -365,6 +409,8 @@ def test_midplane_presence_supervisor():
     name = "SUPERVISOR0"
     fvs = midplane_table.get(name)
     assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert supervisor.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(supervisor.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
@@ -373,6 +419,8 @@ def test_midplane_presence_supervisor():
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
     assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
     assert supervisor.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(supervisor.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
@@ -389,8 +437,9 @@ def test_asic_presence():
     name = "SUPERVISOR0"
     desc = "Supervisor card"
     slot = 16
+    serial = "RP1000101"
     module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
-    supervisor = MockModule(index, name, desc, module_type, slot)
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
     supervisor.set_midplane_ip()
     chassis.module_list.append(supervisor)
 
@@ -399,8 +448,9 @@ def test_asic_presence():
     name = "LINE-CARD0"
     desc = "36 port 400G card"
     slot = 1
+    serial = "LC1000101"
     module_type = ModuleBase.MODULE_TYPE_LINE
-    module = MockModule(index, name, desc, module_type, slot)
+    module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
     chassis.module_list.append(module)
 
@@ -409,9 +459,10 @@ def test_asic_presence():
     name = "FABRIC-CARD0"
     desc = "Switch fabric card"
     slot = 17
+    serial = "FC1000101"
     module_type = ModuleBase.MODULE_TYPE_FABRIC
     fabric_asic_list = [("4", "0000:04:00.0"), ("5", "0000:05:00.0")]
-    fabric = MockModule(index, name, desc, module_type, slot, fabric_asic_list)
+    fabric = MockModule(index, name, desc, module_type, slot, serial, fabric_asic_list)
     chassis.module_list.append(fabric)
 
     #Run on supervisor
@@ -430,6 +481,8 @@ def test_asic_presence():
 
     def verify_fabric_asic(asic_name, asic_pci_address, module_name, asic_id_in_module):
         fvs = fabric_asic_table.get(asic_name)
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
         assert fvs[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
         assert fvs[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
         assert fvs[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
@@ -524,3 +577,83 @@ def test_daemon_run_linecard():
     with patch.object(sonic_platform.platform.Chassis, 'get_my_slot') as mock:
        mock.return_value = sonic_platform.platform.Platform().get_chassis().get_supervisor_slot() + 1
        daemon_chassisd.run()
+
+def test_chassis_db_cleanup():
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    sup_name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    sup_slot = 16
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, sup_name, desc, module_type, sup_slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard 0. Host name will be pushed for this to make clean up happen
+    index = 1
+    lc_name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    lc_slot = 1
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, lc_name, desc, module_type, lc_slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Linecard 1. Host name will not be pushed for this so that clean up will not happen
+    index = 2
+    lc2_name = "LINE-CARD1"
+    desc = "36 port 400G card"
+    lc2_slot = 2
+    serial = "LC2000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module2 = MockModule(index, lc2_name, desc, module_type, lc2_slot, serial)
+    module2.set_midplane_ip()
+    chassis.module_list.append(module2)
+
+    # Supervisor ModuleUpdater
+    sup_module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
+    sup_module_updater.modules_num_update()
+    # Mock hostname table update for the line card LINE-CARD0
+    hostname = "lc1-host-00"
+    num_asics = 1
+    hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(lc_slot)), 
+                                    (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
+                                    (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(num_asics))])
+    sup_module_updater.hostname_table.set(lc_name, hostname_fvs)
+
+    # Set linecard initial state to ONLINE
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    sup_module_updater.module_db_update()
+
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # Change linecard module status to OFFLINE
+    status = ModuleBase.MODULE_STATUS_OFFLINE
+    module.set_oper_status(status)
+    sup_module_updater.module_db_update()
+
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD0
+    down_module_key = lc_name+"|"+hostname
+    module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
+    sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
+
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD1
+    down_module_key = lc2_name+"|"
+    module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
+    sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
+
+    # Run module database update from supervisor to run chassis db cleanup
+    sup_module_updater.module_down_chassis_db_cleanup()

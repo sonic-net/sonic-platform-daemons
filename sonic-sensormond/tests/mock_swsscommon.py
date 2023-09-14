@@ -2,6 +2,8 @@
     Mock implementation of swsscommon package for unit testing
 '''
 
+from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
+
 STATE_DB = ''
 
 
@@ -9,6 +11,7 @@ class Table:
     def __init__(self, db, table_name):
         self.table_name = table_name
         self.mock_dict = {}
+        self.mock_keys = []
 
     def _del(self, key):
         del self.mock_dict[key]
@@ -27,7 +30,7 @@ class Table:
         return (len(self.mock_dict))
 
     def getKeys(self):
-        return list(self.mock_dict.keys())
+        return self.mock_keys
 
 
 class FieldValuePairs:
@@ -55,12 +58,3 @@ class FieldValuePairs:
 
     def __str__(self):
         return repr(self.fv_dict)
-
-class ConfigDBConnector:
-    pass
-
-class SonicDBConfig:
-    pass
-
-class SonicV2Connector:
-    pass

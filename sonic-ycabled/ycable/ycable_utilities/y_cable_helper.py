@@ -296,7 +296,7 @@ def check_mux_cable_port_type(logical_port_name, port_tbl, asic_index):
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return (False, None)
 
@@ -353,7 +353,7 @@ def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client, f
 
     (status, fvs) = port_tbl[asic_index].get(port)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(port, port_tbl[asic_index].getTableName()))
         return False
 
@@ -387,10 +387,10 @@ def apply_grpc_secrets_configuration(SECRETS_PATH, grpc_config):
     if grpc_client_config is not None:
         config = grpc_client_config.get("config", None)
         if config is not None:
-            type = config.get("type",None)
+            type_chan = config.get("type",None)
             auth_level = config.get("auth_level",None)
             log_level = config.get("log_level", None)
-            fvs_updated = swsscommon.FieldValuePairs([('type', type),
+            fvs_updated = swsscommon.FieldValuePairs([('type', type_chan),
                                                       ('auth_level',auth_level ),
                                                       ('log_level',log_level)])
             grpc_config[asic_index].set('config', fvs_updated)
@@ -407,7 +407,7 @@ def apply_grpc_secrets_configuration(SECRETS_PATH, grpc_config):
             grpc_config[asic_index].set('certs', fvs_updated)
     
 
-def get_grpc_credentials(type, kvp):
+def get_grpc_credentials(type_chan, kvp):
 
     root_file = kvp.get("ca_crt", None)
     if root_file is not None and os.path.isfile(root_file): 
@@ -416,7 +416,7 @@ def get_grpc_credentials(type, kvp):
         helper_logger.log_error("grpc credential channel setup no root file in config_db")
         return None
 
-    if type == "mutual":
+    if type_chan == "mutual":
         cert_file = kvp.get("client_crt", None)
         if cert_file is not None and os.path.isfile(cert_file): 
             cert_chain = open(cert_file, 'rb').read()
@@ -435,7 +435,7 @@ def get_grpc_credentials(type, kvp):
                 root_certificates=root_cert,
                 private_key=key,
                 certificate_chain=cert_chain)
-    elif type == "server":
+    elif type_chan == "server":
         credential = grpc.ssl_channel_credentials(
                 root_certificates=root_cert)
     else:
@@ -458,7 +458,7 @@ def connect_channel(channel, stub, port):
         else:
             break
 
-def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async):
+def create_channel(type_chan, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async):
 
     # Helper callback to get an channel connectivity state
     def wait_for_state_change(channel_connectivity):
@@ -487,28 +487,33 @@ def create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_respons
             grpc_port_connectivity[port] = "SHUTDOWN"
 
 
-    if type == "secure": 
+    if type_chan == "secure":
         credential = get_grpc_credentials(level, kvp)
         target_name = kvp.get("grpc_ssl_credential", None)
         if credential is None or target_name is None:
             return (None, None)
 
-        GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
 
         if is_async:
-            channel = grpc.aio.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+            ASYNC_GRPC_CLIENT_OPTIONS = []
+            ASYNC_GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
+            channel = grpc.aio.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=ASYNC_GRPC_CLIENT_OPTIONS)
+            stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
         else:
+            GRPC_CLIENT_OPTIONS.append(('grpc.ssl_target_name_override', '{}'.format(target_name)))
             channel = grpc.secure_channel("{}:{}".format(soc_ip, GRPC_PORT), credential, options=GRPC_CLIENT_OPTIONS)
+            stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
 
     else:
         if is_async:
-            channel = grpc.aio.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
+            channel = grpc.aio.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT))
+            stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
         else:
             channel = grpc.insecure_channel("{}:{}".format(soc_ip, GRPC_PORT), options=GRPC_CLIENT_OPTIONS)
+            stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
 
-    stub = linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub(channel)
 
 
     if not is_async and channel is not None:
@@ -541,31 +546,31 @@ def setup_grpc_channel_for_port(port, soc_ip, asic_index, grpc_config, fwd_state
 
 
     #if no config from config DB, treat channel to be as insecure
-    type = "insecure"
+    type_chan = "insecure"
     level = "server"
 
     (status, fvs) = grpc_config[asic_index].get("config")
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table kvp config for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
     else:
         grpc_config_dict = dict(fvs)
-        type = grpc_config_dict.get("type", None)
+        type_chan = grpc_config_dict.get("type", None)
         level = grpc_config_dict.get("auth_level", None)
     
    
     kvp = {}
-    if type == "secure":
+    if type_chan == "secure":
         (status, fvs) = grpc_config[asic_index].get("certs")
         if status is False:
-            helper_logger.log_warning(
+            helper_logger.log_debug(
                 "Could not retreive fieldvalue pairs for {}, inside config_db table kvp certs for {} for setting up channel type".format(port, grpc_config[asic_index].getTableName()))
             #if type is secure, must have certs defined
             return (None, None)
         kvp = dict(fvs)
 
 
-    channel, stub = create_channel(type, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async) 
+    channel, stub = create_channel(type_chan, level, kvp, soc_ip, port, asic_index, fwd_state_response_tbl, is_async)
 
     if stub is None:
         helper_logger.log_warning("stub was not setup for gRPC soc ip {} port {}, no gRPC soc server running ?".format(soc_ip, port))
@@ -642,7 +647,7 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
@@ -1155,7 +1160,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
     global y_cable_port_locks
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
@@ -1297,7 +1302,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning(
+        helper_logger.log_debug(
             "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
@@ -1310,7 +1315,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                 #We dont delete the values here, rather just update the values in state DB
                 (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
                 if status is False:
-                    helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {} while deleting mux entry".format(
+                    helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {} while deleting mux entry".format(
                         logical_port_name, y_cable_tbl[asic_index].getTableName()))
                 mux_port_dict = dict(fvs)
                 read_side = mux_port_dict.get("read_side", None)
@@ -1384,7 +1389,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
                 "Could not retreive port inside config_db PORT table {} for Y-Cable initiation".format(logical_port_name))
 
 
-def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, stop_event=threading.Event()):
+def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event()):
 
     global read_side
     delete_change_event = [False]
@@ -1439,8 +1444,9 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
     if y_cable_presence[0] is True and delete_change_event[0] is True:
 
         y_cable_presence[:] = [False]
-        state_db = {},
+        state_db = {}
         yc_hw_mux_cable_table = {}
+        namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(
                 namespace)
@@ -1510,7 +1516,7 @@ def check_identifier_presence_and_update_mux_info_entry(state_db, mux_tbl, asic_
     (cable_status, cable_type) = check_mux_cable_port_type(logical_port_name, port_tbl, asic_index)
 
     if status is False:
-        helper_logger.log_info("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
+        helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, port_tbl[asic_index].getTableName()))
         return
 
     elif cable_status is True:
@@ -1550,7 +1556,7 @@ def get_firmware_dict(physical_port, port_instance, target, side, mux_info_dict,
 
         (status, fvs) = mux_tbl[asic_index].get(logical_port_name)
         if status is False:
-            helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, mux_tbl[asic_index].getTableName()))
+            helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, mux_tbl[asic_index].getTableName()))
             mux_info_dict[("version_{}_active".format(side))] = "N/A"
             mux_info_dict[("version_{}_inactive".format(side))] = "N/A"
             mux_info_dict[("version_{}_next".format(side))] = "N/A"
@@ -1690,7 +1696,7 @@ def get_muxcable_info_for_active_active(physical_port, port, mux_tbl, asic_index
 
     (status, fvs) = y_cable_tbl[asic_index].get(port)
     if status is False:
-        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
+        helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
 
     mux_port_dict = dict(fvs)
@@ -1825,7 +1831,7 @@ def get_muxcable_info(physical_port, logical_port_name, mux_tbl, asic_index, y_c
 
     (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
+        helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
 
     mux_port_dict = dict(fvs)
@@ -2073,7 +2079,7 @@ def get_muxcable_static_info(physical_port, logical_port_name, y_cable_tbl):
 
     (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
     if status is False:
-        helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+        helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
             logical_port_name, y_cable_tbl[asic_index].getTableName()))
         return -1
 
@@ -2178,7 +2184,7 @@ def post_port_mux_info_to_db(logical_port_name, mux_tbl, asic_index, y_cable_tbl
         if not y_cable_wrapper_get_presence(physical_port) or cable_type == 'pseudo-cable':
             mux_info_dict = get_muxcable_info_without_presence()
         elif cable_type == 'active-active':
-            helper_logger.log_warning("Error: trying to post mux info without presence of port {}".format(logical_port_name))
+            helper_logger.log_debug("Error: trying to post mux info without presence of port {}".format(logical_port_name))
             mux_info_dict = get_muxcable_info_for_active_active(physical_port, logical_port_name, mux_tbl, asic_index, y_cable_tbl)
             if mux_info_dict is not None and mux_info_dict !=  -1:
                 fvs = swsscommon.FieldValuePairs(
@@ -3260,7 +3266,7 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
             (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
 
             if status is False:
-                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table while responding to cli cmd show mux status {}".format(
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table while responding to cli cmd show mux status {}".format(
                     port, hw_mux_cable_tbl[asic_index].getTableName()))
                 set_result_and_delete_port('state', 'unknown', xcvrd_show_hwmode_dir_cmd_sts_tbl[asic_index], xcvrd_show_hwmode_dir_rsp_tbl[asic_index], port)
                 return -1
@@ -3392,7 +3398,7 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
             helper_logger.log_debug("Y_CABLE_DEBUG:processing the notification fwd_state port {}".format(port))
             (status, fv) = hw_mux_cable_tbl[asic_index].get(port)
             if status is False:
-                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                     port, hw_mux_cable_tbl[asic_index].getTableName()))
                 return False
             mux_port_dict = dict(fv)
@@ -3464,7 +3470,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
 
             (status, fvs) = hw_mux_cable_tbl[asic_index].get(port)
             if status is False:
-                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                     port, hw_mux_cable_tbl[asic_index].getTableName()))
                 return
             helper_logger.log_debug("Y_CABLE_DEBUG processing the notification mux hw state port {}".format(port))
@@ -3554,7 +3560,7 @@ def handle_ycable_active_standby_probe_notification(cable_type, fvp_dict, appl_d
             (status, fv) = hw_mux_cable_tbl[asic_index].get(port_m)
 
             if status is False:
-                helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                     port_m, hw_mux_cable_tbl[asic_index].getTableName()))
                 return False
 
@@ -3678,7 +3684,7 @@ class YCableTableUpdateTask(threading.Thread):
                                 requested_status = new_status
                                 (status, fvs) = self.table_helper.get_hw_mux_cable_tbl()[asic_index].get(port)
                                 if status is False:
-                                    helper_logger.log_warning("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
+                                    helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {}".format(
                                         port, self.table_helper.get_hw_mux_cable_tbl()[asic_index].getTableName()))
                                     continue
                                 mux_port_dict = dict(fvs)
@@ -3712,6 +3718,7 @@ class YCableTableUpdateTask(threading.Thread):
                             if fvp:
                                 handle_hw_mux_cable_table_grpc_notification(
                                     fvp, self.table_helper.get_hw_mux_cable_tbl(), asic_index, self.table_helper.get_mux_metrics_tbl(), False, port, self.table_helper.get_port_tbl(), self.table_helper.get_grpc_config_tbl(), self.table_helper.get_fwd_state_response_tbl())
+
 
             while True:
                 (port_m, op_m, fvp_m) = self.table_helper.get_mux_cable_command_tbl()[asic_index].pop()
@@ -3788,6 +3795,7 @@ class YCableCliUpdateTask(threading.Thread):
         self.task_download_firmware_thread = {}
         self.task_stopping_event = threading.Event()
         self.cli_table_helper =  y_cable_table_helper.YcableCliUpdateTableHelper()
+        self.name = "YCableCliUpdateTask"
 
 
     def task_cli_worker(self):
@@ -3841,6 +3849,7 @@ class YCableCliUpdateTask(threading.Thread):
             # Get the corresponding namespace from redisselect db connector object
             namespace = redisSelectObj.getDbConnector().getNamespace()
             asic_index = multi_asic.get_asic_index_from_namespace(namespace)
+
 
             while True:
                 (key, op_m, fvp_m) = self.cli_table_helper.xcvrd_log_tbl[asic_index].pop()
@@ -4070,6 +4079,7 @@ class YCableAsyncNotificationTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.table_helper =  y_cable_table_helper.YcableAsyncNotificationTableHelper()
         self.read_side = process_loopback_interface_and_get_read_side(self.table_helper.loopback_keys)
+        self.name = "YCableAsyncNotificationTask"
 
     async def task_worker(self):
 
@@ -4084,7 +4094,7 @@ class YCableAsyncNotificationTask(threading.Thread):
             asic_index = y_cable_platform_sfputil.get_asic_id_for_logical_port(logical_port_name)
             (status, fvs) = self.table_helper.get_port_tbl()[asic_index].get(logical_port_name)
             if status is False:
-                helper_logger.log_warning(
+                helper_logger.log_debug(
                     "Could not retreive fieldvalue pairs for {}, inside config_db table {}".format(logical_port_name, self.table_helper.get_port_tbl()[asic_index].getTableName()))
                 continue
 
