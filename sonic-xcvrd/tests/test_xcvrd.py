@@ -808,12 +808,14 @@ class TestXcvrdScript(object):
 
     @pytest.mark.parametrize("lport, freq, grid, expected", [
          (1, 193100, 75, True),
-         (1, 191000, 100, False)
+         (1, 193100, 100, False),
+         (1, 193125, 75, False),
+         (1, 193100, 25, False)
     ])
     def test_CmisManagerTask_verify_config_laser_frequency(self, lport, freq, grid, expected):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_supported_freq_config = MagicMock()
-        mock_xcvr_api.get_supported_freq_config.return_value = (0xA0, 0, 0, 191300, 196100)
+        mock_xcvr_api.get_supported_freq_config.return_value = (0x80, 0, 0, 191300, 196100)
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
