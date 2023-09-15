@@ -817,7 +817,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
         result = task.verify_config_laser_frequency(mock_xcvr_api, lport, freq, grid)
         assert result == expected
 
