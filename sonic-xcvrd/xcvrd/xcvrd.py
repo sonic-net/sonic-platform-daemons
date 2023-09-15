@@ -1406,6 +1406,13 @@ class CmisManagerTask(threading.Thread):
             if chan % 3 != 0:
                 self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
                 return False
+        elif grid == 100:
+            if (grid_supported >> 5) & 0x1 != 1:
+                self.log_error("{} 100GHz is not supported".format(lport))
+                return False
+        else:
+            self.log_error("{} {}GHz is not supported".format(lport, grid))
+            return False
         return True
 
     def configure_laser_frequency(self, api, lport, freq, grid=75):

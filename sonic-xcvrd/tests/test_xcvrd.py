@@ -759,6 +759,21 @@ class TestXcvrdScript(object):
         appl = task.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
+    @pytest.mark.parametrize("lport, freq, grid, expected", [
+         (1, 193100, 75, True),
+         (1, 191000, 100, False)
+    ])
+    def test_CmisManagerTask_verify_config_laser_frequency(self, lport, freq, grid, expected):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_supported_freq_config = MagicMock()
+        mock_xcvr_api.get_supported_freq_config.return_value = (0xA0, 0, 0, 191300, 196100)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(port_mapping, stop_event)
+        result = task.verify_config_laser_frequency(mock_xcvr_api, lport, freq, grid)
+        assert result == expected
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
