@@ -34,6 +34,7 @@ try:
 
 
 except ImportError as e:
+    helper_logger.log_error("---- shalvi ---- EXCEPTION 1")
     raise ImportError(str(e) + " - required module not found")
 
 #
@@ -1815,11 +1816,14 @@ class CmisManagerTask(threading.Thread):
                 break
 
     def task_worker(self):
+        helper_logger.log_error("---- shalvi ---- Entered CMIS task_worker")
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-
+        
         self.log_notice("Waiting for PortConfigDone...")
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
+        
+        helper_logger.log_error("---- shalvi ---- received PortConfigDone")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
@@ -1928,11 +1932,14 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 try:
+                    helper_logger.log_error("---- shalvi ---- Starting CMIS state machine")
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_INSERTED")
                         self.port_dict[lport]['appl'] = self.get_cmis_application_desired(api,
                                                                 host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] < 1:
+                            helper_logger.log_error("---- shalvi ---- inside  if self.port_dict[lport]['appl'] < 1")
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
                                             "host_speed {}".format(lport, appl, host_lane_count, host_speed))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1943,6 +1950,7 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
                                                                         appl, host_lane_count, subport)
                         if self.port_dict[lport]['host_lanes_mask'] <= 0:
+                            helper_logger.log_error("---- shalvi ---- Inside  if self.port_dict[lport]['host_lanes_mask'] <= 0")
                             self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
                                             "appl {}!".format(lport, host_lane_count, subport, appl))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1957,6 +1965,7 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
                                                                         appl, lport, subport)
                         if self.port_dict[lport]['media_lanes_mask'] <= 0:
+                            helper_logger.log_error("---- shalvi ---- Inside  if self.port_dict[lport]['media_lanes_mask'] <= 0")
                             self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
                                             "media_lane_assignment_options {} subport {}"
                                             " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
@@ -1967,6 +1976,7 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
+                           helper_logger.log_error("---- shalvi ---- Inside  self.port_dict[lport]['host_tx_ready'] != 'true' or ...")
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
                            api.tx_disable_channel(media_lanes_mask, True)
@@ -1991,21 +2001,26 @@ class CmisManagerTask(threading.Thread):
                            # force datapath re-initialization
                            if 0 != freq and freq != api.get_laser_config_freq():
                               need_update = True
-
-                        if not need_update:
-                            # No application updates
-                            self.log_notice("{}: no CMIS application update required...READY".format(lport))
-                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                            continue
+                        
+                        #TODO: uncomment below lines
+                        #if not need_update:
+                        #    # No application updates
+                        #    helper_logger.log_error("---- shalvi ---- inside  if not need_update")
+                        #    self.log_notice("{}: no CMIS application update required...READY".format(lport))
+                        #    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        #    continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_DEINIT")
                         api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
+                        #TODO: uncomment below lines
                         if not api.tx_disable_channel(media_lanes_mask, True):
+                            helper_logger.log_error("---- shalvi ---- inside  if not api.tx_disable_channel(media_lanes_mask, True)")
                             self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
@@ -2022,16 +2037,20 @@ class CmisManagerTask(threading.Thread):
                         # Explicit control bit to apply custom Host SI settings. 
                         # It will be set to 1 and applied via set_application if 
                         # custom SI settings is applicable
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_AP_CONF")
                         ec = 0
 
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
+                            helper_logger.log_error("---- shalvi ---- inside  if not self.check_module_state(api, ['ModuleReady'])")
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
-
+                        
+                        #TODO: uncomment below lines
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
+                            helper_logger.log_error("---- shalvi ---- inside  if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated'])")
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -2039,40 +2058,56 @@ class CmisManagerTask(threading.Thread):
 
                         if api.is_coherent_module():
                         # For ZR module, configure the laser frequency when Datapath is in Deactivated state
+                           helper_logger.log_error("---- shalvi ---- inside  if api.is_coherent_module()")
                            freq = self.port_dict[lport]['laser_freq']
                            if 0 != freq:
                                 if 1 != self.configure_laser_frequency(api, lport, freq):
                                    self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
                                 else:
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
-
+                        
+                        helper_logger.log_error("---- shalvi ---- AP_CONF: Starting staging custom SI settings")
                         # Stage custom SI settings
                         if optics_si_parser.optics_si_present():
                             optics_si_dict = {}
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
+                            helper_logger.log_error(f"---- shalvi ---- AP_CONF: pport = {pport},  lane_speed = {lane_speed}")
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-
+                            
+                            helper_logger.log_error("---- shalvi ---- AP_CONF: optics_si_settings.json content:")
+                            for key, sub_dict in optics_si_dict.items():
+                                helper_logger.log_error(f"---- shalvi ---- ~~~~~ {key} ~~~~~")
+                                for sub_key, value in sub_dict.items():
+                                    helper_logger.log_error(f"---- shalvi ---- ~~~~~   {sub_key}: {str(value)}  ~~~~~")
+                            
                             if optics_si_dict:
+                                helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if optics_si_dict")
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                  format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
                                 if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
+                                    helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if not api.stage_custom_si_settings()")
                                     self.log_notice("{}: unable to stage custom SI settings ".format(lport))
                                     self.force_cmis_reinit(lport, retries + 1)
                                     continue
-
+                                
+                                self.log_notice(f"---- shalvi ---- after if not api.stage_custom_si_settings")
+                                
                                 # Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
                         if not api.scs_apply_datapath_init(host_lanes_mask):
+                            helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if not api.scs_apply_datapath_init()")
                             self.log_notice("{}: unable to set application and stage DP init".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+                        helper_logger.log_error("---- shalvi ---- AP_CONF: Moving to the next state")
                     elif state == self.CMIS_STATE_DP_INIT:
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_INIT")
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
@@ -2103,6 +2138,7 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_TXON")
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
@@ -2115,6 +2151,7 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
+                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_ACTIVATE")
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
@@ -3067,6 +3104,7 @@ class XcvrTableHelper:
 
 
 def main():
+    helper_logger.log_error(f"---- shalvi ---- starting xcvrd")
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
 
@@ -3077,3 +3115,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+

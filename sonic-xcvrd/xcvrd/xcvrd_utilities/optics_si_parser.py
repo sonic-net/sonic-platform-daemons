@@ -10,6 +10,7 @@ SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
 def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str):
+    helper_logger.log_info("---- shalvi ---- optics_si_parser.get_optics_si_settings_value(): Entered optics_si_parser")
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
     DEFAULT_KEY = 'Default'
@@ -103,7 +104,9 @@ def get_module_vendor_key(physical_port, sfp):
     return vendor_name.upper().strip() + '-' + vendor_pn.upper().strip(), vendor_name.upper().strip()
 
 def fetch_optics_si_setting(physical_port, lane_speed, sfp):
+    helper_logger.log_info("---- shalvi ---- optics_si_parser.fetch_optics_si_setting(): Entered function")
     if not g_optics_si_dict:
+        helper_logger.log_info("---- shalvi ---- optics_si_parser.fetch_optics_si_setting(): missing dict")
         return
 
     optics_si = {}
@@ -134,4 +137,5 @@ def optics_si_present():
     if g_optics_si_dict:
         return True
     return False
+
 
