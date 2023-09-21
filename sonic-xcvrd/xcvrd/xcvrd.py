@@ -976,7 +976,7 @@ def get_gaui_key(physical_port, port_speed, lane_count):
     
     appl_dict = None
     #TODO: instead of this neted if, just initialize gaui_key with None at the begining
-    #TODO: rename gaui_key to lane_speed_key
+    #TODO: rename gaui_key to lane_speed_key 
     if type(api) == CmisApi:
         appl_dict = api.get_application_advertisement()
         helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {physical_port} ---> appl_dict = {appl_dict}")
