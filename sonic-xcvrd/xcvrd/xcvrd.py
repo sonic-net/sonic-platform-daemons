@@ -34,7 +34,6 @@ try:
 
 
 except ImportError as e:
-    helper_logger.log_error("---- shalvi ---- EXCEPTION 1")
     raise ImportError(str(e) + " - required module not found")
 
 #
@@ -119,7 +118,7 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
 
 
-#TODO: remove this function. It is duplicated from CMIS thread
+#TODO: This function is duplicated from the CMIS thread. Need to have one merged function out of the CMIS context
 def get_cmis_application_desired(api, host_lane_count, speed):
     """
     Get the CMIS application code that matches the specified host side configurations
@@ -135,55 +134,23 @@ def get_cmis_application_desired(api, host_lane_count, speed):
     Returns:
         Integer, the transceiver-specific application code
     """
-
-    # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: api = {api}")
-    # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: type(api) = {type(api)}")
-    # (api.split('.'[-1])).split()[0]
-
     app_found = False
 
     if speed == 0 or host_lane_count == 0:
         return 0
 
     appl_code = 0
-    # if api == sonic_platform_base.sonic_xcvr.api.public.c_cmis.CmisApi:
     if type(api) == CmisApi:
-        # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: inside  if type(api) == CmisApi")
         appl_dict = api.get_application_advertisement()
-        helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: appl_dict == {appl_dict}")
         for c in appl_dict.keys():
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: c == {c}")
             d = appl_dict[c]
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: d == {d}")
-            
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: d.lane_count = {d.get('host_lane_count')} ~~~ lane_count = {host_lane_count}")
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: d.speed = {get_interface_speed(d.get('host_electrical_interface_id'))} ~~~ speed = {speed}")
-            
             if d.get('host_lane_count') != host_lane_count:
-                # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: inside  if d.get('host_lane_count') != host_lane_count")
-                # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: type(get_interface_speed(d.get('host_electrical_interface_id'))) = {type(get_interface_speed(d.get('host_electrical_interface_id')))}")
-                # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: type(speed) = {type(speed)}")
                 continue
             if get_interface_speed(d.get('host_electrical_interface_id')) != speed:
-                helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: inside  if get_interface_speed(d.get('host_electrical_interface_id')) != speed")
-                # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: type(get_interface_speed(d.get('host_electrical_interface_id'))) = {type(get_interface_speed(d.get('host_electrical_interface_id')))}")
-                # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: type(speed) = {type(speed)}")
                 continue
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: found something")
             appl_code = c
             app_found = True
-
             result_index = appl_code & 0xf
-            # helper_logger.log_error(f"---- tomer2 ---- get_cmis_application_desired: result_index = {result_index}")
-            # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: appl_dict[result_index] = {appl_dict[result_index]}")
-            # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: appl_dict[result_index]['host_electrical_interface_id'] = {appl_dict[result_index]['host_electrical_interface_id']}")
-
-
-            # helper_logger.log_error(f"---- tomer2 ---- get_cmis_application_desired: appl_dict[result_index] = {appl_dict[result_index]}")
-            # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: gaui_key_returned = {appl_dict[result_index].get('host_lane_count')}")
-            # helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: gaui_key_returned = {appl_dict[result_index].get('host_lane_count')}")
-
-            helper_logger.log_error(f"---- tomer ---- get_cmis_application_desired: gaui_key_returned = {appl_dict[result_index].get('host_electrical_interface_id')}")
             break
 
         if app_found:
@@ -192,43 +159,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
     return None
 
 
-# #TODO: remove this function. It is duplicated from CMIS thread
-# def get_cmis_application_desired(api, host_lane_count, speed):
-#     """
-#     Get the CMIS application code that matches the specified host side configurations
-
-#     Args:
-#         api:
-#             XcvrApi object
-#         host_lane_count:
-#             Number of lanes on the host side
-#         speed:
-#             Integer, the port speed of the host interface
-
-#     Returns:
-#         Integer, the transceiver-specific application code
-#     """
-
-#     if speed == 0 or host_lane_count == 0:
-#         return 0
-
-#     appl_code = 0
-#     if type(api) == CmisApi:
-#         appl_dict = api.get_application_advertisement()
-#         for c in appl_dict.keys():
-#             d = appl_dict[c]
-#             if d.get('host_lane_count') != host_lane_count:
-#                 continue
-#             if get_interface_speed(d.get('host_electrical_interface_id')) != speed:
-#                 continue
-#             appl_code = c
-#             break
-
-#         return (appl_code & 0xf)
-
-#     return None
-
-#TODO: remove this function. It is duplicated from CMIS thread
+#TODO: This function is duplicated from the CMIS thread. Need to have one merged function out of the CMIS context
 def get_interface_speed(ifname):
     """
     Get the port speed from the host interface name
@@ -960,6 +891,7 @@ def get_media_settings_value(physical_port, key):
 
 
 
+#TODO: update the implementation of this method after getting answers from Prince (probably replacing CONFIG_DB with APP_DB)
 def get_speed_and_lane_count(port, cfg_port_tbl):
     port_speed, lane_count = -1, -1
     found, port_info = cfg_port_tbl.get(port)
@@ -969,25 +901,19 @@ def get_speed_and_lane_count(port, cfg_port_tbl):
         lane_count = len(lanes.split(','))
     return port_speed, lane_count
 
-def get_gaui_key(physical_port, port_speed, lane_count):
+
+def get_lane_speed_key(physical_port, port_speed, lane_count):
     sfp = platform_chassis.get_sfp(physical_port)
     api = sfp.get_xcvr_api()
     speed_index = get_cmis_application_desired(api, int(lane_count), int(port_speed))
     
-    appl_dict = None
-    #TODO: instead of this neted if, just initialize gaui_key with None at the begining
-    #TODO: rename gaui_key to lane_speed_key 
+    appl_adv_dict, lane_speed_key = None, None
     if type(api) == CmisApi:
-        appl_dict = api.get_application_advertisement()
-        helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {physical_port} ---> appl_dict = {appl_dict}")
-        if speed_index is None:
-            gaui_key = None
-        else:
-            gaui_key = SI_PER_SPEED_INDICATION_STR + (appl_dict[speed_index].get('host_electrical_interface_id')).split()[0]
-    else:
-        gaui_key = None
-    return gaui_key
+        appl_adv_dict = api.get_application_advertisement()
+        if speed_index is not None:
+            lane_speed_key = SI_PER_SPEED_INDICATION_STR + (appl_adv_dict[speed_index].get('host_electrical_interface_id')).split()[0]
 
+    return lane_speed_key
 
 
 def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count):
@@ -1034,9 +960,9 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
 
-    gaui_key = get_gaui_key(physical_port, port_speed, lane_count)
+    lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
 
-    return [vendor_key, media_key, gaui_key]
+    return [vendor_key, media_key, lane_speed_key]
 
 
 
@@ -1100,36 +1026,16 @@ def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
 def notify_media_setting(logical_port_name, transceiver_dict,
                          app_port_tbl, cfg_port_tbl, port_mapping):
 
-
-
-    helper_logger.log_error(f"---- tomer ---- notify_media_setting(): entered notify_media_setting()")
-
-
-    helper_logger.log_error(f"---- tomer ---- notify_media_setting(): logical_port_name = {logical_port_name}")
-
-    # port_speed, lane_count = -1, -1
-    # found, port_info = cfg_port_tbl.get(logical_port_name)
-    # if found and 'speed' in dict(port_info) and 'lanes' in dict(port_info):
-    #     port_speed = dict(port_info).get('speed', '-1')
-    #     lanes = dict(port_info).get('lanes', '-1')
-    #     lane_count = len(lanes.split(','))
-    port_speed, lane_count = get_speed_and_lane_count(logical_port_name, cfg_port_tbl)
-            
-    # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): port_speed = {port_speed}")
-    # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): lane_count = {lane_count}")
-    # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): lanes = {lanes}")
-
-
     if not g_dict:
-        helper_logger.log_error(f"---- tomer ---- g_dict is None")
         return
+
+    port_speed, lane_count = get_speed_and_lane_count(logical_port_name, cfg_port_tbl)
 
     ganged_port = False
     ganged_member_num = 1
 
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
-        helper_logger.log_error(f"---- tomer ---- notify_media_setting(): No physical ports found for logical port {logical_port_name}")
         helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
         return PHYSICAL_PORT_NOT_EXIST
 
@@ -1137,35 +1043,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_port = True
 
     for physical_port in physical_port_list:
-
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): inside loop: physical_port = {physical_port}")
-        # sfp = platform_chassis.get_sfp(physical_port)
-        # api = sfp.get_xcvr_api()
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} --> api = {api}")
-        
-        # speed_index = get_cmis_application_desired(api, int(lane_count), int(port_speed))
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} --> final speed_index = {speed_index}")
-
-        # appl_dict = None
-        # if type(api) == CmisApi:
-        #     appl_dict = api.get_application_advertisement()
-        #     helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} --> appl_dict = {appl_dict}")
-        #     if speed_index is None:
-        #         gaui_key = None
-        #     else:
-        #         gaui_key = (appl_dict[speed_index].get('host_electrical_interface_id')).split()[0]
-        # else:
-        #     gaui_key = None
-
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} --> final gaui_key = {gaui_key}")
-        
-        # gaui_from_fnction = get_gaui_key(physical_port, port_speed, lane_count)
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} --> final gaui_key from function = {gaui_from_fnction}")
-
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-
-
-
         logical_port_list = port_mapping.get_physical_to_logical(physical_port)
         num_logical_ports = len(logical_port_list)
         logical_idx = logical_port_list.index(logical_port_name)
@@ -1179,18 +1056,11 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         port_name = get_physical_port_name(logical_port_name,
                                            ganged_member_num, ganged_port)
         
-        helper_logger.log_error(f"---- tomer ---- notify_media_setting(): physical port_name = {port_name}")
-
         ganged_member_num += 1
         
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
-        helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} ---> whole_key = {key}")
+        helper_logger.log_debug("Retrieving media settings for port {} using the following keys: {}".format(logical_port_name, key))
         media_dict = get_media_settings_value(physical_port, key)
-        helper_logger.log_error(f"---- tomer ---- notify_media_setting(): {logical_port_name} ---> whole_value = {media_dict}")
-
-        # helper_logger.log_error(f"---- tomer ---- key = {key}")
-        # helper_logger.log_error(f"---- tomer ---- value = {media_dict}")
-
 
         if len(media_dict) == 0:
             helper_logger.log_error("Error in obtaining media setting for {}".format(logical_port_name))
@@ -1199,6 +1069,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
         index = 0
+        helper_logger.log_debug("Storing in Application DB the following media settings for port {}:".format(logical_port_name))
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
                 media_val_str = get_media_val_str(num_logical_ports,
@@ -1206,11 +1077,9 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                                   logical_idx)
             else:
                 media_val_str = media_dict[media_key]
+            helper_logger.log_debug("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
             fvs[index] = (str(media_key), str(media_val_str))
             index += 1
-
-
-        # helper_logger.log_error(f"---- tomer ---- notify_media_setting(): ~~~~ writing pair to APP_DB: ~~~~ {port_name} --> {fvs.fv_dict}")
 
         app_port_tbl.set(port_name, fvs)
 
@@ -1816,14 +1685,12 @@ class CmisManagerTask(threading.Thread):
                 break
 
     def task_worker(self):
-        helper_logger.log_error("---- shalvi ---- Entered CMIS task_worker")
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         
         self.log_notice("Waiting for PortConfigDone...")
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
         
-        helper_logger.log_error("---- shalvi ---- received PortConfigDone")
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
@@ -1932,14 +1799,12 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 try:
-                    helper_logger.log_error("---- shalvi ---- Starting CMIS state machine")
+                    self.log_notice("Starting CMIS state machine...")
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_INSERTED")
                         self.port_dict[lport]['appl'] = self.get_cmis_application_desired(api,
                                                                 host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] < 1:
-                            helper_logger.log_error("---- shalvi ---- inside  if self.port_dict[lport]['appl'] < 1")
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
                                             "host_speed {}".format(lport, appl, host_lane_count, host_speed))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1950,7 +1815,6 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
                                                                         appl, host_lane_count, subport)
                         if self.port_dict[lport]['host_lanes_mask'] <= 0:
-                            helper_logger.log_error("---- shalvi ---- Inside  if self.port_dict[lport]['host_lanes_mask'] <= 0")
                             self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
                                             "appl {}!".format(lport, host_lane_count, subport, appl))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1965,7 +1829,6 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
                                                                         appl, lport, subport)
                         if self.port_dict[lport]['media_lanes_mask'] <= 0:
-                            helper_logger.log_error("---- shalvi ---- Inside  if self.port_dict[lport]['media_lanes_mask'] <= 0")
                             self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
                                             "media_lane_assignment_options {} subport {}"
                                             " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
@@ -1976,7 +1839,6 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
-                           helper_logger.log_error("---- shalvi ---- Inside  self.port_dict[lport]['host_tx_ready'] != 'true' or ...")
                            self.log_notice("{} Forcing Tx laser OFF".format(lport))
                            # Force DataPath re-init
                            api.tx_disable_channel(media_lanes_mask, True)
@@ -2013,14 +1875,11 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
                         # D.2.2 Software Deinitialization
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_DEINIT")
                         api.set_datapath_deinit(host_lanes_mask)
 
                         # D.1.3 Software Configuration and Initialization
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
-                        #TODO: uncomment below lines
                         if not api.tx_disable_channel(media_lanes_mask, True):
-                            helper_logger.log_error("---- shalvi ---- inside  if not api.tx_disable_channel(media_lanes_mask, True)")
                             self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
                             self.port_dict[lport]['cmis_retries'] = retries + 1
                             continue
@@ -2037,20 +1896,16 @@ class CmisManagerTask(threading.Thread):
                         # Explicit control bit to apply custom Host SI settings. 
                         # It will be set to 1 and applied via set_application if 
                         # custom SI settings is applicable
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_AP_CONF")
                         ec = 0
 
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
-                            helper_logger.log_error("---- shalvi ---- inside  if not self.check_module_state(api, ['ModuleReady'])")
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
                         
-                        #TODO: uncomment below lines
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
-                            helper_logger.log_error("---- shalvi ---- inside  if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated'])")
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
@@ -2058,7 +1913,6 @@ class CmisManagerTask(threading.Thread):
 
                         if api.is_coherent_module():
                         # For ZR module, configure the laser frequency when Datapath is in Deactivated state
-                           helper_logger.log_error("---- shalvi ---- inside  if api.is_coherent_module()")
                            freq = self.port_dict[lport]['laser_freq']
                            if 0 != freq:
                                 if 1 != self.configure_laser_frequency(api, lport, freq):
@@ -2066,32 +1920,27 @@ class CmisManagerTask(threading.Thread):
                                 else:
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
                         
-                        helper_logger.log_error("---- shalvi ---- AP_CONF: Starting staging custom SI settings")
+                        helper_logger.log_debug("Starting to stage custom SI settings")
                         # Stage custom SI settings
                         if optics_si_parser.optics_si_present():
                             optics_si_dict = {}
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
-                            helper_logger.log_error(f"---- shalvi ---- AP_CONF: pport = {pport},  lane_speed = {lane_speed}")
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
                             
-                            helper_logger.log_error("---- shalvi ---- AP_CONF: optics_si_settings.json content:")
+                            helper_logger.log_debug("SI values for the connected module found in optics_si_settings.json:")
                             for key, sub_dict in optics_si_dict.items():
-                                helper_logger.log_error(f"---- shalvi ---- ~~~~~ {key} ~~~~~")
+                                helper_logger.log_debug("{}".format(key))
                                 for sub_key, value in sub_dict.items():
-                                    helper_logger.log_error(f"---- shalvi ---- ~~~~~   {sub_key}: {str(value)}  ~~~~~")
+                                    helper_logger.log_debug("{}: {}".format(sub_key, str(value)))
                             
                             if optics_si_dict:
-                                helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if optics_si_dict")
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                  format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
                                 if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
-                                    helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if not api.stage_custom_si_settings()")
                                     self.log_notice("{}: unable to stage custom SI settings ".format(lport))
                                     self.force_cmis_reinit(lport, retries + 1)
                                     continue
-                                
-                                self.log_notice(f"---- shalvi ---- after if not api.stage_custom_si_settings")
                                 
                                 # Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
@@ -2099,15 +1948,12 @@ class CmisManagerTask(threading.Thread):
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
                         if not api.scs_apply_datapath_init(host_lanes_mask):
-                            helper_logger.log_error("---- shalvi ---- AP_CONF: inside  if not api.scs_apply_datapath_init()")
                             self.log_notice("{}: unable to set application and stage DP init".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
-                        helper_logger.log_error("---- shalvi ---- AP_CONF: Moving to the next state")
                     elif state == self.CMIS_STATE_DP_INIT:
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_INIT")
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
@@ -2138,7 +1984,6 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_TXON
                     elif state == self.CMIS_STATE_DP_TXON:
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_TXON")
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
@@ -2151,7 +1996,6 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
-                        helper_logger.log_error("---- shalvi ---- In state: CMIS_STATE_DP_ACTIVATE")
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
@@ -3104,7 +2948,6 @@ class XcvrTableHelper:
 
 
 def main():
-    helper_logger.log_error(f"---- shalvi ---- starting xcvrd")
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
 
