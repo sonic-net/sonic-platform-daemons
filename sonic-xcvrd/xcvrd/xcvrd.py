@@ -29,9 +29,7 @@ try:
     from .xcvrd_utilities import port_mapping
     from .xcvrd_utilities import optics_si_parser
     
-
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
-
 
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
