@@ -99,11 +99,7 @@ platform_sfputil = None
 # Global chassis object based on new platform api
 platform_chassis = None
 
-
-
-SI_PER_SPEED_INDICATION_STR = "speed:"
-
-
+LANE_SPEED_KEY_PREFIX = "speed:"
 
 # Global logger instance for helper functions and classes
 # TODO: Refactor so that we only need the logger inherited
@@ -113,9 +109,6 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 # Helper functions =============================================================
 #
-
-
-
 
 
 #TODO: This function is duplicated from the CMIS thread. Need to have one merged function out of the CMIS context
@@ -189,11 +182,6 @@ def get_interface_speed(ifname):
     elif '1000BASE' in ifname:
         speed = 1000
     return speed
-
-
-
-
-
 
 
 # Get physical port name
@@ -668,129 +656,8 @@ def check_port_in_range(range_str, physical_port):
         return True
     return False
 
-
-
-
-# original
-# def get_media_settings_value(physical_port, key):
-#     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
-#     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
-#     DEFAULT_KEY = 'Default'
-#     RANGE_SEPARATOR = '-'
-#     COMMA_SEPARATOR = ','
-#     media_dict = {}
-#     default_dict = {}
-#     # Keys under global media settings can be a list or range or list of ranges
-#     # of physical port numbers. Below are some examples
-#     # 1-32
-#     # 1,2,3,4,5
-#     # 1-4,9-12
-#     if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
-#         for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
-#             if COMMA_SEPARATOR in keys:
-#                 port_list = keys.split(COMMA_SEPARATOR)
-#                 for port in port_list:
-#                     if RANGE_SEPARATOR in port:
-#                         if check_port_in_range(port, physical_port):
-#                             media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#                             break
-#                     elif str(physical_port) == port:
-#                         media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#                         break
-#             elif RANGE_SEPARATOR in keys:
-#                 if check_port_in_range(keys, physical_port):
-#                     media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#             # If there is a match in the global profile for a media type,
-#             # fetch those values
-#             if key[0] in media_dict:
-#                 return media_dict[key[0]]
-#             elif key[1] in media_dict:
-#                 return media_dict[key[1]]
-#             elif DEFAULT_KEY in media_dict:
-#                 default_dict = media_dict[DEFAULT_KEY]
-#     media_dict = {}
-#     if PORT_MEDIA_SETTINGS_KEY in g_dict:
-#         for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
-#             if int(keys) == physical_port:
-#                 media_dict = g_dict[PORT_MEDIA_SETTINGS_KEY][keys]
-#                 break
-#         if len(media_dict) == 0:
-#             if len(default_dict) != 0:
-#                 return default_dict
-#             else:
-#                 helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
-#             return {}
-#         if key[0] in media_dict:
-#             return media_dict[key[0]]
-#         elif key[1] in media_dict:
-#             return media_dict[key[1]]
-#         elif DEFAULT_KEY in media_dict:
-#             return media_dict[DEFAULT_KEY]
-#         elif len(default_dict) != 0:
-#             return default_dict
-#     else:
-#         if len(default_dict) != 0:
-#             return default_dict
-#     return {}
-
-
 def is_si_per_speed_supported(media_dict):
-    #SI_PER_SPEED_INDICATION_STR = "speed:"
-    return SI_PER_SPEED_INDICATION_STR in list(media_dict.keys())[0]
-
-
-# Before session with Prince   # TODO: delete 
-# def get_media_settings_value(physical_port, key):
-#     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
-#     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
-#     DEFAULT_KEY = 'Default'
-#     RANGE_SEPARATOR = '-'
-#     COMMA_SEPARATOR = ','
-#     media_dict = {}
-#     default_dict = {}
-#     # Keys under global media settings can be a list or range or list of ranges
-#     # of physical port numbers. Below are some examples
-#     # 1-32
-#     # 1,2,3,4,5
-#     # 1-4,9-12
-#     if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
-#         for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
-#             if COMMA_SEPARATOR in keys:
-#                 port_list = keys.split(COMMA_SEPARATOR)
-#                 for port in port_list:
-#                     if RANGE_SEPARATOR in port:
-#                         if check_port_in_range(port, physical_port):
-#                             media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#                             break
-#                     elif str(physical_port) == port:
-#                         media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#                         break
-#             elif RANGE_SEPARATOR in keys:
-#                 if check_port_in_range(keys, physical_port):
-#                     media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-#             # If there is a match in the global profile for a media type,
-#             # fetch those values
-#             if key[0] in media_dict:
-#                 return media_dict[key[0]]
-#             elif key[1] in media_dict:
-#                 if is_si_per_speed_supported(media_dict[key[1]]):
-#                     if key[2] in media_dict[key[1]]:
-#                         return media_dict[key[1]][key[2]]
-#                     else:
-#                         return {}
-#                 else:
-#                     return media_dict[key[1]]
-#             elif DEFAULT_KEY in media_dict:
-
-
-
-
-
-
-
-
-
-
+    return LANE_SPEED_KEY_PREFIX in list(media_dict.keys())[0]
 
 def get_media_settings_value(physical_port, key):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
@@ -887,10 +754,6 @@ def get_media_settings_value(physical_port, key):
     return {}
 
 
-
-
-
-
 #TODO: update the implementation of this method after getting answers from Prince (probably replacing CONFIG_DB with APP_DB)
 def get_speed_and_lane_count(port, cfg_port_tbl):
     port_speed, lane_count = -1, -1
@@ -911,7 +774,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
     if type(api) == CmisApi:
         appl_adv_dict = api.get_application_advertisement()
         if speed_index is not None:
-            lane_speed_key = SI_PER_SPEED_INDICATION_STR + (appl_adv_dict[speed_index].get('host_electrical_interface_id')).split()[0]
+            lane_speed_key = LANE_SPEED_KEY_PREFIX + (appl_adv_dict[speed_index].get('host_electrical_interface_id')).split()[0]
 
     return lane_speed_key
 
@@ -965,17 +828,6 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     return [vendor_key, media_key, lane_speed_key]
 
 
-
-
-
-
-
-
-
-
-
-
-
 def get_media_val_str_from_dict(media_dict):
     LANE_STR = 'lane'
     LANE_SEPARATOR = ','
@@ -1018,9 +870,6 @@ def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
     else:
         media_val_str = get_media_val_str_from_dict(lane_dict)
     return media_val_str
-
-
-
 
 
 def notify_media_setting(logical_port_name, transceiver_dict,
@@ -1082,12 +931,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             index += 1
 
         app_port_tbl.set(port_name, fvs)
-
-
-
-
-
-
 
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
