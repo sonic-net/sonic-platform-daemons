@@ -1703,7 +1703,7 @@ class CmisManagerTask(threading.Thread):
                            # force datapath re-initialization
                            if 0 != freq and freq != api.get_laser_config_freq():
                               need_update = True
-                        
+ 
                         if not need_update:
                             # No application updates
                             self.log_notice("{}: no CMIS application update required...READY".format(lport))
