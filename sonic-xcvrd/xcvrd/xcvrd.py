@@ -1527,10 +1527,10 @@ class CmisManagerTask(threading.Thread):
 
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
- 
+
         self.log_notice("Waiting for PortConfigDone...")
         for namespace in self.namespaces:
-            self.wait_for_port_config_done(namespace)        
+            self.wait_for_port_config_done(namespace)
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
@@ -1704,13 +1704,11 @@ class CmisManagerTask(threading.Thread):
                            if 0 != freq and freq != api.get_laser_config_freq():
                               need_update = True
                         
-                        #TODO: uncomment below lines
-                        #if not need_update:
-                        #    # No application updates
-                        #    helper_logger.log_error("---- shalvi ---- inside  if not need_update")
-                        #    self.log_notice("{}: no CMIS application update required...READY".format(lport))
-                        #    self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                        #    continue
+                        if not need_update:
+                            # No application updates
+                            self.log_notice("{}: no CMIS application update required...READY".format(lport))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                            continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_DEINIT
                     elif state == self.CMIS_STATE_DP_DEINIT:
