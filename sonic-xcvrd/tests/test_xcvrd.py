@@ -1635,4 +1635,3 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
-
