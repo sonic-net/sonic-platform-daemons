@@ -109,7 +109,6 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 
 
-#TODO: This function is duplicated from the CMIS thread. Need to have one merged function out of the CMIS context
 def get_cmis_application_desired(api, host_lane_count, speed):
     """
     Get the CMIS application code that matches the specified host side configurations
@@ -150,7 +149,6 @@ def get_cmis_application_desired(api, host_lane_count, speed):
     return None
 
 
-#TODO: This function is duplicated from the CMIS thread. Need to have one merged function out of the CMIS context
 def get_interface_speed(ifname):
     """
     Get the port speed from the host interface name
@@ -752,7 +750,6 @@ def get_media_settings_value(physical_port, key):
     return {}
 
 
-#TODO: update the implementation of this method after getting answers from Prince (probably replacing CONFIG_DB with APP_DB)
 def get_speed_and_lane_count(port, cfg_port_tbl):
     port_speed, lane_count = -1, -1
     found, port_info = cfg_port_tbl.get(port)
@@ -820,9 +817,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     else:
         media_key += '-' + '*'
 
-
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
-
     return [vendor_key, media_key, lane_speed_key]
 
 
@@ -904,7 +899,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                            ganged_member_num, ganged_port)
         
         ganged_member_num += 1
-        
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_debug("Retrieving media settings for port {} using the following keys: {}".format(logical_port_name, key))
         media_dict = get_media_settings_value(physical_port, key)
@@ -1703,7 +1697,7 @@ class CmisManagerTask(threading.Thread):
                            # force datapath re-initialization
                            if 0 != freq and freq != api.get_laser_config_freq():
                               need_update = True
- 
+
                         if not need_update:
                             # No application updates
                             self.log_notice("{}: no CMIS application update required...READY".format(lport))
