@@ -135,4 +135,3 @@ def optics_si_present():
         return True
     return False
 
-
