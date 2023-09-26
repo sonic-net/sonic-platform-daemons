@@ -1527,11 +1527,10 @@ class CmisManagerTask(threading.Thread):
 
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        
+ 
         self.log_notice("Waiting for PortConfigDone...")
         for namespace in self.namespaces:
-            self.wait_for_port_config_done(namespace)
-        
+            self.wait_for_port_config_done(namespace)        
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
@@ -1745,7 +1744,7 @@ class CmisManagerTask(threading.Thread):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
-                        
+
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
                             if (expired is not None) and (expired <= now):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
@@ -1782,7 +1781,7 @@ class CmisManagerTask(threading.Thread):
                                     self.log_notice("{}: unable to stage custom SI settings ".format(lport))
                                     self.force_cmis_reinit(lport, retries + 1)
                                     continue
-                                
+
                                 # Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
 
@@ -2490,7 +2489,6 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
                 notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.xcvr_table_helper.get_cfg_port_tbl(asic_index), self.port_mapping)
-                #notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
@@ -2516,7 +2514,6 @@ class SfpStateUpdateTask(threading.Thread):
             rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
             if rc != SFP_EEPROM_NOT_READY:
                 post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
-                # notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.port_mapping)
                 notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.xcvr_table_helper.get_cfg_port_tbl(asic_index), self.port_mapping)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
