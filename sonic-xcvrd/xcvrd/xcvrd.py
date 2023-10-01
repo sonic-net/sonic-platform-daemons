@@ -109,6 +109,10 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 
 
+def is_cmis_api(api):
+   return type(api) == CmisApi
+
+
 def get_cmis_application_desired(api, host_lane_count, speed):
     """
     Get the CMIS application code that matches the specified host side configurations
@@ -130,7 +134,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         return 0
 
     appl_code = 0
-    if type(api) == CmisApi:
+    if is_cmis_api(api):
         appl_dict = api.get_application_advertisement()
         for c in appl_dict.keys():
             d = appl_dict[c]
@@ -766,7 +770,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
     speed_index = get_cmis_application_desired(api, int(lane_count), int(port_speed))
     
     appl_adv_dict, lane_speed_key = None, None
-    if type(api) == CmisApi:
+    if is_cmis_api(api):
         appl_adv_dict = api.get_application_advertisement()
         if speed_index is not None:
             lane_speed_key = LANE_SPEED_KEY_PREFIX + (appl_adv_dict[speed_index].get('host_electrical_interface_id')).split()[0]
@@ -2480,7 +2484,7 @@ class SfpStateUpdateTask(threading.Thread):
                 self.retry_eeprom_set.add(port_change_event.port_name)
             else:
                 post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
-                notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.xcvr_table_helper.get_cfg_port_tbl(asic_index), self.port_mapping)
+                notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.xcvr_table_helper.get_cfg_port_tbl(port_change_event.asic_id), self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
