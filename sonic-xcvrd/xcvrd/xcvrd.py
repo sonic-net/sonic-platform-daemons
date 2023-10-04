@@ -1698,7 +1698,7 @@ class CmisManagerTask(threading.Thread):
                                    self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
                                 else:
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
-                        
+
                         # Stage custom SI settings
                         if optics_si_parser.optics_si_present():
                             optics_si_dict = {}
@@ -2519,7 +2519,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         with open(media_settings_file_path, "r") as media_file:
             g_dict = json.load(media_file)
-
 
     # Initialize daemon
     def init(self):
