@@ -24,7 +24,6 @@ try:
     from sonic_py_common import daemon_base, device_info, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
-    from swsscommon.swsscommon import ConfigDBConnector
 
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
@@ -145,7 +144,6 @@ def get_cmis_application_desired(api, host_lane_count, speed):
                 continue
             appl_code = index
             app_found = True
-            # result_index = appl_code & 0xf
             break
 
         if app_found:
@@ -757,7 +755,6 @@ def get_media_settings_value(physical_port, key):
     return {}
 
 
-
 def get_speed_and_lane_count(port, cfg_port_tbl):
     port_speed, lane_count = '0', '0'
     found, port_info = cfg_port_tbl.get(port)
@@ -768,21 +765,10 @@ def get_speed_and_lane_count(port, cfg_port_tbl):
         lane_count = len(lanes.split(','))
     return port_speed, lane_count
 
-# def get_speed_and_lane_count(port, cfg_port_tbl):
-#     port_speed, lane_count = -1, -1
-#     found, port_info = cfg_port_tbl.get(port)
-#     port_info_dict = dict(port_info)
-#     if found and 'speed' in port_info_dict and 'lanes' in port_info_dict:
-#         port_speed = port_info_dict.get('speed', '-1')
-#         lanes = port_info_dict.get('lanes', '-1')
-#         lane_count = len(lanes.split(','))
-#     return port_speed, lane_count
-
 
 def get_lane_speed_key(physical_port, port_speed, lane_count):
     sfp = platform_chassis.get_sfp(physical_port)
     api = sfp.get_xcvr_api()
-    # app_id = get_cmis_application_desired(api, int(lane_count), int(port_speed))
     
     lane_speed_key = None
     if is_cmis_api(api):
@@ -923,7 +909,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_debug("Retrieving media settings for port {} using the following keys: {}".format(logical_port_name, key))
-        #TODO: check if we need to add here: "if suppoerted "
         media_dict = get_media_settings_value(physical_port, key)
 
         if len(media_dict) == 0:
@@ -1113,66 +1098,6 @@ class CmisManagerTask(threading.Thread):
         else:
             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_REMOVED
 
-    # def get_interface_speed(self, ifname):
-    #     """
-    #     Get the port speed from the host interface name
-
-    #     Args:
-    #         ifname: String, interface name
-
-    #     Returns:
-    #         Integer, the port speed if success otherwise 0
-    #     """
-    #     # see HOST_ELECTRICAL_INTERFACE of sff8024.py
-    #     speed = 0
-    #     if '400G' in ifname:
-    #         speed = 400000
-    #     elif '200G' in ifname:
-    #         speed = 200000
-    #     elif '100G' in ifname or 'CAUI-4' in ifname:
-    #         speed = 100000
-    #     elif '50G' in ifname or 'LAUI-2' in ifname:
-    #         speed = 50000
-    #     elif '40G' in ifname or 'XLAUI' in ifname or 'XLPPI' in ifname:
-    #         speed = 40000
-    #     elif '25G' in ifname:
-    #         speed = 25000
-    #     elif '10G' in ifname or 'SFI' in ifname or 'XFI' in ifname:
-    #         speed = 10000
-    #     elif '1000BASE' in ifname:
-    #         speed = 1000
-    #     return speed
-
-    # def get_cmis_application_desired(self, api, host_lane_count, speed):
-    #     """
-    #     Get the CMIS application code that matches the specified host side configurations
-
-    #     Args:
-    #         api:
-    #             XcvrApi object
-    #         host_lane_count:
-    #             Number of lanes on the host side
-    #         speed:
-    #             Integer, the port speed of the host interface
-
-    #     Returns:
-    #         Integer, the transceiver-specific application code
-    #     """
-    #     if speed == 0 or host_lane_count == 0:
-    #         return 0
-
-    #     appl_code = 0
-    #     appl_dict = api.get_application_advertisement()
-    #     for c in appl_dict.keys():
-    #         d = appl_dict[c]
-    #         if d.get('host_lane_count') != host_lane_count:
-    #             continue
-    #         if self.get_interface_speed(d.get('host_electrical_interface_id')) != speed:
-    #             continue
-    #         appl_code = c
-    #         break
-
-    #     return (appl_code & 0xf)
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
@@ -1659,10 +1584,7 @@ class CmisManagerTask(threading.Thread):
                     self.log_notice("Starting CMIS state machine...")
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
-                        # self.port_dict[lport]['appl'] = self.get_cmis_application_desired(api,
-                        #                                         host_lane_count, host_speed)
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
-                        # if self.port_dict[lport]['appl'] < 1:
                         if self.port_dict[lport]['appl'] is None:
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
                                             "host_speed {}".format(lport, appl, host_lane_count, host_speed))
@@ -2598,17 +2520,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         with open(media_settings_file_path, "r") as media_file:
             g_dict = json.load(media_file)
 
-    # def create_speeds_cache(self):
-    #     table_name = 'PORT'
-    #     config_db = ConfigDBConnector()
-    #     config_db.connect()
-    #     table_data = config_db.get_table(table_name)
-    #     port_ids = config_db.get_keys(table_name)
-    #     self.log_notice("TOMER: table_data = {}".format(table_data))
-    #     self.log_notice("TOMER: port_ids = {}".format(port_ids))
-    #     speeds_cache = {key: value['speed'] for key, value in table_data.items()}
-    #     return speeds_cache
-
 
     # Initialize daemon
     def init(self):
@@ -2655,9 +2566,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         else:
             self.load_media_settings()
             optics_si_parser.load_optics_si_settings()
-
-        # speeds_cache = self.create_speeds_cache()
-        # pdb.set_trace()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
