@@ -1132,7 +1132,7 @@ class CmisManagerTask(threading.Thread):
         """
         host_lanes_mask = 0
 
-        if appl < 1 or host_lane_count <= 0 or subport < 0:
+        if appl is None or host_lane_count <= 0 or subport < 0:
             self.log_error("Invalid input to get host lane mask - appl {} host_lane_count {} "
                             "subport {}!".format(appl, host_lane_count, subport))
             return host_lanes_mask

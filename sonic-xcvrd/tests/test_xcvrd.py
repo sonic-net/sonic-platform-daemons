@@ -792,6 +792,7 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     @pytest.mark.parametrize("host_lane_count, speed, subport, expected", [
         (8, 400000, 0, 0xFF),
         (4, 100000, 1, 0xF),
@@ -835,7 +836,7 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
 
-        appl = task.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
+        appl = get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
     def test_CmisManagerTask_post_port_active_apsel_to_db(self):
@@ -926,6 +927,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     def test_CmisManagerTask_task_worker(self, mock_chassis):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
