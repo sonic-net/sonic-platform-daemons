@@ -756,7 +756,7 @@ def get_media_settings_value(physical_port, key):
 
 
 def get_speed_and_lane_count(port, cfg_port_tbl):
-    port_speed, lane_count = '0', '0'
+    port_speed, lane_count = '0', 0
     found, port_info = cfg_port_tbl.get(port)
     port_info_dict = dict(port_info)
     if found and 'speed' in port_info_dict and 'lanes' in port_info_dict:
@@ -774,7 +774,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
     if is_cmis_api(api):
         appl_adv_dict = api.get_application_advertisement()
         app_id = get_cmis_application_desired(api, int(lane_count), int(port_speed))
-        if app_id:
+        if app_id and app_id in appl_adv_dict:
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
@@ -826,7 +826,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
-    return [vendor_key, media_key, lane_speed_key]
+    return (vendor_key, media_key, lane_speed_key)
 
 
 def get_media_val_str_from_dict(media_dict):
@@ -1581,7 +1581,7 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 try:
-                    self.log_notice("Starting CMIS state machine...")
+                    self.log_debug("Starting CMIS state machine for port {}".format(lport))
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
