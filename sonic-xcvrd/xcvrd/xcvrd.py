@@ -132,23 +132,15 @@ def get_cmis_application_desired(api, host_lane_count, speed):
     if speed == 0 or host_lane_count == 0:
         return None
 
-    appl_code = None
-    app_found = False
-    if is_cmis_api(api):
-        appl_dict = api.get_application_advertisement()
-        for index in appl_dict.keys():
-            app_info = appl_dict[index]
-            if app_info.get('host_lane_count') != host_lane_count:
-                continue
-            if get_interface_speed(app_info.get('host_electrical_interface_id')) != speed:
-                continue
-            appl_code = index
-            app_found = True
-            break
+    if not is_cmis_api(api):
+        return None
 
-        if app_found:
-            return (appl_code & 0xf)
-    
+    appl_dict = api.get_application_advertisement()
+    for index, app_info in appl_dict.items():
+        if (app_info.get('host_lane_count') == host_lane_count and
+        get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
+            return (index & 0xf)
+
     return None
 
 
