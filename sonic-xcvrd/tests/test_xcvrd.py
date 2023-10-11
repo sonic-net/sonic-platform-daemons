@@ -462,19 +462,19 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == ['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2']
+        assert result == ('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == ['MOLEX-1064141421', 'QSFP+-*', 'speed:100GBASE-CR2']
+        assert result == ('MOLEX-1064141421', 'QSFP+-*', 'speed:100GBASE-CR2')
         # TODO: Ensure that error message was logged
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
-    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2']))
+    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')))
     @patch('xcvrd.xcvrd.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting(self):
         self._check_notify_media_setting(1)
@@ -483,7 +483,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
-    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2']))
+    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')))
     @patch('xcvrd.xcvrd.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting_with_comma(self):
         self._check_notify_media_setting(1)
