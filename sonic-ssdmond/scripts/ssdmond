@@ -111,6 +111,8 @@ class DaemonSsd(daemon_base.DaemonBase):
         self.ssd_device_list = get_ssds_on_device()
 
         self.static_fields = ["device_model", "serial", "firmware"]
+        self.dynamic_fields = ["health", "temperature", "io_reads", "io_writes", "reserved_blocks"]
+
         self.read_static_fields = False
         self.update_static_fields_statedb = False
 
@@ -136,15 +138,15 @@ class DaemonSsd(daemon_base.DaemonBase):
                 self.device_table._del(tk)
 
 
-    # Update the Static Fields to State DB
-    def update_static_fields_status_db(self, ssd_device, static_kvp_dict):
+    # Update the SSD info to State DB
+    def update_ssd_info_status_db(self, ssd_device, ssd_fields, kvp_dict):
 
-        for field in self.static_fields:
-            fvp = swsscommon.FieldValuePairs([(field, static_kvp_dict[field])])
+        for field in ssd_fields:
+            fvp = swsscommon.FieldValuePairs([(field, kvp_dict[field])])
             self.device_table.set(ssd_device, fvp)
 
 
-    # Check the SSD device
+    # Get Static attributes and update the State DB, once
     def get_static_fields(self):
 
         try:
@@ -162,9 +164,10 @@ class DaemonSsd(daemon_base.DaemonBase):
                 static_kvp_dict["serial"] = platform_ssdutil[ssd_device].get_serial()
                 static_kvp_dict["firmware"] = platform_ssdutil[ssd_device].get_firmware()
 
+                self.log_info("SSD: {}, Device Model: {}, Serial: {}, FW: {}".format(ssd_device, static_kvp_dict["device_model"], static_kvp_dict["serial"], static_kvp_dict["firmware"]))
 
                 # update SSD Device Status to DB
-                self.update_static_fields_status_db(ssd_device, static_kvp_dict)
+                self.update_ssd_info_status_db(ssd_device, self.static_fields, static_kvp_dict)
 
             read_static_fields = True
             update_static_fields_statedb = True
@@ -173,8 +176,38 @@ class DaemonSsd(daemon_base.DaemonBase):
             self.log_warning("get_static_fields() failed with: {}".format(str(ex)))
 
     # Get Dynamic attributes and update the State DB
-    def get_dynamic_attributes(self):
-        self.log_warning("nothing yet")
+    def get_dynamic_fields(self):
+
+        try:
+            # Get relevant information about each SSD on the device
+            for ssd_device in self.ssd_device_list:
+
+                dynamic_kvp_dict = dict((field, "") for field in self.dynamic_fields)
+
+                # Verify that the SSD exists in the expected location in the filesystem hierarchy
+                if not ssd_exists(ssd_device):
+                    self.log_info("{} not found. Moving on.".format(ssd_device))
+                    continue
+
+                dynamic_kvp_dict["health"] = platform_ssdutil[ssd_device].get_health()
+                dynamic_kvp_dict["temperature"] = platform_ssdutil[ssd_device].get_temperature()
+                dynamic_kvp_dict["io_reads"] = platform_ssdutil[ssd_device].get_io_reads()
+                dynamic_kvp_dict["io_writes"] = platform_ssdutil[ssd_device].get_io_writes()
+                dynamic_kvp_dict["reserved_blocks"] = platform_ssdutil[ssd_device].get_reserved_blocks()
+
+                self.log_info("SSD: {}, health: {}%, Temp: {}C, IO Reads: {}, IO Writes: {}, Reserved Blocks: {}" \
+                    .format(ssd_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["io_reads"], \
+                            dynamic_kvp_dict["io_writes"], dynamic_kvp_dict["reserved_blocks"]))
+
+                # update SSD Device Status to DB
+                self.update_ssd_info_status_db(ssd_device, self.dynamic_fields, dynamic_kvp_dict)
+
+            self.read_static_fields = True
+            self.update_static_fields_statedb = True
+
+        except Exception as ex:
+            self.log_warning("get_dynamic_fields() failed with: {}".format(str(ex)))
+
 
    # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -201,9 +234,11 @@ class DaemonSsd(daemon_base.DaemonBase):
         # Read and update Static Fields to the StateDB once
         if not self.read_static_fields and not self.update_static_fields_statedb:
             self.get_static_fields()
+        else:
+            self.log_info("static fields have already been read and updated to State DB")
 
         # Repeatedly read and update Dynamic Fields to the StateDB
-        self.get_dynamic_attributes()
+        self.get_dynamic_fields()
 
         return True
 #
