@@ -1573,7 +1573,6 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 try:
-                    self.log_debug("Starting CMIS state machine for port {}".format(lport))
                     # CMIS state transitions
                     if state == self.CMIS_STATE_INSERTED:
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
