@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+
+"""
+    ssdmond
+    SSD device monitoring daemon for SONiC
+"""
+
+import os
+import signal
+import sys
+import threading
+import subprocess
+import shutil
+
+from sonic_py_common import daemon_base, device_info, logger
+from swsscommon import swsscommon
+
+#
+# Constants ====================================================================
+#
+
+# TODO: Once we no longer support Python 2, we can eliminate this and get the
+# name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
+SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
+                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
+
+SYSLOG_IDENTIFIER = "ssdmond"
+
+SSD_DEVICE_TABLE_NAME = "SSD_INFO"
+
+SSDMOND_MAIN_THREAD_SLEEP_SECS = 21600 #six hours
+
+SSDUTIL_LOAD_ERROR = 127
+
+platform_ssdutil = None
+
+log = logger.Logger(SYSLOG_IDENTIFIER)
+
+exit_code = 0
+
+# wrapper functions to call the platform api
+def load_platform_ssdutil(diskdev):
+    """
+    Loads platform specific or generic Ssdutil module from source
+    Raises an ImportError exception if none of above available
+
+    Returns:
+        Instance of the class with SSD API implementation (vendor or generic)
+    """
+
+    # try to load platform specific module
+    try:
+        platform_path, _ = device_info.get_paths_to_platform_and_hwsku_dirs()
+        platform_plugins_path = os.path.join(platform_path, "plugins")
+        sys.path.append(os.path.abspath(platform_plugins_path))
+        from ssd_util import SsdUtil
+    except ImportError as e:
+        log.log_warning("Platform specific SsdUtil module not found. Falling down to the generic implementation")
+        try:
+            from sonic_platform_base.sonic_ssd.ssd_generic import SsdUtil
+        except ImportError as e:
+            log.log_error("Failed to import default SsdUtil. Error: {}".format(str(e)), True)
+            raise e
+
+    return SsdUtil(diskdev)
+
+def exec_cmd(cmd, verbose=False):
+    p = subprocess.Popen(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    outs, errs = p.communicate()
+    msg = ''
+    if outs: msg = outs.decode('utf8')
+    if outs and verbose: log.log_info('exec_cmd stdout = '+msg)
+    if errs:
+        log.log_error('exec_cmd stderr = '+errs)
+        msg = msg + errs.decode('utf8')
+
+    return (p.returncode, msg)
+
+def get_ssds_on_device():
+    ssd_device_list = []
+    cmd = "lsblk -d -o name,type"
+
+    rc, out = exec_cmd(cmd)
+
+    if rc != 0:
+        log.log_error("FATAL: Unable to query SSDs on the device. Error: {}".format(out.strip()))
+        sys.exit(SSDUTIL_LOAD_ERROR)
+
+    ssd_device_list += (line.split()[0].strip() for line in out.splitlines() if 'disk' in line)
+
+    log.log_info("{}".format(ssd_device_list))
+    return ssd_device_list
+
+def ssd_exists(ssd_device):
+    return os.path.exists("/dev/" + str(ssd_device))
+
+
+#
+# Daemon =======================================================================
+#
+
+
+class DaemonSsd(daemon_base.DaemonBase):
+    def __init__(self, log_identifier):
+        super(DaemonSsd, self).__init__(log_identifier)
+
+        self.timeout = SSDMOND_MAIN_THREAD_SLEEP_SECS
+        self.stop_event = threading.Event()
+        self.state_db = None
+        self.device_table = None
+        self.ssd_device_list = get_ssds_on_device()
+
+        self.static_fields = ["device_model", "serial", "firmware"]
+        self.read_static_fields = False
+        self.update_static_fields_statedb = False
+
+        global platform_ssdutil
+
+        platform_ssdutil = dict((ssd, None) for ssd in self.ssd_device_list)
+
+        for ssd in self.ssd_device_list:
+            diskdev = ("/dev/" + str(ssd))
+            platform_ssdutil[ssd] = load_platform_ssdutil(diskdev)
+            if platform_ssdutil[ssd] is None:
+                sys.exit(SSDUTIL_LOAD_ERROR)
+
+
+        # Connect to STATE_DB and create pcie device table
+        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.device_table = swsscommon.Table(self.state_db, SSD_DEVICE_TABLE_NAME)
+
+    def __del__(self):
+        if self.device_table:
+            table_keys = self.device_table.getKeys()
+            for tk in table_keys:
+                self.device_table._del(tk)
+
+
+    # Update the Static Fields to State DB
+    def update_static_fields_status_db(self, ssd_device, static_kvp_dict):
+
+        for field in self.static_fields:
+            fvp = swsscommon.FieldValuePairs([(field, static_kvp_dict[field])])
+            self.device_table.set(ssd_device, fvp)
+
+
+    # Check the SSD device
+    def get_static_fields(self):
+
+        try:
+            # Get relevant information about each SSD on the device
+            for ssd_device in self.ssd_device_list:
+
+                static_kvp_dict = dict((field, "") for field in self.static_fields)
+
+                # Verify that the SSD exists in the expected location in the filesystem hierarchy
+                if not ssd_exists(ssd_device):
+                    self.log_warning("{} not found. Moving on.".format(ssd_device))
+                    continue
+
+                static_kvp_dict["device_model"] = platform_ssdutil[ssd_device].get_model()
+                static_kvp_dict["serial"] = platform_ssdutil[ssd_device].get_serial()
+                static_kvp_dict["firmware"] = platform_ssdutil[ssd_device].get_firmware()
+
+
+                # update SSD Device Status to DB
+                self.update_static_fields_status_db(ssd_device, static_kvp_dict)
+
+            read_static_fields = True
+            update_static_fields_statedb = True
+
+        except Exception as ex:
+            self.log_warning("get_static_fields() failed with: {}".format(str(ex)))
+
+    # Get Dynamic attributes and update the State DB
+    def get_dynamic_attributes(self):
+        self.log_warning("nothing yet")
+
+   # Override signal handler from DaemonBase
+    def signal_handler(self, sig, frame):
+        FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
+        NONFATAL_SIGNALS = [signal.SIGHUP]
+
+        global exit_code
+
+        if sig in FATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - exiting...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            exit_code = 128 + sig  # Make sure we exit with a non-zero code so that supervisor will try to restart us
+            self.stop_event.set()
+        elif sig in NONFATAL_SIGNALS:
+            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+        else:
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+
+    # Main daemon logic
+    def run(self):
+        if self.stop_event.wait(self.timeout):
+            # We received a fatal signal
+            return False
+
+        # Read and update Static Fields to the StateDB once
+        if not self.read_static_fields and not self.update_static_fields_statedb:
+            self.get_static_fields()
+
+        # Repeatedly read and update Dynamic Fields to the StateDB
+        self.get_dynamic_attributes()
+
+        return True
+#
+# Main =========================================================================
+#
+
+
+def main():
+    ssdmon = DaemonSsd(SYSLOG_IDENTIFIER)
+
+    ssdmon.log_info("Starting up...")
+
+    while ssdmon.run():
+        pass
+
+    ssdmon.log_info("Shutting down...")
+
+    return exit_code
+
+if __name__ == '__main__':
+    sys.exit(main())
