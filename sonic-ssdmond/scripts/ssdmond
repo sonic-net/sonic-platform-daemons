@@ -113,18 +113,24 @@ class DaemonSsd(daemon_base.DaemonBase):
         self.static_fields = ["device_model", "serial", "firmware"]
         self.dynamic_fields = ["health", "temperature", "io_reads", "io_writes", "reserved_blocks"]
 
-        self.read_static_fields = False
-        self.update_static_fields_statedb = False
+        self.read_static_fields = dict((ssd, False) for ssd in self.ssd_device_list)
+        self.updated_static_fields_statedb = dict((ssd, False) for ssd in self.ssd_device_list)
 
         global platform_ssdutil
-
         platform_ssdutil = dict((ssd, None) for ssd in self.ssd_device_list)
 
         for ssd in self.ssd_device_list:
-            diskdev = ("/dev/" + str(ssd))
-            platform_ssdutil[ssd] = load_platform_ssdutil(diskdev)
+            if 'mmc' in ssd:
+                self.log_warning("eMMC SSD currently unsupported. Moving on to next disk on device.")
+                continue
+            else:
+                diskdev = ("/dev/" + str(ssd))
+                platform_ssdutil[ssd] = load_platform_ssdutil(diskdev)
+
             if platform_ssdutil[ssd] is None:
                 sys.exit(SSDUTIL_LOAD_ERROR)
+
+
 
 
         # Connect to STATE_DB and create pcie device table
@@ -153,11 +159,19 @@ class DaemonSsd(daemon_base.DaemonBase):
             # Get relevant information about each SSD on the device
             for ssd_device in self.ssd_device_list:
 
+                if platform_ssdutil[ssd_device] is None:
+                    self.log_warning("{} does not have an ssdutil object. Static Information cannot be gathered. Skipping.".format(ssd_device))
+                    continue
+
+                if self.read_static_fields[ssd_device] and self.updated_static_fields_statedb[ssd_device]:
+                    self.log_info("Static information from {} has already been parsed and updated to StateDB.".format(ssd_device))
+                    continue
+
                 static_kvp_dict = dict((field, "") for field in self.static_fields)
 
                 # Verify that the SSD exists in the expected location in the filesystem hierarchy
                 if not ssd_exists(ssd_device):
-                    self.log_warning("{} not found. Moving on.".format(ssd_device))
+                    self.log_warning("{} disk not found. Moving on.".format(ssd_device))
                     continue
 
                 static_kvp_dict["device_model"] = platform_ssdutil[ssd_device].get_model()
@@ -165,12 +179,11 @@ class DaemonSsd(daemon_base.DaemonBase):
                 static_kvp_dict["firmware"] = platform_ssdutil[ssd_device].get_firmware()
 
                 self.log_info("SSD: {}, Device Model: {}, Serial: {}, FW: {}".format(ssd_device, static_kvp_dict["device_model"], static_kvp_dict["serial"], static_kvp_dict["firmware"]))
+                self.read_static_fields[ssd_device] = True
 
                 # update SSD Device Status to DB
                 self.update_ssd_info_status_db(ssd_device, self.static_fields, static_kvp_dict)
-
-            read_static_fields = True
-            update_static_fields_statedb = True
+                self.updated_static_fields_statedb[ssd_device] = True
 
         except Exception as ex:
             self.log_warning("get_static_fields() failed with: {}".format(str(ex)))
@@ -181,6 +194,10 @@ class DaemonSsd(daemon_base.DaemonBase):
         try:
             # Get relevant information about each SSD on the device
             for ssd_device in self.ssd_device_list:
+
+                if platform_ssdutil[ssd_device] is None:
+                    self.log_warning("{} does not have an ssdutil object. Dynamic Information cannot be gathered. Skipping.".format(ssd_device))
+                    continue
 
                 dynamic_kvp_dict = dict((field, "") for field in self.dynamic_fields)
 
@@ -201,9 +218,6 @@ class DaemonSsd(daemon_base.DaemonBase):
 
                 # update SSD Device Status to DB
                 self.update_ssd_info_status_db(ssd_device, self.dynamic_fields, dynamic_kvp_dict)
-
-            self.read_static_fields = True
-            self.update_static_fields_statedb = True
 
         except Exception as ex:
             self.log_warning("get_dynamic_fields() failed with: {}".format(str(ex)))
@@ -232,10 +246,7 @@ class DaemonSsd(daemon_base.DaemonBase):
             return False
 
         # Read and update Static Fields to the StateDB once
-        if not self.read_static_fields and not self.update_static_fields_statedb:
-            self.get_static_fields()
-        else:
-            self.log_info("static fields have already been read and updated to State DB")
+        self.get_static_fields()
 
         # Repeatedly read and update Dynamic Fields to the StateDB
         self.get_dynamic_fields()
