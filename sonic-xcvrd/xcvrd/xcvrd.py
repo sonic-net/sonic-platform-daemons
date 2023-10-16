@@ -29,6 +29,7 @@ try:
     from .xcvrd_utilities import port_mapping
     from .sff_mgr import SffManagerTask
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
+    from .xcvrd_utilities import optics_si_parser
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -1337,6 +1338,36 @@ class CmisManagerTask(threading.Thread):
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
 
+    def post_port_active_apsel_to_db(self, api, lport, host_lanes_mask):
+        try:
+            act_apsel = api.get_active_apsel_hostlane()
+            appl_advt = api.get_application_advertisement()
+        except NotImplementedError:
+            helper_logger.log_error("Required feature is not implemented")
+            return
+
+        tuple_list = []
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
+                continue
+            act_apsel_lane = act_apsel.get('ActiveAppSelLane{}'.format(lane + 1), 'N/A')
+            tuple_list.append(('active_apsel_hostlane{}'.format(lane + 1),
+                               str(act_apsel_lane)))
+
+        # also update host_lane_count and media_lane_count
+        if len(tuple_list) > 0:
+            appl_advt_act = appl_advt.get(act_apsel_lane)
+            host_lane_count = appl_advt_act.get('host_lane_count', 'N/A') if appl_advt_act else 'N/A'
+            tuple_list.append(('host_lane_count', str(host_lane_count)))
+            media_lane_count = appl_advt_act.get('media_lane_count', 'N/A') if appl_advt_act else 'N/A'
+            tuple_list.append(('media_lane_count', str(media_lane_count)))
+
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+        fvs = swsscommon.FieldValuePairs(tuple_list)
+        intf_tbl.set(lport, fvs)
+        self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
+
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
@@ -1502,8 +1533,8 @@ class CmisManagerTask(threading.Thread):
                                                                         appl, lport, subport)
                         if self.port_dict[lport]['media_lanes_mask'] <= 0:
                             self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
-                                            "media_lane_assignment_options {} lport{} subport {}"
-                                            " appl {}!".format(media_lane_count,media_lane_assignment_options,lport,subport,appl))
+                                            "media_lane_assignment_options {} subport {}"
+                                            " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
                             self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                             continue
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
@@ -1563,6 +1594,11 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == self.CMIS_STATE_AP_CONF:
+                        # Explicit control bit to apply custom Host SI settings. 
+                        # It will be set to 1 and applied via set_application if 
+                        # custom SI settings is applicable
+                        ec = 0
+
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
                             if (expired is not None) and (expired <= now):
@@ -1585,9 +1621,28 @@ class CmisManagerTask(threading.Thread):
                                 else:
                                    self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
+                        # Stage custom SI settings
+                        if optics_si_parser.optics_si_present():
+                            optics_si_dict = {}
+                            # Apply module SI settings if applicable
+                            lane_speed = int(speed/1000)//host_lane_count
+                            optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
+
+                            if optics_si_dict:
+                                self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
+                                                 format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
+                                if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
+                                    self.log_notice("{}: unable to stage custom SI settings ".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                    continue
+
+                                # Set Explicit control bit to apply Custom Host SI settings
+                                ec = 1
+
                         # D.1.3 Software Configuration and Initialization
-                        if not api.set_application(host_lanes_mask, appl):
-                            self.log_notice("{}: unable to set application".format(lport))
+                        api.set_application(host_lanes_mask, appl, ec)
+                        if not api.scs_apply_datapath_init(host_lanes_mask):
+                            self.log_notice("{}: unable to set application and stage DP init".format(lport))
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
@@ -1643,6 +1698,7 @@ class CmisManagerTask(threading.Thread):
 
                         self.log_notice("{}: READY".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+                        self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
 
                 except (NotImplementedError, AttributeError) as e:
                     self.log_error("{}: internal errors due to {}".format(lport, e))
@@ -2422,9 +2478,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
         if is_fast_reboot_enabled():
-            self.log_info("Skip loading media_settings.json in case of fast-reboot")
+            self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             self.load_media_settings()
+            optics_si_parser.load_optics_si_settings()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
