@@ -638,6 +638,17 @@ def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, int_tbl, dom_
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 
+def check_port_in_range(range_str, physical_port):
+    RANGE_SEPARATOR = '-'
+
+    range_list = range_str.split(RANGE_SEPARATOR)
+    start_num = int(range_list[0].strip())
+    end_num = int(range_list[1].strip())
+    if start_num <= physical_port <= end_num:
+        return True
+    return False
+
+
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
     time_diff = time_now - time_start

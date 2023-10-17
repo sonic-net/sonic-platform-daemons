@@ -1,6 +1,7 @@
 #from unittest.mock import DEFAULT
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
+from xcvrd.xcvrd_utilities.media_settings_parser import *
 from xcvrd.xcvrd_utilities.optics_si_parser import *
 from xcvrd.xcvrd import *
 import pytest
@@ -461,21 +462,21 @@ class TestXcvrdScript(object):
         }
 
         # Test a good 'specification_compliance' value
-        result = get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == ('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
-        result = get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == ('MOLEX-1064141421', 'QSFP+-*', 'speed:100GBASE-CR2')
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:100GBASE-CR2' }
         # TODO: Ensure that error message was logged
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
-    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')))
-    @patch('xcvrd.xcvrd.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock(return_value={ 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting(self):
         self._check_notify_media_setting(1)
 
@@ -483,8 +484,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
-    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock(return_value=('MOLEX-1064141421', 'QSFP+-10GBase-SR-255M', 'speed:100GBASE-CR2')))
-    @patch('xcvrd.xcvrd.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock(return_value={ 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting_with_comma(self):
         self._check_notify_media_setting(1)
         self._check_notify_media_setting(6)
@@ -509,7 +510,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, mock_cfg_table, port_mapping)
+        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, mock_cfg_table, port_mapping)
 
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -792,6 +793,7 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+
     @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     @pytest.mark.parametrize("host_lane_count, speed, subport, expected", [
         (8, 400000, 0, 0xFF),
@@ -838,6 +840,7 @@ class TestXcvrdScript(object):
 
         appl = get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
+
 
     def test_CmisManagerTask_post_port_active_apsel_to_db(self):
         mock_xcvr_api = MagicMock()
@@ -921,6 +924,7 @@ class TestXcvrdScript(object):
         host_lanes_mask = 0xf
         ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert int_tbl.getKeys() == []
+
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
@@ -1263,7 +1267,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
     @patch('xcvrd.xcvrd.del_port_sfp_dom_info_from_db')
-    @patch('xcvrd.xcvrd.notify_media_setting')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
     @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
@@ -1359,7 +1363,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
     @patch('xcvrd.xcvrd._wrapper_get_presence')
-    @patch('xcvrd.xcvrd.notify_media_setting')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
     @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
@@ -1632,7 +1636,7 @@ class TestXcvrdScript(object):
 
     def test_get_media_val_str_from_dict(self):
         media_dict = {'lane0': '1', 'lane1': '2'}
-        media_str = get_media_val_str_from_dict(media_dict)
+        media_str = media_settings_parser.get_media_val_str_from_dict(media_dict)
         assert media_str == '1,2'
 
     def test_get_media_val_str(self):

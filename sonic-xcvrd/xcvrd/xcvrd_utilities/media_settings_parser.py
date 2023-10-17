@@ -107,17 +107,6 @@ def is_si_per_speed_supported(media_dict):
     return LANE_SPEED_KEY_PREFIX in list(media_dict.keys())[0]
 
 
-def check_port_in_range(range_str, physical_port):
-    RANGE_SEPARATOR = '-'
-
-    range_list = range_str.split(RANGE_SEPARATOR)
-    start_num = int(range_list[0].strip())
-    end_num = int(range_list[1].strip())
-    if start_num <= physical_port <= end_num:
-        return True
-    return False
-
-
 def get_media_val_str_from_dict(media_dict):
     LANE_STR = 'lane'
     LANE_SEPARATOR = ','
@@ -183,7 +172,7 @@ def get_media_settings_value(physical_port, key):
                 port_list = keys.split(COMMA_SEPARATOR)
                 for port in port_list:
                     if RANGE_SEPARATOR in port:
-                        if check_port_in_range(port, physical_port):
+                        if xcvrd.check_port_in_range(port, physical_port):
                             media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
                             break
                     elif str(physical_port) == port:
@@ -191,7 +180,7 @@ def get_media_settings_value(physical_port, key):
                         break
 
             elif RANGE_SEPARATOR in keys:
-                if check_port_in_range(keys, physical_port):
+                if xcvrd.check_port_in_range(keys, physical_port):
                     media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
 
             # If there is a match in the global profile for a media type,
