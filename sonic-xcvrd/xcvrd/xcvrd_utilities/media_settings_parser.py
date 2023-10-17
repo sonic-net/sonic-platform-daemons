@@ -292,7 +292,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
-        helper_logger.log_error("Retrieving media settings for port {} using the following keys: {}".format(logical_port_name, key))
+        helper_logger.log_debug("Retrieving media settings for port {} using the following keys: {}".format(logical_port_name, key))
         media_dict = get_media_settings_value(physical_port, key)
 
         if len(media_dict) == 0:
@@ -302,7 +302,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
         index = 0
-        helper_logger.log_error("Storing in Application DB the following media settings for port {}:".format(logical_port_name))
+        helper_logger.log_debug("Storing in Application DB the following media settings for port {}:".format(logical_port_name))
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
                 media_val_str = get_media_val_str(num_logical_ports,
@@ -310,7 +310,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                                   logical_idx)
             else:
                 media_val_str = media_dict[media_key]
-            helper_logger.log_error("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
+            helper_logger.log_debug("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
             fvs[index] = (str(media_key), str(media_val_str))
             index += 1
 
