@@ -1323,6 +1323,8 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
+    # Verify if the configured frequency is valid or supported
+    # Now it only checks for grids 75 and 100. This needs to be implemented when more grids are supported.
     def verify_config_laser_frequency(self, api, lport, freq, grid=75):
         grid_supported, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
@@ -1585,6 +1587,9 @@ class CmisManagerTask(threading.Thread):
                             if 0 != freq and freq != api.get_laser_config_freq():
                                 if self.verify_config_laser_frequency(api, lport, freq) == True:
                                     need_update = True
+                                else:
+                                    # clear the invalid freq to prevent setting in AP_CONFIGURED
+                                    self.port_dict[lport]['laser_freq'] = 0
 
                         if not need_update:
                             # No application updates
