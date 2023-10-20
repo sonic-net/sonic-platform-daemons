@@ -10,6 +10,6 @@ if sys.version_info.major == 3:
 else:
     import mock
 
-class MockSsdUtil():
+class MockStorageDevice():
     def __init__(self):
-        super(MockSsdUtil, self).__init__()
+        super(MockStorageDevice, self).__init__()

@@ -11,9 +11,9 @@ if sys.version_info.major == 3:
 else:
     import mock
 
-from .mock_platform import MockSsdUtil
+from .mock_platform import MockStorageDevice
 
-SYSLOG_IDENTIFIER = 'ssd_daemon_test'
+SYSLOG_IDENTIFIER = 'storage_daemon_test'
 NOT_AVAILABLE = 'N/A'
 
 
@@ -30,11 +30,11 @@ daemon_base.db_connect = mock.MagicMock()
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('ssdmond', os.path.join(scripts_path, 'ssdmond'))
-import ssdmond
+load_source('storagemond', os.path.join(scripts_path, 'storagemond'))
+import storagemond
 
 
-class TestDaemonPcied(object):
+class TestDaemonStorage(object):
     """
-    Test cases to cover functionality in DaemonPcied class
+    Test cases to cover functionality in DaemonStorage class
     """

@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='sonic-ssdmond',
+    name='sonic-stormond',
     version='1.0',
     description='SSD status daemon for SONiC',
     license='Apache 2.0',
@@ -11,7 +11,7 @@ setup(
     maintainer='Ashwin Srinivasan',
     maintainer_email='assrinivasan@microsoft.com',
     scripts=[
-        'scripts/ssdmond',
+        'scripts/stormond',
     ],
     setup_requires=[
         'pytest-runner',
