@@ -10,7 +10,7 @@ if sys.version_info >= (3, 3):
 else:
     from mock import MagicMock, patch, mock_open
 
-from .mock_platform import MockSsdUtil
+from .mock_platform import MockStorageDevice
 
 tests_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -23,11 +23,11 @@ from sonic_py_common import daemon_base, device_info
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('ssdmond', os.path.join(scripts_path, 'ssdmond'))
-import ssdmond
+load_source('stormond', os.path.join(scripts_path, 'stormond'))
+import stormond
 
 
 daemon_base.db_connect = MagicMock()
 
-SYSLOG_IDENTIFIER = 'ssd_test'
+SYSLOG_IDENTIFIER = 'storagedevice_test'
 NOT_AVAILABLE = 'N/A'
