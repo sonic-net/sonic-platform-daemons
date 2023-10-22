@@ -1,3 +1,7 @@
+"""
+This parser is responsible for parsing the ASIC side SerDes custom SI settings.
+"""
+
 import json
 import os
 import ast
