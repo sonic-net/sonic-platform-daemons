@@ -402,18 +402,6 @@ class MockChassis(chassis_base.ChassisBase):
         module._psu_list.append(psu)
         module._thermal_list.append(MockThermal())
 
-    def make_module_inactive_psu_thermal(self):
-        module = MockModule()
-        self._module_list.append(module)
-        sfp = MockSfp()
-        sfp._thermal_list.append(MockThermal())
-        psu = MockPsu()
-        psu.set_status(False)
-        psu._thermal_list.append(MockThermal())
-        module._sfp_list.append(sfp)
-        module._psu_list.append(psu)
-        module._thermal_list.append(MockThermal())
-
     def is_modular_chassis(self):
         return self._is_chassis_system
 
