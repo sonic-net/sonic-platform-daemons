@@ -502,8 +502,9 @@ class TestTemperatureUpdater(object):
         temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 3
-        
-        chassis.psu.set_status(False)
+
+        chassis._module_list = []
+        chassis.make_module_inactive_psu_thermal()
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 2
         

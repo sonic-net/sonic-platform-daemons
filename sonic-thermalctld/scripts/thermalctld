@@ -566,11 +566,6 @@ class TemperatureUpdater(logger.Logger):
         :return:
         """
         self.log_debug("Start temperature updating")
-        for index, thermal in enumerate(self.chassis.get_all_thermals()):
-            if self.task_stopping_event.is_set():
-                return
-
-            self._refresh_temperature_status(CHASSIS_INFO_KEY, thermal, index)
 
         available_thermals = set()
         for index, thermal in enumerate(self.chassis.get_all_thermals()):
