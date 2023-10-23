@@ -620,6 +620,7 @@ class TemperatureUpdater(logger.Logger):
                         
                 for psu_index, psu in enumerate(module.get_all_psus()):
                     if psu.get_presence() and psu.get_powergood_status():
+                        psu_name = '{} PSU {}'.format(module_name, psu_index + 1)
                         for thermal_index, thermal in enumerate(psu.get_all_thermals()):
                             if self.task_stopping_event.is_set():
                                 return
