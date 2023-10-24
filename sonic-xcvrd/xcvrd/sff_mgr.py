@@ -370,7 +370,7 @@ class SffManagerTask(threading.Thread):
                             "{}: skipping sff_mgr due to tx_disable not supported".format(
                                 lport))
                         continue
-                except AttributeError:
+                except (AttributeError, NotImplementedError):
                     # Skip if these essential routines are not available
                     continue
 
