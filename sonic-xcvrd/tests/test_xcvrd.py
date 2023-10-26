@@ -471,6 +471,19 @@ class TestXcvrdScript(object):
         assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:100GBASE-CR2' }
         # TODO: Ensure that error message was logged
 
+    @pytest.mark.parametrize("data_found, data, expected", [
+        (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('400000', 8)),
+        (True, [('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('0', 0)),
+        (True, [('speed', '400000'), ('mtu', '9100')], ('0', 0)),
+        (False, [], ('0', 0))
+    ])
+    def test_get_speed_and_lane_count(self, data_found, data, expected):
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.get = MagicMock(return_value=(data_found, data))
+        port = MagicMock()
+
+        assert media_settings_parser.get_speed_and_lane_count(port, cfg_port_tbl) == expected
+
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
