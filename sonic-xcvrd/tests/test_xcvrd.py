@@ -484,6 +484,61 @@ class TestXcvrdScript(object):
 
         assert media_settings_parser.get_speed_and_lane_count(port, cfg_port_tbl) == expected
 
+    def test_is_si_per_speed_supported(self):
+        media_dict = {
+            'speed:400G-GAUI-4':{
+            'main':{
+                    'lane0': '0x00000000',
+                    'lane1': '0x00000000',
+                    'lane2': '0x00000000',
+                    'lane3': '0x00000000',
+                    'lane4': '0x00000000',
+                    'lane5': '0x00000000',
+                    'lane6': '0x00000000',
+                    'lane7': '0x00000000'
+                }
+            },
+            'speed:400GAUI-8':{
+                'post1':{
+                    'lane0': '0x00000000',
+                    'lane1': '0x00000000',
+                    'lane2': '0x00000000',
+                    'lane3': '0x00000000',
+                    'lane4': '0x00000000',
+                    'lane5': '0x00000000',
+                    'lane6': '0x00000000',
+                    'lane7': '0x00000000'
+                }
+            }
+        }
+        result = is_si_per_speed_supported(media_dict)
+        assert result == True
+
+        media_dict = {
+            'main':{
+                'lane0': '0x00000000',
+                'lane1': '0x00000000',
+                'lane2': '0x00000000',
+                'lane3': '0x00000000',
+                'lane4': '0x00000000',
+                'lane5': '0x00000000',
+                'lane6': '0x00000000',
+                'lane7': '0x00000000'
+            },
+            'post1':{
+                'lane0': '0x00000000',
+                'lane1': '0x00000000',
+                'lane2': '0x00000000',
+                'lane3': '0x00000000',
+                'lane4': '0x00000000',
+                'lane5': '0x00000000',
+                'lane6': '0x00000000',
+                'lane7': '0x00000000'
+            }
+        }
+        result = is_si_per_speed_supported(media_dict)
+        assert result == False
+
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
@@ -806,6 +861,25 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+    @pytest.mark.parametrize("ifname, expected", [
+        ('400G CR8', 400000),
+        ('200GBASE-CR4 (Clause 136)', 200000),
+        ('100GBASE-CR2 (Clause 136)', 100000),
+        ('CAUI-4 C2M (Annex 83E)', 100000),
+        ('50GBASE-CR', 50000),
+        ('LAUI-2 C2M (Annex 135C)', 50000),
+        ('40GBASE-CR4 (Clause 85)', 40000),
+        ('XLAUI C2M (Annex 83B)', 40000),
+        ('XLPPI (Annex 86A)', 40000),
+        ('25GBASE-CR CA-N (Clause 110)', 25000),
+        ('10GBASE-CX4 (Clause 54)', 10000),
+        ('SFI (SFF-8431)', 10000),
+        ('XFI (SFF INF-8071i)', 10000),
+        ('1000BASE -CX(Clause 39)', 1000),
+        ('Unknown Interface', 0)
+    ])
+    def test_get_interface_speed(self, ifname, expected):
+        assert get_interface_speed(ifname) == expected
 
     @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     @pytest.mark.parametrize("host_lane_count, speed, subport, expected", [
