@@ -48,6 +48,8 @@ TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
 TRANSCEIVER_STATUS_TABLE_SW_FIELDS = ["status", "error"]
 
+CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'QSFP+C']
+
 # Mgminit time required as per CMIS spec
 MGMT_INIT_TIME_DELAY_SECS = 2
 
@@ -631,7 +633,7 @@ def get_media_settings_value(physical_port, key):
             if len(default_dict) != 0:
                 return default_dict
             else:
-                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+                helper_logger.log_info("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
         if key[0] in media_dict:
@@ -740,58 +742,197 @@ def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
     return media_val_str
 
 
-def notify_media_setting(logical_port_name, transceiver_dict,
-                         app_port_tbl, port_mapping):
+"""
+    This function returns the NPU SI settings for a given logical port
+
+    Args:
+        lport:
+            logical port name
+        transceiver_dict:
+            A dictionary containing the vendor specific transceiver information
+        port_mapping:
+            A PortMapping object
+
+    Returns:
+        A dictionary containing the NPU SI settings for the logical port
+        Returns empty dictionary if the NPU SI settings are not found
+"""
+def get_npu_si_settings_dict(lport, transceiver_dict, port_mapping):
     if not g_dict:
+        return {}
+
+    physical_port = port_mapping.get_logical_to_physical(lport)[0]
+    if not _wrapper_get_presence(physical_port):
+        helper_logger.log_info("Get NPU SI settings: Port {} presence not detected".format(physical_port))
+        return {}
+
+    if physical_port not in transceiver_dict:
+        helper_logger.log_error("Get NPU SI settings: Port {} eeprom not populated in transceiver dict".format(physical_port))
+        return {}
+
+    key = get_media_settings_key(physical_port, transceiver_dict)
+    media_dict = get_media_settings_value(physical_port, key)
+    if len(media_dict) == 0:
+        helper_logger.log_debug("Get NPU SI settings: Error in obtaining media setting for {}".format(lport))
+        return {}
+    else:
+        return media_dict
+
+"""
+    This function updates the NPU SI settings for a given logical port to APPL_DB
+    It then sets the value of NPU_SI_SETTINGS_SYNC_STATUS to NPU_SI_SETTINGS_NOTIFIED
+
+    Args:
+        lport:
+            logical port name
+        transceiver_dict:
+            A dictionary containing the vendor specific transceiver information
+        xcvr_table_helper:
+            A XcvrTableHelper object
+        port_mapping:
+            A PortMapping object
+"""
+def post_npu_si_settings_to_appl_db(lport, transceiver_dict,
+                                     xcvr_table_helper, port_mapping):
+    media_dict = get_npu_si_settings_dict(lport, transceiver_dict, port_mapping)
+    if len(media_dict) == 0:
+        helper_logger.log_error("NPI SI settings post: Media dict is empty for {}".format(lport))
         return
 
-    ganged_port = False
-    ganged_member_num = 1
+    asic_index = port_mapping.get_asic_id_for_logical_port(lport)
+    physical_port = port_mapping.get_logical_to_physical(lport)[0]
+    logical_port_list = port_mapping.get_physical_to_logical(physical_port)
+    num_logical_ports = len(logical_port_list)
+    logical_idx = logical_port_list.index(lport)
 
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
+    fvs = swsscommon.FieldValuePairs(len(media_dict))
 
-    if len(physical_port_list) > 1:
-        ganged_port = True
+    index = 0
+    for media_key in media_dict:
+        if type(media_dict[media_key]) is dict:
+            media_val_str = get_media_val_str(num_logical_ports,
+                                                media_dict[media_key],
+                                                logical_idx)
+        else:
+            media_val_str = media_dict[media_key]
+        fvs[index] = (str(media_key), str(media_val_str))
+        index += 1
 
-    for physical_port in physical_port_list:
-        logical_port_list = port_mapping.get_physical_to_logical(physical_port)
-        num_logical_ports = len(logical_port_list)
-        logical_idx = logical_port_list.index(logical_port_name)
-        if not _wrapper_get_presence(physical_port):
-            helper_logger.log_info("Media {} presence not detected during notify".format(physical_port))
-            continue
-        if physical_port not in transceiver_dict:
-            helper_logger.log_error("Media {} eeprom not populated in transceiver dict".format(physical_port))
-            continue
+    xcvr_table_helper.get_app_port_tbl(asic_index).set(lport, fvs)
+    app_port_table_non_producer = xcvr_table_helper.get_non_producer_app_port_tbl(asic_index)
+    app_port_table_non_producer.set(app_port_table_non_producer.APPL_DB, 'PORT_TABLE:{}'.format(lport), "NPU_SI_SETTINGS_SYNC_STATUS", "NPU_SI_SETTINGS_NOTIFIED")
+    helper_logger.log_notice("{}: Posted NPU settings to APPL_DB".format(lport))
 
-        port_name = get_physical_port_name(logical_port_name,
-                                           ganged_member_num, ganged_port)
-        ganged_member_num += 1
-        key = get_media_settings_key(physical_port, transceiver_dict)
-        media_dict = get_media_settings_value(physical_port, key)
+"""
+    Checks if the module is CMIS SM driven
 
-        if len(media_dict) == 0:
-            helper_logger.log_error("Error in obtaining media setting for {}".format(logical_port_name))
-            return
+    Args:
+        port_mapping:
+            A PortMapping object
+        lport:
+            logical port name
 
-        fvs = swsscommon.FieldValuePairs(len(media_dict))
+    Returns:
+        True if the module is CMIS SM driven
+        False otherwise
+"""
+def is_module_cmis_sm_driven(port_mapping, lport):
+    pport = port_mapping.get_logical_to_physical(lport)[0]
 
-        index = 0
-        for media_key in media_dict:
-            if type(media_dict[media_key]) is dict:
-                media_val_str = get_media_val_str(num_logical_ports,
-                                                  media_dict[media_key],
-                                                  logical_idx)
-            else:
-                media_val_str = media_dict[media_key]
-            fvs[index] = (str(media_key), str(media_val_str))
-            index += 1
+    # double-check the HW presence before moving forward
+    sfp = platform_chassis.get_sfp(pport)
+    if not sfp.get_presence():
+        return False
 
-        app_port_tbl.set(port_name, fvs)
+    try:
+        # Skip if XcvrApi is not supported
+        api = sfp.get_xcvr_api()
+        if api is None:
+            helper_logger.log_error("{}: No xcvr api found while checking for module CMIS SM driven!".format(lport))
+            return False
 
+        if api.is_flat_memory():
+            helper_logger.log_notice("{}: Flat memory module found while checking for module CMIS SM driven!".format(lport))
+            return False
+
+        type = api.get_module_type_abbreviation()
+        if (type is None) or (type not in CMIS_MODULE_TYPES):
+            helper_logger.log_notice("{}: Module type {} not supported for module CMIS SM driven!".format(lport, type))
+            return False
+
+    except AttributeError:
+        # Return False if these essential routines are not available
+        return False
+
+    return True
+
+"""
+    Retrieves the value of a key from APP_DB PORT_TABLE for a given logical port
+
+    Args:
+        xcvr_table_helper:
+            A XcvrTableHelper object
+        port_mapping:
+            A PortMapping object
+        lport:
+            logical port name
+        key:
+            key for the corresponding value to be retrieved
+
+    Returns:
+        The value of the key if the key is found in APP_PORT_TABLE
+        None otherwise
+"""
+def get_app_port_table_val_by_key(xcvr_table_helper, port_mapping, lport, key):
+    if xcvr_table_helper is None:
+        helper_logger.log_error("xcvr_table_helper is None while getting "
+                                "app port table value by key for lport {}".format(lport))
+        return None
+
+    if port_mapping is None:
+        helper_logger.log_error("port_mapping is None while getting "
+                                "app port table value by key for lport {}".format(lport))
+        return None
+
+    asic_index = port_mapping.get_asic_id_for_logical_port(lport)
+    appl_db = xcvr_table_helper.get_non_producer_app_port_tbl(asic_index)
+    if appl_db is None:
+        helper_logger.log_error("appl_db is None for lport {} while getting app port table value by key".format(lport))
+        return None
+
+    app_port_table_fvs_dict = appl_db.get_all(appl_db.APPL_DB, 'PORT_TABLE:{}'.format(lport))
+    if (app_port_table_fvs_dict is None) or (key not in app_port_table_fvs_dict):
+        helper_logger.log_error("Unable to find key {} from APP_PORT_TABLE for lport {}".format(key, lport))
+        return None
+
+    return app_port_table_fvs_dict[key]
+
+"""
+    Checks if NPU SI settings update is required for a module
+
+    Args:
+        lport:
+            logical port name
+        xcvr_table_helper:
+            A XcvrTableHelper object
+        port_mapping:
+            A PortMapping object
+        transceiver_dict:
+            A dictionary containing the vendor specific transceiver information
+    Returns true if both the below conditions are true
+        - npu_si_settings_sync_val == "NPU_SI_SETTINGS_DEFAULT"
+        - NPU SI settings are available for the module
+    Returns false otherwise
+"""
+def is_npu_si_settings_update_required(lport, xcvr_table_helper, port_mapping, transceiver_dict):
+    npu_si_settings_sync_val = get_app_port_table_val_by_key(
+                    xcvr_table_helper, port_mapping, lport, "NPU_SI_SETTINGS_SYNC_STATUS")
+    if npu_si_settings_sync_val is None:
+        helper_logger.log_error("NPU SI settings update required: npu_si_settings_sync_val is None for {}".format(lport))
+        return False
+
+    return (npu_si_settings_sync_val == "NPU_SI_SETTINGS_DEFAULT") and \
+        (get_npu_si_settings_dict(lport, transceiver_dict, port_mapping) != {})
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
@@ -871,13 +1012,14 @@ class CmisManagerTask(threading.Thread):
 
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
-    CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
+    CMIS_NPU_SI_SETTINGS_WAIT_DURATION = 5 # seconds
 
     CMIS_STATE_UNKNOWN   = 'UNKNOWN'
     CMIS_STATE_INSERTED  = 'INSERTED'
     CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
     CMIS_STATE_AP_CONF   = 'AP_CONFIGURED'
+    CMIS_STATE_NPU_SI_SETTINGS_WAIT = 'NPU_SI_SETTINGS_WAIT'
     CMIS_STATE_DP_ACTIVATE = 'DP_ACTIVATION'
     CMIS_STATE_DP_INIT   = 'DP_INIT'
     CMIS_STATE_DP_TXON   = 'DP_TXON'
@@ -1366,33 +1508,69 @@ class CmisManagerTask(threading.Thread):
         intf_tbl.set(lport, fvs)
         self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
 
-    def wait_for_port_config_done(self, namespace):
-        # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+    """
+    Creates a dictionary of various fields of transceiver specific information
+    which will be used to find the NPU SI settings for the port.
 
-        sel = swsscommon.Select()
-        port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-        sel.addSelectable(port_tbl)
+    Args:
+        pport:
+            Integer, physical port index
+        lport:
+            String, logical port name
+        api:
+            XcvrApi object
 
-        # Make sure this daemon started after all port configured
-        while not self.task_stopping_event.is_set():
-            (state, c) = sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
-            if state == swsscommon.Select.TIMEOUT:
-                continue
-            if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-                continue
+    Returns:
+        Dictionary, a dictionary of various fields of transceiver specific information
+        which will be used to find the NPU SI settings for the port.
+    """
+    def get_transceiver_info_dict_for_npu_si_settings(self, pport, lport, api):
+        transceiver_info_dict = {}
+        if api is None:
+            helper_logger.log_error("Module {} api is None".format(lport))
+            return None
 
-            (key, op, fvp) = port_tbl.pop()
-            if key in ["PortConfigDone", "PortInitDone"]:
-                break
+        vendor_name = api.get_manufacturer()
+        if vendor_name is None:
+            helper_logger.log_info("Module {} vendor name not found".format(lport))
+            return None
+
+        model_name = api.get_model()
+        if model_name is None:
+            helper_logger.log_info("Module {} model name not found".format(lport))
+            return None
+
+        media_type = api.get_module_media_type()
+        if media_type is None:
+            helper_logger.log_info("Module {} media type not found".format(lport))
+            return None
+
+        cable_type = api.get_cable_type()
+        if cable_type is None:
+            helper_logger.log_info("Module {} cable type not found".format(lport))
+            return None
+
+        cable_length = api.get_cable_length()
+        if cable_length is None:
+            helper_logger.log_info("Module {} cable length not found".format(lport))
+            return None
+
+        type_abbrv_name = api.get_module_type_abbreviation()
+        if type_abbrv_name is None:
+            helper_logger.log_info("Module {} type abbrv name not found".format(lport))
+            return None
+
+        transceiver_info_dict[pport] = {"manufacturer": vendor_name,
+                                        "model": model_name,
+                                        "cable_type": cable_type,
+                                        "cable_length": cable_length,
+                                        "specification_compliance": media_type,
+                                        "type_abbrv_name": type_abbrv_name}
+
+        return transceiver_info_dict
 
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-
-        self.log_notice("Waiting for PortConfigDone...")
-        for namespace in self.namespaces:
-            self.wait_for_port_config_done(namespace)
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
@@ -1416,6 +1594,16 @@ class CmisManagerTask(threading.Thread):
                              self.CMIS_STATE_FAILED,
                              self.CMIS_STATE_READY,
                              self.CMIS_STATE_REMOVED]:
+                    asic_id = self.port_mapping.get_asic_id_for_logical_port(lport)
+                    cmis_reinit_rqd_val = get_app_port_table_val_by_key(
+                                    self.xcvr_table_helper, self.port_mapping, lport, "CMIS_REINIT_REQUIRED")
+                    if cmis_reinit_rqd_val is None:
+                        self.log_error("{}: CMIS terminal states: cmis_reinit_rqd_val is None".format(lport))
+                    else:
+                        if cmis_reinit_rqd_val == "true":
+                            app_port_table = self.xcvr_table_helper.get_non_producer_app_port_tbl(asic_id)
+                            app_port_table.set(app_port_table.APPL_DB, 'PORT_TABLE:{}'.format(lport), "CMIS_REINIT_REQUIRED", "false")
+                            self.log_notice("{}: CMIS terminal states: CMIS_REINIT_REQUIRED set to false".format(lport))
                     if state != self.CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
                         self.port_dict[lport]['host_lanes_mask'] = 0
@@ -1454,15 +1642,8 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
-                    # Skip if it's not a paged memory device
-                    if api.is_flat_memory():
-                        self.log_notice("{}: skipping CMIS state machine for flat memory xcvr".format(lport))
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
-                        continue
-
-                    # Skip if it's not a CMIS module
-                    type = api.get_module_type_abbreviation()
-                    if (type is None) or (type not in self.CMIS_MODULE_TYPES):
+                    if not is_module_cmis_sm_driven(self.port_mapping, lport):
+                        self.log_notice("{}: Skipping CMIS state machine as module not CMIS SM driven".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
                         continue
 
@@ -1492,9 +1673,9 @@ class CmisManagerTask(threading.Thread):
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
                     continue
 
-                self.log_notice("{}: {}G, lanemask=0x{:x}, state={}, appl {} host_lane_count {} "
-                                "retries={}".format(lport, int(speed/1000), host_lanes_mask,
-                                state, appl, host_lane_count, retries))
+                self.log_notice("{}: {}G, lanemask=0x{:x}, CMIS state={}, Module state={}, DP state={}, appl {} host_lane_count {} "
+                                "retries={}".format(lport, int(speed/1000), host_lanes_mask, state,
+                                api.get_module_state(), api.get_datapath_state(), appl, host_lane_count, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
                     self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
@@ -1564,6 +1745,14 @@ class CmisManagerTask(threading.Thread):
                            # force datapath re-initialization
                            if 0 != freq and freq != api.get_laser_config_freq():
                               need_update = True
+
+                        cmis_reinit_rqd_val = get_app_port_table_val_by_key(
+                                        self.xcvr_table_helper, self.port_mapping, lport, "CMIS_REINIT_REQUIRED")
+                        if cmis_reinit_rqd_val is None:
+                            self.log_error("{}: cmis_reinit_rqd_val is None".format(lport))
+                        elif cmis_reinit_rqd_val == "true":
+                            need_update = True
+                            self.log_notice("{}: Forcing CMIS reinit as CMIS_REINIT_REQUIRED is true".format(lport))
 
                         if not need_update:
                             # No application updates
@@ -1637,6 +1826,15 @@ class CmisManagerTask(threading.Thread):
                                 # Set Explicit control bit to apply Custom Host SI settings
                                 ec = 1
 
+                        npu_si_settings_wait_required = False
+                        transceiver_info_for_npu_si_settings = self.get_transceiver_info_dict_for_npu_si_settings(pport, lport, api)
+                        if transceiver_info_for_npu_si_settings is not None:
+                            if is_npu_si_settings_update_required(lport, self.xcvr_table_helper, self.port_mapping, transceiver_info_for_npu_si_settings):
+                                post_npu_si_settings_to_appl_db(lport, transceiver_info_for_npu_si_settings, self.xcvr_table_helper, self.port_mapping)
+                                npu_si_settings_wait_required = True
+                        else:
+                            self.log_error("{}: transceiver_info_for_npu_si_settings is None in CMIS_STATE_AP_CONF state".format(lport))
+
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
                         if not api.scs_apply_datapath_init(host_lanes_mask):
@@ -1644,7 +1842,25 @@ class CmisManagerTask(threading.Thread):
                             self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+                        if npu_si_settings_wait_required:
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_NPU_SI_SETTINGS_WAIT
+                            self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = self.CMIS_NPU_SI_SETTINGS_WAIT_DURATION)
+                        else:
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+                    elif state == self.CMIS_STATE_NPU_SI_SETTINGS_WAIT:
+                        npu_si_settings_sync_val = get_app_port_table_val_by_key(self.xcvr_table_helper, self.port_mapping, lport, "NPU_SI_SETTINGS_SYNC_STATUS")
+                        if npu_si_settings_sync_val is None:
+                            self.log_error("{}: npu_si_settings_sync_val is None in CMIS_STATE_NPU_SI_SETTINGS_WAIT state".format(lport))
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_FAILED
+                            continue
+                        if npu_si_settings_sync_val == "NPU_SI_SETTINGS_DONE":
+                            self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_INIT
+                            self.log_notice("{}: NPU SI settings is done now".format(lport))
+                        else:
+                            if (expired is not None) and (expired <= now):
+                                self.log_notice("{}: timeout for CMIS_STATE_NPU_SI_SETTINGS_WAIT".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                            continue
                     elif state == self.CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if (expired is not None) and (expired <= now):
@@ -1696,6 +1912,20 @@ class CmisManagerTask(threading.Thread):
 
                         self.log_notice("{}: READY".format(lport))
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_READY
+
+                        # Setting CMIS_REINIT_REQUIRED to false to avoid CMIS re-init caused by TRANSCEIVER_INFO table
+                        # update through post_port_active_apsel_to_db
+                        asic_id = self.port_mapping.get_asic_id_for_logical_port(lport)
+                        cmis_reinit_rqd_val = get_app_port_table_val_by_key(
+                                        self.xcvr_table_helper, self.port_mapping, lport, "CMIS_REINIT_REQUIRED")
+                        if cmis_reinit_rqd_val is None:
+                            self.log_error("{}: CMIS_STATE_DP_ACTIVATE state: cmis_reinit_rqd_val is None".format(lport))
+                        else:
+                            if cmis_reinit_rqd_val == "true":
+                                app_port_table = self.xcvr_table_helper.get_non_producer_app_port_tbl(asic_id)
+                                app_port_table.set(app_port_table.APPL_DB, 'PORT_TABLE:{}'.format(lport), "CMIS_REINIT_REQUIRED", "false")
+                                self.log_notice("{}: CMIS_STATE_DP_ACTIVATE state: CMIS_REINIT_REQUIRED set to false".format(lport))
+
                         self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
 
                 except (NotImplementedError, AttributeError) as e:
@@ -1897,11 +2127,6 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        warmstart = swsscommon.WarmStart()
-        warmstart.initialize("xcvrd", "pmon")
-        warmstart.checkWarmStart("xcvrd", "pmon", False)
-        is_warm_start = warmstart.isWarmStart()
-
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -1917,10 +2142,10 @@ class SfpStateUpdateTask(threading.Thread):
             if rc != SFP_EEPROM_NOT_READY:
                 post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_dom_threshold_tbl(asic_index), stop_event)
 
-                # Do not notify media settings during warm reboot to avoid dataplane traffic impact
-                if is_warm_start == False:
-                    notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper.get_app_port_tbl(asic_index), port_mapping)
-                    transceiver_dict.clear()
+                if not is_module_cmis_sm_driven(port_mapping, logical_port_name) and \
+                    is_npu_si_settings_update_required(logical_port_name, xcvr_table_helper, port_mapping, transceiver_dict):
+                    post_npu_si_settings_to_appl_db(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
+                transceiver_dict.clear()
             else:
                 retry_eeprom_set.add(logical_port_name)
 
@@ -2141,10 +2366,14 @@ class SfpStateUpdateTask(threading.Thread):
 
                                 if rc != SFP_EEPROM_NOT_READY:
                                     post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
-                                    notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.port_mapping)
+                                    if not is_module_cmis_sm_driven(self.port_mapping, logical_port) and \
+                                        is_npu_si_settings_update_required(logical_port, self.xcvr_table_helper, self.port_mapping, transceiver_dict):
+                                        post_npu_si_settings_to_appl_db(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
+                                appl_db = self.xcvr_table_helper.get_non_producer_app_port_tbl(asic_index)
+                                appl_db.set(appl_db.APPL_DB, 'PORT_TABLE:{}'.format(logical_port), "NPU_SI_SETTINGS_SYNC_STATUS", "NPU_SI_SETTINGS_DEFAULT")
                                 update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                                 helper_logger.log_notice("{}: received plug out and update port sfp status table.".format(logical_port))
@@ -2340,7 +2569,9 @@ class SfpStateUpdateTask(threading.Thread):
                 self.retry_eeprom_set.add(port_change_event.port_name)
             else:
                 post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
-                notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(port_change_event.asic_id), self.port_mapping)
+                if not is_module_cmis_sm_driven(self.port_mapping, port_change_event.port_name) and \
+                    is_npu_si_settings_update_required(port_change_event.port_name, self.xcvr_table_helper, self.port_mapping, transceiver_dict):
+                    post_npu_si_settings_to_appl_db(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         update_port_transceiver_status_table_sw(port_change_event.port_name, status_tbl, status, error_description)
@@ -2366,7 +2597,9 @@ class SfpStateUpdateTask(threading.Thread):
             rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
             if rc != SFP_EEPROM_NOT_READY:
                 post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
-                notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper.get_app_port_tbl(asic_index), self.port_mapping)
+                if not is_module_cmis_sm_driven(self.port_mapping, logical_port) and \
+                    is_npu_si_settings_update_required(logical_port, self.xcvr_table_helper, self.port_mapping, transceiver_dict):
+                    post_npu_si_settings_to_appl_db(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
@@ -2421,6 +2654,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             (key, op, fvp) = port_tbl.pop()
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
+        sel.removeSelectable(port_tbl)
 
     def load_media_settings(self):
         global g_dict
@@ -2433,6 +2667,43 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         with open(media_settings_file_path, "r") as media_file:
             g_dict = json.load(media_file)
+
+    """
+    Initializes CMIS_REINIT_REQUIRED and NPU_SI_SETTINGS_SYNC_STATUS fields in APPL_DB:PORT_TABLE
+    if not already present for a port.
+    """
+    def initialize_port_init_fields_in_port_table(self, port_mapping_data):
+        logical_port_list = port_mapping_data.logical_port_list
+        for lport in logical_port_list:
+            asic_index = port_mapping_data.get_asic_id_for_logical_port(lport)
+            appl_db = self.xcvr_table_helper.get_non_producer_app_port_tbl(asic_index)
+            if appl_db is None:
+                helper_logger.log_error("appl_db is None for lport {} during init".format(lport))
+                continue
+
+            app_port_table_fvs_dict = appl_db.get_all(appl_db.APPL_DB, 'PORT_TABLE:{}'.format(lport))
+            if "CMIS_REINIT_REQUIRED" not in app_port_table_fvs_dict:
+                appl_db.set(appl_db.APPL_DB, 'PORT_TABLE:{}'.format(lport), "CMIS_REINIT_REQUIRED", "true")
+                self.log_notice("Added CMIS_REINIT_REQUIRED for lport {}".format(lport))
+            if "NPU_SI_SETTINGS_SYNC_STATUS" not in app_port_table_fvs_dict:
+                appl_db.set(appl_db.APPL_DB, 'PORT_TABLE:{}'.format(lport), "NPU_SI_SETTINGS_SYNC_STATUS", "NPU_SI_SETTINGS_DEFAULT")
+                self.log_notice("Added NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(lport))
+
+        self.log_notice("XCVRD INIT: Port init fields initialized in APP_PORT_TABLE")
+
+    """
+    Subscribes APPL_DB PORT_TABLE table events
+    """
+    def subscribe_appl_port_table(self):
+        sel = swsscommon.Select()
+        asic_context = {}
+        for namespace in self.namespaces:
+            appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+            appl_port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+            asic_context[appl_port_tbl] = multi_asic.get_asic_index_from_namespace(namespace)
+            sel.addSelectable(appl_port_tbl)
+
+        return sel, asic_context
 
     # Initialize daemon
     def init(self):
@@ -2463,6 +2734,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             except Exception as e:
                 self.log_error("Failed to load sfputil: {}".format(str(e)), True)
                 sys.exit(SFPUTIL_LOAD_ERROR)
+        # force main thread to cause underlying initialization of SFPs for platforms waiting to dynamically do so,
+        # since signal handlers can only be installed from within the context of the main thread
+        try:
+            platform_chassis.get_num_sfps()
+        except NotImplementedError:
+            pass
 
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
@@ -2486,7 +2763,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.wait_for_port_config_done(namespace)
 
         self.log_notice("XCVRD INIT: After port config is done")
-        return port_mapping.get_port_mapping(self.namespaces)
+        port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
+
+        self.initialize_port_init_fields_in_port_table(port_mapping_data)
+
+        return port_mapping_data
 
     # Deinitialize daemon
     def deinit(self):
@@ -2542,9 +2823,34 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for thread in self.threads:
             self.log_notice("Started thread {}".format(thread.getName()))
 
-        self.stop_event.wait()
+        sel, asic_context  = self.subscribe_appl_port_table()
+        self.log_notice("Subscribed to appl {} update".format(swsscommon.APP_PORT_TABLE_NAME))
 
-        self.log_info("Stop daemon main loop")
+        generate_sigabrt = False
+
+        while not self.stop_event.is_set() and not generate_sigabrt:
+            (state, _) = sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
+            if state == swsscommon.Select.TIMEOUT:
+                continue
+            if state != swsscommon.Select.OBJECT:
+                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                continue
+
+            for port_tbl in asic_context.keys():
+                while True:
+                    (key, op, _) = port_tbl.pop()
+                    if not key:
+                        break
+                    self.log_info("APPL_DB subscriber: Received {} op for {} key".format(op, key))
+                    if op == swsscommon.DEL_COMMAND and "Ethernet" in key:
+                        self.log_notice("DEL_COMMAND received for {}:{} key. Starting graceful restart to xcvrd!".format(swsscommon.APP_PORT_TABLE_NAME, key))
+                        generate_sigabrt = True
+                        break
+
+                if generate_sigabrt is True:
+                    break
+
+        self.log_notice("Stop daemon main loop")
 
         generate_sigkill = False
         # check all threads are alive
@@ -2581,6 +2887,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         if self.sfp_error_event.is_set():
             sys.exit(SFP_SYSTEM_ERROR)
+        elif generate_sigabrt is True:
+            self.log_notice("Sending SIGABRT to xcvrd!")
+            os.kill(os.getpid(), signal.SIGABRT)
 
 
 class XcvrTableHelper:
@@ -2589,6 +2898,7 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
+        self.non_producer_app_port_tbl = {}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -2600,6 +2910,8 @@ class XcvrTableHelper:
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             appl_db = daemon_base.db_connect("APPL_DB", namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+            self.non_producer_app_port_tbl[asic_id] = swsscommon.SonicV2Connector(use_unix_socket_path=False, namespace=namespace)
+            self.non_producer_app_port_tbl[asic_id].connect(self.non_producer_app_port_tbl[asic_id].APPL_DB)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
 
@@ -2620,6 +2932,9 @@ class XcvrTableHelper:
 
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
+
+    def get_non_producer_app_port_tbl(self, asic_id):
+        return self.non_producer_app_port_tbl[asic_id]
 
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
