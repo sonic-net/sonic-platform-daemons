@@ -73,7 +73,9 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     media_compliance_dict = {}
 
     try:
-        if xcvrd._wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+        api = sfp.get_xcvr_api()
+        if xcvrd.is_cmis_api(api):
             media_compliance_code = media_compliance_dict_str
         else:
             media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
@@ -88,7 +90,9 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += media_type
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
-        if xcvrd._wrapper_get_sfp_type(physical_port) == 'QSFP_DD':
+        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+        api = sfp.get_xcvr_api()
+        if xcvrd.is_cmis_api(api):
             if media_compliance_code == "passive_copper_media_interface":
                 if media_len != 0:
                     media_key += '-' + str(media_len) + 'M'
