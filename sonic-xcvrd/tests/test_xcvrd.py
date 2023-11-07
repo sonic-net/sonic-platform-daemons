@@ -430,25 +430,13 @@ class TestXcvrdScript(object):
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
-    def test_get_media_settings_key(self, mock_chassis):
+    @patch('xcvrd.xcvrd.is_cmis_api')
+    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
-
-        mock_app_adv_value ={
-        1: {'host_electrical_interface_id': '400G CR8', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 8, 'host_lane_count': 8, 'host_lane_assignment_options': 1},
-        2: {'host_electrical_interface_id': '200GBASE-CR4 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17}, 
-        3: {'host_electrical_interface_id': '100GBASE-CR2 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 2, 'host_lane_count': 2, 'host_lane_assignment_options': 85}, 
-        4: {'host_electrical_interface_id': '100GBASE-CR4 (Clause 92)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17}, 
-        5: {'host_electrical_interface_id': '50GBASE-CR (Clause 126)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255}, 
-        6: {'host_electrical_interface_id': '40GBASE-CR4 (Clause 85)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17}, 
-        7: {'host_electrical_interface_id': '25GBASE-CR CA-N (Clause 110)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255}, 
-        8: {'host_electrical_interface_id': '1000BASE -CX(Clause 39)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255}
-        }
-
-        mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
+        mock_is_cmis_api.return_value = False
 
         xcvr_info_dict = {
             0: {
@@ -463,13 +451,40 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': None }
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:100GBASE-CR2' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': None }
         # TODO: Ensure that error message was logged
+
+        mock_is_cmis_api.return_value = True
+        xcvr_info_dict = {
+            0: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "sm_media_interface",
+                'type_abbrv_name': 'QSFP-DD'
+            }
+        }
+
+        mock_app_adv_value ={
+        1: {'host_electrical_interface_id': '400G CR8', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 8, 'host_lane_count': 8, 'host_lane_assignment_options': 1},
+        2: {'host_electrical_interface_id': '200GBASE-CR4 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        3: {'host_electrical_interface_id': '100GBASE-CR2 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 2, 'host_lane_count': 2, 'host_lane_assignment_options': 85},
+        4: {'host_electrical_interface_id': '100GBASE-CR4 (Clause 92)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        5: {'host_electrical_interface_id': '50GBASE-CR (Clause 126)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255},
+        6: {'host_electrical_interface_id': '40GBASE-CR4 (Clause 85)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        7: {'host_electrical_interface_id': '25GBASE-CR CA-N (Clause 110)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255},
+        8: {'host_electrical_interface_id': '1000BASE -CX(Clause 39)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255}
+        }
+
+        mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2' }
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('400000', 8)),
