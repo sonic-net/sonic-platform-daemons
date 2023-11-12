@@ -755,6 +755,9 @@ class CmisManagerTask(threading.Thread):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
 
+    def log_debug(self, message):
+        helper_logger.log_debug("CMIS: {}".format(message))
+
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
 
@@ -1421,11 +1424,11 @@ class CmisManagerTask(threading.Thread):
                             lane_speed = int(speed/1000)//host_lane_count
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
                             
-                            helper_logger.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
+                            self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                             for key, sub_dict in optics_si_dict.items():
-                                helper_logger.log_debug("{}".format(key))
+                                self.log_debug("{}".format(key))
                                 for sub_key, value in sub_dict.items():
-                                    helper_logger.log_debug("{}: {}".format(sub_key, str(value)))
+                                    self.log_debug("{}: {}".format(sub_key, str(value)))
                             
                             if optics_si_dict:
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
