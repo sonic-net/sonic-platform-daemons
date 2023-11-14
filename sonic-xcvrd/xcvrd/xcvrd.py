@@ -51,8 +51,6 @@ TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
 TRANSCEIVER_STATUS_TABLE_SW_FIELDS = ["status", "error"]
 
-CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'QSFP+C']
-
 # Mgminit time required as per CMIS spec
 MGMT_INIT_TIME_DELAY_SECS = 2
 
