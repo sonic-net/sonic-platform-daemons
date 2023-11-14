@@ -28,6 +28,9 @@ try:
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
     from .xcvrd_utilities import optics_si_parser
+
+    from sonic_platform_base.sonic_xcvr.api.public.cmis import CmisApi
+
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -855,10 +858,7 @@ def is_module_cmis_sm_driven(port_mapping, lport):
             helper_logger.log_notice("{}: Flat memory module found while checking for module CMIS SM driven!".format(lport))
             return False
 
-        type = api.get_module_type_abbreviation()
-        if (type is None) or (type not in CMIS_MODULE_TYPES):
-            helper_logger.log_notice("{}: Module type {} not supported for module CMIS SM driven!".format(lport, type))
-            return False
+        return (isinstance(api, CmisApi))
 
     except AttributeError:
         # Return False if these essential routines are not available
@@ -2633,18 +2633,35 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '" + sig + "'")
 
+    """
+    Subscribes APPL_DB PORT_TABLE table events
+    """
+    def subscribe_appl_port_table(self):
+        sel = swsscommon.Select()
+        asic_context = {}
+        for namespace in self.namespaces:
+            appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+            appl_port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+            asic_context[appl_port_tbl] = multi_asic.get_asic_index_from_namespace(namespace)
+            sel.addSelectable(appl_port_tbl)
+
+        return sel, asic_context
+
     # Wait for port config is done
     def wait_for_port_config_done(self, namespace):
-        # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
-
-        sel = swsscommon.Select()
-        port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-        sel.addSelectable(port_tbl)
+        input_asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+        port_tbl = None
+        for current_port_tble, asic_id in self.asic_context.items():
+            if asic_id == input_asic_id:
+                port_tbl = current_port_tble
+                break
+        if port_tbl is None:
+            self.log_error("Failed to find port table for asic {}".format(input_asic_id))
+            return
 
         # Make sure this daemon started after all port configured
         while not self.stop_event.is_set():
-            (state, c) = sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
+            (state, c) = self.sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
@@ -2654,7 +2671,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             (key, op, fvp) = port_tbl.pop()
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
-        sel.removeSelectable(port_tbl)
 
     def load_media_settings(self):
         global g_dict
@@ -2690,20 +2706,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 self.log_notice("Added NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(lport))
 
         self.log_notice("XCVRD INIT: Port init fields initialized in APP_PORT_TABLE")
-
-    """
-    Subscribes APPL_DB PORT_TABLE table events
-    """
-    def subscribe_appl_port_table(self):
-        sel = swsscommon.Select()
-        asic_context = {}
-        for namespace in self.namespaces:
-            appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
-            appl_port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-            asic_context[appl_port_tbl] = multi_asic.get_asic_index_from_namespace(namespace)
-            sel.addSelectable(appl_port_tbl)
-
-        return sel, asic_context
 
     # Initialize daemon
     def init(self):
@@ -2756,6 +2758,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         else:
             self.load_media_settings()
             optics_si_parser.load_optics_si_settings()
+
+        self.sel, self.asic_context  = self.subscribe_appl_port_table()
+        self.log_notice("Subscribed to appl {} update".format(swsscommon.APP_PORT_TABLE_NAME))
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
@@ -2823,20 +2828,17 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for thread in self.threads:
             self.log_notice("Started thread {}".format(thread.getName()))
 
-        sel, asic_context  = self.subscribe_appl_port_table()
-        self.log_notice("Subscribed to appl {} update".format(swsscommon.APP_PORT_TABLE_NAME))
-
         generate_sigabrt = False
 
         while not self.stop_event.is_set() and not generate_sigabrt:
-            (state, _) = sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
+            (state, _) = self.sel.select(port_mapping.SELECT_TIMEOUT_MSECS)
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
                 self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
                 continue
 
-            for port_tbl in asic_context.keys():
+            for port_tbl in self.asic_context.keys():
                 while True:
                     (key, op, _) = port_tbl.pop()
                     if not key:
