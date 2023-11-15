@@ -862,8 +862,6 @@ def is_module_cmis_sm_driven(port_mapping, lport):
         # Return False if these essential routines are not available
         return False
 
-    return True
-
 """
     Retrieves the value of a key from APP_DB PORT_TABLE for a given logical port
 
@@ -2617,6 +2615,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = ['']
         self.threads = []
+        self.asic_context = {}
+        self.sel = None
 
     # Signal handler
     def signal_handler(self, sig, frame):

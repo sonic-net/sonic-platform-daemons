@@ -527,6 +527,7 @@ class TestXcvrdScript(object):
 
         mock_sfp.get_presence = MagicMock(return_value=True)
         mock_xcvr_api = MagicMock()
+        mock_xcvr_api.__class__ = CmisApi
         mock_sfp.get_xcvr_api = MagicMock(return_value=None)
         assert not is_module_cmis_sm_driven(port_mapping, "Ethernet0")
 
@@ -535,13 +536,9 @@ class TestXcvrdScript(object):
         assert not is_module_cmis_sm_driven(port_mapping, "Ethernet0")
 
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
-        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP28')
-        assert not is_module_cmis_sm_driven(port_mapping, "Ethernet0")
-
-        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         assert is_module_cmis_sm_driven(port_mapping, "Ethernet0")
 
-        mock_xcvr_api.get_module_type_abbreviation = MagicMock(side_effect=AttributeError)
+        mock_xcvr_api.is_flat_memory = MagicMock(side_effect=AttributeError)
         assert not is_module_cmis_sm_driven(port_mapping, "Ethernet0")
 
     def test_get_app_port_table_val_by_key(self):
@@ -666,19 +663,18 @@ class TestXcvrdScript(object):
         assert port_mapping.get_physical_to_logical(3) == None
         assert port_mapping.get_logical_to_physical('Ethernet-IB0') == None
 
-    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
-    @patch('swsscommon.swsscommon.Select.removeSelectable', MagicMock())
-    @patch('swsscommon.swsscommon.SubscriberStateTable')
-    @patch('swsscommon.swsscommon.Select.select')
-    def test_DaemonXcvrd_wait_for_port_config_done(self, mock_select, mock_sub_table):
+    def test_DaemonXcvrd_wait_for_port_config_done(self):
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
             side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('PortConfigDone', None, None)])
+        mock_select = MagicMock()
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
-        mock_sub_table.return_value = mock_selectable
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.asic_context[mock_selectable] = 0
+        xcvrd.sel = MagicMock()
+        xcvrd.sel.select = mock_select
         xcvrd.wait_for_port_config_done('')
-        assert swsscommon.Select.select.call_count == 2
+        assert xcvrd.sel.select.call_count == 2
 
     def test_DaemonXcvrd_initialize_port_init_fields_in_port_table(self):
         port_mapping = PortMapping()
@@ -1715,7 +1711,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('xcvrd.xcvrd.DaemonXcvrd.subscribe_appl_port_table', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
