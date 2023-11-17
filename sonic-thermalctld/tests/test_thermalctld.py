@@ -503,10 +503,6 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 3
 
-        chassis._module_list[0]._psu_list[0].set_status(False)
-        temperature_updater.update()
-        assert len(temperature_updater.all_thermals) == 2
-        
         chassis._module_list = []
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0

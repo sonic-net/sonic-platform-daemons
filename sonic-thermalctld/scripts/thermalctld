@@ -576,7 +576,7 @@ class TemperatureUpdater(logger.Logger):
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
             parent_name = 'PSU {}'.format(psu_index + 1)
-            if psu.get_presence() and psu.get_powergood_status():
+            if psu.get_presence():
                 for thermal_index, thermal in enumerate(psu.get_all_thermals()):
                     if self.task_stopping_event.is_set():
                         return
@@ -614,7 +614,7 @@ class TemperatureUpdater(logger.Logger):
                         self._refresh_temperature_status(sfp_name, thermal, thermal_index)
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
-                    if psu.get_presence() and psu.get_powergood_status():
+                    if psu.get_presence():
                         psu_name = '{} PSU {}'.format(module_name, psu_index + 1)
                         for thermal_index, thermal in enumerate(psu.get_all_thermals()):
                             if self.task_stopping_event.is_set():
