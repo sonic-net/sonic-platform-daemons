@@ -51,6 +51,15 @@ global_optics_si_settings = optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SET
 port_optics_si_settings['PORT_MEDIA_SETTINGS'] = optics_si_settings_with_comma_dict.pop('PORT_MEDIA_SETTINGS')
 optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['0-5,6,7-20,21-31'] = global_optics_si_settings
 
+with open(os.path.join(test_path, 'media_settings_extended_format.json'), 'r') as f:
+    media_settings_extended_format_dict = json.load(f)
+
+media_settings_extended_with_lane_speed_trimmed_dict = copy.deepcopy(media_settings_extended_format_dict)
+global_ports_module_lane_speed_1 = media_settings_extended_with_lane_speed_trimmed_dict['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-sm_media_interface'].pop('speed:400GAUI-8')
+media_settings_extended_with_lane_speed_trimmed_dict['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-sm_media_interface'] = global_ports_module_lane_speed_1
+global_ports_module_lane_speed_2 = media_settings_extended_with_lane_speed_trimmed_dict['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-active_cable_media_interface'].pop('speed:100GAUI-2')
+media_settings_extended_with_lane_speed_trimmed_dict['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-active_cable_media_interface'] = global_ports_module_lane_speed_2
+
 class TestXcvrdThreadException(object):
 
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
@@ -553,6 +562,18 @@ class TestXcvrdScript(object):
         }
         result = is_si_per_speed_supported(media_dict)
         assert result == False
+
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_extended_format_dict)
+    def test_get_media_settings_value_extended_json(self):
+        result = media_settings_parser.get_media_settings_value(7, {'vendor_key': 'Amphanol-1234', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'})
+        expected = {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}
+        assert result == expected
+
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_extended_with_lane_speed_trimmed_dict)
+    def test_get_media_settings_value_legacy_json(self):
+        result = media_settings_parser.get_media_settings_value(7, {'vendor_key': 'Amphanol-1234', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'})
+        expected = {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}
+        assert result == expected
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))

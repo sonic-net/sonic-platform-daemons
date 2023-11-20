@@ -253,6 +253,13 @@ def read_port_config_change(asic_context, port_mapping, logger, port_change_even
 
                         port_change_event = PortChangeEvent(key, new_physical_index, asic_context[port_tbl], PortChangeEvent.PORT_ADD)
                         port_change_event_handler(port_change_event)
+                    else:
+                        if port_speed_cache['index'] != fvp['speed']:
+                            # need to somehow call to notify_media_settings()
+                            
+
+
+
             elif op == swsscommon.DEL_COMMAND:
                 if port_mapping.is_logical_port(key):
                     port_change_event = PortChangeEvent(key,
