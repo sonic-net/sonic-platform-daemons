@@ -492,6 +492,15 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock())
+    def test_load_media_settings(self, mock_platform_dir_path):
+        mock_platform_dir_path.return_value = ('/invalid/path', None)
+        assert media_settings_parser.load_media_settings() == {}
+
+        mock_platform_dir_path.return_value = (test_path, None)
+        media_settings_parser.load_media_settings()
+        assert media_settings_parser.g_dict == media_settings_dict
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.is_cmis_api')
     def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
