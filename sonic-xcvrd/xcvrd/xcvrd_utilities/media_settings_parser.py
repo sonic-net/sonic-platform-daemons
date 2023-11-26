@@ -227,22 +227,22 @@ def get_media_settings_value(physical_port, key):
                 helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
-        if key[0] in media_dict:
-            if is_si_per_speed_supported(media_dict[key[0]]):
-                if key[2] is not None and key[2] in media_dict[key[0]]:
-                    return media_dict[key[0]][key[2]]
+        if key[VENDOR_KEY] in media_dict:
+            if is_si_per_speed_supported(media_dict[key[VENDOR_KEY]]):
+                if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[key[VENDOR_KEY]]:
+                    return media_dict[key[VENDOR_KEY]][key[LANE_SPEED_KEY]]
                 else:
                     return {}
             else:
-                return media_dict[key[0]]
-        elif key[1] in media_dict:
-            if is_si_per_speed_supported(media_dict[key[1]]):
-                if key[2] is not None and key[2] in media_dict[key[1]]:
-                    return media_dict[key[1]][key[2]]
+                return media_dict[key[VENDOR_KEY]]
+        elif key[MEDIA_KEY] in media_dict:
+            if is_si_per_speed_supported(media_dict[key[MEDIA_KEY]]):
+                if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[key[MEDIA_KEY]]:
+                    return media_dict[key[MEDIA_KEY]][key[LANE_SPEED_KEY]]
                 else:
                     return {}
             else:
-                return media_dict[key[1]]
+                return media_dict[key[MEDIA_KEY]]
         elif DEFAULT_KEY in media_dict:
             return media_dict[DEFAULT_KEY]
         elif len(default_dict) != 0:
