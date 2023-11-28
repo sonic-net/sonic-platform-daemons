@@ -1,6 +1,15 @@
 from setuptools import setup, find_packages
 from distutils.command.build_ext import build_ext as _build_ext
 import distutils.command
+# The shared library of protobuf will be used in the swsscommon
+# So, when we execute python setup.py test, the protobuf.so will be
+# imported twice simultaneously in `GrpcTool run` and
+# `test_y_cable_helper.py: from swsscommon import swsscommon`,
+# The initialization of some global variables in protobuf.so will be conflicted
+# so that raises an import error.
+# To avoid this issue, we need to explicitly import swsscommon before
+# above two steps.
+from swsscommon import swsscommon
 
 class GrpcTool(distutils.cmd.Command):
     def initialize_options(self):
