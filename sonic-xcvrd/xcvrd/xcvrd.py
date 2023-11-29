@@ -1541,7 +1541,7 @@ class CmisManagerTask(threading.Thread):
             helper_logger.log_info("Module {} media type not found".format(lport))
             return None
 
-        cable_type = api.get_cable_type()
+        cable_type = api.get_cable_length_type()
         if cable_type is None:
             helper_logger.log_info("Module {} cable type not found".format(lport))
             return None
