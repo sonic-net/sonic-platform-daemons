@@ -663,6 +663,22 @@ class TestXcvrdScript(object):
         assert port_mapping.get_physical_to_logical(3) == None
         assert port_mapping.get_logical_to_physical('Ethernet-IB0') == None
 
+    @patch('swsscommon.swsscommon.Select.addSelectable')
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_DaemonXcvrd_subscribe_appl_port_table(self, mock_select, mock_sub_table, mock_addSelectable):
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
+        mock_select = MagicMock()
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.sel = MagicMock()
+        xcvrd.sel.select = mock_select
+        xcvrd.subscribe_appl_port_table()
+        assert mock_addSelectable.call_count == 1
+
     def test_DaemonXcvrd_wait_for_port_config_done(self):
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
@@ -712,6 +728,35 @@ class TestXcvrdScript(object):
         assert mock_task_run2.call_count == 1
         assert mock_deinit.call_count == 1
         assert mock_init.call_count == 1
+
+    @patch('xcvrd.xcvrd.DaemonXcvrd.subscribe_appl_port_table', MagicMock(return_value = (None, None)))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('os.kill')
+    @patch('xcvrd.xcvrd.DaemonXcvrd.init')
+    @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.start')
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.join')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.join')
+    def test_DaemonXcvrd_sigabrt(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init, mock_os_kill):
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )), ('PortConfigDone', None, None)])
+        mock_select = MagicMock()
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.asic_context[mock_selectable] = 0
+        xcvrd.sel = MagicMock()
+        xcvrd.sel.select = mock_select
+        xcvrd.stop_event.is_set = MagicMock(return_value=False)
+        xcvrd.run()
+        assert mock_task_stop1.call_count == 1
+        assert mock_task_stop2.call_count == 1
+        assert mock_task_run1.call_count == 1
+        assert mock_task_run2.call_count == 1
+        assert mock_deinit.call_count == 1
+        assert mock_init.call_count == 1
+        assert mock_os_kill.call_count == 1
 
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_handle_port_change_event(self):
@@ -965,6 +1010,56 @@ class TestXcvrdScript(object):
         host_lanes_mask = 0xf
         ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert int_tbl.getKeys() == []
+
+    def test_CmisManagerTask_get_transceiver_info_dict_for_npu_si_settings(self):
+        pport = 1
+        expected_dict = {pport : {"manufacturer": "ABC",
+                                    "model": "M1234",
+                                    "cable_type": "Length Cable Assembly(m)",
+                                    "cable_length": "1.0",
+                                    "specification_compliance": "active_cable_media_interface",
+                                    "type_abbrv_name": "QSFP-DD"}
+
+                                  }
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", None) == None
+
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_manufacturer.call_count == 1
+
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='ABC')
+        mock_xcvr_api.get_model = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_model.call_count == 1
+
+        mock_xcvr_api.get_model = MagicMock(return_value='M1234')
+        mock_xcvr_api.get_module_media_type = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_module_media_type.call_count == 1
+
+        mock_xcvr_api.get_module_media_type = MagicMock(return_value='active_cable_media_interface')
+        mock_xcvr_api.get_cable_length_type = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_cable_length_type.call_count == 1
+
+        mock_xcvr_api.get_cable_length_type = MagicMock(return_value='Length Cable Assembly(m)')
+        mock_xcvr_api.get_cable_length = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_cable_length.call_count == 1
+
+        mock_xcvr_api.get_cable_length = MagicMock(return_value='1.0')
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value=None)
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == None
+        assert mock_xcvr_api.get_module_type_abbreviation.call_count == 1
+
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        assert task.get_transceiver_info_dict_for_npu_si_settings(pport, "Ethernet0", mock_xcvr_api) == expected_dict
+
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
@@ -1707,6 +1802,27 @@ class TestXcvrdScript(object):
         logical_idx = 1
         media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx)
         assert media_str == '3,4'
+
+    @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
+    @patch('xcvrd.xcvrd.get_media_settings_key', MagicMock())
+    @patch('xcvrd.xcvrd.get_media_settings_value', MagicMock(return_value={}))
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    def test_get_npu_si_settings_dict_failure_cases(self, wrapper_get_presence):
+        transceiver_dict = {0: {}}
+        port_mapping = PortMapping()
+        port_mapping.get_logical_to_physical = MagicMock(return_value=[0])
+
+        # case: When _wrapper_get_presence returns False
+        wrapper_get_presence.return_value = False
+        assert get_npu_si_settings_dict('Ethernet0', transceiver_dict, port_mapping) == {}
+
+        wrapper_get_presence.return_value = True
+        # case: When physical port is not in transceiver_dict
+        assert get_npu_si_settings_dict('Ethernet0', dict(), port_mapping) == {}
+
+        wrapper_get_presence.return_value = True
+        # case: When get_media_settings_value returns empty dictionary
+        assert get_npu_si_settings_dict('Ethernet0', transceiver_dict, port_mapping) == {}
 
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
