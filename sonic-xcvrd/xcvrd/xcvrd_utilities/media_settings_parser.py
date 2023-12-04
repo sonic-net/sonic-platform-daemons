@@ -40,17 +40,18 @@ def media_settings_present():
 
 
 def get_lane_speed_key(physical_port, port_speed, lane_count):
-    sfp = xcvrd.platform_chassis.get_sfp(physical_port)
-    api = sfp.get_xcvr_api()
-    
     lane_speed_key = None
-    if xcvrd.is_cmis_api(api):
-        appl_adv_dict = api.get_application_advertisement()
-        app_id = xcvrd.get_cmis_application_desired(api, int(lane_count), int(port_speed))
-        if app_id and app_id in appl_adv_dict:
-            host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
-            if host_electrical_interface_id:
-                lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
+
+    if xcvrd.platform_chassis is not None:
+        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+        api = sfp.get_xcvr_api()
+        if xcvrd.is_cmis_api(api):
+            appl_adv_dict = api.get_application_advertisement()
+            app_id = xcvrd.get_cmis_application_desired(api, int(lane_count), int(port_speed))
+            if app_id and app_id in appl_adv_dict:
+                host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
+                if host_electrical_interface_id:
+                    lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
 
     return lane_speed_key
 
@@ -73,14 +74,15 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     media_compliance_dict = {}
 
     try:
-        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
-        api = sfp.get_xcvr_api()
-        if xcvrd.is_cmis_api(api):
-            media_compliance_code = media_compliance_dict_str
-        else:
-            media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
-            if sup_compliance_str in media_compliance_dict:
-                media_compliance_code = media_compliance_dict[sup_compliance_str]
+        if xcvrd.platform_chassis is not None:
+            sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+            api = sfp.get_xcvr_api()
+            if xcvrd.is_cmis_api(api):
+                media_compliance_code = media_compliance_dict_str
+            else:
+                media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
+                if sup_compliance_str in media_compliance_dict:
+                    media_compliance_code = media_compliance_dict[sup_compliance_str]
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
@@ -90,20 +92,20 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += media_type
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
-        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
-        api = sfp.get_xcvr_api()
-        if xcvrd.is_cmis_api(api):
-            if media_compliance_code == "passive_copper_media_interface":
+        if xcvrd.platform_chassis is not None:
+            sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+            api = sfp.get_xcvr_api()
+            if xcvrd.is_cmis_api(api):
+                if media_compliance_code == "passive_copper_media_interface":
+                    if media_len != 0:
+                        media_key += '-' + str(media_len) + 'M'
+            else:
                 if media_len != 0:
                     media_key += '-' + str(media_len) + 'M'
-        else:
-            if media_len != 0:
-                media_key += '-' + str(media_len) + 'M'
     else:
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
-    # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
