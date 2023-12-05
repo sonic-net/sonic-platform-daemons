@@ -52,6 +52,8 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
                 host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
                 if host_electrical_interface_id:
                     lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
+    else:
+        helper_logger.log_error("Unable to derive lane_speed_key because platform_chassis is None")
 
     return lane_speed_key
 
@@ -83,6 +85,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
                 media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
                 if sup_compliance_str in media_compliance_dict:
                     media_compliance_code = media_compliance_dict[sup_compliance_str]
+        else:
+            helper_logger.log_error("Unable to derive media_key.media_compliance_code because platform_chassis is None")
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
@@ -102,6 +106,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
             else:
                 if media_len != 0:
                     media_key += '-' + str(media_len) + 'M'
+        else:
+            helper_logger.log_error("Unable to derive media_key.media_len because platform_chassis is None")
     else:
         media_key += '-' + '*'
 
