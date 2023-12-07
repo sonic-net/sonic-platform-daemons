@@ -28,63 +28,56 @@ SYSLOG_IDENTIFIER = "stormond"
 
 STORAGE_DEVICE_TABLE_NAME = "STORAGE_INFO"
 
-STORMOND_MAIN_THREAD_SLEEP_SECS = 21600 #six hours
+STORMOND_MAIN_THREAD_SLEEP_SECS = 3600 #one hour
 
 STORAGEUTIL_LOAD_ERROR = 127
 
-platform_storageutil = None
+self.storage.devices = None
 
 log = logger.Logger(SYSLOG_IDENTIFIER)
 
 exit_code = 0
 
-# wrapper functions to call the platform api
-def load_platform_storageutil(diskdev):
-    """
-    Loads generic Ssdutil module from source
-    Raises an ImportError exception if not available
+class StorageDevices():
+    def __init__(self, log_identifier):
+        self.devices = {}
+        self.BASE_PATH = "/sys/block"
+        self.BLKDEV_BASE_PATH = "/dev"
+        self.get_storage_devices()
+        self.get_storage_device_object()
 
-    Returns:
-        Instance of the class with SSD API implementation
-    """
-    try:
-        from sonic_platform_base.sonic_ssd.ssd_generic import SsdUtil
-    except ImportError as e:
-        log.log_error("Failed to import default SsdUtil. Error: {}".format(str(e)), True)
-        raise e
+    def get_storage_devices(self):
+        fdlist = os.listdir(self.BASE_PATH)
+        for fd in fdlist:
+            if 'boot' in fd or 'loop' in fd:
+                continue
+            else:
+                self.devices[fd] = None
 
-    return SsdUtil(diskdev)
-
-def exec_cmd(cmd, verbose=False):
-    p = subprocess.Popen(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    outs, errs = p.communicate()
-    msg = ''
-    if outs: msg = outs.decode('utf8')
-    if outs and verbose: log.log_info('exec_cmd stdout = '+msg)
-    if errs:
-        log.log_error('exec_cmd stderr = '+errs)
-        msg = msg + errs.decode('utf8')
-
-    return (p.returncode, msg)
-
-def get_storage_on_device():
-    storage_device_list = []
-    cmd = "lsblk -d -o name,type"
-
-    rc, out = exec_cmd(cmd)
-
-    if rc != 0:
-        log.log_error("FATAL: Unable to query disks on the device. Error: {}".format(out.strip()))
-        sys.exit(STORAGEUTIL_LOAD_ERROR)
-
-    storage_device_list += (line.split()[0].strip() for line in out.splitlines() if 'disk' in line)
-
-    log.log_info("{}".format(storage_device_list))
-    return storage_device_list
-
-def storage_disk_exists(storage_device):
-    return os.path.exists("/sys/block/{}/device".format(str(storage_device)))
-
+    def get_storage_device_object(self):
+        for key in self.devices:
+            blkdev = os.path.join(self.BLKDEV_BASE_PATH, key)
+            diskdev = os.path.join(self.BASE_PATH, key)
+            if key.startswith('sd'):
+                path = os.path.join(diskdev, "device")
+                if "ata" in os.path.realpath(path):
+                    try:
+                        from sonic_platform_base.sonic_ssd.ssd_generic import SsdUtil
+                        self.devices[key] = SsdUtil(blkdev)
+                    except ImportError as e:
+                        log.log_warning("Failed to import default SsdUtil. Error: {}".format(str(e)), True)
+                elif "usb" in os.path.realpath(path):
+                    try:
+                        from sonic_platform_base.sonic_ssd.ssd_usb import UsbUtil
+                        self.devices[key] = UsbUtil(blkdev)
+                    except ImportError as e:
+                        log.log_warning("Failed to import default UsbUtil. Error: {}".format(str(e)), True)
+            elif "mmcblk" in key:
+                try:
+                    from sonic_platform_base.sonic_ssd.ssd_emmc import EmmcUtil
+                    self.devices[key] = EmmcUtil(key)
+                except ImportError as e:
+                    log.log_warning("Failed to import default EmmcUtil. Error: {}".format(str(e)), True)
 
 #
 # Daemon =======================================================================
@@ -99,30 +92,13 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.state_db = None
         self.device_table = None
-        self.storage_device_list = get_storage_on_device()
+        self.storage = StorageDevices(log_identifier)
 
         self.static_fields = ["device_model", "serial", "firmware"]
         self.dynamic_fields = ["health", "temperature", "io_reads", "io_writes", "reserved_blocks"]
 
-        self.read_static_fields = dict((disk, False) for disk in self.storage_device_list)
-        self.updated_static_fields_statedb = dict((disk, False) for disk in self.storage_device_list)
-
-        global platform_storageutil
-        platform_storageutil = dict((disk, None) for disk in self.storage_device_list)
-
-        for disk in self.storage_device_list:
-            if 'mmc' in disk:
-                self.log_warning("eMMC disks currently unsupported. Moving on to next disk on device.")
-                continue
-            else:
-                diskdev = ("/dev/" + str(disk))
-                platform_storageutil[disk] = load_platform_storageutil(diskdev)
-
-            if platform_storageutil[disk] is None:
-                sys.exit(STORAGEUTIL_LOAD_ERROR)
-
-
-
+        self.read_static_fields = dict((disk, False) for disk in self.storage.devices)
+        self.updated_static_fields_statedb = dict((disk, False) for disk in self.storage.devices)
 
         # Connect to STATE_DB and create Storage device table
         self.state_db = daemon_base.db_connect("STATE_DB")
@@ -146,12 +122,11 @@ class DaemonStorage(daemon_base.DaemonBase):
     # Get Static attributes and update the State DB, once
     def get_static_fields(self):
 
-        try:
-            # Get relevant information about each SSD on the device
-            for storage_device in self.storage_device_list:
-
-                if platform_storageutil[storage_device] is None:
-                    self.log_warning("{} does not have an ssdutil object. Static Information cannot be gathered. Skipping.".format(storage_device))
+        # Get relevant information about each SSD on the device
+        for storage_device in self.storage.devices:
+            try:
+                if self.storage.devices[storage_device] is None:
+                    self.log_warning("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
                     continue
 
                 if self.read_static_fields[storage_device] and self.updated_static_fields_statedb[storage_device]:
@@ -160,14 +135,9 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 static_kvp_dict = dict((field, "") for field in self.static_fields)
 
-                # Verify that the SSD exists in the expected location in the filesystem hierarchy
-                if not storage_disk_exists(storage_device):
-                    self.log_warning("{} disk not found. Moving on.".format(storage_device))
-                    continue
-
-                static_kvp_dict["device_model"] = platform_storageutil[storage_device].get_model()
-                static_kvp_dict["serial"] = platform_storageutil[storage_device].get_serial()
-                static_kvp_dict["firmware"] = platform_storageutil[storage_device].get_firmware()
+                static_kvp_dict["device_model"] = self.storage.devices[storage_device].get_model()
+                static_kvp_dict["serial"] = self.storage.devices[storage_device].get_serial()
+                static_kvp_dict["firmware"] = self.storage.devices[storage_device].get_firmware()
 
                 self.log_info("Storage Device: {}, Device Model: {}, Serial: {}, FW: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"], static_kvp_dict["firmware"]))
                 self.read_static_fields[storage_device] = True
@@ -176,32 +146,26 @@ class DaemonStorage(daemon_base.DaemonBase):
                 self.update_storage_info_status_db(storage_device, self.static_fields, static_kvp_dict)
                 self.updated_static_fields_statedb[storage_device] = True
 
-        except Exception as ex:
-            self.log_warning("get_static_fields() failed with: {}".format(str(ex)))
+            except Exception as ex:
+                self.log_warning("get_static_fields() failed with: {}".format(str(ex)))
 
     # Get Dynamic attributes and update the State DB
     def get_dynamic_fields(self):
 
-        try:
-            # Get relevant information about each SSD on the device
-            for storage_device in self.storage_device_list:
-
-                if platform_storageutil[storage_device] is None:
-                    self.log_warning("{} does not have an ssdutil object. Dynamic Information cannot be gathered. Skipping.".format(storage_device))
+        # Get relevant information about each storage disk on the device
+        for storage_device in self.storage.devices:
+            try:
+                if self.storage.devices[storage_device] is None:
+                    self.log_warning("{} does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
                     continue
 
                 dynamic_kvp_dict = dict((field, "") for field in self.dynamic_fields)
 
-                # Verify that the SSD exists in the expected location in the filesystem hierarchy
-                if not storage_disk_exists(storage_device):
-                    self.log_info("{} not found. Moving on.".format(storage_device))
-                    continue
-
-                dynamic_kvp_dict["health"] = platform_storageutil[storage_device].get_health()
-                dynamic_kvp_dict["temperature"] = platform_storageutil[storage_device].get_temperature()
-                dynamic_kvp_dict["io_reads"] = platform_storageutil[storage_device].get_io_reads()
-                dynamic_kvp_dict["io_writes"] = platform_storageutil[storage_device].get_io_writes()
-                dynamic_kvp_dict["reserved_blocks"] = platform_storageutil[storage_device].get_reserved_blocks()
+                dynamic_kvp_dict["health"] = self.storage.devices[storage_device].get_health()
+                dynamic_kvp_dict["temperature"] = self.storage.devices[storage_device].get_temperature()
+                dynamic_kvp_dict["io_reads"] = self.storage.devices[storage_device].get_io_reads()
+                dynamic_kvp_dict["io_writes"] = self.storage.devices[storage_device].get_io_writes()
+                dynamic_kvp_dict["reserved_blocks"] = self.storage.devices[storage_device].get_reserved_blocks()
 
                 self.log_info("Storage Device: {}, health: {}%, Temp: {}C, IO Reads: {}, IO Writes: {}, Reserved Blocks: {}" \
                     .format(storage_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["io_reads"], \
@@ -210,8 +174,8 @@ class DaemonStorage(daemon_base.DaemonBase):
                 # update SSD Device Status to DB
                 self.update_storage_info_status_db(storage_device, self.dynamic_fields, dynamic_kvp_dict)
 
-        except Exception as ex:
-            self.log_warning("get_dynamic_fields() failed with: {}".format(str(ex)))
+            except Exception as ex:
+                self.log_warning("get_dynamic_fields() failed with: {}".format(str(ex)))
 
 
    # Override signal handler from DaemonBase
