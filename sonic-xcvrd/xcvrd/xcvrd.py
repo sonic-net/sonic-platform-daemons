@@ -88,9 +88,6 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
-USR_SHARE_SONIC_PATH = "/usr/share/sonic"
-HOST_DEVICE_PATH = USR_SHARE_SONIC_PATH + "/device"
-CONTAINER_PLATFORM_PATH = USR_SHARE_SONIC_PATH + "/platform"
 PLATFORM_PMON_CTRL_FILENAME = "pmon_daemon_control.json"
 ENABLE_SFF_MGR_FLAG_NAME = "enable_xcvrd_sff_mgr"
 
@@ -2326,28 +2323,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         """
         Get the platform PMON control file path.
 
-        The method generates a list of potential file paths, prioritizing the container platform path.
-        It then checks these paths in order to find an existing file.
-
         Returns:
-            str: The first found platform PMON control file path.
-            None: If no file path exists.
+            str: The platform PMON control file path.
         """
-        platform_env_conf_path_candidates = []
-
-        platform_env_conf_path_candidates.append(
-            os.path.join(CONTAINER_PLATFORM_PATH, PLATFORM_PMON_CTRL_FILENAME))
-
-        platform = device_info.get_platform()
-        if platform:
-            platform_env_conf_path_candidates.append(
-                os.path.join(HOST_DEVICE_PATH, platform, PLATFORM_PMON_CTRL_FILENAME))
-
-        for platform_env_conf_file_path in platform_env_conf_path_candidates:
-            if os.path.isfile(platform_env_conf_file_path):
-                return platform_env_conf_file_path
-
-        return None
+        return device_info.get_path_to_platform_dir() + '/' + PLATFORM_PMON_CTRL_FILENAME
 
     # Run daemon
 

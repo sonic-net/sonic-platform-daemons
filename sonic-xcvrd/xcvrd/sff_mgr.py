@@ -22,6 +22,32 @@ except ImportError as e:
 
 
 class SffManagerTask(threading.Thread):
+
+    # CONFIG_DB port table fields:
+
+    ADMIN_STATUS = 'admin_status'
+    # This is the subport index for this logical port, starting from 1, 0 means
+    # all lanes are taken.
+    SUBPORT = 'subport'
+    # This is a comma separated list of lane numbers
+    LANES_LIST = 'lanes'
+
+
+    # STATE_DB TRANSCEIVER_INFO table fields:
+
+    # This filed can used to determine insertion/removal event. Since
+    # TRANSCEIVER_INFO has the same life cycle as a transceiver, if transceiver
+    # is inserted/removed, TRANSCEIVER_INFO is also created/deleted.
+    XCVR_TYPE = 'type'
+
+
+    # STATE_DB PORT_TABLE fields:
+
+    HOST_TX_READY = 'host_tx_ready'
+
+    # Default number of lanes per physical port for QSFP28/QSFP+ transceiver
+    DEFAULT_NUM_LANES_PER_PPORT = 4
+
     # Subscribe to below tables in Redis DB
     PORT_TBL_MAP = [
         {
@@ -29,15 +55,13 @@ class SffManagerTask(threading.Thread):
         },
         {
             'STATE_DB': 'TRANSCEIVER_INFO',
-            'FILTER': ['type']
+            'FILTER': [XCVR_TYPE]
         },
         {
             'STATE_DB': 'PORT_TABLE',
-            'FILTER': ['host_tx_ready']
+            'FILTER': [HOST_TX_READY]
         },
     ]
-    # Default number of channels for QSFP28/QSFP+ transceiver
-    DEFAULT_NUM_CHANNELS = 4
 
     def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
         threading.Thread.__init__(self)
@@ -47,15 +71,9 @@ class SffManagerTask(threading.Thread):
         self.main_thread_stop_event = main_thread_stop_event
         self.helper_logger = helper_logger
         self.platform_chassis = platform_chassis
-        # port_dict holds data per port entry with logical_port_name as key, it
-        # maintains local copy of the following DB fields:
-        #   CONFIG_DB PORT_TABLE 'index', 'channel', 'admin_status'
-        #   STATE_DB PORT_TABLE 'host_tx_ready'
-        #   STATE_DB TRANSCEIVER_INFO 'type'
-        # plus 'asic_id' from PortChangeEvent.asic_id (asic_id always gets
-        # filled in handle_port_update_event function based on asic_context)
+        # port_dict holds data obtained from on_port_update_event per port entry
+        # with logical_port_name as key.
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
-        # Port entry's 'type' field will get deleted upon STATE_DB TRANSCEIVER_INFO DEL.
         self.port_dict = {}
         # port_dict snapshot captured in the previous event update loop
         self.port_dict_prev = {}
@@ -70,6 +88,34 @@ class SffManagerTask(threading.Thread):
 
     def log_error(self, message):
         self.helper_logger.log_error("SFF: {}".format(message))
+
+    def get_active_lanes_for_lport(self, lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport):
+        """
+        Get the active lanes for a logical port based on the subport index.
+
+        Args:
+            lport (str): Logical port name.
+            subport_idx (int): Subport index.
+            num_lanes_per_lport (int): Number of lanes per logical port.
+            num_lanes_per_pport (int): Number of lanes per physical port.
+
+        Returns:
+            list: A list of boolean values, where True means the corresponding
+                  lane is active.
+        """
+        if subport_idx < 0 or subport_idx > self.DEFAULT_NUM_LANES_PER_PPORT:
+            self.log_error("{}: Invalid subport index {}".format(lport, subport_idx))
+            return None
+
+        if subport_idx == 0:
+            lanes = [True] * num_lanes_per_pport
+        else:
+            lanes = [False] * num_lanes_per_pport
+
+        start = (subport_idx - 1) * num_lanes_per_lport
+        end = subport_idx * num_lanes_per_lport
+        lanes[start:end] = [True] * (end - start)
+        return lanes
 
     def on_port_update_event(self, port_change_event):
         if (port_change_event.event_type
@@ -96,32 +142,32 @@ class SffManagerTask(threading.Thread):
                 self.port_dict[lport] = {}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
-            # This field comes from CONFIG_DB PORT_TABLE. This is the channel
-            # that blongs to this logical port, 0 means all channels. tx_disable
-            # API needs to know which channels to disable/enable for a
-            # particular physical port.
-            if 'channel' in port_change_event.port_dict:
-                self.port_dict[lport]['channel'] = port_change_event.port_dict['channel']
-            # This field comes from STATE_DB PORT_TABLE
-            if 'host_tx_ready' in port_change_event.port_dict:
-                self.port_dict[lport]['host_tx_ready'] = \
-                        port_change_event.port_dict['host_tx_ready']
-            # This field comes from CONFIG_DB PORT_TABLE
-            if 'admin_status' in port_change_event.port_dict and \
+
+            if self.SUBPORT in port_change_event.port_dict and \
+                self.LANES_LIST in port_change_event.port_dict:
+                subport_idx = int(port_change_event.port_dict[self.SUBPORT])
+                lanes_list = port_change_event.port_dict[self.LANES_LIST].split(',')
+                active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
+                                                               len(lanes_list),
+                                                               self.DEFAULT_NUM_LANES_PER_PPORT)
+                if active_lanes is not None:
+                    self.port_dict[lport]['active_lanes'] = active_lanes
+
+            if self.HOST_TX_READY in port_change_event.port_dict:
+                self.port_dict[lport][self.HOST_TX_READY] = \
+                        port_change_event.port_dict[self.HOST_TX_READY]
+
+            if self.ADMIN_STATUS in port_change_event.port_dict and \
                 port_change_event.db_name and \
                 port_change_event.db_name == 'CONFIG_DB':
                 # Only consider admin_status from CONFIG_DB.
                 # Ignore admin_status from STATE_DB, which may have
                 # different value.
-                self.port_dict[lport]['admin_status'] = \
-                        port_change_event.port_dict['admin_status']
-            # This field comes from STATE_DB TRANSCEIVER_INFO table.
-            # TRANSCEIVER_INFO has the same life cycle as a transceiver, if
-            # transceiver is inserted/removed, TRANSCEIVER_INFO is also
-            # created/deleted. Thus this filed can used to determine
-            # insertion/removal event.
-            if 'type' in port_change_event.port_dict:
-                self.port_dict[lport]['type'] = port_change_event.port_dict['type']
+                self.port_dict[lport][self.ADMIN_STATUS] = \
+                        port_change_event.port_dict[self.ADMIN_STATUS]
+
+            if self.XCVR_TYPE in port_change_event.port_dict:
+                self.port_dict[lport][self.XCVR_TYPE] = port_change_event.port_dict[self.XCVR_TYPE]
             self.port_dict[lport]['asic_id'] = asic_id
         # CONFIG_DB PORT_TABLE DEL case:
         elif port_change_event.db_name and \
@@ -133,19 +179,19 @@ class SffManagerTask(threading.Thread):
         elif port_change_event.table_name and \
                 port_change_event.table_name == 'TRANSCEIVER_INFO':
             # TRANSCEIVER_INFO DEL corresponds to transceiver removal (not
-            # port/interface removal), in this case, remove 'type' field from
+            # port/interface removal), in this case, remove XCVR_TYPE field from
             # self.port_dict
-            if lport in self.port_dict and 'type' in self.port_dict[lport]:
-                del self.port_dict[lport]['type']
+            if lport in self.port_dict and self.XCVR_TYPE in self.port_dict[lport]:
+                del self.port_dict[lport][self.XCVR_TYPE]
 
     def get_host_tx_status(self, lport, asic_index):
         host_tx_ready = 'false'
 
         state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
 
-        found, port_info = state_port_tbl.get(lport)
-        if found and 'host_tx_ready' in dict(port_info):
-            host_tx_ready = dict(port_info)['host_tx_ready']
+        found, value = state_port_tbl.hget(lport, self.HOST_TX_READY)
+        if found:
+            host_tx_ready = value
         return host_tx_ready
 
     def get_admin_status(self, lport, asic_index):
@@ -153,9 +199,9 @@ class SffManagerTask(threading.Thread):
 
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
 
-        found, port_info = cfg_port_tbl.get(lport)
-        if found and 'admin_status' in dict(port_info):
-            admin_status = dict(port_info)['admin_status']
+        found, value = cfg_port_tbl.hget(lport, self.ADMIN_STATUS)
+        if found:
+            admin_status = value
         return admin_status
 
     def run(self):
@@ -182,28 +228,24 @@ class SffManagerTask(threading.Thread):
         if self.exc:
             raise self.exc
 
-    def calculate_tx_disable_delta_array(self, cur_tx_disable_array, tx_disable_flag, channel):
+    def calculate_tx_disable_delta_array(self, cur_tx_disable_array, tx_disable_flag, active_lanes):
         """
-        Calculate the delta between the current transmitter (TX) disable array
-        and a new TX disable flag for a specific channel. The function returns a
-        new array (delta_array) where each entry indicates whether there's a
-        difference for each corresponding channel in the TX disable array.
+        Calculate the delta array between current tx_disable array and the target tx_disable flag.
 
         Args:
-            cur_tx_disable_array (list): Current array of TX disable flags for all channels.
-            tx_disable_flag (bool): The new TX disable flag that needs to be compared
-                                    with the current flags.
-            channel (int): The specific channel that needs to be checked. If channel is 0, all
-                                    channels are checked.
+            cur_tx_disable_array (list): An array of boolean values, where True means the
+                                         corresponding lane is disabled.
+            tx_disable_flag (bool): The target tx_disable flag.
+            active_lanes (list): An array of boolean values, where True means the
+                                 corresponding lane is active for this logical port.
 
         Returns:
-            list: A boolean array where each entry indicates whether there's a
-                  change for the corresponding channel in the TX disable array.
-                  True means there's a change, False means no change.
+            list: A list of boolean values, where True means the corresponding
+                  lane needs to be changed.
         """
         delta_array = []
-        for i, cur_flag in enumerate(cur_tx_disable_array):
-            is_different = (tx_disable_flag != cur_flag) if channel in [i + 1, 0] else False
+        for active, cur_flag in zip(active_lanes, cur_tx_disable_array):
+            is_different = (tx_disable_flag != cur_flag) if active else False
             delta_array.append(is_different)
         return delta_array
 
@@ -227,24 +269,20 @@ class SffManagerTask(threading.Thread):
 
     def task_worker(self):
         '''
-        The goal of sff_mgr is to make sure SFF compliant modules are brought up
-        in a deterministc way, meaning TX is enabled only after host_tx_ready
-        becomes True, and TX will be disabled when host_tx_ready becomes False.
-        This will help eliminate link stability issue and potential interface
-        flap, also turning off TX reduces the power consumption and avoid any
-        lab hazard for admin shut interface.
+        The main goal of sff_mgr is to make sure SFF compliant modules are
+        brought up in a deterministc way, meaning TX is enabled only after
+        host_tx_ready becomes True, and TX will be disabled when host_tx_ready
+        becomes False. This will help eliminate link stability issue and
+        potential interface flap, also turning off TX reduces the power
+        consumption and avoid any lab hazard for admin shut interface.
 
-        Platform can decide whether to enable sff_mgr via platform
-        enable_sff_mgr flag. If enable_sff_mgr is False or not present, sff_mgr
-        will not run. By default, it's disabled.
+        Platform can decide whether to enable sff_mgr. By default, it's disabled.
 
-        There is a pre-requisite for the platforms that
-        enable this sff_mgr feature: platform needs to keep TX in disabled state
-        after module coming out-of-reset, in either module insertion or bootup
-        cases. This is to make sure the module is not transmitting with TX
-        enabled before host_tx_ready is True. No impact for the platforms in
-        current deployment (since they don't enable it explictly.)
-
+        Pre-requisite for platform to enable sff_mgr:
+        platform needs to keep TX in disabled state after module coming
+        out-of-reset, in either module insertion or bootup cases. This is to
+        make sure the module is not transmitting with TX enabled before
+        host_tx_ready is True.
         '''
 
         # CONFIG updates, and STATE_DB for insertion/removal, and host_tx_ready change
@@ -266,58 +304,58 @@ class SffManagerTask(threading.Thread):
                 # In the case of no real update, go back to the beginning of the loop
                 continue
 
-            for lport in list(self.port_dict.keys()):
+            for lport in self.port_dict:
                 if self.task_stopping_event.is_set():
                     break
                 data = self.port_dict[lport]
                 pport = int(data.get('index', '-1'))
-                channel = int(data.get('channel', '0'))
-                xcvr_type = data.get('type', None)
+                active_lanes = data.get('active_lanes', [True] * self.DEFAULT_NUM_LANES_PER_PPORT)
+                xcvr_type = data.get(self.XCVR_TYPE, None)
                 xcvr_inserted = False
                 host_tx_ready_changed = False
                 admin_status_changed = False
-                if pport < 0 or channel < 0:
+                if pport < 0:
                     continue
 
                 if xcvr_type is None:
-                    # TRANSCEIVER_INFO table's 'type' is not ready, meaning xcvr is not present
+                    # TRANSCEIVER_INFO table's XCVR_TYPE is not ready, meaning xcvr is not present
                     continue
 
-                # Procced only for 100G/40G
+                # Procced only for QSFP28/QSFP+ transceiver
                 if not (xcvr_type.startswith('QSFP28') or xcvr_type.startswith('QSFP+')):
                     continue
 
                 # Handle the case that host_tx_ready value in the local cache hasn't
                 # been updated via PortChangeEvent:
-                if 'host_tx_ready' not in data:
+                if self.HOST_TX_READY not in data:
                     # Fetch host_tx_ready status from STATE_DB (if not present
                     # in DB, treat it as false), and update self.port_dict
-                    data['host_tx_ready'] = self.get_host_tx_status(lport, data['asic_id'])
+                    data[self.HOST_TX_READY] = self.get_host_tx_status(lport, data['asic_id'])
                     self.log_notice("{}: fetched DB and updated host_tx_ready={} locally".format(
-                        lport, data['host_tx_ready']))
+                        lport, data[self.HOST_TX_READY]))
                 # Handle the case that admin_status value in the local cache hasn't
                 # been updated via PortChangeEvent:
-                if 'admin_status' not in data:
+                if self.ADMIN_STATUS not in data:
                     # Fetch admin_status from CONFIG_DB (if not present in DB,
                     # treat it as false), and update self.port_dict
-                    data['admin_status'] = self.get_admin_status(lport, data['asic_id'])
+                    data[self.ADMIN_STATUS] = self.get_admin_status(lport, data['asic_id'])
                     self.log_notice("{}: fetched DB and updated admin_status={} locally".format(
-                        lport, data['admin_status']))
+                        lport, data[self.ADMIN_STATUS]))
 
-                # Check if there's a diff between current and previous 'type'
-                # It's a xcvr insertion case if TRANSCEIVER_INFO 'type' doesn't exist
-                # in previous port_dict sanpshot
-                if lport not in self.port_dict_prev or 'type' not in self.port_dict_prev[lport]:
+                # Check if there's a diff between current and previous XCVR_TYPE
+                # It's a xcvr insertion case if TRANSCEIVER_INFO XCVR_TYPE doesn't exist
+                # in previous port_dict snapshot
+                if lport not in self.port_dict_prev or self.XCVR_TYPE not in self.port_dict_prev[lport]:
                     xcvr_inserted = True
                 # Check if there's a diff between current and previous host_tx_ready
                 if (lport not in self.port_dict_prev or
-                        'host_tx_ready' not in self.port_dict_prev[lport] or
-                        self.port_dict_prev[lport]['host_tx_ready'] != data['host_tx_ready']):
+                        self.HOST_TX_READY not in self.port_dict_prev[lport] or
+                        self.port_dict_prev[lport][self.HOST_TX_READY] != data[self.HOST_TX_READY]):
                     host_tx_ready_changed = True
                 # Check if there's a diff between current and previous admin_status
                 if (lport not in self.port_dict_prev or
-                    'admin_status' not in self.port_dict_prev[lport] or
-                    self.port_dict_prev[lport]['admin_status'] != data['admin_status']):
+                    self.ADMIN_STATUS not in self.port_dict_prev[lport] or
+                    self.port_dict_prev[lport][self.ADMIN_STATUS] != data[self.ADMIN_STATUS]):
                     admin_status_changed = True
                 # Skip if neither of below cases happens:
                 # 1) xcvr insertion
@@ -335,14 +373,14 @@ class SffManagerTask(threading.Thread):
                                  "admin_status={}(changed={})").format(
                     lport,
                     xcvr_inserted,
-                    data['host_tx_ready'], host_tx_ready_changed,
-                    data['admin_status'], admin_status_changed))
+                    data[self.HOST_TX_READY], host_tx_ready_changed,
+                    data[self.ADMIN_STATUS], admin_status_changed))
 
                 # double-check the HW presence before moving forward
                 sfp = self.platform_chassis.get_sfp(pport)
                 if not sfp.get_presence():
                     self.log_error("{}: module not present!".format(lport))
-                    del self.port_dict[lport]
+                    del self.port_dict[lport][self.XCVR_TYPE]
                     continue
                 try:
                     # Skip if XcvrApi is not supported
@@ -375,9 +413,9 @@ class SffManagerTask(threading.Thread):
                     continue
 
                 # Only turn on TX if both host_tx_ready is true and admin_status is up
-                target_tx_disable_flag = not (data['host_tx_ready'] == 'true'
-                                              and data['admin_status'] == 'up')
-                # get_tx_disable API returns an array of bool, with tx_disable flag on each channel.
+                target_tx_disable_flag = not (data[self.HOST_TX_READY] == 'true'
+                                              and data[self.ADMIN_STATUS] == 'up')
+                # get_tx_disable API returns an array of bool, with tx_disable flag on each lane.
                 # True means tx disabled; False means tx enabled.
                 cur_tx_disable_array = api.get_tx_disable()
                 if cur_tx_disable_array is None:
@@ -385,20 +423,20 @@ class SffManagerTask(threading.Thread):
                     # If reading current tx_disable/enable value failed (could be due to
                     # read error), then set this variable to the opposite value of
                     # target_tx_disable_flag, to let detla array to be True on
-                    # all the interested channels, to try best-effort TX disable/enable.
-                    cur_tx_disable_array = [not target_tx_disable_flag] * self.DEFAULT_NUM_CHANNELS
-                # Get an array of bool, where it's True only on the channels that need change.
+                    # all the interested lanes, to try best-effort TX disable/enable.
+                    cur_tx_disable_array = [not target_tx_disable_flag] * self.DEFAULT_NUM_LANES_PER_PPORT
+                # Get an array of bool, where it's True only on the lanes that need change.
                 delta_array = self.calculate_tx_disable_delta_array(cur_tx_disable_array,
-                                                                    target_tx_disable_flag, channel)
+                                                                    target_tx_disable_flag, active_lanes)
                 mask = self.convert_bool_array_to_bit_mask(delta_array)
                 if mask == 0:
                     self.log_notice("{}: No change is needed for tx_disable value".format(lport))
                     continue
                 if api.tx_disable_channel(mask, target_tx_disable_flag):
-                    self.log_notice("{}: TX was {} with channel mask: {}".format(
+                    self.log_notice("{}: TX was {} with lanes mask: {}".format(
                         lport, "disabled" if target_tx_disable_flag else "enabled", bin(mask)))
                 else:
-                    self.log_error("{}: Failed to {} TX with channel mask: {}".format(
+                    self.log_error("{}: Failed to {} TX with lanes mask: {}".format(
                         lport, "disable" if target_tx_disable_flag else "enable", bin(mask)))
 
             # Take a snapshot for port_dict, this will be used to calculate diff

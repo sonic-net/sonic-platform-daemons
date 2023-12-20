@@ -867,6 +867,7 @@ class TestXcvrdScript(object):
     def test_DaemonXcvrd_run(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init):
         mock_init.return_value = (PortMapping(), set())
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
         xcvrd.run()
         assert mock_task_stop1.call_count == 1
@@ -900,7 +901,7 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
-        port_dict = {'type': 'QSFP28', 'channel': '0', 'host_tx_ready': 'false'}
+        port_dict = {'type': 'QSFP28', 'subport': '0', 'host_tx_ready': 'false'}
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, port_dict)
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
@@ -917,7 +918,7 @@ class TestXcvrdScript(object):
 
     @patch.object(XcvrTableHelper, 'get_state_port_tbl', return_value=MagicMock())
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
-        mock_get_state_port_tbl.return_value.get.return_value = (True, {'host_tx_ready': 'true'})
+        mock_get_state_port_tbl.return_value.hget.return_value = (True, 'true')
 
         sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
@@ -927,11 +928,11 @@ class TestXcvrdScript(object):
         lport = 'Ethernet0'
         assert sff_manager_task.get_host_tx_status(lport, 0) == 'true'
         mock_get_state_port_tbl.assert_called_once_with(0)
-        mock_get_state_port_tbl.return_value.get.assert_called_once_with(lport)
+        mock_get_state_port_tbl.return_value.hget.assert_called_once_with(lport, 'host_tx_ready')
 
     @patch.object(XcvrTableHelper, 'get_cfg_port_tbl', return_value=MagicMock())
     def test_SffManagerTask_get_admin_status(self, mock_get_cfg_port_tbl):
-        mock_get_cfg_port_tbl.return_value.get.return_value = (True, {'admin_status': 'up'})
+        mock_get_cfg_port_tbl.return_value.hget.return_value = (True, 'up')
 
         sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
@@ -941,7 +942,7 @@ class TestXcvrdScript(object):
         lport = 'Ethernet0'
         assert sff_manager_task.get_admin_status(lport, 0) == 'up'
         mock_get_cfg_port_tbl.assert_called_once_with(0)
-        mock_get_cfg_port_tbl.return_value.get.assert_called_once_with(lport)
+        mock_get_cfg_port_tbl.return_value.hget.assert_called_once_with(lport, 'admin_status')
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
@@ -969,7 +970,7 @@ class TestXcvrdScript(object):
         # TX enable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
             'type': 'QSFP28',
-            'channel': '0'
+            'subport': '0'
         })
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
@@ -2070,7 +2071,7 @@ class TestXcvrdScript(object):
         mock_json_load.assert_called_once()
         assert xcvrd.enable_sff_mgr == True
 
-    @patch('sonic_py_common.device_info.get_platform', MagicMock(return_value='x86_64-sonic-linux'))
+    @patch('sonic_py_common.device_info.get_path_to_platform_dir', MagicMock(return_value='/usr/share/sonic/platform'))
     @patch('os.path.isfile', MagicMock(return_value=True))
     def test_DaemonXcvrd_get_platform_pmon_ctrl_file_path(self):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
