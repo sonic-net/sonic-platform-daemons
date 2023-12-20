@@ -916,6 +916,80 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
+    def test_SffManagerTask_get_active_lanes_for_lport(self):
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                 threading.Event(),
+                                 MagicMock(),
+                                 helper_logger)
+
+        lport = 'Ethernet0'
+
+        subport_idx = 3
+        num_lanes_per_lport = 1
+        num_lanes_per_pport = 4
+        expected_result = [False, False, True, False]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+        subport_idx = 1
+        num_lanes_per_lport = 2
+        num_lanes_per_pport = 4
+        expected_result = [True, True, False, False]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+        subport_idx = 1
+        num_lanes_per_lport = 2
+        num_lanes_per_pport = 4
+        expected_result = [True, True, False, False]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+        subport_idx = 2
+        num_lanes_per_lport = 2
+        num_lanes_per_pport = 4
+        expected_result = [False, False, True, True]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+        subport_idx = 0
+        num_lanes_per_lport = 4
+        num_lanes_per_pport = 4
+        expected_result = [True, True, True, True]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+        # Test with larger number of lanes per port (not real use case)
+        subport_idx = 1
+        num_lanes_per_lport = 4
+        num_lanes_per_pport = 32
+        expected_result = [True, True, True, True, False, False, False, False,
+                           False, False, False, False, False, False, False, False,
+                           False, False, False, False, False, False, False, False,
+                           False, False, False, False, False, False, False, False]
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result == expected_result
+
+    def test_SffManagerTask_get_active_lanes_for_lport_with_invalid_input(self):
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                 threading.Event(),
+                                 MagicMock(),
+                                 helper_logger)
+
+        lport = 'Ethernet0'
+
+        subport_idx = -1
+        num_lanes_per_lport = 4
+        num_lanes_per_pport = 32
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result is None
+
+        subport_idx = 5
+        num_lanes_per_lport = 1
+        num_lanes_per_pport = 4
+        result = sff_manager_task.get_active_lanes_for_lport(lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport)
+        assert result is None
+
     @patch.object(XcvrTableHelper, 'get_state_port_tbl', return_value=MagicMock())
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
         mock_get_state_port_tbl.return_value.hget.return_value = (True, 'true')

@@ -95,7 +95,7 @@ class SffManagerTask(threading.Thread):
 
         Args:
             lport (str): Logical port name.
-            subport_idx (int): Subport index.
+            subport_idx (int): Subport index, starting from 1. 0 means all lanes are taken.
             num_lanes_per_lport (int): Number of lanes per logical port.
             num_lanes_per_pport (int): Number of lanes per physical port.
 
@@ -103,18 +103,22 @@ class SffManagerTask(threading.Thread):
             list: A list of boolean values, where True means the corresponding
                   lane is active.
         """
-        if subport_idx < 0 or subport_idx > self.DEFAULT_NUM_LANES_PER_PPORT:
-            self.log_error("{}: Invalid subport index {}".format(lport, subport_idx))
+        if subport_idx < 0 or subport_idx > num_lanes_per_pport // num_lanes_per_lport:
+            self.log_error(
+                f"{lport}: Invalid subport_idx {subport_idx} "
+                f"for num_lanes_per_lport={num_lanes_per_lport}, "
+                f"num_lanes_per_pport={num_lanes_per_pport}"
+            )
             return None
 
         if subport_idx == 0:
             lanes = [True] * num_lanes_per_pport
         else:
             lanes = [False] * num_lanes_per_pport
+            start = (subport_idx - 1) * num_lanes_per_lport
+            end = subport_idx * num_lanes_per_lport
+            lanes[start:end] = [True] * (end - start)
 
-        start = (subport_idx - 1) * num_lanes_per_lport
-        end = subport_idx * num_lanes_per_lport
-        lanes[start:end] = [True] * (end - start)
         return lanes
 
     def on_port_update_event(self, port_change_event):
