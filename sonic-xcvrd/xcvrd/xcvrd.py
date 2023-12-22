@@ -88,6 +88,14 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
+
+RANGE_SEPARATOR = '-'
+COMMA_SEPARATOR = ','
+GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
+PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
+GLOBAL_MEDIA_PATTERN_SETTINGS_KEY = 'GLOBAL_MEDIA_PATTERN_SETTINGS'
+DEFAULT_KEY = 'Default'
+
 g_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -576,12 +584,28 @@ def check_port_in_range(range_str, physical_port):
     return False
 
 
+def parse_delimitors_in_port_ranges(keys, physical_port, global_key):
+
+    media_dict = {}
+
+    if COMMA_SEPARATOR in keys:
+        port_list = keys.split(COMMA_SEPARATOR)
+        for port in port_list:
+            if RANGE_SEPARATOR in port:
+                if check_port_in_range(port, physical_port):
+                    media_dict = g_dict[global_key][keys]
+                    break
+            elif str(physical_port) == port:
+                media_dict = g_dict[global_key][keys]
+                break
+
+    elif RANGE_SEPARATOR in keys:
+        if check_port_in_range(keys, physical_port):
+            media_dict = g_dict[global_key][keys]
+
+    return media_dict
+
 def get_media_settings_value(physical_port, key):
-    GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
-    PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
-    DEFAULT_KEY = 'Default'
-    RANGE_SEPARATOR = '-'
-    COMMA_SEPARATOR = ','
     media_dict = {}
     default_dict = {}
 
@@ -590,23 +614,12 @@ def get_media_settings_value(physical_port, key):
     # 1-32
     # 1,2,3,4,5
     # 1-4,9-12
-
+    
+    
     if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
         for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
-            if COMMA_SEPARATOR in keys:
-                port_list = keys.split(COMMA_SEPARATOR)
-                for port in port_list:
-                    if RANGE_SEPARATOR in port:
-                        if check_port_in_range(port, physical_port):
-                            media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-                            break
-                    elif str(physical_port) == port:
-                        media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-                        break
 
-            elif RANGE_SEPARATOR in keys:
-                if check_port_in_range(keys, physical_port):
-                    media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+            media_dict = parse_delimitors_in_port_ranges(keys, physical_port, GLOBAL_MEDIA_SETTINGS_KEY)
 
             # If there is a match in the global profile for a media type,
             # fetch those values
@@ -642,12 +655,19 @@ def get_media_settings_value(physical_port, key):
             return media_dict[key[1]]
         elif DEFAULT_KEY in media_dict:
             return media_dict[DEFAULT_KEY]
-        elif len(default_dict) != 0:
-            return default_dict
+
+
+    if GLOBAL_MEDIA_PATTERN_SETTINGS_KEY in g_dict:
+        for keys in g_dict[GLOBAL_MEDIA_PATTERN_SETTINGS_KEY]:
+            media_dict = parse_delimitors_in_port_ranges(keys, physical_port, GLOBAL_MEDIA_PATTERN_SETTINGS_KEY)
+
+            for dkey, val in media_dict.items():
+                if re.match(dkey, key[1]):
+                    return media_dict[key[1]]
+
     else:
         if len(default_dict) != 0:
             return default_dict
-
     return {}
 
 
@@ -1096,7 +1116,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-	
+    
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -1522,7 +1542,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-			
+            
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -2586,7 +2606,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 class XcvrTableHelper:
     def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
-		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
+        self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
         for namespace in namespaces:
