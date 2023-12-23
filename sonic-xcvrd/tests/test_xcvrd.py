@@ -1044,7 +1044,8 @@ class TestXcvrdScript(object):
         # TX enable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
             'type': 'QSFP28',
-            'subport': '0'
+            'subport': '0',
+            'lanes': '1,2,3,4',
         })
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1

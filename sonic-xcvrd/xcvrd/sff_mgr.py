@@ -101,7 +101,9 @@ class SffManagerTask(threading.Thread):
 
         Returns:
             list: A list of boolean values, where True means the corresponding
-                  lane is active.
+                  lane belongs to this logical port. For example, [True, True,
+                  False, False] means the first two lanes on this physical port
+                  belong to this logical port.
         """
         if subport_idx < 0 or subport_idx > num_lanes_per_pport // num_lanes_per_lport:
             self.log_error(
@@ -149,13 +151,9 @@ class SffManagerTask(threading.Thread):
 
             if self.SUBPORT in port_change_event.port_dict and \
                 self.LANES_LIST in port_change_event.port_dict:
-                subport_idx = int(port_change_event.port_dict[self.SUBPORT])
-                lanes_list = port_change_event.port_dict[self.LANES_LIST].split(',')
-                active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
-                                                               len(lanes_list),
-                                                               self.DEFAULT_NUM_LANES_PER_PPORT)
-                if active_lanes is not None:
-                    self.port_dict[lport]['active_lanes'] = active_lanes
+                self.port_dict[lport][self.SUBPORT] = port_change_event.port_dict[self.SUBPORT]
+                self.port_dict[lport][self.LANES_LIST] = \
+                    port_change_event.port_dict[self.LANES_LIST].split(',')
 
             if self.HOST_TX_READY in port_change_event.port_dict:
                 self.port_dict[lport][self.HOST_TX_READY] = \
@@ -313,12 +311,16 @@ class SffManagerTask(threading.Thread):
                     break
                 data = self.port_dict[lport]
                 pport = int(data.get('index', '-1'))
-                active_lanes = data.get('active_lanes', [True] * self.DEFAULT_NUM_LANES_PER_PPORT)
+                subport_idx = int(data.get(self.SUBPORT, '0'))
+                lanes_list = data.get(self.LANES_LIST, None)
+                # active_lanes is a list of boolean values, where True means the
+                # corresponding lane belongs to this logical port.
+                active_lanes = data.get('active_lanes', None)
                 xcvr_type = data.get(self.XCVR_TYPE, None)
                 xcvr_inserted = False
                 host_tx_ready_changed = False
                 admin_status_changed = False
-                if pport < 0:
+                if pport < 0 or lanes_list is None:
                     continue
 
                 if xcvr_type is None:
@@ -415,6 +417,17 @@ class SffManagerTask(threading.Thread):
                 except (AttributeError, NotImplementedError):
                     # Skip if these essential routines are not available
                     continue
+
+                if active_lanes is None:
+                    active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
+                                                               len(lanes_list),
+                                                               self.DEFAULT_NUM_LANES_PER_PPORT)
+                    if active_lanes is None:
+                        self.log_error("{}: skipping sff_mgr due to "
+                                       "failing to get active lanes".format(lport))
+                        continue
+                    # Save active_lanes in self.port_dict
+                    self.port_dict[lport]['active_lanes'] = active_lanes
 
                 # Only turn on TX if both host_tx_ready is true and admin_status is up
                 target_tx_disable_flag = not (data[self.HOST_TX_READY] == 'true'
