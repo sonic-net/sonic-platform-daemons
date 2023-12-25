@@ -1,13 +1,12 @@
 import json
 import os
 
-from sonic_py_common import device_info, logger
+from sonic_py_common import device_info
 from xcvrd import xcvrd
+from .logger import logger as helper_logger
 
 g_optics_si_dict = {}
 
-SYSLOG_IDENTIFIER = "xcvrd"
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
 def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'

@@ -29,6 +29,7 @@ try:
     from .xcvrd_utilities import port_mapping
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
+    from .xcvrd_utilities.logger import logger as helper_logger
     
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
@@ -97,11 +98,6 @@ g_dict = {}
 platform_sfputil = None
 # Global chassis object based on new platform api
 platform_chassis = None
-
-# Global logger instance for helper functions and classes
-# TODO: Refactor so that we only need the logger inherited
-# by DaemonXcvrd
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
 #
 # Helper functions =============================================================

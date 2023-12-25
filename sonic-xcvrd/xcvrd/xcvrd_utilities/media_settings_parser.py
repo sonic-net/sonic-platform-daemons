@@ -6,9 +6,10 @@ import json
 import os
 import ast
 
-from sonic_py_common import device_info, logger
+from sonic_py_common import device_info
 from swsscommon import swsscommon
 from xcvrd import xcvrd
+from .logger import logger as helper_logger
 
 g_dict = {}
 
@@ -16,8 +17,6 @@ LANE_SPEED_KEY_PREFIX = "speed:"
 VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
-SYSLOG_IDENTIFIER = "xcvrd"
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
 
 def load_media_settings():
