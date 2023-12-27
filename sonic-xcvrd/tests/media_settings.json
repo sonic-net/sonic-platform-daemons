@@ -436,6 +436,39 @@
                     "lane3":"0x144808"
                 }
             }
+        },
+        "33": {
+            "Default": {
+                "preemphasis": {
+                    "lane0":"0x144808",
+                    "lane1":"0x144808",
+                    "lane2":"0x144808",
+                    "lane3":"0x144808"
+                }
+            }
+        }
+    },
+    "GLOBAL_MEDIA_PATTERN_SETTINGS": {
+        "1-33": {
+            "^QSFP\\+.*10G.*SR.*": {
+                   "interface_type": "sr4"
+
+            },
+            "^QSFP\\+.*40G.*": {
+                   "interface_type": "sr4"
+
+            },
+            "QSFP\\+.*100GBASE-LR4.*": {
+                   "interface_type": "sr4"
+
+            }
+
+        },
+        "34,35,36": {
+            "^QSFP\\+.*10G.*SR.*": {
+                   "interface_type": "sr4"
+
+            }
         }
     }
 }

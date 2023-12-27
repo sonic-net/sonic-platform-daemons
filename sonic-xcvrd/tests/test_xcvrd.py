@@ -41,6 +41,7 @@ with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
 media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
+regex_media_settings = copy.deepcopy(media_settings_dict)
 
 with open(os.path.join(test_path, 'optics_si_settings.json'), 'r') as fn:
     optics_si_settings_dict = json.load(fn)
@@ -453,7 +454,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_notify_media_setting(self):
-        self._check_notify_media_setting(1)
+        rv = self._check_notify_media_setting(1)
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_with_comma_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -478,6 +479,28 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
         notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
+
+
+    @patch('xcvrd.xcvrd.g_dict', regex_media_settings)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_check_notify_media_settings_value(self):
+        logical_port_name = 'Ethernet0'
+        index = 33
+        xcvr_info_dict = {
+            index: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+        physical_port = 33
+        key = get_media_settings_key(physical_port, xcvr_info_dict)
+        media_dict = get_media_settings_value(physical_port, key)
+        res_dict = {'interface_type': 'sr4'}
+        assert media_dict == res_dict
 
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))

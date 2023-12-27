@@ -634,6 +634,7 @@ def get_media_settings_value(physical_port, key):
 
     media_dict = {}
 
+
     if PORT_MEDIA_SETTINGS_KEY in g_dict:
         for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
             if int(keys) == physical_port:
@@ -647,6 +648,7 @@ def get_media_settings_value(physical_port, key):
                 helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
+
         if key[0] in media_dict:
             return media_dict[key[0]]
         elif key[0].split('-')[0] in media_dict:
@@ -654,8 +656,7 @@ def get_media_settings_value(physical_port, key):
         elif key[1] in media_dict:
             return media_dict[key[1]]
         elif DEFAULT_KEY in media_dict:
-            return media_dict[DEFAULT_KEY]
-
+            default_dict = media_dict[DEFAULT_KEY]
 
     if GLOBAL_MEDIA_PATTERN_SETTINGS_KEY in g_dict:
         for keys in g_dict[GLOBAL_MEDIA_PATTERN_SETTINGS_KEY]:
