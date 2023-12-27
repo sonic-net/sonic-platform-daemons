@@ -663,7 +663,7 @@ def get_media_settings_value(physical_port, key):
 
             for dkey, val in media_dict.items():
                 if re.match(dkey, key[1]):
-                    return media_dict[key[1]]
+                    return media_dict[dkey]
 
     else:
         if len(default_dict) != 0:
