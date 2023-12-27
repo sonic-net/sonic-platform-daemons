@@ -454,7 +454,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     def test_notify_media_setting(self):
-        rv = self._check_notify_media_setting(1)
+        self._check_notify_media_setting(1)
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_with_comma_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
