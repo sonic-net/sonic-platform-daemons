@@ -667,7 +667,7 @@ class TestXcvrdScript(object):
             result = media_settings_parser.get_media_settings_value(port, key)
             assert result == expected
 
-    @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
@@ -676,7 +676,7 @@ class TestXcvrdScript(object):
     def test_post_npu_si_settings_to_appl_db(self):
         self._check_post_npu_si_settings_to_appl_db_setting(1)
 
-    @patch('xcvrd.xcvrd.g_dict', media_settings_with_comma_dict)
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_with_comma_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
@@ -2036,9 +2036,10 @@ class TestXcvrdScript(object):
         media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx)
         assert media_str == '3,4'
 
-    @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock())
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_value', MagicMock(return_value={}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     @patch('xcvrd.xcvrd._wrapper_get_presence')
     def test_get_npu_si_settings_dict_failure_cases(self, wrapper_get_presence):
         transceiver_dict = {0: {}}
