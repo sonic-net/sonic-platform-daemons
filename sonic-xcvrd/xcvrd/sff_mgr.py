@@ -59,7 +59,7 @@ class SffManagerTask(threading.Thread):
         },
         {
             'STATE_DB': 'PORT_TABLE',
-            'FILTER': [HOST_TX_READY]
+            'FILTER': [HOST_TX_READY] # This also filters out unwanted 'admin_status' from STATE_DB.
         },
     ]
 
@@ -107,9 +107,12 @@ class SffManagerTask(threading.Thread):
         """
         if subport_idx < 0 or subport_idx > num_lanes_per_pport // num_lanes_per_lport:
             self.log_error(
-                f"{lport}: Invalid subport_idx {subport_idx} "
-                f"for num_lanes_per_lport={num_lanes_per_lport}, "
-                f"num_lanes_per_pport={num_lanes_per_pport}"
+                "{}: Invalid subport_idx {} "
+                "for num_lanes_per_lport={}, "
+                "num_lanes_per_pport={}".format(lport,
+                                                subport_idx,
+                                                num_lanes_per_lport,
+                                                num_lanes_per_pport)
             )
             return None
 
@@ -159,12 +162,7 @@ class SffManagerTask(threading.Thread):
                 self.port_dict[lport][self.HOST_TX_READY] = \
                         port_change_event.port_dict[self.HOST_TX_READY]
 
-            if self.ADMIN_STATUS in port_change_event.port_dict and \
-                port_change_event.db_name and \
-                port_change_event.db_name == 'CONFIG_DB':
-                # Only consider admin_status from CONFIG_DB.
-                # Ignore admin_status from STATE_DB, which may have
-                # different value.
+            if self.ADMIN_STATUS in port_change_event.port_dict:
                 self.port_dict[lport][self.ADMIN_STATUS] = \
                         port_change_event.port_dict[self.ADMIN_STATUS]
 
@@ -208,7 +206,7 @@ class SffManagerTask(threading.Thread):
 
     def run(self):
         if self.platform_chassis is None:
-            self.log_notice("Platform chassis is not available, stopping...")
+            self.log_error("Platform chassis is not available, stopping...")
             return
 
         try:
