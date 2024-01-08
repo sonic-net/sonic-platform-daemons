@@ -71,6 +71,14 @@ media_settings_global_range_vendor_key_si = copy.deepcopy(media_settings_global_
 media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'].pop('speed:400GAUI-8')
 media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-5678'] = media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-5678'].pop('speed:100GAUI-2')
 
+media_settings_global_range_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-sm_media_interface')
+media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_global_range_generic_vendor_key_si = copy.deepcopy(media_settings_global_range_generic_vendor_key_lane_speed_si)
+media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'].pop('speed:400GAUI-8')
+media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'].pop('speed:100GAUI-2')
+
 media_settings_global_list_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
 new_key = str(','.join([str(i) for i in range(32)]))
 media_settings_global_list_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'][new_key] = media_settings_global_list_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
@@ -641,6 +649,9 @@ class TestXcvrdScript(object):
     (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
     (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
     (media_settings_global_range_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_global_range_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
     (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
     (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, {}),
     (media_settings_global_list_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
