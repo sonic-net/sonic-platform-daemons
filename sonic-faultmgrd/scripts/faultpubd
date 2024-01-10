@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import yaml
+import argparse
+
+import redis
+from cisco.pacific.thermal.thermal_zone import thermal_zone
+from sonic_py_common import daemon_base, multi_asic, logger
+from swsscommon import swsscommon
+from swsscommon.swsscommon import event_receive_op_t, event_receive
+from swsscommon.swsscommon import events_init_subscriber, events_deinit_subscriber
+
+import sys
+import syslog
+import time
+import threading
+from enum import Enum
+import subprocess
+import uuid
+
+#########################################################
+## fault_publisher: microservice running at Linux host ##
+#########################################################
+
+SYSLOG_IDENTIFIER = 'faultPubd'
+helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+
+ASYNC_CONN_WAIT = 0.3
+# In case of no event from publisher(s), event subscriber's
+# max time (in ms) to wait before checking for the next event
+RECEIVE_TIMEOUT = 1000
+rc_of_events_received = -1
+redisDB_event_count = 0
+publish_cnt = 0
+
+# sonic-event.yang is the source of these tags (yet to be committed)
+EVENTS_PUBLISHER_SOURCE = "sonic-event"
+EVENTS_PUBLISHER_TAG = "EVENT"
+EVENTS_PUBLISHER_ID = "{}:{}".format(EVENTS_PUBLISHER_SOURCE, EVENTS_PUBLISHER_TAG)
+exp_event_params = {
+    "id": "0",
+    "resource": "fault-manager",
+    "text": "device, component FM test",
+    "time-created": "De19",
+    "type-id": "CUSTOM_EVPROFILE_CHANGE",
+    "severity": "MAJOR",
+}
+
+#########################################################################
+# 1. Presently, events (faults) are published by sonic-events*.yang files
+#    source location: /usr/local/yang-models/
+# 2. In near future, there would be a single events SCHEMA yang file
+#    named: sonic-event.yang
+# 3. Subscribe to event-framework to recieve events
+# 4. Look for the events periodically; as and when they are received, 
+#    parse and process them; formulate an event (fault) entry locally
+# 5. Add the event data as an entry in the new EVENT_TABLE of chassis
+#    redis-DB
+# 6. Then fetch the event entry from this EVENT_TABLE, perform a lookup
+#    on event's id and severity in fault_action_policy_info file (table)
+#    to find a match.
+# 7. Once a match is found, take the action(s) as specified by the match
+#########################################################################
+
+class faultPublisher():
+    # Interval to run this microservice
+    FM_INTERVAL = 15
+    # microservice identifier
+
+    _thermal_zone = None
+    _interval = 15
+
+    _card_type = None
+    _pi_slot_id = None
+
+    _redis_chassis_db = None
+    _state_db = {}
+    _temperature_info_tbl = {}
+    _system_health_info_tbl = {}
+    TEMPERATURE_INFO_TABLE = "TEMPERATURE_INFO"
+    SYSTEM_HEALTH_INFO_TABLE = "SYSTEM_HEALTH_INFO"
+
+    EVENT_ENTRY_KEY = 'EVENT_TABLE|{}'
+
+    REDIS_DB_SERVERS = {
+        'local': {'host': 'localhost', 'port': 6379},
+        'chassis': {'host': 'redis_chassis.server', 'port': 6380}}
+
+    def access_redis_db(self):
+        '''
+        Connect to all required tables for all corresponding namespace databases
+        '''
+        for namespace in self.namespaces:
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            # Connet to redis STATE_DB to fetch data from its tables
+            self._state_db[asic_id] = daemon_base.db_connect('STATE_DB', namespace)
+            self._temperature_info_tbl[asic_id] = swsscommon.Table(self._state_db[asic_id], self.TEMPERATURE_INFO_TABLE)
+            self._system_health_info_tbl[asic_id] = swsscommon.Table(self._state_db[asic_id], self.SYSTEM_HEALTH_INFO_TABLE)
+
+    def cleanup_DB_events(self):
+        redisDB_event_count = 75
+        while redisDB_event_count >= 0:
+            #self._redis_chassis_db.delete(self.EVENT_ENTRY_KEY.format('{}'.format('*')))
+            self._redis_chassis_db.delete(self.EVENT_ENTRY_KEY.format('{}'.format(redisDB_event_count)))
+            helper_logger.log_notice('done deleting redisDB_event_count:{} entry from chassis redisDB'.format(redisDB_event_count))
+            redisDB_event_count = redisDB_event_count - 1
+
+    def __init__(self, id):
+        """
+        Initializer of faultPublisher microservice(process)
+        """
+        super(faultPublisher, self).__init__()
+
+        self.stop_event = threading.Event()
+        self.wait_time = self.FM_INTERVAL
+
+        self._thermal_zone = thermal_zone(cfg_filename=os.path.join(os.path.sep, 'opt', 'cisco', 'etc', 'thermal_zone.yaml'))
+        helper_logger.log_notice("thermal_zone: {}".format(self._thermal_zone))
+        self._interval = self._thermal_zone.interval
+        helper_logger.log_notice("interval: {}".format(self._interval))
+
+        # Select redis chassis server details, card type and slot id from chassis bootstrap details
+        bootstrap = self._thermal_zone.platform.bootstrap
+        helper_logger.log_notice("bootstrap: {}".format(bootstrap))
+
+        try:
+            self._card_type = bootstrap['card_type'].split(':')[0]
+            slot_id = bootstrap['slot_id']
+            # Distributed platforms host a specific chassis DB server on the RP
+            # Fixed platforms do not need this, and just use the default local host
+            if bootstrap['platform_type'] == 'distributed':
+                # Convert slot_id from pd to pi
+                self._pi_slot_id = bootstrap['chassis']['{}_pd_to_pi'.format(self._card_type.lower())][slot_id]
+                server = self.REDIS_DB_SERVERS['chassis']
+            else:
+                self._pi_slot_id = slot_id
+                server = self.REDIS_DB_SERVERS['local']
+        except KeyError as exc:
+            raise Exception('Insufficient platform bootstrap data for DB key: {}'.format(exc))
+        self._redis_chassis_db = redis.Redis(
+            host=server['host'],
+            port=server['port'],
+            decode_responses=True,
+            db=swsscommon.CHASSIS_STATE_DB)
+
+        # Fetch namespaces based on number of ASICs on the chassis or the board
+        # For instance, on a multi-asic chassis or board (RP,LC):
+        # - Detected namespaces: ['asic0', 'asic1', 'asic2']; num_asics 3; asic_id_list [0, 1, 2]
+        # For single-asic chassis or board,
+        # - Detected namespaces: ['']; num_asics 1; asic_id_list []
+        # Load the namespace details first from the database_global.json file
+        if multi_asic.is_multi_asic():
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
+        self.namespaces = multi_asic.get_front_end_namespaces()
+
+        # Initialize redisDB accessor method
+        self.access_redis_db()
+
+        #TODO : ensure if this intial cleanup is neededfault_action_policy_info 
+        # cleanup all 'events' i.e. EVENT_TABLE entries in chassis redisDB
+        self.cleanup_DB_events()
+
+    def stop_fault_publisher_algorithm(self):
+        '''
+        Stop fault publisher algorithm
+        '''
+        global redisDB_event_count
+        self._algorithm_running = False
+
+        # Delete the EVENT_TABLE contents from chassis_redis_db
+        # cleanup all 'events' i.e. EVENT_TABLE entries in chassis redisDB
+        helper_logger.log_notice('redisDB_event_count:{} at almost done stage'.format(redisDB_event_count))
+        self.cleanup_DB_events()
+
+    def stop(self):
+        '''
+        Stop fault publisher instance
+        '''
+        self.stop_fault_publisher_algorithm()
+        self._running = False
+
+    def deinitialize(self):
+        '''
+        Destroy fault publisher instance
+        '''
+        self.stop()
+        self._thermal_zone = None
+        self._redis_chassis_db = None
+        self._card_type = None
+        self._pi_slot_id = None
+
+        self._state_db = {}
+        self._temperature_info_tbl, self._system_health_info_tbl = {}, {}
+
+    def map_dict_fvm(self, s, d):
+        for k, v in s.items():
+                d[k] = v
+
+    def populate_events_to_redisDB(self, cnt):
+        # Populate redis (chassis) DB with fault event entries
+        # redis only stores string data, NoneType must be converted to 'None' string 
+        global redisDB_event_count
+        event_id = 50
+        while cnt > 0:
+            helper_logger.log_notice("Received event_id{}".format(event_id))
+            data = {'id': str(event_id), 'resource': 'fault-manager', 'text': 'device, component FM test', 'time-created': 'Dec52023', 'type-id': 'CUSTOM_EVPROFILE_CHANGE', 'severity': 'CRITICAL', 'action': 'reload'}
+            key = self.EVENT_ENTRY_KEY.format('{}'.format(event_id))
+            self._redis_chassis_db.hset(key, mapping=data)
+            redisDB_event_count += 1
+            event_id += 1
+            cnt = cnt - 1
+
+    def parse_rcvd_events(self, event_obj, cnt):
+        global rc_of_events_received
+        global redisDB_event_count
+
+        # subscribe to the events (from the event-pubisher framework)
+        # EVENTS_PUBLISHER_SOURCE: sonic-events-host, sonic-events-swss, sonic-event etc.
+        # are 'module' under their respective sonic-events-*yang or sonic-event.yang file.
+        # EVENTS_PUBLISHER_TAG: event-disk, if-state, EVENT etc. are 'container' under their 
+        # respective sonic-events-*yang or sonic-event.yang file.
+        sh = events_init_subscriber(False, RECEIVE_TIMEOUT, None)
+        helper_logger.log_notice("events_init_subscriber HANDLE: {}".format(sh))
+
+        # Sleep ASYNC_CONN_WAIT to ensure async connectivity is complete.
+        #time.sleep(ASYNC_CONN_WAIT)
+
+        #exp_params = dict(exp_event_params)
+
+        # Signal main thread that subscriber is ready to receive
+        event_obj.set()
+
+        evt_rcvd_cntr = 0
+        evt_rcvd_key_matched = 0
+
+        helper_logger.log_notice("event_receive counter init'ed to {}".format(evt_rcvd_cntr))
+
+        while True:
+            p = event_receive_op_t()
+            rc = event_receive(sh, p)
+
+            helper_logger.log_notice("event_receive()'s iteration:{} rc:{}".format(evt_rcvd_cntr, rc))
+            evt_rcvd_cntr = evt_rcvd_cntr + 1
+            if rc > 0:
+                helper_logger.log_notice("rc:{} denotes no event reveived within timeout! continue to look for next event".format(rc))
+                continue
+            elif rc != 0:
+                helper_logger.log_notice("rc:{} denotes failure! abort event_receive()".format(rc))
+                break
+
+            helper_logger.log_notice("Events publisher id - exp:{} vs rcvd:{}".format(EVENTS_PUBLISHER_ID, p.key))
+            if p.key != EVENTS_PUBLISHER_ID:
+                # received a different EVENTS_PUBLISHER_ID than expected
+                helper_logger.log_notice("Events publisher id mismatch! continue to look for next event")
+                continue
+            else:
+                # Events publisher identier (source and tag) matched
+                helper_logger.log_notice("Events publisher id MATCHED. proceed...")
+
+            # In order to process the received event, ensure event payload has mandatory fields in it
+            if "id" not in p.params or "type-id" not in p.params or "severity" not in p.params:
+                helper_logger.log_notice("key or mandatory fields missing in received event!")
+                continue
+            
+            rcvd_event_params = {}
+            self.map_dict_fvm(p.params, rcvd_event_params)
+
+            event_dict = {}
+            for k, v in exp_event_params.items():
+                if k in rcvd_event_params:
+                    # add the key,value to event_dict dictionary which would then be populated as 
+                    # EVENT_TABLE entry into redisDB via hset
+                    event_dict[k] = rcvd_event_params[k] 
+                    if (rcvd_event_params[k] != v):
+                        helper_logger.log_notice("key:{} value rcvd:{} != exp:{}".format(k, rcvd_event_params[k], v))
+                        rc = -1
+                    else:
+                        helper_logger.log_notice("key:{} value rcvd:{} MATCHES exp:{}".format(k, rcvd_event_params[k], v))
+                    if k == 'id':
+                        # add 'id' field as key to the EVENT_TABLE entry
+                        key = self.EVENT_ENTRY_KEY.format('{}'.format(int(rcvd_event_params[k])))
+                        helper_logger.log_notice(":event_dict KEY is:{} k:{} v:{}".format(key, k, rcvd_event_params[k]))
+                    helper_logger.log_notice("dict updated:{}".format(event_dict))
+                else:
+                    helper_logger.log_notice("key:{} is missing in rcvd_event_params".format(k))
+                    rc = -1
+
+            if (rc != 0):
+                helper_logger.log_notice("rc:{} denotes missing key or params mismatch for the rcvd event! ignore it".format(rc))
+
+            if p.missed_cnt != 0:
+                helper_logger.log_notice("Expect missed_cnt {} == 0 {}/{}".format(p.missed_cnt, evt_rcvd_cntr, cnt))
+                break
+
+            if p.publish_epoch_ms == 0:
+                helper_logger.log_notice("Expect publish_epoch_ms != 0 {}/{}".format(evt_rcvd_cntr, cnt))
+                break
+
+            # populate event_dict entry as EVENT_TABLE entry into redisDB
+            self._redis_chassis_db.hset(key, mapping=event_dict)
+            redisDB_event_count += 1
+            helper_logger.log_notice("In total, parsed {} event entries and populated them all to redisDB".format(redisDB_event_count))
+
+        if (evt_rcvd_cntr == cnt):
+            rc_of_events_received = 0
+        else:
+            helper_logger.log_notice("received events further parsing aborted {}/{}".format(evt_rcvd_cntr, cnt))
+
+        # Signal main thread that subscriber thread is done
+        event_obj.set()
+        events_deinit_subscriber(sh)
+
+        helper_logger.log_notice("Received {}/{}".format(evt_rcvd_cntr, cnt))
+
+    def receive_events(self, cnt):
+        # Initialising event subscriber object
+        event_sub = threading.Event()
+
+        # Start events' subscriber thread
+        thread_sub = threading.Thread(target=self.parse_rcvd_events, args=(event_sub, cnt))
+        thread_sub.start()
+        helper_logger.log_notice("parse_rcvd_events THREAD started")
+
+        # Wait until subscriber thread completes the async subscription
+        # Any event published prior to that could get lost!
+        # Subscriber would wait for ASYNC_CONN_WAIT. Wait additional 200ms
+        # for signal from test_receiver as ready.
+        event_sub.wait(ASYNC_CONN_WAIT + 0.2)
+        helper_logger.log_notice("WAITED {} time prior to event_sub clear".format(ASYNC_CONN_WAIT+0.2))
+        event_sub.clear()
+        helper_logger.log_notice("event_sub clear through")
+
+    def start_fault_publisher_algorithm(self, cnt):
+        '''
+        Start fault publisher algorithm
+        '''
+        self._algorithm_running = True
+        helper_logger.log_notice("Entered start_fault_publisher_algorithm...")
+        if self._algorithm_running and self._thermal_zone:
+            try:
+                helper_logger.log_notice("Initiating FP algorithm sub-tasks")
+                helper_logger.log_notice("Task1: Adding {} FP test events to chassis_server_db...".format(cnt))
+                self.populate_events_to_redisDB(cnt)
+                helper_logger.log_notice("Task2: Spawning parse_rcvd_events THREAD")
+                self.receive_events(cnt) 
+                helper_logger.log_notice("Task3: main THREAD returned to its NORMAL course")
+            except:
+                # TODO
+                self.stop_fault_publisher_algorithm()
+                raise
+
+    # primary logic to run FDR (Fault Detection & Reporting) as fault publishing service
+    def run(self, cnt):
+        """
+        Run main logic of this fault publisher service
+        :return:
+        """
+        try:
+            if self:
+                helper_logger.log_notice("FP start_fault_publisher_algorithm starting up...")
+                self.start_fault_publisher_algorithm(cnt)
+                return True
+        except Exception as e:
+            helper_logger.log_error('Caught exception while executing FM run_policy() - {}'.format(repr(e)))
+            return False
+
+def main():
+   
+    helper_logger.log_notice("FDR (fault publisher) service starting up...")
+
+    parser=argparse.ArgumentParser(
+                description="Check events published, receive and parse them")
+    parser.add_argument('-n', "--cnt", default=0, type=int,
+                help="count of events to receive")
+    args = parser.parse_args()
+
+    # Instantiate an object of class faultPublisher
+    fault_pub = faultPublisher(SYSLOG_IDENTIFIER)
+
+    if not fault_pub.run(args.cnt):
+        helper_logger.log_notice("Shutting down FDR service with exit code ...")
+        fault_pub.deinitialize()
+        helper_logger.log_notice("FDR service exiting")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

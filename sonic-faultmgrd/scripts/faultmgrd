@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import yaml
+import argparse
+import json
+
+import redis
+from cisco.pacific.thermal.thermal_zone import thermal_zone
+from sonic_py_common import daemon_base, multi_asic, logger
+from swsscommon import swsscommon
+
+import sys
+import syslog
+import time
+import threading
+from enum import Enum
+import subprocess
+import uuid
+
+#####################################
+## Host microservice fault_manager ##
+#####################################
+
+SYSLOG_IDENTIFIER = 'faultMgrd'
+helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+
+ASYNC_CONN_WAIT = 0.3
+# In case of no event from publisher(s), event subscriber's
+# max time (in ms) to wait before checking for the next event
+RECEIVE_TIMEOUT = 1000
+rc_of_events_received = -1
+redisDB_event_count = 0
+publish_cnt = 0
+json_data = {}
+
+#########################################################################
+# 1. Presently, events (faults) are published by sonic-events*.yang files
+#    source location: /usr/local/yang-models/
+# 2. In near future, there would be a single events SCHEMA yang file
+#    named: sonic-event.yang
+# 3. Subscribe to event-framework to recieve events
+# 4. Look for the events periodically; as and when they are received, 
+#    parse and process them; formulate an event (fault) entry locally
+# 5. Add the event data as an entry in the new EVENT_TABLE of chassis
+#    redis-DB
+# 6. Then fetch the event entry from this EVENT_TABLE, perform a lookup
+#    on event's id and severity in fault__policy info file (table)
+#    to find a match.
+# 7. Once a match is found, take the action(s) as specified by the match
+#########################################################################
+
+class faultManager():
+    # Interval to run this microservice
+    FM_INTERVAL = 15
+    # Policy file defining fault policies and their respective actions
+    FM_POLICY_FILE = '/usr/share/sonic/platform/fault_policy.json'
+    # microservice identifier
+
+    _thermal_zone = None
+    _interval = 15
+
+    _card_type = None
+    _pi_slot_id = None
+
+    _redis_chassis_db = None
+    _state_db = {}
+    _temperature_info_tbl = {}
+    _system_health_info_tbl = {}
+    TEMPERATURE_INFO_TABLE = "TEMPERATURE_INFO"
+    SYSTEM_HEALTH_INFO_TABLE = "SYSTEM_HEALTH_INFO"
+
+    EVENT_ENTRY_KEY = 'EVENT_TABLE|{}'
+
+    REDIS_DB_SERVERS = {
+        'local': {'host': 'localhost', 'port': 6379},
+        'chassis': {'host': 'redis_chassis.server', 'port': 6380}}
+
+    def access_redis_db(self):
+        '''
+        Connect to all required tables for all corresponding namespace databases
+        '''
+        for namespace in self.namespaces:
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            # Connet to redis STATE_DB to fetch data from its tables
+            self._state_db[asic_id] = daemon_base.db_connect('STATE_DB', namespace)
+            self._temperature_info_tbl[asic_id] = swsscommon.Table(self._state_db[asic_id], self.TEMPERATURE_INFO_TABLE)
+            self._system_health_info_tbl[asic_id] = swsscommon.Table(self._state_db[asic_id], self.SYSTEM_HEALTH_INFO_TABLE)
+
+    def determine_fault_action_policies(self):
+        global json_data
+        try:
+            # Load, parse fault_policy json file
+            helper_logger.log_notice("INIT data from JSON file: {}".format(json_data))
+            with open('./fault_policy.json', 'r') as f:
+                json_data = json.load(f)
+                helper_logger.log_notice("data from JSON file: {}".format(json_data))
+                helper_logger.log_notice("chassis name: {}".format(json_data['chassis']))
+                for entry in json_data['chassis']:
+                    helper_logger.log_notice("chassis entry: {}".format(entry))
+                    helper_logger.log_notice("each entry name: {}".format(entry['name']))
+                    helper_logger.log_notice("each entry faults list: {}".format(entry['faults']))
+                    for fault_entry in entry['faults']:
+                        helper_logger.log_notice("TRAVERSING through fault entry: {}".format(fault_entry))
+                        helper_logger.log_notice("TRAVERSING inside each fault entry TYPE : {}".format(fault_entry['type']))
+                        helper_logger.log_notice("TRAVERSING inside each fault entry SEVERITY: {}".format(fault_entry['severity']))
+                        helper_logger.log_notice("TRAVERSING inside each fault entry ACTION: {}".format(fault_entry['action']))
+
+        #TODO: correct this error name
+        except redis.exceptions.ConnectionError as exc:
+            helper_logger.log_notice('issue with opening JSON policy file or parsing its contents: {}'.format(exc))
+
+    def cleanup_DB_events(self):
+        redisDB_event_count = 75
+        while redisDB_event_count >= 0:
+            #self._redis_chassis_db.delete(self.EVENT_ENTRY_KEY.format('{}'.format('*')))
+            self._redis_chassis_db.delete(self.EVENT_ENTRY_KEY.format('{}'.format(redisDB_event_count)))
+            helper_logger.log_notice('done deleting redisDB_event_count:{} entry from chassis redisDB'.format(redisDB_event_count))
+            redisDB_event_count = redisDB_event_count - 1
+
+    def __init__(self, id):
+        """
+        Initializer of faultManager microservice(process)
+        """
+        super(faultManager, self).__init__()
+
+        self.stop_event = threading.Event()
+        self.wait_time = self.FM_INTERVAL
+
+        self._thermal_zone = thermal_zone(cfg_filename=os.path.join(os.path.sep, 'opt', 'cisco', 'etc', 'thermal_zone.yaml'))
+        helper_logger.log_notice("thermal_zone: {}".format(self._thermal_zone))
+        self._interval = self._thermal_zone.interval
+        helper_logger.log_notice("interval: {}".format(self._interval))
+
+        # Select redis chassis server details, card type and slot id from chassis bootstrap details
+        bootstrap = self._thermal_zone.platform.bootstrap
+        helper_logger.log_notice("bootstrap: {}".format(bootstrap))
+
+        try:
+            self._card_type = bootstrap['card_type'].split(':')[0]
+            slot_id = bootstrap['slot_id']
+            # Distributed platforms host a specific chassis DB server on the RP
+            # Fixed platforms do not need this, and just use the default local host
+            if bootstrap['platform_type'] == 'distributed':
+                # Convert slot_id from pd to pi
+                self._pi_slot_id = bootstrap['chassis']['{}_pd_to_pi'.format(self._card_type.lower())][slot_id]
+                server = self.REDIS_DB_SERVERS['chassis']
+            else:
+                self._pi_slot_id = slot_id
+                server = self.REDIS_DB_SERVERS['local']
+        except KeyError as exc:
+            raise Exception('Insufficient platform bootstrap data for DB key: {}'.format(exc))
+        self._redis_chassis_db = redis.Redis(
+            host=server['host'],
+            port=server['port'],
+            decode_responses=True,
+            db=swsscommon.CHASSIS_STATE_DB)
+
+        # Fetch namespaces based on number of ASICs on the chassis or the board
+        # For instance, on a multi-asic chassis or board (RP,LC):
+        # - Detected namespaces: ['asic0', 'asic1', 'asic2']; num_asics 3; asic_id_list [0, 1, 2]
+        # For single-asic chassis or board,
+        # - Detected namespaces: ['']; num_asics 1; asic_id_list []
+        # Load the namespace details first from the database_global.json file
+        if multi_asic.is_multi_asic():
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
+        self.namespaces = multi_asic.get_front_end_namespaces()
+
+        # Initialize redisDB accessor method
+        self.access_redis_db()
+
+        # Fault-Action policies
+        self.determine_fault_action_policies()
+
+        #TODO : ensure if this intial cleanup is neededfault_action_policy_info
+        # cleanup all 'events' i.e. EVENT_TABLE entries in chassis redisDB
+        self.cleanup_DB_events()
+
+    def stop_fault_manager_algorithm(self):
+        '''
+        Stop fault manager algorithm
+        '''
+        global redisDB_event_count
+        self._algorithm_running = False
+
+        # Delete the EVENT_TABLE contents from chassis_redis_db
+        # cleanup all 'events' i.e. EVENT_TABLE entries in chassis redisDB
+        helper_logger.log_notice('redisDB_event_count:{} at almost done stage'.format(redisDB_event_count))
+        self.cleanup_DB_events()
+
+    def stop(self):
+        '''
+        Stop fault manager instance
+        '''
+        self.stop_fault_manager_algorithm()
+        self._running = False
+
+    def deinitialize(self):
+        '''
+        Destroy fault manager instance
+        '''
+        self.stop()
+        self._thermal_zone = None
+        self._redis_chassis_db = None
+        self._card_type = None
+        self._pi_slot_id = None
+
+        self._state_db = {}
+        self._temperature_info_tbl, self._system_health_info_tbl = {}, {}
+
+    def map_dict_fvm(self, s, d):
+        for k, v in s.items():
+                d[k] = v
+
+    def map_db_event_to_action(self, json_data):
+        # processing events from redisDB table
+        '''
+        Retrieve events (faults) data from the redisDB and parse them against fault_policy JSON file
+        '''
+        try:
+            for key in self._redis_chassis_db.keys(pattern=self.EVENT_ENTRY_KEY.format('*')):
+                helper_logger.log_notice("KEY fetched: {} from EVENT_TABLE of chassis redisDB".format(key))
+                event_data = {}
+                evdata = {}
+                data = self._redis_chassis_db.hgetall(key)
+                evdata['id'] = int(data['id'])
+                evdata['resource'] = data['resource']
+                evdata['text'] = data['text']
+                evdata['time-created'] = data['time-created']
+                evdata['type-id'] = data['type-id']
+                evdata['severity'] = data['severity']
+                helper_logger.log_notice("Updating evdata[id]:{}".format(evdata['id']))
+                #helper_logger.log_notice("KEY evdata[id]:{}".format(key[evdata['id']]))
+                event_data[evdata['id']] = evdata
+                helper_logger.log_notice("Received event: {} from chassis redisDB EVENT_TABLE".format(event_data[evdata['id']]))
+                helper_logger.log_notice(" event_data DICT from chassis redisDB EVENT_TABLE: {}".format(event_data))
+
+                # Iterate through the fault_action_policy_info dictionary to find a match  for the received event (fault).
+                # This dictionary is derived from fault_action_policy_info json file.
+                for entry in json_data['chassis']:
+                    for fault_entry in entry['faults']:
+                        if ((fault_entry['type'] ==  evdata['type-id']) and (fault_entry['severity'] == evdata['severity'])):
+                            helper_logger.log_notice("KEYS MATCHED at fault_seq_id: {}".format(fault_entry))
+                            helper_logger.log_notice("Action to be taken: {}".format(fault_entry['action']))
+                            break
+        except redis.exceptions.ConnectionError as exc:
+            helper_logger.log_notice('state DB currently unavailable: {}'.format(exc))
+
+    def analyze_db_events(self, event_obj, cnt):
+        # get events from event redisDB, analyze them
+        # Map each event against each of the fault policy 
+        # once a match is found, take the needed action(s)
+
+        global json_data
+        iter = 0
+
+        while True:
+            # perform lookup for the received event(fault) match in fault_action_policy_info dictionary
+            # (which is derived from fault_policy.json file)
+            # key is EVENT_TABLE|<event id> from the 'key' above
+            iter += 1
+            helper_logger.log_notice('Map redisDB fault events to actions: Iter: {}'.format(iter))
+            self.map_db_event_to_action(json_data)
+            # wait sometime before scanning for the events again in eventDB
+            time.sleep(25)
+
+    def map_event_to_action(self, cnt):
+        # Initialising event consumer object
+        event_consume = threading.Event()
+
+        # Start events' consumer thread to consume events from eventDB
+        thread_consume = threading.Thread(target=self.analyze_db_events, args=(event_consume, cnt))
+        thread_consume.start()
+        helper_logger.log_notice("analyze_db_events THREAD started")
+        event_consume.wait(1)
+        event_consume.clear()
+        helper_logger.log_notice("event_consume clear through")
+
+    def start_fault_manager_algorithm(self, cnt):
+        '''
+        Start fault management algorithm
+        '''
+        self._algorithm_running = True
+        helper_logger.log_notice("Entered start_fault_manager_algorithm...")
+        if self._algorithm_running and self._thermal_zone:
+            try:
+                helper_logger.log_notice("Initiating FM algorithm sub-tasks")
+                helper_logger.log_notice("Task1: spawning map_event_to_action THREAD")
+                self.map_event_to_action(cnt)
+                helper_logger.log_notice("Task2: main THREAD returned to its NORMAL course")
+            except:
+                self.stop_fault_manager_algorithm()
+                raise
+
+    # primary logic to run fault management service
+    def run(self, cnt):
+        """
+        Run main logic of this fault management service
+        :return:
+        """
+        try:
+            if self:
+                helper_logger.log_notice("FM start_fault_manager_algorithm starting up...")
+                self.start_fault_manager_algorithm(cnt)
+                return True
+        except Exception as e:
+            helper_logger.log_error('Caught exception while executing FM run_policy() - {}'.format(repr(e)))
+            return False
+
+def main():
+   
+    helper_logger.log_notice("FM (Fault Management) service starting up...")
+
+    parser=argparse.ArgumentParser(
+                description="Check events published, receive and parse them")
+    parser.add_argument('-n', "--cnt", default=0, type=int,
+                help="count of events to receive")
+    args = parser.parse_args()
+
+    # Instantiate an object of class faultManager
+    fault_mgr = faultManager(SYSLOG_IDENTIFIER)
+
+    if not fault_mgr.run(args.cnt):
+        helper_logger.log_notice("Shutting down FM service with exit code ...")
+        fault_mgr.deinitialize()
+        helper_logger.log_notice("FM service exiting")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
