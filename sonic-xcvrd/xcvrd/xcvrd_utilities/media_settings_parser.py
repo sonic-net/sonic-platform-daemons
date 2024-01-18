@@ -243,6 +243,14 @@ def get_media_settings_value(physical_port, key):
                     return {}
             else:
                 return media_dict[key[VENDOR_KEY]]
+        if key[VENDOR_KEY].split('-')[0] in media_dict:
+            if is_si_per_speed_supported(media_dict[key[VENDOR_KEY].split('-')[0]]):
+                if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[key[VENDOR_KEY].split('-')[0]]:
+                    return media_dict[key[VENDOR_KEY].split('-')[0]][key[LANE_SPEED_KEY]]
+                else:
+                    return {}
+            else:
+                return media_dict[key[VENDOR_KEY].split('-')[0]]
         elif key[MEDIA_KEY] in media_dict:
             if is_si_per_speed_supported(media_dict[key[MEDIA_KEY]]):
                 if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[key[MEDIA_KEY]]:
