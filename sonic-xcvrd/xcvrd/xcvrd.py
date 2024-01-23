@@ -970,7 +970,9 @@ class CmisManagerTask(threading.Thread):
         """
         # see HOST_ELECTRICAL_INTERFACE of sff8024.py
         speed = 0
-        if '400G' in ifname:
+        if '800G' in ifname:
+            speed = 800000
+        elif '400G' in ifname:
             speed = 400000
         elif '200G' in ifname:
             speed = 200000
