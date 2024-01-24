@@ -826,6 +826,12 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
 
+    def get_cmis_dp_txturnon_duration_secs(self, api):
+        return api.get_datapath_tx_turnon_duration()/1000
+
+    def get_cmis_dp_txturnoff_duration_secs(self, api):
+        return api.get_datapath_tx_turnoff_duration()/1000
+
     def get_cmis_module_power_up_duration_secs(self, api):
         return api.get_module_pwr_up_duration()/1000
 
@@ -1492,6 +1498,9 @@ class CmisManagerTask(threading.Thread):
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                         api.tx_disable_channel(media_lanes_mask, False)
                         self.log_notice("{}: Turning ON tx power".format(lport))
+                        dpTxTurnOnDuration = self.get_cmis_dp_tx_turnon_duration_secs(api)
+                        self.log_notice("{}: DpTxTurnon duration {} secs".format(lport, dpTxTurnOnDuration))
+                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpTxTurnOnDuration)
                         self.port_dict[lport]['cmis_state'] = self.CMIS_STATE_DP_ACTIVATE
                     elif state == self.CMIS_STATE_DP_ACTIVATE:
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
