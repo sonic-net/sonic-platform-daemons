@@ -1,19 +1,31 @@
+import threading
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from sonic_py_common.interface import backplane_prefix, inband_prefix, recirc_prefix
 from swsscommon import swsscommon
 
 SELECT_TIMEOUT_MSECS = 1000
+DEFAULT_PORT_TBL_MAP = [
+    {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
+    {'STATE_DB': 'TRANSCEIVER_INFO'},
+    {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
+]
 
 
 class PortChangeEvent:
+    # thread_local_data will be used to hold class-scope thread-safe variables
+    # (i.e. global variable to the local thread), such as
+    # thread_local_data.PORT_EVENT. thread_local_data.PORT_EVENT dict will be
+    # initialized in subscribe_port_update_event, and used to store the latest
+    # port change event for each key, to avoid duplicate event processing.
+    thread_local_data = threading.local()
     PORT_ADD = 0
     PORT_REMOVE = 1
     PORT_SET = 2
     PORT_DEL = 3
-    PORT_EVENT = {}
 
-    def __init__(self, port_name, port_index, asic_id, event_type, port_dict=None):
+    def __init__(self, port_name, port_index, asic_id, event_type, port_dict=None,
+                 db_name=None, table_name=None):
         # Logical port name, e.g. Ethernet0
         self.port_name = port_name
         # Physical port index, equals to "index" field of PORT table in CONFIG_DB
@@ -24,6 +36,8 @@ class PortChangeEvent:
         self.event_type = event_type
         # Port config dict
         self.port_dict = port_dict
+        self.db_name = db_name
+        self.table_name = table_name
 
     def __str__(self):
         return '{} - name={} index={} asic_id={}'.format('Add' if self.event_type == self.PORT_ADD else 'Remove',
@@ -107,18 +121,16 @@ def subscribe_port_config_change(namespaces):
         sel.addSelectable(port_tbl)
     return sel, asic_context
 
-def subscribe_port_update_event(namespaces, logger):
+def subscribe_port_update_event(namespaces, logger, port_tbl_map=DEFAULT_PORT_TBL_MAP):
     """
        Subscribe to a particular DB's table and listen to only interested fields
        Format :
           { <DB name> : <Table name> , <field1>, <field2>, .. } where only field<n> update will be received
     """
-    port_tbl_map = [
-        {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
-        {'STATE_DB': 'TRANSCEIVER_INFO'},
-        {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
-    ]
-
+    # PORT_EVENT dict stores the latest port change event for each key, to avoid
+    # duplicate event processing. key in PORT_EVENT dict would be a combination
+    # of (key of redis DB entry, port_tbl.db_name, port_tbl.table_name)
+    PortChangeEvent.thread_local_data.PORT_EVENT = {}
     sel = swsscommon.Select()
     asic_context = {}
     for d in port_tbl_map:
@@ -145,14 +157,18 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
     """
     Select PORT update events, notify the observers upon a port update in CONFIG_DB
     or a XCVR insertion/removal in STATE_DB
+
+    Returns:
+        bool: True if there's at least one update event; False if there's no update event.
     """
+    has_event = False
     if not stop_event.is_set():
         (state, _) = sel.select(SELECT_TIMEOUT_MSECS)
         if state == swsscommon.Select.TIMEOUT:
-            return
+            return has_event
         if state != swsscommon.Select.OBJECT:
             logger.log_warning('sel.select() did not return swsscommon.Select.OBJECT')
-            return
+            return has_event
 
         port_event_cache = {}
         for port_tbl in asic_context.keys():
@@ -173,42 +189,54 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
                 fvp['op'] = op
                 fvp['FILTER'] = port_tbl.filter
                 # Soak duplicate events and consider only the last event
-                port_event_cache[key+port_tbl.db_name+port_tbl.table_name] = fvp
+                port_event_cache[(key, port_tbl.db_name, port_tbl.table_name)] = fvp
 
         # Now apply filter over soaked events
         for key, fvp in port_event_cache.items():
+            port_name = key[0]
+            db_name = key[1]
+            table_name = key[2]
             port_index = int(fvp['index'])
             port_change_event = None
-            diff = {}
             filter = fvp['FILTER']
             del fvp['FILTER']
             apply_filter_to_fvp(filter, fvp)
 
-            if key in PortChangeEvent.PORT_EVENT:
-               diff = dict(set(fvp.items()) - set(PortChangeEvent.PORT_EVENT[key].items()))
-               # Ignore duplicate events
-               if not diff:
-                  PortChangeEvent.PORT_EVENT[key] = fvp
-                  continue
-            PortChangeEvent.PORT_EVENT[key] = fvp
+            if key in PortChangeEvent.thread_local_data.PORT_EVENT:
+                # Compare current event with last event on this key, to see if
+                # there's really a change on the contents.
+                diff = set(fvp.items()) - set(PortChangeEvent.thread_local_data.PORT_EVENT[key].items())
+                # Ignore duplicate events
+                if not diff:
+                   PortChangeEvent.thread_local_data.PORT_EVENT[key] = fvp
+                   continue
+            # Update the latest event to the cache
+            PortChangeEvent.thread_local_data.PORT_EVENT[key] = fvp
 
             if fvp['op'] == swsscommon.SET_COMMAND:
                port_change_event = PortChangeEvent(fvp['key'],
                                                         port_index,
                                                         fvp['asic_id'],
                                                         PortChangeEvent.PORT_SET,
-                                                        fvp)
+                                                        fvp,
+                                                        db_name,
+                                                        table_name)
             elif fvp['op'] == swsscommon.DEL_COMMAND:
                port_change_event = PortChangeEvent(fvp['key'],
                                                         port_index,
                                                         fvp['asic_id'],
                                                         PortChangeEvent.PORT_DEL,
-                                                        fvp)
+                                                        fvp,
+                                                        db_name,
+                                                        table_name)
             # This is the final event considered for processing
             logger.log_warning("*** {} handle_port_update_event() fvp {}".format(
                 key, fvp))
             if port_change_event is not None:
-               port_change_event_handler(port_change_event)
+                has_event = True
+                port_change_event_handler(port_change_event)
+
+    return has_event
 
 
 def handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_change_event_handler):
