@@ -2185,7 +2185,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
         self.enable_sff_mgr = enable_sff_mgr
-        self.enable_sff_mgr = False
         self.namespaces = ['']
         self.threads = []
 
