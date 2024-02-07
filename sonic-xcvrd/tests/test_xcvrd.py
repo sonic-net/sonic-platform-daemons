@@ -508,7 +508,7 @@ class TestXcvrdScript(object):
         handle_port_update_event(sel, asic_context, stop_event,
                                   logger, port_mapping.handle_port_change_event)
 
-        # reset the side_effect to test the case of duplicate port update event
+        # reset side_effect to test the case of duplicate port update event
         mock_selectable.pop.side_effect = iter(side_effect_list)
         handle_port_update_event(sel, asic_context, stop_event,
                                   logger, port_mapping.handle_port_change_event)
