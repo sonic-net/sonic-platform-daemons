@@ -495,8 +495,8 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Select.select')
     def test_handle_port_update_event(self, mock_select, mock_sub_table):
         mock_selectable = MagicMock()
-        mock_selectable.pop = MagicMock(
-            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
+        side_effect_list = [('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)]
+        mock_selectable.pop = MagicMock(side_effect= side_effect_list)
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         logger = MagicMock()
@@ -505,6 +505,11 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
+        handle_port_update_event(sel, asic_context, stop_event,
+                                  logger, port_mapping.handle_port_change_event)
+
+        # reset the side_effect to test the case of duplicate port update event
+        mock_selectable.pop.side_effect = iter(side_effect_list)
         handle_port_update_event(sel, asic_context, stop_event,
                                   logger, port_mapping.handle_port_change_event)
 
