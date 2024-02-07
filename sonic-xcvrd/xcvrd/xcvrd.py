@@ -88,9 +88,6 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
-PLATFORM_PMON_CTRL_FILENAME = "pmon_daemon_control.json"
-ENABLE_SFF_MGR_FLAG_NAME = "enable_xcvrd_sff_mgr"
-
 g_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -2182,11 +2179,12 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False):
         super(DaemonXcvrd, self).__init__(log_identifier)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.enable_sff_mgr = enable_sff_mgr
         self.enable_sff_mgr = False
         self.namespaces = ['']
         self.threads = []
@@ -2306,28 +2304,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         del globals()['platform_chassis']
 
-    def load_feature_flags(self):
-        """
-        Load feature enable/skip flags from platform files.
-        """
-        platform_pmon_ctrl_file_path = self.get_platform_pmon_ctrl_file_path()
-        if platform_pmon_ctrl_file_path is not None:
-            # Load the JSON file
-            with open(platform_pmon_ctrl_file_path) as file:
-                data = json.load(file)
-                if ENABLE_SFF_MGR_FLAG_NAME in data:
-                    enable_sff_mgr = data[ENABLE_SFF_MGR_FLAG_NAME]
-                    self.enable_sff_mgr = isinstance(enable_sff_mgr, bool) and enable_sff_mgr
-
-    def get_platform_pmon_ctrl_file_path(self):
-        """
-        Get the platform PMON control file path.
-
-        Returns:
-            str: The platform PMON control file path.
-        """
-        return device_info.get_path_to_platform_dir() + '/' + PLATFORM_PMON_CTRL_FILENAME
-
     # Run daemon
 
     def run(self):
@@ -2336,7 +2312,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start daemon initialization sequence
         port_mapping_data = self.init()
 
-        self.load_feature_flags()
         # Start the SFF manager
         sff_manager = None
         if self.enable_sff_mgr:
@@ -2423,9 +2398,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
+    parser.add_argument('--enable_sff_mgr', action='store_true')
 
     args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr)
     xcvrd.run()
 
 

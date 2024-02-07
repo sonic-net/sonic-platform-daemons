@@ -2135,24 +2135,6 @@ class TestXcvrdScript(object):
             xcvrd.init()
             xcvrd.deinit()
 
-    @patch('builtins.open', new_callable=MagicMock)
-    @patch('xcvrd.xcvrd.DaemonXcvrd.get_platform_pmon_ctrl_file_path', return_value="dummy_path")
-    @patch('json.load', return_value={ENABLE_SFF_MGR_FLAG_NAME: True})
-    def test_DaemonXcvrd_load_feature_flags(self, mock_json_load, mock_get_path, mock_open):
-        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.load_feature_flags()
-        mock_get_path.assert_called_once()
-        mock_open.assert_called_once_with('dummy_path')
-        mock_json_load.assert_called_once()
-        assert xcvrd.enable_sff_mgr == True
-
-    @patch('sonic_py_common.device_info.get_path_to_platform_dir', MagicMock(return_value='/usr/share/sonic/platform'))
-    @patch('os.path.isfile', MagicMock(return_value=True))
-    def test_DaemonXcvrd_get_platform_pmon_ctrl_file_path(self):
-        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        assert xcvrd.get_platform_pmon_ctrl_file_path(
-        ) == '/usr/share/sonic/platform/pmon_daemon_control.json'
-
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
     while wait_time <= total_wait_time:
