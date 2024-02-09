@@ -23,8 +23,8 @@ from sonic_py_common import daemon_base, device_info
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('stormond', os.path.join(scripts_path, 'stormond'))
-import stormond
+load_source('storagemond', os.path.join(scripts_path, 'storagemond'))
+import storagemond
 
 
 daemon_base.db_connect = MagicMock()

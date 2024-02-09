@@ -1,8 +1,8 @@
 #
-# pcie_base.py
+# ssd_base.py
 #
 # Abstract base class for implementing platform-specific
-#  PCIE functionality for SONiC
+#  Storage information gathering functionality for SONiC
 #
 
 try:
@@ -13,7 +13,7 @@ except ImportError as e:
 #
 # ssd_base.py
 #
-# Base class for implementing common SSD health features
+# Base class for implementing common Storage Device health features
 #
 
 
