@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 """
-    stormond
-    SSD device monitoring daemon for SONiC
+    storagemond
+    Strage Monitoring device monitoring daemon for SONiC
 """
 
 import os
@@ -24,7 +24,7 @@ from swsscommon import swsscommon
 SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
                              for n in dir(signal) if n.startswith('SIG') and '_' not in n)
 
-SYSLOG_IDENTIFIER = "stormond"
+SYSLOG_IDENTIFIER = "storagemond"
 
 STORAGE_DEVICE_TABLE_NAME = "STORAGE_INFO"
 
@@ -122,7 +122,7 @@ class DaemonStorage(daemon_base.DaemonBase):
     # Get Static attributes and update the State DB, once
     def get_static_fields(self):
 
-        # Get relevant information about each SSD on the device
+        # Get relevant information about each Storage Device on the switch
         for storage_device in self.storage.devices:
             try:
                 if self.storage.devices[storage_device] is None:
@@ -142,7 +142,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                 self.log_info("Storage Device: {}, Device Model: {}, Serial: {}, FW: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"], static_kvp_dict["firmware"]))
                 self.read_static_fields[storage_device] = True
 
-                # update SSD Device Status to DB
+                # update Storage Device Status to DB
                 self.update_storage_info_status_db(storage_device, self.static_fields, static_kvp_dict)
                 self.updated_static_fields_statedb[storage_device] = True
 
@@ -171,7 +171,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                     .format(storage_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["io_reads"], \
                             dynamic_kvp_dict["io_writes"], dynamic_kvp_dict["reserved_blocks"]))
 
-                # update SSD Device Status to DB
+                # update Storage Device Status to DB
                 self.update_storage_info_status_db(storage_device, self.dynamic_fields, dynamic_kvp_dict)
 
             except Exception as ex:
