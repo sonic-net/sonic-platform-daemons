@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='sonic-stormond',
     version='1.0',
-    description='SSD status daemon for SONiC',
+    description='Storage Device status daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
@@ -11,7 +11,7 @@ setup(
     maintainer='Ashwin Srinivasan',
     maintainer_email='assrinivasan@microsoft.com',
     scripts=[
-        'scripts/stormond',
+        'scripts/storagemond',
     ],
     setup_requires=[
         'pytest-runner',
@@ -38,6 +38,6 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC ssd Ssd SSD ssdmon',
+    keywords='sonic SONiC ssd Ssd SSD ssdmond storage stormond storagemond',
     test_suite='setup.get_test_suite'
 )
