@@ -27,6 +27,7 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities import port_mapping
+    from .xcvrd_utilities.port_mapping import PortChangeObserver
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -1364,14 +1365,13 @@ class CmisManagerTask(threading.Thread):
             self.wait_for_port_config_done(namespace)
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
-        sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
+        port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
+                                                  self.task_stopping_event,
+                                                  self.on_port_update_event)
+
         while not self.task_stopping_event.is_set():
             # Handle port change event from main thread
-            port_mapping.handle_port_update_event(sel,
-                                                  asic_context,
-                                                  self.task_stopping_event,
-                                                  helper_logger,
-                                                  self.on_port_update_event)
+            port_change_observer.handle_port_update_event()
 
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():

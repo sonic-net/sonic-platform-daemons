@@ -494,24 +494,154 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
     def test_handle_port_update_event(self, mock_select, mock_sub_table):
+        class DummyPortChangeEventHandler:
+            def __init__(self):
+                self.port_event_cache = []
+
+            def handle_port_change_event(self, port_event):
+                self.port_event_cache.append(port_event)
+
+        CONFIG_DB = 'CONFIG_DB'
+        PORT_TABLE = swsscommon.CFG_PORT_TABLE_NAME
+        port_change_event_handler = DummyPortChangeEventHandler()
+        expected_processed_event_count = 0
+
         mock_selectable = MagicMock()
-        side_effect_list = [('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)]
-        mock_selectable.pop = MagicMock(side_effect= side_effect_list)
+        side_effect_list = [
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '40000'), ('fec', 'rs'))),
+            (None, None, None)
+        ]
+        mock_selectable.pop = MagicMock(side_effect=side_effect_list)
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         logger = MagicMock()
-
-        sel, asic_context = subscribe_port_update_event(DEFAULT_NAMESPACE, logger)
-        port_mapping = PortMapping()
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
-        handle_port_update_event(sel, asic_context, stop_event,
-                                  logger, port_mapping.handle_port_change_event)
 
-        # reset side_effect to test the case of duplicate port update event
+        observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event,
+                                     port_change_event_handler.handle_port_change_event,
+                                     [{CONFIG_DB: PORT_TABLE}])
+
+        # Test basic single update event without filtering:
+        assert observer.handle_port_update_event()
+        expected_processed_event_count +=1
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        # 'fec' should not be filtered out
+        expected_cache = {
+            ('Ethernet0', CONFIG_DB, PORT_TABLE): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'op': swsscommon.SET_COMMAND,
+                'asic_id': 0,
+                'speed': '40000',
+                'fec': 'rs'
+            }
+        }
+        assert observer.port_event_cache == expected_cache
+
+        observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event,
+                                     port_change_event_handler.handle_port_change_event,
+                                     [{CONFIG_DB: PORT_TABLE, 'FILTER': ['speed']}])
         mock_selectable.pop.side_effect = iter(side_effect_list)
-        handle_port_update_event(sel, asic_context, stop_event,
-                                  logger, port_mapping.handle_port_change_event)
+
+        # Test basic single update event with filtering:
+        assert not observer.port_event_cache
+        assert observer.handle_port_update_event()
+        expected_processed_event_count +=1
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        # 'fec' should be filtered out
+        expected_cache = {
+            ('Ethernet0', CONFIG_DB, PORT_TABLE): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'op': swsscommon.SET_COMMAND,
+                'asic_id': 0,
+                'speed': '40000',
+            }
+        }
+        assert observer.port_event_cache == expected_cache
+        assert port_change_event_handler.port_event_cache[-1].port_name == 'Ethernet0'
+        assert port_change_event_handler.port_event_cache[-1].event_type == PortChangeEvent.PORT_SET
+        assert port_change_event_handler.port_event_cache[-1].port_index == 1
+        assert port_change_event_handler.port_event_cache[-1].asic_id == 0
+        assert port_change_event_handler.port_event_cache[-1].db_name == CONFIG_DB
+        assert port_change_event_handler.port_event_cache[-1].table_name == PORT_TABLE
+        assert port_change_event_handler.port_event_cache[-1].port_dict == \
+            expected_cache[('Ethernet0', CONFIG_DB, PORT_TABLE)]
+
+        # Test duplicate update event on the same key:
+        mock_selectable.pop.side_effect = iter(side_effect_list)
+        # return False when no new event is processed
+        assert not observer.handle_port_update_event()
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        assert observer.port_event_cache == expected_cache
+
+        # Test soaking multiple different update events on the same key:
+        side_effect_list = [
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '100000'))),
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '200000'))),
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '400000'))),
+            (None, None, None)
+        ]
+        mock_selectable.pop.side_effect = iter(side_effect_list)
+        assert observer.handle_port_update_event()
+        # only the last event should be processed
+        expected_processed_event_count +=1
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        expected_cache = {
+            ('Ethernet0', CONFIG_DB, PORT_TABLE): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'op': swsscommon.SET_COMMAND,
+                'asic_id': 0,
+                'speed': '400000',
+            }
+        }
+        assert observer.port_event_cache == expected_cache
+
+        # Test select timeout case:
+        mock_select.return_value = (swsscommon.Select.TIMEOUT, None)
+        assert not observer.handle_port_update_event()
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        mock_select.return_value = (swsscommon.Select.OBJECT, None)
+
+        # Test update event for DEL case:
+        side_effect_list = [
+            ('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), ('speed', '400000'))),
+            (None, None, None)
+        ]
+        mock_selectable.pop.side_effect = iter(side_effect_list)
+        assert observer.handle_port_update_event()
+        expected_processed_event_count +=1
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        expected_cache = {
+            ('Ethernet0', CONFIG_DB, PORT_TABLE): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'op': swsscommon.DEL_COMMAND,
+                'asic_id': 0,
+                'speed': '400000',
+            }
+        }
+        assert observer.port_event_cache == expected_cache
+
+        # Test update event if it's a subset of cached event:
+        side_effect_list = [
+            ('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )),
+            (None, None, None)
+        ]
+        mock_selectable.pop.side_effect = iter(side_effect_list)
+        assert not observer.handle_port_update_event()
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
+        expected_cache = {
+            ('Ethernet0', CONFIG_DB, PORT_TABLE): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'op': swsscommon.DEL_COMMAND,
+                'asic_id': 0,
+            }
+        }
+        assert observer.port_event_cache == expected_cache
 
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
@@ -649,8 +779,7 @@ class TestXcvrdScript(object):
         assert task.get_configured_tx_power_from_db('Ethernet0') == -10
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
+    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_CmisManagerTask_task_run_stop(self, mock_chassis):
         mock_object = MagicMock()
         mock_object.get_presence = MagicMock(return_value=True)
@@ -770,8 +899,7 @@ class TestXcvrdScript(object):
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event', MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock())
+    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
     def test_CmisManagerTask_task_worker(self, mock_chassis):
