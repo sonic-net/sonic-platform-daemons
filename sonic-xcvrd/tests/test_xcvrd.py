@@ -1,6 +1,8 @@
 #from unittest.mock import DEFAULT
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
+from xcvrd.xcvrd_utilities.media_settings_parser import *
+from xcvrd.xcvrd_utilities.optics_si_parser import *
 from xcvrd.xcvrd import *
 import pytest
 import copy
@@ -40,6 +42,97 @@ with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
 media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
+
+with open(os.path.join(test_path, 'optics_si_settings.json'), 'r') as fn:
+    optics_si_settings_dict = json.load(fn)
+port_optics_si_settings = {}
+optics_si_settings_with_comma_dict = copy.deepcopy(optics_si_settings_dict)
+global_optics_si_settings = optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+port_optics_si_settings['PORT_MEDIA_SETTINGS'] = optics_si_settings_with_comma_dict.pop('PORT_MEDIA_SETTINGS')
+optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['0-5,6,7-20,21-31'] = global_optics_si_settings
+
+with open(os.path.join(test_path, 'media_settings_extended_format.json'), 'r') as f:
+    media_settings_extended_format_dict = json.load(f)
+
+
+# Creating instances of media_settings.json for testing purposes
+# Each instance represents a different possible structure for media_settings.json.
+media_settings_global_range_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+
+media_settings_global_range_media_key_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_range_media_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-sm_media_interface'] = media_settings_global_range_media_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-sm_media_interface'].pop('speed:400GAUI-8')
+media_settings_global_range_media_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-active_cable_media_interface'] = media_settings_global_range_media_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP-DD-active_cable_media_interface'].pop('speed:100GAUI-2')
+
+media_settings_global_range_vendor_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_range_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-sm_media_interface')
+media_settings_global_range_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-5678'] = media_settings_global_range_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_global_range_vendor_key_si = copy.deepcopy(media_settings_global_range_vendor_key_lane_speed_si)
+media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'].pop('speed:400GAUI-8')
+media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-5678'] = media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-5678'].pop('speed:100GAUI-2')
+
+media_settings_global_range_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-sm_media_interface')
+media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_global_range_generic_vendor_key_si = copy.deepcopy(media_settings_global_range_generic_vendor_key_lane_speed_si)
+media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'].pop('speed:400GAUI-8')
+media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'].pop('speed:100GAUI-2')
+
+media_settings_global_list_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+new_key = str(','.join([str(i) for i in range(32)]))
+media_settings_global_list_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'][new_key] = media_settings_global_list_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_global_list_media_key_si = copy.deepcopy(media_settings_global_range_media_key_si)
+media_settings_global_list_media_key_si['GLOBAL_MEDIA_SETTINGS'][new_key] = media_settings_global_list_media_key_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_global_list_of_ranges_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_list_of_ranges_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-15,16-31'] = media_settings_global_list_of_ranges_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_global_list_of_ranges_media_key_si = copy.deepcopy(media_settings_global_range_media_key_si)
+media_settings_global_list_of_ranges_media_key_si['GLOBAL_MEDIA_SETTINGS']['0-15,16-31'] = media_settings_global_list_of_ranges_media_key_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section['GLOBAL_MEDIA_SETTINGS']['0-31']['Default'] = {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}
+
+media_settings_port_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_port_media_key_lane_speed_si['PORT_MEDIA_SETTINGS'] = {'7': media_settings_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')}
+del media_settings_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']
+
+media_settings_port_media_key_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"].pop("speed:400GAUI-8")
+media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"].pop("speed:100GAUI-2")
+
+media_settings_port_vendor_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_port_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-sm_media_interface')
+media_settings_port_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-5678'] = media_settings_port_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_port_vendor_key_si = copy.deepcopy(media_settings_port_vendor_key_lane_speed_si)
+media_settings_port_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'].pop('speed:400GAUI-8')
+media_settings_port_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-5678'] = media_settings_port_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-5678'].pop('speed:100GAUI-2')
+
+media_settings_port_media_key_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"].pop("speed:400GAUI-8")
+media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"].pop("speed:100GAUI-2")
+
+media_settings_port_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-sm_media_interface')
+media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_port_generic_vendor_key_si = copy.deepcopy(media_settings_port_generic_vendor_key_lane_speed_si)
+media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'].pop('speed:400GAUI-8')
+media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'] = media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'].pop('speed:100GAUI-2')
+
+media_settings_global_default_port_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
+port_media_settings_data = {'7': media_settings_global_default_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')}
+media_settings_global_default_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'Default': {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}}}
+media_settings_global_default_port_media_key_lane_speed_si['PORT_MEDIA_SETTINGS'] = port_media_settings_data
+
+media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}
+
+media_settings_empty = {}
+
 
 class TestXcvrdThreadException(object):
 
@@ -131,6 +224,20 @@ class TestXcvrdThreadException(object):
         assert mock_os_kill.call_count == 1
 
 class TestXcvrdScript(object):
+
+    from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CCmisApi
+    from sonic_platform_base.sonic_xcvr.api.public.sff8636 import Sff8636Api
+    from sonic_platform_base.sonic_xcvr.api.public.sff8436 import Sff8436Api
+    @pytest.mark.parametrize("mock_class, expected_return_value", [
+        (CmisApi, True),
+        (CCmisApi, True),
+        (Sff8636Api, False),
+        (Sff8436Api, False)
+    ])
+    def test_is_cmis_api(self, mock_class, expected_return_value):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.__class__ = mock_class
+        assert is_cmis_api(mock_xcvr_api) == expected_return_value
 
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type')
     @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -419,7 +526,19 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
-    def test_get_media_settings_key(self):
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', None)))
+    def test_load_media_settings_missing_file(self):
+        assert media_settings_parser.load_media_settings() == {}
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd.is_cmis_api')
+    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
+        mock_sfp = MagicMock()
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        mock_api = MagicMock()
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
+        mock_is_cmis_api.return_value = False
+
         xcvr_info_dict = {
             0: {
                 'manufacturer': 'Molex',
@@ -432,27 +551,169 @@ class TestXcvrdScript(object):
         }
 
         # Test a good 'specification_compliance' value
-        result = get_media_settings_key(0, xcvr_info_dict)
-        assert result == ['MOLEX-1064141421', 'QSFP+-10GBase-SR-255M']
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': None }
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
-        result = get_media_settings_key(0, xcvr_info_dict)
-        assert result == ['MOLEX-1064141421', 'QSFP+-*']
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': None }
         # TODO: Ensure that error message was logged
+
+        mock_is_cmis_api.return_value = True
+        xcvr_info_dict = {
+            0: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "sm_media_interface",
+                'type_abbrv_name': 'QSFP-DD'
+            }
+        }
+
+        mock_app_adv_value ={
+        1: {'host_electrical_interface_id': '400G CR8', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 8, 'host_lane_count': 8, 'host_lane_assignment_options': 1},
+        2: {'host_electrical_interface_id': '200GBASE-CR4 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        3: {'host_electrical_interface_id': '100GBASE-CR2 (Clause 136)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 2, 'host_lane_count': 2, 'host_lane_assignment_options': 85},
+        4: {'host_electrical_interface_id': '100GBASE-CR4 (Clause 92)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        5: {'host_electrical_interface_id': '50GBASE-CR (Clause 126)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255},
+        6: {'host_electrical_interface_id': '40GBASE-CR4 (Clause 85)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 4, 'host_lane_count': 4, 'host_lane_assignment_options': 17},
+        7: {'host_electrical_interface_id': '25GBASE-CR CA-N (Clause 110)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255},
+        8: {'host_electrical_interface_id': '1000BASE -CX(Clause 39)', 'module_media_interface_id': 'Copper cable', 'media_lane_count': 1, 'host_lane_count': 1, 'host_lane_assignment_options': 255}
+        }
+
+        mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2' }
+
+    @pytest.mark.parametrize("data_found, data, expected", [
+        (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('400000', 8)),
+        (True, [('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('0', 0)),
+        (True, [('speed', '400000'), ('mtu', '9100')], ('0', 0)),
+        (False, [], ('0', 0))
+    ])
+    def test_get_speed_and_lane_count(self, data_found, data, expected):
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.get = MagicMock(return_value=(data_found, data))
+        port = MagicMock()
+
+        assert media_settings_parser.get_speed_and_lane_count(port, cfg_port_tbl) == expected
+
+    def test_is_si_per_speed_supported(self):
+        media_dict = {
+            'speed:400G-GAUI-4':{
+            'main':{
+                    'lane0': '0x00000000',
+                    'lane1': '0x00000000',
+                    'lane2': '0x00000000',
+                    'lane3': '0x00000000',
+                    'lane4': '0x00000000',
+                    'lane5': '0x00000000',
+                    'lane6': '0x00000000',
+                    'lane7': '0x00000000'
+                }
+            },
+            'speed:400GAUI-8':{
+                'post1':{
+                    'lane0': '0x00000000',
+                    'lane1': '0x00000000',
+                    'lane2': '0x00000000',
+                    'lane3': '0x00000000',
+                    'lane4': '0x00000000',
+                    'lane5': '0x00000000',
+                    'lane6': '0x00000000',
+                    'lane7': '0x00000000'
+                }
+            }
+        }
+        result = is_si_per_speed_supported(media_dict)
+        assert result == True
+
+        media_dict = {
+            'main':{
+                'lane0': '0x00000000',
+                'lane1': '0x00000000',
+                'lane2': '0x00000000',
+                'lane3': '0x00000000',
+                'lane4': '0x00000000',
+                'lane5': '0x00000000',
+                'lane6': '0x00000000',
+                'lane7': '0x00000000'
+            },
+            'post1':{
+                'lane0': '0x00000000',
+                'lane1': '0x00000000',
+                'lane2': '0x00000000',
+                'lane3': '0x00000000',
+                'lane4': '0x00000000',
+                'lane5': '0x00000000',
+                'lane6': '0x00000000',
+                'lane7': '0x00000000'
+            }
+        }
+        result = is_si_per_speed_supported(media_dict)
+        assert result == False
+
+    @pytest.mark.parametrize("media_settings_dict, port, key, expected", [
+    (media_settings_global_range_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_global_range_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_global_range_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_global_list_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_list_of_ranges_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_list_of_ranges_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_global_default_port_media_key_lane_speed_si, 6, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}),
+    (media_settings_port_vendor_key_lane_speed_si, -1, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {}),
+    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_port_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
+    (media_settings_port_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
+    (media_settings_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}),
+    (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}),
+    (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}),
+    (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {})
+    ])
+    def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
+            result = media_settings_parser.get_media_settings_value(port, key)
+            assert result == expected
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock(return_value={ 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting(self):
         self._check_notify_media_setting(1)
 
     @patch('xcvrd.xcvrd.g_dict', media_settings_with_comma_dict)
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock(return_value={ 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count', MagicMock(return_value=(100000, 2)))
     def test_notify_media_setting_with_comma(self):
         self._check_notify_media_setting(1)
         self._check_notify_media_setting(6)
 
     def _check_notify_media_setting(self, index):
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        cfg_port_tbl = MagicMock()
+        mock_cfg_table = xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+
         logical_port_name = 'Ethernet0'
         xcvr_info_dict = {
             index: {
@@ -468,7 +729,40 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, port_mapping)
+        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, app_port_tbl, mock_cfg_table, port_mapping)
+
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting(self):
+        self._check_fetch_optics_si_setting(1)
+
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_with_comma_dict)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting_with_comma(self):
+        self._check_fetch_optics_si_setting(1)
+        self._check_fetch_optics_si_setting(6)
+
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', port_optics_si_settings)
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_fetch_optics_si_setting_with_port(self):
+       self._check_fetch_optics_si_setting(1)
+
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.get_module_vendor_key', MagicMock(return_value=('CREDO-CAC82X321M','CREDO')))
+    def _check_fetch_optics_si_setting(self, index):
+        port = 1
+        lane_speed = 100
+        mock_sfp = MagicMock()
+        optics_si_parser.fetch_optics_si_setting(port, lane_speed, mock_sfp)
+
+    def test_get_module_vendor_key(self):
+        mock_sfp = MagicMock()
+        mock_xcvr_api = MagicMock()
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='Credo ')
+        mock_xcvr_api.get_model = MagicMock(return_value='CAC82X321HW')
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result == ('CREDO-CAC82X321HW','CREDO')
 
     def test_detect_port_in_error_status(self):
         class MockTable:
@@ -852,6 +1146,28 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+    @pytest.mark.parametrize("ifname, expected", [
+        ('800G L C2M', 800000),
+        ('400G CR8', 400000),
+        ('200GBASE-CR4 (Clause 136)', 200000),
+        ('100GBASE-CR2 (Clause 136)', 100000),
+        ('CAUI-4 C2M (Annex 83E)', 100000),
+        ('50GBASE-CR', 50000),
+        ('LAUI-2 C2M (Annex 135C)', 50000),
+        ('40GBASE-CR4 (Clause 85)', 40000),
+        ('XLAUI C2M (Annex 83B)', 40000),
+        ('XLPPI (Annex 86A)', 40000),
+        ('25GBASE-CR CA-N (Clause 110)', 25000),
+        ('10GBASE-CX4 (Clause 54)', 10000),
+        ('SFI (SFF-8431)', 10000),
+        ('XFI (SFF INF-8071i)', 10000),
+        ('1000BASE -CX(Clause 39)', 1000),
+        ('Unknown Interface', 0)
+    ])
+    def test_get_interface_speed(self, ifname, expected):
+        assert get_interface_speed(ifname) == expected
+
+    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     @pytest.mark.parametrize("host_lane_count, speed, subport, expected", [
         (8, 400000, 0, 0xFF),
         (4, 100000, 1, 0xF),
@@ -895,13 +1211,99 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
 
-        appl = task.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
+        appl = get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
+
+
+    def test_CmisManagerTask_post_port_active_apsel_to_db(self):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(side_effect=[
+            {
+             'ActiveAppSelLane1': 1,
+             'ActiveAppSelLane2': 1,
+             'ActiveAppSelLane3': 1,
+             'ActiveAppSelLane4': 1,
+             'ActiveAppSelLane5': 1,
+             'ActiveAppSelLane6': 1,
+             'ActiveAppSelLane7': 1,
+             'ActiveAppSelLane8': 1
+            },
+            {
+             'ActiveAppSelLane1': 2,
+             'ActiveAppSelLane2': 2,
+             'ActiveAppSelLane3': 2,
+             'ActiveAppSelLane4': 2,
+             'ActiveAppSelLane5': 2,
+             'ActiveAppSelLane6': 2,
+             'ActiveAppSelLane7': 2,
+             'ActiveAppSelLane8': 2
+            },
+            NotImplementedError
+        ])
+        mock_xcvr_api.get_application_advertisement = MagicMock(side_effect=[
+            {
+                1: {
+                    'media_lane_count': 4,
+                    'host_lane_count': 8
+                }
+            },
+            {
+                2: {
+                    'media_lane_count': 1,
+                    'host_lane_count': 2
+                }
+            }
+        ])
+
+        int_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+
+        # case: partial lanes update
+        lport = "Ethernet0"
+        host_lanes_mask = 0xc
+        ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == ["Ethernet0"]
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+                                                        'active_apsel_hostlane4': '1',
+                                                        'host_lane_count': '8',
+                                                        'media_lane_count': '4'}
+        # case: full lanes update
+        lport = "Ethernet8"
+        host_lanes_mask = 0xff
+        task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8"]
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+                                                        'active_apsel_hostlane4': '1',
+                                                        'host_lane_count': '8',
+                                                        'media_lane_count': '4'}
+        assert dict(int_tbl.mock_dict["Ethernet8"]) == {'active_apsel_hostlane1': '2',
+                                                        'active_apsel_hostlane2': '2',
+                                                        'active_apsel_hostlane3': '2',
+                                                        'active_apsel_hostlane4': '2',
+                                                        'active_apsel_hostlane5': '2',
+                                                        'active_apsel_hostlane6': '2',
+                                                        'active_apsel_hostlane7': '2',
+                                                        'active_apsel_hostlane8': '2',
+                                                        'host_lane_count': '2',
+                                                        'media_lane_count': '1'}
+
+        # case: NotImplementedError
+        int_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)     # a new empty table
+        lport = "Ethernet0"
+        host_lanes_mask = 0xf
+        ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
+        assert int_tbl.getKeys() == []
+
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
     def test_CmisManagerTask_task_worker(self, mock_chassis):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
@@ -1176,6 +1578,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     def test_SfpStateUpdateTask_retry_eeprom_reading(self, mock_post_sfp_info):
         mock_table = MagicMock()
         mock_table.get = MagicMock(return_value=(False, None))
@@ -1236,7 +1639,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
     @patch('xcvrd.xcvrd.del_port_sfp_dom_info_from_db')
-    @patch('xcvrd.xcvrd.notify_media_setting')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
     @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
@@ -1332,7 +1735,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
     @patch('xcvrd.xcvrd._wrapper_get_presence')
-    @patch('xcvrd.xcvrd.notify_media_setting')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
     @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
@@ -1605,7 +2008,7 @@ class TestXcvrdScript(object):
 
     def test_get_media_val_str_from_dict(self):
         media_dict = {'lane0': '1', 'lane1': '2'}
-        media_str = get_media_val_str_from_dict(media_dict)
+        media_str = media_settings_parser.get_media_val_str_from_dict(media_dict)
         assert media_str == '1,2'
 
     def test_get_media_val_str(self):
