@@ -32,8 +32,6 @@ STORMOND_MAIN_THREAD_SLEEP_SECS = 3600 #one hour
 
 STORAGEUTIL_LOAD_ERROR = 127
 
-self.storage.devices = None
-
 log = logger.Logger(SYSLOG_IDENTIFIER)
 
 exit_code = 0
@@ -95,7 +93,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.storage = StorageDevices(log_identifier)
 
         self.static_fields = ["device_model", "serial", "firmware"]
-        self.dynamic_fields = ["health", "temperature", "io_reads", "io_writes", "reserved_blocks"]
+        self.dynamic_fields = ["health", "temperature", "fs_io_reads", "fs_io_writes", "disk_io_reads", "disk_io_writes", "reserved_blocks"]
 
         self.read_static_fields = dict((disk, False) for disk in self.storage.devices)
         self.updated_static_fields_statedb = dict((disk, False) for disk in self.storage.devices)
@@ -115,7 +113,7 @@ class DaemonStorage(daemon_base.DaemonBase):
     def update_storage_info_status_db(self, disk_device, disk_fields, kvp_dict):
 
         for field in disk_fields:
-            fvp = swsscommon.FieldValuePairs([(field, kvp_dict[field])])
+            fvp = swsscommon.FieldValuePairs([(field, str(kvp_dict[field]))])
             self.device_table.set(disk_device, fvp)
 
 
@@ -163,13 +161,16 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 dynamic_kvp_dict["health"] = self.storage.devices[storage_device].get_health()
                 dynamic_kvp_dict["temperature"] = self.storage.devices[storage_device].get_temperature()
-                dynamic_kvp_dict["io_reads"] = self.storage.devices[storage_device].get_io_reads()
-                dynamic_kvp_dict["io_writes"] = self.storage.devices[storage_device].get_io_writes()
+                dynamic_kvp_dict["fs_io_reads"] = self.storage.devices[storage_device].get_fs_io_reads()
+                dynamic_kvp_dict["fs_io_writes"] = self.storage.devices[storage_device].get_fs_io_writes()
+                dynamic_kvp_dict["disk_io_reads"] = self.storage.devices[storage_device].get_disk_io_reads()
+                dynamic_kvp_dict["disk_io_writes"] = self.storage.devices[storage_device].get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = self.storage.devices[storage_device].get_reserved_blocks()
 
-                self.log_info("Storage Device: {}, health: {}%, Temp: {}C, IO Reads: {}, IO Writes: {}, Reserved Blocks: {}" \
-                    .format(storage_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["io_reads"], \
-                            dynamic_kvp_dict["io_writes"], dynamic_kvp_dict["reserved_blocks"]))
+                self.log_info("Storage Device: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
+                storage_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["fs_io_reads"],dynamic_kvp_dict["fs_io_writes"],))
+                self.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
+                dynamic_kvp_dict["reserved_blocks"]))
 
                 # update Storage Device Status to DB
                 self.update_storage_info_status_db(storage_device, self.dynamic_fields, dynamic_kvp_dict)
@@ -215,12 +216,12 @@ class DaemonStorage(daemon_base.DaemonBase):
 def main():
     stormon = DaemonStorage(SYSLOG_IDENTIFIER)
 
-    stormon.log_info("Starting up...")
+    stormon.log_info("Starting Storage Monitoring Daemon")
 
     while stormon.run():
         pass
 
-    stormon.log_info("Shutting down...")
+    stormon.log_info("Shutting down Storage Monitoring Daemon")
 
     return exit_code
 
