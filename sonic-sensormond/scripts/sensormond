@@ -504,7 +504,7 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
             self.wait_time = self.INITIAL_INTERVAL
 
         if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
-            self.logger.log_warning('Sensors update took a long time : '
+            self.log_warning('Sensors update took a long time : '
                                     '{} seconds'.format(elapsed))
 
         return True
