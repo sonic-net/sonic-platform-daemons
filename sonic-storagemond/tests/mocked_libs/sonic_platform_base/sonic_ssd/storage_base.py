@@ -1,5 +1,5 @@
 #
-# ssd_base.py
+# storage_base.py
 #
 # Abstract base class for implementing platform-specific
 #  Storage information gathering functionality for SONiC
@@ -11,7 +11,7 @@ except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
 #
-# ssd_base.py
+# storage_base.py
 #
 # Base class for implementing common Storage Device health features
 #
