@@ -232,7 +232,7 @@ def get_media_settings_value(physical_port, key):
             if len(default_dict) != 0:
                 return default_dict
             else:
-                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+                helper_logger.log_info("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
         if key[VENDOR_KEY] in media_dict:
@@ -281,61 +281,90 @@ def get_speed_and_lane_count(port, cfg_port_tbl):
     return port_speed, lane_count
 
 
-def notify_media_setting(logical_port_name, transceiver_dict,
-                         app_port_tbl, cfg_port_tbl, port_mapping):
-
+"""
+    This function returns the NPU SI settings for a given logical port
+    Args:
+        lport:
+            logical port name
+        transceiver_dict:
+            A dictionary containing the vendor specific transceiver information
+        cfg_port_tbl:
+            A ConfigDBConnector object
+        port_mapping:
+            A PortMapping object
+    Returns:
+        A dictionary containing the NPU SI settings for the logical port
+        Returns empty dictionary if the NPU SI settings are not found
+"""
+def get_npu_si_settings_dict(lport, transceiver_dict, cfg_port_tbl, port_mapping):
     if not media_settings_present():
+        return {}
+
+    port_speed, lane_count = get_speed_and_lane_count(lport, cfg_port_tbl)
+
+    physical_port = port_mapping.get_logical_to_physical(lport)[0]
+    if not xcvrd._wrapper_get_presence(physical_port):
+        helper_logger.log_info("Get NPU SI settings: Media {} presence not detected during notify".format(physical_port))
+        return {}
+    if physical_port not in transceiver_dict:
+        helper_logger.log_error("Get NPU SI settings: Media {} eeprom not populated in transceiver dict".format(physical_port))
+        return {}
+
+    key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
+    helper_logger.log_debug("Get NPU SI settings: Retrieving media settings for port {}, operating at a speed "
+                            "of {} with a lane count of {}, using the following lookup keys: {}".format(lport, port_speed, lane_count, key))
+    media_dict = get_media_settings_value(physical_port, key)
+
+    if len(media_dict) == 0:
+        helper_logger.log_info("Get NPU SI settings: Error in obtaining media setting for {}".format(lport))
+        return {}
+    else:
+        helper_logger.log_info("Get NPU SI settings: Media settings for {} obtained successfully".format(lport))
+        return media_dict
+
+"""
+    This function updates the NPU SI settings for a given logical port to APPL_DB
+    It then sets the value of NPU_SI_SETTINGS_SYNC_STATUS to NPU_SI_SETTINGS_NOTIFIED in STATE_DB|PORT_TABLE
+    Args:
+        lport:
+            logical port name
+        transceiver_dict:
+            A dictionary containing the vendor specific transceiver information
+        xcvr_table_helper:
+            A XcvrTableHelper object
+        port_mapping:
+            A PortMapping object
+"""
+def post_npu_si_settings_to_appl_db(lport, transceiver_dict,
+                                     xcvr_table_helper, port_mapping):
+    asic_index = port_mapping.get_asic_id_for_logical_port(lport)
+
+    media_dict = get_npu_si_settings_dict(lport, transceiver_dict, xcvr_table_helper.get_cfg_port_tbl(asic_index), port_mapping)
+    if len(media_dict) == 0:
+        helper_logger.log_error("NPI SI settings post: Media dict is empty for {}".format(lport))
         return
 
-    port_speed, lane_count = get_speed_and_lane_count(logical_port_name, cfg_port_tbl)
+    physical_port = port_mapping.get_logical_to_physical(lport)[0]
+    logical_port_list = port_mapping.get_physical_to_logical(physical_port)
+    num_logical_ports = len(logical_port_list)
+    logical_idx = logical_port_list.index(lport)
 
-    ganged_port = False
-    ganged_member_num = 1
+    fvs = swsscommon.FieldValuePairs(len(media_dict))
 
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("Error: No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
+    index = 0
+    helper_logger.log_debug("NPU SI settings post: Publishing ASIC-side SI setting for port {} in APP_DB:".format(lport))
+    for media_key in media_dict:
+        if type(media_dict[media_key]) is dict:
+            media_val_str = get_media_val_str(num_logical_ports,
+                                                media_dict[media_key],
+                                                logical_idx)
+        else:
+            media_val_str = media_dict[media_key]
+        helper_logger.log_debug("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
+        fvs[index] = (str(media_key), str(media_val_str))
+        index += 1
 
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
-    for physical_port in physical_port_list:
-        logical_port_list = port_mapping.get_physical_to_logical(physical_port)
-        num_logical_ports = len(logical_port_list)
-        logical_idx = logical_port_list.index(logical_port_name)
-        if not xcvrd._wrapper_get_presence(physical_port):
-            helper_logger.log_info("Media {} presence not detected during notify".format(physical_port))
-            continue
-        if physical_port not in transceiver_dict:
-            helper_logger.log_error("Media {} eeprom not populated in transceiver dict".format(physical_port))
-            continue
-
-        port_name = xcvrd.get_physical_port_name(logical_port_name,
-                                           ganged_member_num, ganged_port)
-        
-        ganged_member_num += 1
-        key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
-        helper_logger.log_debug("Retrieving media settings for port {}, operating at a speed of {} with a lane count of {}, using the following lookup keys: {}".format(logical_port_name, port_speed, lane_count, key))
-        media_dict = get_media_settings_value(physical_port, key)
-
-        if len(media_dict) == 0:
-            helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
-            return
-
-        fvs = swsscommon.FieldValuePairs(len(media_dict))
-
-        index = 0
-        helper_logger.log_debug("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
-        for media_key in media_dict:
-            if type(media_dict[media_key]) is dict:
-                media_val_str = get_media_val_str(num_logical_ports,
-                                                  media_dict[media_key],
-                                                  logical_idx)
-            else:
-                media_val_str = media_dict[media_key]
-            helper_logger.log_debug("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
-            fvs[index] = (str(media_key), str(media_val_str))
-            index += 1
-
-        app_port_tbl.set(port_name, fvs)
+    xcvr_table_helper.get_app_port_tbl(asic_index).set(lport, fvs)
+    state_port_table = xcvr_table_helper.get_state_port_tbl(asic_index)
+    state_port_table.set(lport, [("NPU_SI_SETTINGS_SYNC_STATUS", "NPU_SI_SETTINGS_NOTIFIED")])
+    helper_logger.log_notice("{}: Posted NPU settings to APPL_DB".format(lport))
