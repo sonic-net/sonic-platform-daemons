@@ -14,6 +14,7 @@ import shutil
 
 from sonic_py_common import daemon_base, device_info, logger
 from swsscommon import swsscommon
+from sonic_platform_base.sonic_storage.storage_devices import StorageDevices
 
 #
 # Constants ====================================================================
@@ -36,47 +37,6 @@ log = logger.Logger(SYSLOG_IDENTIFIER)
 
 exit_code = 0
 
-class StorageDevices():
-    def __init__(self, log_identifier):
-        self.devices = {}
-        self.BASE_PATH = "/sys/block"
-        self.BLKDEV_BASE_PATH = "/dev"
-        self.get_storage_devices()
-        self.get_storage_device_object()
-
-    def get_storage_devices(self):
-        fdlist = os.listdir(self.BASE_PATH)
-        for fd in fdlist:
-            if 'boot' in fd or 'loop' in fd:
-                continue
-            else:
-                self.devices[fd] = None
-
-    def get_storage_device_object(self):
-        for key in self.devices:
-            blkdev = os.path.join(self.BLKDEV_BASE_PATH, key)
-            diskdev = os.path.join(self.BASE_PATH, key)
-            if key.startswith('sd'):
-                path = os.path.join(diskdev, "device")
-                if "ata" in os.path.realpath(path):
-                    try:
-                        from sonic_platform_base.sonic_ssd.ssd_generic import SsdUtil
-                        self.devices[key] = SsdUtil(blkdev)
-                    except ImportError as e:
-                        log.log_warning("Failed to import default SsdUtil. Error: {}".format(str(e)), True)
-                elif "usb" in os.path.realpath(path):
-                    try:
-                        from sonic_platform_base.sonic_ssd.ssd_usb import UsbUtil
-                        self.devices[key] = UsbUtil(blkdev)
-                    except ImportError as e:
-                        log.log_warning("Failed to import default UsbUtil. Error: {}".format(str(e)), True)
-            elif "mmcblk" in key:
-                try:
-                    from sonic_platform_base.sonic_ssd.ssd_emmc import EmmcUtil
-                    self.devices[key] = EmmcUtil(key)
-                except ImportError as e:
-                    log.log_warning("Failed to import default EmmcUtil. Error: {}".format(str(e)), True)
-
 #
 # Daemon =======================================================================
 #
@@ -92,8 +52,8 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.device_table = None
         self.storage = StorageDevices(log_identifier)
 
-        self.static_fields = ["device_model", "serial", "firmware"]
-        self.dynamic_fields = ["health", "temperature", "fs_io_reads", "fs_io_writes", "disk_io_reads", "disk_io_writes", "reserved_blocks"]
+        self.static_fields = ["device_model", "serial"]
+        self.dynamic_fields = ["firmware", "health", "temperature", "fs_io_reads", "fs_io_writes", "disk_io_reads", "disk_io_writes", "reserved_blocks"]
 
         self.read_static_fields = dict((disk, False) for disk in self.storage.devices)
         self.updated_static_fields_statedb = dict((disk, False) for disk in self.storage.devices)
@@ -135,9 +95,8 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 static_kvp_dict["device_model"] = self.storage.devices[storage_device].get_model()
                 static_kvp_dict["serial"] = self.storage.devices[storage_device].get_serial()
-                static_kvp_dict["firmware"] = self.storage.devices[storage_device].get_firmware()
 
-                self.log_info("Storage Device: {}, Device Model: {}, Serial: {}, FW: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"], static_kvp_dict["firmware"]))
+                self.log_info("Storage Device: {}, Device Model: {}, Serial: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"]))
                 self.read_static_fields[storage_device] = True
 
                 # update Storage Device Status to DB
@@ -159,6 +118,7 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 dynamic_kvp_dict = dict((field, "") for field in self.dynamic_fields)
 
+                dynamic_kvp_dict["firmware"] = self.storage.devices[storage_device].get_firmware()
                 dynamic_kvp_dict["health"] = self.storage.devices[storage_device].get_health()
                 dynamic_kvp_dict["temperature"] = self.storage.devices[storage_device].get_temperature()
                 dynamic_kvp_dict["fs_io_reads"] = self.storage.devices[storage_device].get_fs_io_reads()
@@ -167,8 +127,8 @@ class DaemonStorage(daemon_base.DaemonBase):
                 dynamic_kvp_dict["disk_io_writes"] = self.storage.devices[storage_device].get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = self.storage.devices[storage_device].get_reserved_blocks()
 
-                self.log_info("Storage Device: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
-                storage_device, dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["fs_io_reads"],dynamic_kvp_dict["fs_io_writes"],))
+                self.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
+                storage_device, dynamic_kvp_dict["firmware"], dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["fs_io_reads"],dynamic_kvp_dict["fs_io_writes"],))
                 self.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
                 dynamic_kvp_dict["reserved_blocks"]))
 

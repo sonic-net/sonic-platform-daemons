@@ -10,7 +10,7 @@
 try:
     import re
     import subprocess
-    from .ssd_base import SsdBase
+    from .storage_base import StorageBase
 except ImportError as e:
     raise ImportError (str(e) + "- required module not found")
 
@@ -26,7 +26,7 @@ INNODISK_TEMPERATURE_ID = 194
 SWISSBIT_HEALTH_ID = 248
 SWISSBIT_TEMPERATURE_ID = 194
 
-class SsdUtil(SsdBase):
+class SsdUtil(StorageBase):
     """
     Generic implementation of the SSD health API
     """
