@@ -40,10 +40,24 @@ class PortChangeEvent:
                                                          self.asic_id)
 
 class PortChangeObserver:
+    """
+    PortChangeObserver is a class to monitor port change events in DBs, and
+    notify callback function
+    """
+
     def __init__(self, namespaces, logger,
                  stop_event,
                  port_change_event_handler,
                  port_tbl_map=DEFAULT_PORT_TBL_MAP):
+        """
+        Args:
+            namespaces (list): List of namespaces to monitor
+            logger (Logger): Logger object
+            stop_event (threading.Event): Stop event to stop the observer
+            port_change_event_handler (function): Callback function to handle port change event
+            port_tbl_map (list): List of dictionaries, each dictionary contains
+            the DB name and table name to monitor
+        """
         # To avoid duplicate event processing, this dict stores the latest port
         # change event for each key which is a tuple of
         # (port_name, port_tbl.db_name, port_tbl.table_name)
