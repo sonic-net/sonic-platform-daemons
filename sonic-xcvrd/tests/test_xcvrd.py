@@ -1,4 +1,6 @@
 #from unittest.mock import DEFAULT
+import os
+os.environ["XCVRD_UNIT_TESTING"] = "1"
 from xcvrd.xcvrd_utilities.port_mapping import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd_utilities.media_settings_parser import *
@@ -33,8 +35,6 @@ modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "xcvrd")
 sys.path.insert(0, modules_path)
 DEFAULT_NAMESPACE = ['']
-
-os.environ["XCVRD_UNIT_TESTING"] = "1"
 
 with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
     media_settings_dict = json.load(f)
