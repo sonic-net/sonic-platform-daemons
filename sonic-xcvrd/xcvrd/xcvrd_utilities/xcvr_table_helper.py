@@ -6,6 +6,7 @@ except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
 TRANSCEIVER_INFO_TABLE = 'TRANSCEIVER_INFO'
+TRANSCEIVER_FIRMWARE_INFO_TABLE = 'TRANSCEIVER_FIRMWARE_INFO'
 TRANSCEIVER_DOM_SENSOR_TABLE = 'TRANSCEIVER_DOM_SENSOR'
 TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
@@ -14,7 +15,7 @@ TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 class XcvrTableHelper:
     def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
-  self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl = {}, {}, {}, {}, {}, {}, {}, {}
+		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
         for namespace in namespaces:
@@ -25,6 +26,7 @@ class XcvrTableHelper:
             self.dom_threshold_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_THRESHOLD_TABLE)
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
             self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
+            self.firmware_info_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_FIRMWARE_INFO_TABLE)
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             appl_db = daemon_base.db_connect("APPL_DB", namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
@@ -45,6 +47,9 @@ class XcvrTableHelper:
 
     def get_pm_tbl(self, asic_id):
         return self.pm_tbl[asic_id]
+
+    def get_firmware_info_tbl(self, asic_id):
+        return self.firmware_info_tbl[asic_id]
 
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
