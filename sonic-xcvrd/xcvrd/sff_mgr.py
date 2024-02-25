@@ -12,15 +12,28 @@ try:
 
     from swsscommon import swsscommon
 
-    from .xcvrd_utilities import port_mapping
+    from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
 
+class SffLoggerForPortUpdateEvent:
+    SFF_LOGGER_PREFIX = "SFF-PORT-UPDATE: "
+
+    def __init__(self, logger):
+        self.logger = logger
+
+    def log_notice(self, message):
+        self.logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
+    def log_warning(self, message):
+        self.logger.log_warning("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
+    def log_error(self, message):
+        self.logger.log_error("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
 # Thread wrapper class for SFF compliant transceiver management
-
-
 class SffManagerTask(threading.Thread):
 
     # CONFIG_DB port table fields:
@@ -63,6 +76,8 @@ class SffManagerTask(threading.Thread):
         },
     ]
 
+    SFF_LOGGER_PREFIX = "SFF-MAIN: "
+
     def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
@@ -70,6 +85,7 @@ class SffManagerTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.helper_logger = helper_logger
+        self.logger_for_port_update_event = SffLoggerForPortUpdateEvent(helper_logger)
         self.platform_chassis = platform_chassis
         # port_dict holds data obtained from on_port_update_event per port entry
         # with logical_port_name as key.
@@ -81,13 +97,13 @@ class SffManagerTask(threading.Thread):
         self.namespaces = namespaces
 
     def log_notice(self, message):
-        self.helper_logger.log_notice("SFF: {}".format(message))
+        self.helper_logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
     def log_warning(self, message):
-        self.helper_logger.log_warning("SFF: {}".format(message))
+        self.helper_logger.log_warning("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
     def log_error(self, message):
-        self.helper_logger.log_error("SFF: {}".format(message))
+        self.helper_logger.log_error("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
     def get_active_lanes_for_lport(self, lport, subport_idx, num_lanes_per_lport, num_lanes_per_pport):
         """
@@ -286,8 +302,11 @@ class SffManagerTask(threading.Thread):
         '''
 
         # CONFIG updates, and STATE_DB for insertion/removal, and host_tx_ready change
-        sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, self,
-                                                                     self.PORT_TBL_MAP)
+        port_change_observer = PortChangeObserver(self.namespaces,
+                                                  self.logger_for_port_update_event,
+                                                  self.task_stopping_event,
+                                                  self.on_port_update_event,
+                                                  self.PORT_TBL_MAP)
 
         # This thread doesn't need to expilictly wait on PortInitDone and
         # PortConfigDone events, as xcvrd main thread waits on them before
@@ -299,8 +318,7 @@ class SffManagerTask(threading.Thread):
             # operation in the DB tables. Upon process restart, messages will be
             # replayed for all fields, no need to explictly query the DB tables
             # here.
-            if not port_mapping.handle_port_update_event(
-                    sel, asic_context, self.task_stopping_event, self, self.on_port_update_event):
+            if not port_change_observer.handle_port_update_event():
                 # In the case of no real update, go back to the beginning of the loop
                 continue
 

@@ -138,8 +138,7 @@ media_settings_empty = {}
 
 class TestXcvrdThreadException(object):
 
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
-           MagicMock(side_effect = NotImplementedError))
+    @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(side_effect=NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
         stop_event = threading.Event()
         sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
@@ -156,7 +155,7 @@ class TestXcvrdThreadException(object):
         assert(type(exception_received) == NotImplementedError)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
         assert("sonic-xcvrd/xcvrd/sff_mgr.py" in str(trace))
-        assert("subscribe_port_update_event" in str(trace))
+        assert("PortChangeObserver" in str(trace))
 
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
     def test_CmisManagerTask_task_run_with_exception(self):
@@ -1208,9 +1207,7 @@ class TestXcvrdScript(object):
         mock_get_cfg_port_tbl.return_value.hget.assert_called_once_with(lport, 'admin_status')
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    @patch('xcvrd.xcvrd_utilities.port_mapping.subscribe_port_update_event',
-           MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_mapping.handle_port_update_event', MagicMock(return_value=True))
+    @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_SffManagerTask_task_worker(self, mock_chassis):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
