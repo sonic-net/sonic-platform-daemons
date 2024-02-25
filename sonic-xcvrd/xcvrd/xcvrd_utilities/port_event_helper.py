@@ -1,4 +1,3 @@
-import threading
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from sonic_py_common.interface import backplane_prefix, inband_prefix, recirc_prefix
@@ -13,12 +12,6 @@ DEFAULT_PORT_TBL_MAP = [
 
 
 class PortChangeEvent:
-    # thread_local_data will be used to hold class-scope thread-safe variables
-    # (i.e. global variable to the local thread), such as
-    # thread_local_data.PORT_EVENT. thread_local_data.PORT_EVENT dict will be
-    # initialized in subscribe_port_update_event, and used to store the latest
-    # port change event for each key, to avoid duplicate event processing.
-    thread_local_data = threading.local()
     PORT_ADD = 0
     PORT_REMOVE = 1
     PORT_SET = 2
