@@ -1,7 +1,10 @@
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py as _build_py
-from setuptools.errors import CompileError
 import setuptools.command
+try:
+    from setuptools.errors import CompileError
+except:
+    from distutils.errors import CompileError
 
 class GrpcTool(setuptools.Command):
     def initialize_options(self):
