@@ -10,7 +10,7 @@ from swsscommon import swsscommon
 
 MUX_CABLE_STATIC_INFO_TABLE = "MUX_CABLE_STATIC_INFO"
 MUX_CABLE_INFO_TABLE = "MUX_CABLE_INFO"
-TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
+TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_INFO'
 
 class YcableInfoUpdateTableHelper(object):
     def __init__(self):
