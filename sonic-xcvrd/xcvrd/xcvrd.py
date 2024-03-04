@@ -536,7 +536,7 @@ def post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, table,
                 transceiver_firmware_info_dict = firmware_info_cache[physical_port]
             else:
                 transceiver_firmware_info_dict = _wrapper_get_transceiver_firmware_info(physical_port)
-                if transceiver_firmware_info_dict is not None:
+                if firmware_info_cache is not None:
                     # If cache is enabled, put firmware information to cache
                     firmware_info_cache[physical_port] = transceiver_firmware_info_dict
             if transceiver_firmware_info_dict:
