@@ -1461,7 +1461,7 @@ class TestXcvrdScript(object):
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         assert task.port_dict['Ethernet0']['cmis_state'] == 'DP_ACTIVATION'
 
-    @pytest.mark.parametrize("lport, expected_dom_status", [
+    @pytest.mark.parametrize("lport, expected_dom_polling", [
         ('Ethernet0', 'disabled'),
         ('Ethernet4', 'disabled'),
         ('Ethernet8', 'disabled'),
@@ -1469,13 +1469,13 @@ class TestXcvrdScript(object):
         ('Ethernet16', 'enabled'),
         ('Ethernet20', 'enabled')
     ])
-    def test_DomInfoUpdateTask_get_dom_status_from_config_db(self, lport, expected_dom_status):
+    def test_DomInfoUpdateTask_get_dom_polling_from_config_db(self, lport, expected_dom_polling):
         # Define the mock_get function inside the test function
         def mock_get(key):
             if key in ['Ethernet4', 'Ethernet8', 'Ethernet12', 'Ethernet16']:
-                return (True, [('dom_status', 'enabled')])
+                return (True, [('dom_polling', 'enabled')])
             elif key == 'Ethernet0':
-                return (True, [('dom_status', 'disabled')])
+                return (True, [('dom_polling', 'disabled')])
             else:
                 return None
 
@@ -1492,7 +1492,7 @@ class TestXcvrdScript(object):
         cfg_port_tbl.get = MagicMock(side_effect=mock_get)
         task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
 
-        assert task.get_dom_status_from_config_db(lport) == expected_dom_status
+        assert task.get_dom_polling_from_config_db(lport) == expected_dom_polling
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.delete_port_from_status_table_hw')
@@ -1550,7 +1550,7 @@ class TestXcvrdScript(object):
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
-        task.get_dom_status_from_config_db = MagicMock(return_value='enabled')
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         mock_detect_error.return_value = True
         task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
@@ -1563,7 +1563,7 @@ class TestXcvrdScript(object):
         assert mock_post_pm_info.call_count == 0
         mock_detect_error.return_value = False
         task.task_stopping_event.wait = MagicMock(side_effect=[False, False, True])
-        task.get_dom_status_from_config_db = MagicMock(side_effect=('disabled', 'enabled'))
+        task.get_dom_polling_from_config_db = MagicMock(side_effect=('disabled', 'enabled'))
         task.task_worker()
         assert mock_post_firmware_info.call_count == 1
         assert mock_post_dom_info.call_count == 1

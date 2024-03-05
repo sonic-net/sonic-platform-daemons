@@ -1588,28 +1588,28 @@ class DomInfoUpdateTask(threading.Thread):
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
 
-    def get_dom_status_from_config_db(self, lport):
+    def get_dom_polling_from_config_db(self, lport):
         """
-            Returns the value of dom_status field from PORT table in CONFIG_DB
-            For non-breakout ports, this function will get dom_status field from PORT table of lport (subport = 0)
-            For breakout ports, this function will get dom_status field from PORT table of the first subport
+            Returns the value of dom_polling field from PORT table in CONFIG_DB
+            For non-breakout ports, this function will get dom_polling field from PORT table of lport (subport = 0)
+            For breakout ports, this function will get dom_polling field from PORT table of the first subport
             of lport's correpsonding breakout group (subport = 1)
 
             Returns:
-                'disabled' if dom_status is set to 'disabled', otherwise 'enabled'
+                'disabled' if dom_polling is set to 'disabled', otherwise 'enabled'
         """
-        dom_status = 'enabled'
+        dom_polling = 'enabled'
 
         pport_list = self.port_mapping.get_logical_to_physical(lport)
         if not pport_list:
             helper_logger.log_warning("Get dom disabled: Got unknown physical port list {} for lport {}".format(pport_list, lport))
-            return dom_status
+            return dom_polling
         pport = pport_list[0]
 
         logical_port_list = self.port_mapping.get_physical_to_logical(pport)
         if logical_port_list is None:
             helper_logger.log_warning("Get dom disabled: Got unknown FP port index {}".format(pport))
-            return dom_status
+            return dom_polling
 
         # Sort the logical port list to make sure we always get the first subport
         logical_port_list = natsorted(logical_port_list, key=lambda y: y.lower())
@@ -1619,13 +1619,13 @@ class DomInfoUpdateTask(threading.Thread):
         port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
 
         found, port_info = port_tbl.get(first_logical_port)
-        if found and 'dom_status' in dict(port_info):
-            dom_status = dict(port_info)['dom_status']
+        if found and 'dom_polling' in dict(port_info):
+            dom_polling = dict(port_info)['dom_polling']
 
-        return dom_status
+        return dom_polling
 
     def is_port_dom_monitoring_disabled(self, logical_port_name):
-        return self.get_dom_status_from_config_db(logical_port_name) == 'disabled'
+        return self.get_dom_polling_from_config_db(logical_port_name) == 'disabled'
 
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
