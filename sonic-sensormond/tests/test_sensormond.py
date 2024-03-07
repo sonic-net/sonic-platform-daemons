@@ -1,5 +1,6 @@
 import os
 import sys
+import yaml
 import multiprocessing
 from imp import load_source
 from unittest import mock
@@ -437,7 +438,7 @@ def test_signal_handler():
     assert daemon_sensormond.stop_event.set.call_count == 0
     assert sensormond.exit_code == 1
 
-
+@mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
 def test_daemon_run():
 
     import sonic_platform.platform
