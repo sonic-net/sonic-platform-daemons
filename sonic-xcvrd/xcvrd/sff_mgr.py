@@ -168,9 +168,10 @@ class SffManagerTask(threading.Thread):
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
 
-            if self.SUBPORT in port_change_event.port_dict and \
-                self.LANES_LIST in port_change_event.port_dict:
+            if self.SUBPORT in port_change_event.port_dict:
                 self.port_dict[lport][self.SUBPORT] = port_change_event.port_dict[self.SUBPORT]
+
+            if self.LANES_LIST in port_change_event.port_dict:
                 self.port_dict[lport][self.LANES_LIST] = \
                     port_change_event.port_dict[self.LANES_LIST].split(',')
 
