@@ -94,7 +94,7 @@ def detect_port_in_error_status(logical_port_name, status_tbl):
     rec, fvp = status_tbl.get(logical_port_name)
     if rec:
         status_dict = dict(fvp)
-        if status_dict['status'] in errors_block_eeprom_reading:
+        if status_dict.get('status', None) in errors_block_eeprom_reading:
             return True
         else:
             return False
@@ -146,9 +146,8 @@ class YcableInfoUpdateTask(threading.Thread):
                     logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                if not detect_port_in_error_status(logical_port_name, self.table_helper.get_status_tbl()[asic_index]):
-                    if y_cable_presence[0] is True:
-                        y_cable_helper.check_identifier_presence_and_update_mux_info_entry(self.table_helper.get_state_db(), self.table_helper.get_mux_tbl(), asic_index, logical_port_name, self.table_helper.get_y_cable_tbl(), self.table_helper.get_port_tbl())
+                if y_cable_presence[0] is True:
+                    y_cable_helper.check_identifier_presence_and_update_mux_info_entry(self.table_helper.get_state_db(), self.table_helper.get_mux_tbl(), asic_index, logical_port_name, self.table_helper.get_y_cable_tbl(), self.table_helper.get_port_tbl())
 
         helper_logger.log_info("Stop DOM monitoring loop")
 
