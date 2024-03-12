@@ -346,6 +346,7 @@ class TestYcableScript(object):
 
         y_cable_presence = [True]
         stopping_event = MagicMock()
+        sfp_error_event = MagicMock()
         Y_cable_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
         Y_cable_task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
         mock_table = MagicMock()
