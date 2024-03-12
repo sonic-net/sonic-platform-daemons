@@ -330,7 +330,32 @@ class TestYcableScript(object):
         rc = handle_state_update_task(op, port, fvp_dict, y_cable_presence, port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stopping_event)
         assert(rc == None)
 
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.Select.TIMEOUT', MagicMock(return_value=None))
+    @patch('swsscommon.swsscommon.CastSelectableToRedisSelectObj', MagicMock())
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_ycable_helper_state_update_task(self, mock_select, mock_sub_table):
 
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('state', 'active'), )), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False), (False, False, False)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+
+
+        y_cable_presence = [True]
+        stopping_event = MagicMock()
+        Y_cable_task = YcableStateUpdateTask(sfp_error_event, y_cable_presence)
+        Y_cable_task.task_stopping_event.is_set = MagicMock(side_effect=[False, True])
+        mock_table = MagicMock()
+        """mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4'])
+        mock_table.get = MagicMock(
+            side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
+        mock_swsscommon_table.return_value = mock_table
+        """
+        Y_cable_task.task_worker()
+        assert swsscommon.Select.select.call_count == 1
 
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
