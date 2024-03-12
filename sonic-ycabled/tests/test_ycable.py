@@ -317,6 +317,21 @@ class TestYcableScript(object):
         assert(rc == None)
 
 
+    @patch('ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event', MagicMock(return_value=0))
+    def test_handle_state_update_task_delete(self):
+        
+        port = "Ethernet0"
+        fvp_dict = {}
+        state_db = {}
+        y_cable_presence = False
+        stopping_event = None
+        op = swsscommon.DEL_COMMAND
+        port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+        rc = handle_state_update_task(op, port, fvp_dict, y_cable_presence, port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stopping_event)
+        assert(rc == None)
+
+
+
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
