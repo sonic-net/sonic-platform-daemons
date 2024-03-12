@@ -355,7 +355,7 @@ class TestYcableScript(object):
             side_effect=[(True, (('index', 1), )), (True, (('index', 2), ))])
         mock_swsscommon_table.return_value = mock_table
         """
-        Y_cable_task.task_worker()
+        Y_cable_task.task_worker(stopping_event, sfp_error_event, y_cable_presence)
         assert swsscommon.Select.select.call_count == 1
 
 
