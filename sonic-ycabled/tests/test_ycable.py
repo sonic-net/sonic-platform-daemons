@@ -343,7 +343,6 @@ class TestYcableScript(object):
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
 
-
         y_cable_presence = [True]
         stopping_event = MagicMock()
         sfp_error_event = MagicMock()
