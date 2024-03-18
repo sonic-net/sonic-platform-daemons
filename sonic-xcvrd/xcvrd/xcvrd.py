@@ -776,6 +776,12 @@ class CmisManagerTask(threading.Thread):
     CMIS_STATE_REMOVED   = 'REMOVED'
     CMIS_STATE_FAILED    = 'FAILED'
 
+    CMIS_TERMINAL_STATES = {
+                            CMIS_STATE_FAILED,
+                            CMIS_STATE_READY,
+                            CMIS_STATE_REMOVED
+                            }
+
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
         self.name = "CmisManagerTask"
@@ -1170,6 +1176,9 @@ class CmisManagerTask(threading.Thread):
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
 
+    def get_cmis_state(self, lport):
+        return self.port_dict[lport].get('cmis_state', self.CMIS_STATE_UNKNOWN)
+
     def post_port_active_apsel_to_db(self, api, lport, host_lanes_mask):
         try:
             act_apsel = api.get_active_apsel_hostlane()
@@ -1245,10 +1254,7 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 state = self.port_dict[lport].get('cmis_state', self.CMIS_STATE_UNKNOWN)
-                if state in [self.CMIS_STATE_UNKNOWN,
-                             self.CMIS_STATE_FAILED,
-                             self.CMIS_STATE_READY,
-                             self.CMIS_STATE_REMOVED]:
+                if state in self.CMIS_TERMINAL_STATES or state == self.CMIS_STATE_UNKNOWN:
                     if state != self.CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
                         self.port_dict[lport]['host_lanes_mask'] = 0
@@ -1574,7 +1580,7 @@ class CmisManagerTask(threading.Thread):
 
 
 class DomInfoUpdateTask(threading.Thread):
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event):
+    def __init__(self, namespaces, port_mapping, main_thread_stop_event, cmis_manager):
         threading.Thread.__init__(self)
         self.name = "DomInfoUpdateTask"
         self.exc = None
@@ -1582,6 +1588,7 @@ class DomInfoUpdateTask(threading.Thread):
         self.main_thread_stop_event = main_thread_stop_event
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
+        self.cmis_manager = cmis_manager
 
     def get_dom_polling_from_config_db(self, lport):
         """
@@ -1619,8 +1626,31 @@ class DomInfoUpdateTask(threading.Thread):
 
         return dom_polling
 
+    """
+    Checks if the port is in CMIS terminal state
+    This API assumes CMIS_STATE_UNKNOWN as a transitional state since any CMIS supported platform will
+    eventually reach to a CMIS terminal state (CMIS_TERMINAL_STATES) irrespective of the transciver type
+    Returns:
+        True if the port is in CMIS initialization process, otherwise False
+    """
+    def is_port_in_cmis_terminal_state(self, logical_port_name):
+        # If CMIS manager is not available for the platform, return False
+        if self.cmis_manager is None:
+            return False
+
+        try:
+            cmis_state = self.cmis_manager.get_cmis_state(logical_port_name)
+            if cmis_state not in self.cmis_manager.CMIS_TERMINAL_STATES:
+                return True
+        except KeyError:
+            helper_logger.log_error("Got KeyError while getting CMIS state for port {}".format(logical_port_name))
+            return True
+
+        return False
+
     def is_port_dom_monitoring_disabled(self, logical_port_name):
-        return self.get_dom_polling_from_config_db(logical_port_name) == 'disabled'
+        return self.get_dom_polling_from_config_db(logical_port_name) == 'disabled' or \
+                self.is_port_in_cmis_terminal_state(logical_port_name)
 
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
@@ -2412,13 +2442,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.log_notice("Skipping SFF Task Manager")
 
         # Start the CMIS manager
-        cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr)
+        cmis_manager = None
         if not self.skip_cmis_mgr:
+            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr)
             cmis_manager.start()
             self.threads.append(cmis_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.stop_event)
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.stop_event, cmis_manager)
         dom_info_update.start()
         self.threads.append(dom_info_update)
 

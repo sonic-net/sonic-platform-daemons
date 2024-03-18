@@ -182,7 +182,8 @@ class TestXcvrdThreadException(object):
     def test_DomInfoUpdateTask_task_run_with_exception(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        mock_cmis_manager = MagicMock()
+        dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
         exception_received = None
         trace = None
         try:
@@ -1753,7 +1754,8 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.port_mapping.handle_port_change_event(PortChangeEvent('Ethernet4', 1, 0, PortChangeEvent.PORT_ADD))
         task.port_mapping.handle_port_change_event(PortChangeEvent('Ethernet12', 1, 0, PortChangeEvent.PORT_ADD))
@@ -1766,12 +1768,33 @@ class TestXcvrdScript(object):
 
         assert task.get_dom_polling_from_config_db(lport) == expected_dom_polling
 
+    @pytest.mark.parametrize("mock_cmis_manager, mock_raise_exception, mock_cmis_state, expected_result", [
+        (True, False, None, False),
+        (False, True, None, True),
+        (False, False, "INSERTED", True),
+        (False, False, "READY", False)
+    ])
+    def test_DomInfoUpdateTask_is_port_in_cmis_terminal_state(self, mock_cmis_manager, mock_raise_exception, mock_cmis_state, expected_result):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        if mock_cmis_manager:
+            cmis_manager = None
+        else:
+            cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, cmis_manager)
+        if mock_raise_exception:
+            task.cmis_manager.get_cmis_state = MagicMock(side_effect=KeyError)
+        elif mock_cmis_state is not None:
+            cmis_manager.get_cmis_state = MagicMock(return_value=mock_cmis_state)
+        assert task.is_port_in_cmis_terminal_state('Ethernet0') == expected_result
+
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.delete_port_from_status_table_hw')
     def test_DomInfoUpdateTask_handle_port_change_event(self, mock_del_status_tbl_hw):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         task.on_port_config_change(port_change_event)
@@ -1794,7 +1817,8 @@ class TestXcvrdScript(object):
     def test_DomInfoUpdateTask_task_run_stop(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
         task.start()
         task.join()
         assert not task.is_alive()
@@ -1819,10 +1843,12 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
         mock_detect_error.return_value = True
         task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
