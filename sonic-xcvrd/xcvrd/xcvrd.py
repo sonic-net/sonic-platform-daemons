@@ -1252,6 +1252,10 @@ class CmisManagerTask(threading.Thread):
         for namespace in self.namespaces:
             self.wait_for_port_config_done(namespace)
 
+        logical_port_list = self.port_mapping.logical_port_list
+        for lport in logical_port_list:
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
                                                   self.task_stopping_event,
@@ -1643,8 +1647,10 @@ class DomInfoUpdateTask(threading.Thread):
 
     """
     Checks if the port is going through CMIS initialization process
-    This API assumes CMIS_STATE_UNKNOWN as a transitional state since any CMIS supported platform will
-    eventually reach to a state in CMIS_TERMINAL_STATES irrespective of the transciver type
+    This API assumes CMIS_STATE_UNKNOWN as a transitional state since it is the
+    first state after starting CMIS state machine.
+    This assumption allows the DomInfoUpdateTask thread to skip polling on the port
+    to allow CMIS initialization to complete if needed.
     Returns:
         True if the port is in CMIS initialization process,
         otherwise False
