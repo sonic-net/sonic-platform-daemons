@@ -357,27 +357,6 @@ class TestXcvrdScript(object):
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
         del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, init_tbl, dom_tbl, dom_threshold_tbl, pm_tbl, firmware_info_tbl)
 
-    def test_update_port_transceiver_status_table_sw_cmis_state(self):
-        mock_xcvr_table_helper = MagicMock()
-        mock_get_status_tbl = MagicMock()
-        mock_get_status_tbl.set = MagicMock()
-        mock_xcvr_table_helper.get_status_tbl.return_value = mock_get_status_tbl
-        port_mapping = PortMapping()
-        update_port_transceiver_status_table_sw_cmis_state("Ethernet0", None, port_mapping, CMIS_STATE_INSERTED)
-        assert mock_get_status_tbl.set.call_count == 0
-
-        update_port_transceiver_status_table_sw_cmis_state("Ethernet0", mock_xcvr_table_helper, None, CMIS_STATE_INSERTED)
-        assert mock_get_status_tbl.set.call_count == 0
-
-        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
-        mock_xcvr_table_helper.get_status_tbl.return_value = None
-        update_port_transceiver_status_table_sw_cmis_state("Ethernet0", mock_xcvr_table_helper, port_mapping, CMIS_STATE_INSERTED)
-        assert mock_get_status_tbl.set.call_count == 0
-
-        mock_xcvr_table_helper.get_status_tbl.return_value = mock_get_status_tbl
-        update_port_transceiver_status_table_sw_cmis_state("Ethernet0", mock_xcvr_table_helper, port_mapping, CMIS_STATE_INSERTED)
-        assert mock_get_status_tbl.set.call_count == 1
-
     @pytest.mark.parametrize("mock_found, mock_status_dict, expected_cmis_state", [
         (True, {'cmis_state': CMIS_STATE_INSERTED}, CMIS_STATE_INSERTED),
         (False, {}, CMIS_STATE_UNKNOWN),
@@ -1339,6 +1318,22 @@ class TestXcvrdScript(object):
         assert mock_sfp.get_presence.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         mock_sfp.get_presence = MagicMock(return_value=True)
+
+    def test_update_port_transceiver_status_table_sw_cmis_state(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        task.xcvr_table_helper.get_status_tbl = MagicMock(return_value=None)
+        task.update_port_transceiver_status_table_sw_cmis_state("Ethernet0", CMIS_STATE_INSERTED)
+
+        mock_get_status_tbl = MagicMock()
+        mock_get_status_tbl.set = MagicMock()
+        task.xcvr_table_helper.get_status_tbl.return_value = mock_get_status_tbl
+        task.update_port_transceiver_status_table_sw_cmis_state("Ethernet0", CMIS_STATE_INSERTED)
+        assert mock_get_status_tbl.set.call_count == 1
 
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_handle_port_change_event(self):
