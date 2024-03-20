@@ -1,0 +1,29 @@
+{
+    "chassis": [
+        {
+            "name": "Cisco-8102-C64",
+            "faults": [
+                {
+                    "type" : "CUSTOM_EVPROFILE_CHANGE",
+                    "severity" : "MAJOR",
+                    "action" : ["syslog"]
+                },
+                {
+                    "type" : "TEMPERATURE_EXCEEDED",
+                    "severity" : "CRITICAL",
+                    "action" : ["syslog", "obfl", "reload"]
+                },
+                {
+                    "type": "FANS MISSING",
+                    "severity": "CRITICAL",
+                    "action" : ["syslog", "obfl", "shutdown"]
+                },
+		{
+                    "type": "EVENTS_MONITORING",
+                    "severity": "WARNING",
+                    "action" : ["syslog"]
+                }
+             ]
+	}
+    ]
+}
