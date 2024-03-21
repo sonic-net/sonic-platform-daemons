@@ -1434,7 +1434,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
                         check_identifier_presence_and_delete_mux_table_entry(
                             state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
                 except (TypeError, ValueError) as e:
-                    helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
+                    helper_logger.log_warning("Got unrecognized event {}, ignored".format(value))
 
                 # SFP return unkown event, just ignore for now.
                 helper_logger.log_warning("Got unknown event {}, ignored".format(value))
