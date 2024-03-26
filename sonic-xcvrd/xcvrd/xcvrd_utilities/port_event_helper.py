@@ -79,7 +79,6 @@ class PortChangeObserver:
             cfg_db = daemon_base.db_connect("CONFIG_DB", namespace=ns)
             port_table = swsscommon.Table(cfg_db, swsscommon.CFG_PORT_TABLE_NAME)
             for key in port_table.getKeys():
-                print("key, {}".format(key))
                 _, port_config = port_table.get(key)
                 port_config_dict = dict(port_config)
                 if port_config_dict.get(multi_asic.PORT_ROLE, None):
