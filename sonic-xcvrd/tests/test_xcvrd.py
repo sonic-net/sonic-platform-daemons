@@ -2375,7 +2375,26 @@ class TestXcvrdScript(object):
             mock_run.return_value = "true"
 
             xcvrd.init()
+
+            status_tbl = MagicMock()
+            xcvrd.xcvr_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
+
             xcvrd.deinit()
+
+            status_tbl.hdel.assert_not_called()
+
+    @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
+    @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
+    @patch('subprocess.check_output', MagicMock(return_value='false'))
+    def test_DaemonXcvrd_init_deinit_cold(self):
+        xcvrd.platform_chassis = MagicMock()
+
+        xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrdaemon.init()
+        xcvrdaemon.deinit()
+
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
