@@ -1000,12 +1000,22 @@ class CmisManagerTask(threading.Thread):
         for lane in range(self.CMIS_MAX_HOST_LANES):
             if ((1 << lane) & host_lanes_mask) == 0:
                 continue
+            app_cur = api.get_application(lane)
             if app_old == 0:
-                app_old = api.get_application(lane)
-            elif app_old != api.get_application(lane):
+                app_old = app_cur
+            elif app_cur != 0:
+                if app_cur != app_new:
+                    self.log_notice("Changing from default AppSel {} to non default "
+                                    "AppSel code {}. Reset AppSel code for all lanes"
+                                     .format(app_cur, app_new))
+                    api.set_application(0xff, 0, 0)
+                    api.set_datapath_deinit(0xff)
+                    api.scs_apply_datapath_init(0xff)
+                    return True
+            elif app_old != app_cur:
                 self.log_notice("Not all the lanes are in the same application mode "
                                 "app_old {} current app {} lane {} host_lanes_mask {}".format(
-                                app_old, api.get_application(lane), lane, host_lanes_mask))
+                                app_old, app_cur, lane, host_lanes_mask))
                 self.log_notice("Forcing application update...")
                 return True
 
