@@ -1958,15 +1958,14 @@ class TestXcvrdScript(object):
         assert mock_update_status_hw.call_count == 1
 
     def test_SfpStateUpdateTask_task_run_stop(self):
-        def poll_for_5s(*args, **kwargs):
-            for i in range(5):
+        def poll_forever(*args, **kwargs):
+            while True:
                 time.sleep(1)
-            return None
-        # Redefine the XcvrTableHelper function to poll for 5 seconds so that the task can be stopped by
+        # Redefine the XcvrTableHelper function to poll forever so that the task can be stopped by
         # raising an exception in between. Also, XcvrTableHelper is the first function to be called after
         # starting the task, so having the patch here will avoid the task crashing unexpectedly
         # at a different location.
-        with patch('xcvrd.xcvrd.XcvrTableHelper', new=poll_for_5s):
+        with patch('xcvrd.xcvrd.XcvrTableHelper', new=poll_forever):
             port_mapping = PortMapping()
             stop_event = threading.Event()
             sfp_error_event = threading.Event()
