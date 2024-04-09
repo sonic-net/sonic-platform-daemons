@@ -831,7 +831,7 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Table')
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
-    def test_handle_pude_front_panel(self, mock_select, mock_sub_table, mock_swsscommon_table):
+    def test_handle_front_panel_filter(self, mock_select, mock_sub_table, mock_swsscommon_table):
         class DummyPortChangeEventHandler:
             def __init__(self):
                 self.port_event_cache = []
