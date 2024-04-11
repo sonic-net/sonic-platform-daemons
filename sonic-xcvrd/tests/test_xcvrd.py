@@ -1912,7 +1912,7 @@ class TestXcvrdScript(object):
         assert mock_update_status_hw.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
-    @patch('xcvrd.xcvrd_utilities.port_mapping.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @pytest.mark.parametrize("dom_info_cache, dom_th_info, expected", [
         ({0: {'temperature': '75'}},
