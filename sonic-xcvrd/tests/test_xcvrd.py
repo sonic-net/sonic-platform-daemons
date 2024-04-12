@@ -1635,6 +1635,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
+        mock_xcvr_api.get_supported_freq_config = MagicMock(return_value=(0xA0,0,0,191300,196100))
         mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
             'DPInitPending1': True,
             'DPInitPending2': True,
@@ -2495,7 +2496,22 @@ class TestXcvrdScript(object):
             xcvrdaemon.deinit()
 
             status_tbl.hdel.assert_called()
+    @pytest.mark.parametrize("lport, freq, grid, expected", [
+         (1, 193100, 75, True),
+         (1, 193100, 100, False),
+         (1, 193125, 75, False),
+         (1, 193100, 25, True)
+    ])
+    def test_CmisManagerTask_config_laser_frequency_validate(self, lport, freq, grid, expected):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_supported_freq_config = MagicMock()
+        mock_xcvr_api.get_supported_freq_config.return_value = (0x80, 0, 0, 191300, 196100)
 
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        result = task.config_laser_frequency_validate(mock_xcvr_api, lport, freq, grid)
+        assert result == expected
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
