@@ -1205,7 +1205,7 @@ class CmisManagerTask(threading.Thread):
             if chan % 3 != 0:
                 self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
                 return False
-	elif grid == 100:
+        elif grid == 100:
             if (supported_grid >> 5) & 0x1 != 1:
                 self.log_error("{} 100GHz is not supported".format(lport))
                 return False
