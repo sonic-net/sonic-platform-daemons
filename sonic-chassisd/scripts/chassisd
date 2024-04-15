@@ -131,6 +131,7 @@ class ModuleConfigUpdater(logger.Logger):
         super(ModuleConfigUpdater, self).__init__(log_identifier)
 
         self.chassis = chassis
+        self.lock = threading.Lock()
 
     def deinit(self):
         """
@@ -141,11 +142,13 @@ class ModuleConfigUpdater(logger.Logger):
     def module_config_update(self, key, admin_state):
         if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
            not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
-           not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
+           not key.startswith(ModuleBase.MODULE_TYPE_FABRIC) and \
+           not key.startswith(ModuleBase.MODULE_TYPE_DPU):
             self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
                                                                                                ModuleBase.MODULE_TYPE_SUPERVISOR,
                                                                                                ModuleBase.MODULE_TYPE_LINE,
-                                                                                               ModuleBase.MODULE_TYPE_FABRIC))
+                                                                                               ModuleBase.MODULE_TYPE_FABRIC,
+                                                                                               ModuleBase.MODULE_TYPE_DPU))
             return
 
         module_index = try_get(self.chassis.get_module_index, key, default=INVALID_MODULE_INDEX)
@@ -158,7 +161,20 @@ class ModuleConfigUpdater(logger.Logger):
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             # Setting the module to administratively up/down state
             self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
-            try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+            # Acquire the lock before submitting the callback function
+            with self.lock:
+                # Submit the callback function as a separate thread
+                t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
+                t.start()
+        else:
+            self.log_warning("Invalid admin_state value: {}".format(admin_state))
+
+    def submit_callback(self, module_index, admin_state):
+        # Implement the callback function here
+        # Example: self.chassis.get_module(module_index).set_admin_state(admin_state)
+        # Ensure that the callback function is thread-safe
+        try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        pass
 
 #
 # Module Updater ==============================================================
@@ -177,7 +193,7 @@ class ModuleUpdater(logger.Logger):
         self.chassis = chassis
         self.my_slot = my_slot
         self.supervisor_slot = supervisor_slot
-        self.num_modules = chassis.get_num_modules()
+        self.num_modules = self.chassis.get_num_modules()
         # Connect to STATE_DB and create chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
         self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
@@ -190,16 +206,18 @@ class ModuleUpdater(logger.Logger):
                                CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
-        if self._is_supervisor():
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
-                                            CHASSIS_FABRIC_ASIC_INFO_TABLE)
-        else:
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
-                                            CHASSIS_ASIC_INFO_TABLE)
 
-        self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
-        self.down_modules = {}
-        self.chassis_app_db_clean_sha = None
+        if not self.chassis.is_smartswitch():
+            if self._is_supervisor():
+                self.asic_table = swsscommon.Table(self.chassis_state_db,
+                                                CHASSIS_FABRIC_ASIC_INFO_TABLE)
+            else:
+                self.asic_table = swsscommon.Table(self.chassis_state_db,
+                                                CHASSIS_ASIC_INFO_TABLE)
+
+            self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
+            self.down_modules = {}
+            self.chassis_app_db_clean_sha = None
 
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
@@ -221,7 +239,7 @@ class ModuleUpdater(logger.Logger):
             self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
         if self.asic_table is not None:
-            if not self._is_supervisor():
+            if not self._is_supervisor() or self.chassis.is_smartswitch():
                 asics = list(self.asic_table.getKeys())
                 for asic in asics:
                     self.asic_table._del(asic)
@@ -254,10 +272,12 @@ class ModuleUpdater(logger.Logger):
 
                 if not key.startswith(ModuleBase.MODULE_TYPE_SUPERVISOR) and \
                    not key.startswith(ModuleBase.MODULE_TYPE_LINE) and \
+                   not key.startswith(ModuleBase.MODULE_TYPE_DPU) and \
                    not key.startswith(ModuleBase.MODULE_TYPE_FABRIC):
-                    self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
+                    self.log_error("Incorrect module-name {}. Should start with {} or {} or {} or {}".format(key,
                                                                                                        ModuleBase.MODULE_TYPE_SUPERVISOR,
                                                                                                        ModuleBase.MODULE_TYPE_LINE,
+                                                                                                       ModuleBase.MODULE_TYPE_DPU,
                                                                                                        ModuleBase.MODULE_TYPE_FABRIC))
                     continue
 
@@ -270,67 +290,65 @@ class ModuleUpdater(logger.Logger):
                 prev_status = self.get_module_current_status(key)
                 self.module_table.set(key, fvs)
 
-                # Construct key for down_modules dict. Example down_modules key format: LINE-CARD0|<hostname>
-                fvs = self.hostname_table.get(key)
-                if isinstance(fvs, list) and fvs[0] is True:
-                    fvs = dict(fvs[-1])
-                    hostname = fvs[CHASSIS_MODULE_INFO_HOSTNAME_FIELD]
-                    down_module_key = key+'|'+hostname
-                else:
-                    down_module_key = key+'|'
+                if not self.chassis.is_smartswitch():
+                    # Construct key for down_modules dict. Example down_modules key format: LINE-CARD0|<hostname>
+                    fvs = self.hostname_table.get(key)
+                    if isinstance(fvs, list) and fvs[0] is True:
+                        fvs = dict(fvs[-1])
+                        hostname = fvs[CHASSIS_MODULE_INFO_HOSTNAME_FIELD]
+                        down_module_key = key+'|'+hostname
+                    else:
+                        down_module_key = key+'|'
 
-                if module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] != str(ModuleBase.MODULE_STATUS_ONLINE):
-                    if prev_status == ModuleBase.MODULE_STATUS_ONLINE:
+                    if module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] != str(ModuleBase.MODULE_STATUS_ONLINE):
                         notOnlineModules.append(key)
                         # Record the time when the module down was detected to track the
                         # module down time. Used for chassis db cleanup for all asics of the module if the module is down for a 
                         # long time like 30 mins.
                         # All down modules including supervisor are added to the down modules dictionary. This is to help
                         # identifying module operational status change. But the clean up will not be attempted for supervisor
-
                         if down_module_key not in self.down_modules:
                             self.log_warning("Module {} went off-line!".format(key))
                             self.down_modules[down_module_key] = {}
                             self.down_modules[down_module_key]['down_time'] = time.time()
                             self.down_modules[down_module_key]['cleaned'] = False
-                    continue
-                else:
-                    # Module is operational. Remove it from down time tracking.
-                    if down_module_key in self.down_modules:
-                        self.log_notice("Module {} recovered on-line!".format(key))
-                        del self.down_modules[down_module_key]
-                    elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
-                        self.log_notice("Module {} is on-line!".format(key))
+                        continue
+                    else:
+                        # Module is operational. Remove it from down time tracking.
+                        if down_module_key in self.down_modules:
+                            self.log_notice("Module {} recovered on-line!".format(key))
+                            del self.down_modules[down_module_key]
 
-                for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
-                    asic_global_id, asic_pci_addr = asic
-                    asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
-                    if not self._is_supervisor():
-                        asic_key = "%s|%s" % (key, asic_key)
+                    for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
+                        asic_global_id, asic_pci_addr = asic
+                        asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
+                        if not self._is_supervisor():
+                            asic_key = "%s|%s" % (key, asic_key)
 
-                    asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
-                                                            (CHASSIS_MODULE_INFO_NAME_FIELD, key),
-                                                            (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
-                    self.asic_table.set(asic_key, asic_fvs)
+                        asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
+                                                                (CHASSIS_MODULE_INFO_NAME_FIELD, key),
+                                                                (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
+                        self.asic_table.set(asic_key, asic_fvs)
 
-        # In line card push the hostname of the module and num_asics to the chassis state db.
-        # The hostname is used as key to access chassis app db entries 
-        if not self._is_supervisor():
-           hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
-           hostname = try_get(device_info.get_hostname, default="None")
-           hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)), 
-                                                        (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
-                                                        (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
-           self.hostname_table.set(hostname_key, hostname_fvs)
+        if not self.chassis.is_smartswitch():
+            # In line card push the hostname of the module and num_asics to the chassis state db.
+            # The hostname is used as key to access chassis app db entries 
+            if not self._is_supervisor():
+                hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
+                hostname = try_get(device_info.get_hostname, default="None")
+                hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)), 
+                                                            (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
+                                                            (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
+                self.hostname_table.set(hostname_key, hostname_fvs)
 
-        # Asics that are on the "not online" modules need to be cleaned up
-        asics = list(self.asic_table.getKeys())
-        for asic in asics:
-            fvs = self.asic_table.get(asic)
-            if isinstance(fvs, list):
-                fvs = dict(fvs[-1])
-            if fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
-                self.asic_table._del(asic)
+            # Asics that are on the "not online" modules need to be cleaned up
+            asics = list(self.asic_table.getKeys())
+            for asic in asics:
+                fvs = self.asic_table.get(asic)
+                if isinstance(fvs, list):
+                    fvs = dict(fvs[-1])
+                if fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
+                    self.asic_table._del(asic)
 
     def _get_module_info(self, module_index):
         """
@@ -357,6 +375,9 @@ class ModuleUpdater(logger.Logger):
         return module_info_dict
 
     def _is_supervisor(self):
+        if self.chassis.is_smartswitch():
+            return False
+
         if self.my_slot == self.supervisor_slot:
             return True
         else:
@@ -369,18 +390,21 @@ class ModuleUpdater(logger.Logger):
         index = -1
         for module in self.chassis.get_all_modules():
             index += 1
-            # Skip fabric cards
-            if module.get_type() == ModuleBase.MODULE_TYPE_FABRIC:
-                continue
 
-            if self._is_supervisor():
-                # On supervisor skip checking for supervisor
-                if module.get_slot() == self.supervisor_slot:
+            # Skip for SmartSwitch
+            if not self.chassis.is_smartswitch():
+                # Skip fabric cards
+                if module.get_type() == ModuleBase.MODULE_TYPE_FABRIC:
                     continue
-            else:
-                # On line-card check only supervisor
-                if module.get_slot() != self.supervisor_slot:
-                    continue
+
+                if self._is_supervisor():
+                    # On supervisor skip checking for supervisor
+                    if module.get_slot() == self.supervisor_slot:
+                        continue
+                else:
+                    # On line-card check only supervisor
+                    if module.get_slot() != self.supervisor_slot:
+                        continue
 
             module_key = try_get(module.get_name, default='MODULE {}'.format(index))
             midplane_ip = try_get(module.get_midplane_ip, default=INVALID_IP)
@@ -478,7 +502,7 @@ class ModuleUpdater(logger.Logger):
 
 
     def module_down_chassis_db_cleanup(self):
-        if self._is_supervisor() == False:
+        if self._is_supervisor() == False or self.chassis.is_smartswitch():
             return
         time_now = time.time()
         for module in self.down_modules:
@@ -506,38 +530,42 @@ class ConfigManagerTask(ProcessTaskBase):
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
 
     def task_worker(self):
-        self.config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, platform_chassis)
-        config_db = daemon_base.db_connect("CONFIG_DB")
+        try:
+            self.config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, platform_chassis)
+            config_db = daemon_base.db_connect("CONFIG_DB")
 
-        # Subscribe to CHASSIS_MODULE table notifications in the Config DB
-        sel = swsscommon.Select()
-        sst = swsscommon.SubscriberStateTable(config_db, CHASSIS_CFG_TABLE)
-        sel.addSelectable(sst)
+            # Subscribe to CHASSIS_MODULE table notifications in the Config DB
+            sel = swsscommon.Select()
+            sst = swsscommon.SubscriberStateTable(config_db, CHASSIS_CFG_TABLE)
+            sel.addSelectable(sst)
 
-        # Listen indefinitely for changes to the CFG_CHASSIS_MODULE_TABLE table in the Config DB
-        while True:
-            # Use timeout to prevent ignoring the signals we want to handle
-            # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-            (state, c) = sel.select(SELECT_TIMEOUT)
+            # Listen indefinitely for changes to the CFG_CHASSIS_MODULE_TABLE table in the Config DB
+            while True:
+                # Use timeout to prevent ignoring the signals we want to handle
+                # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+                (state, c) = sel.select(SELECT_TIMEOUT)
 
-            if state == swsscommon.Select.TIMEOUT:
-                # Do not flood log when select times out
-                continue
-            if state != swsscommon.Select.OBJECT:
-                self.logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-                continue
+                if state == swsscommon.Select.TIMEOUT:
+                    # Do not flood log when select times out
+                    continue
+                if state != swsscommon.Select.OBJECT:
+                    self.logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                    continue
 
-            (key, op, fvp) = sst.pop()
+                (key, op, fvp) = sst.pop()
 
-            if op == 'SET':
-                admin_state = MODULE_ADMIN_DOWN
-            elif op == 'DEL':
-                admin_state = MODULE_ADMIN_UP
-            else:
-                continue
+                if op == 'SET':
+                    admin_state = MODULE_ADMIN_DOWN
+                elif op == 'DEL':
+                    admin_state = MODULE_ADMIN_UP
+                else:
+                    continue
 
-            self.config_updater.module_config_update(key, admin_state)
+                self.config_updater.module_config_update(key, admin_state)
 
+        except Exception as e:
+            # Log any exceptions that occur
+            self.logger.log_error("Exception in task_worker:", str(e))
 #
 # Daemon =======================================================================
 #
@@ -580,27 +608,23 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             sys.exit(CHASSIS_LOAD_ERROR)
 
         # Check for valid slot numbers
-        my_slot = try_get(platform_chassis.get_my_slot,
-                                              default=INVALID_SLOT)
-        supervisor_slot = try_get(platform_chassis.get_supervisor_slot,
-                                                      default=INVALID_SLOT)
-        
+        my_slot = try_get(platform_chassis.get_my_slot, default=INVALID_SLOT)
+        supervisor_slot = try_get(platform_chassis.get_supervisor_slot, default=INVALID_SLOT)
+
         # Check if module list is populated
         self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
+        if not ModuleBase.MODULE_TYPE_DPU and \
+           not ModuleBase.MODULE_TYPE_SWITCH:
+            if ((self.module_updater.my_slot == INVALID_SLOT) or
+                    (self.module_updater.supervisor_slot == INVALID_SLOT)):
+                self.log_error("Chassisd not supported for this platform")
+                sys.exit(CHASSIS_NOT_SUPPORTED)
 
-        if ((self.module_updater.my_slot == INVALID_SLOT) or
-                (self.module_updater.supervisor_slot == INVALID_SLOT)):
-            self.log_error("Chassisd not supported for this platform")
-            sys.exit(CHASSIS_NOT_SUPPORTED)
-
-        # Start configuration manager task on supervisor module
-        if self.module_updater.supervisor_slot == self.module_updater.my_slot:
-            config_manager = ConfigManagerTask()
-            config_manager.task_run()
-        else:
-            config_manager = None
+        config_manager = ConfigManagerTask()
+        thread1 = threading.Thread(target=config_manager.task_worker)
+        thread1.start()
 
         # Start main loop
         self.log_info("Start daemon main loop")
