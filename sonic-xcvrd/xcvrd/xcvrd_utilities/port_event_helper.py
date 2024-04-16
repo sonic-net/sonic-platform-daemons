@@ -133,6 +133,8 @@ class PortChangeObserver:
                     fvp = dict(fvp) if fvp is not None else {}
                     role = fvp.get(multi_asic.PORT_ROLE, None)
                     if role:
+                        # If an internal port is broken out on the fly using DPB,
+                        # the assumption here is that we would recieve CONFIG_DB or APPL_DB notification before STATE_DB
                         self.port_role_map[port_name] = role
                     else:
                         # role attribute might not be present for state DB
