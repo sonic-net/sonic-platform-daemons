@@ -2500,7 +2500,9 @@ class TestXcvrdScript(object):
          (1, 193100, 75, True),
          (1, 193100, 100, False),
          (1, 193125, 75, False),
-         (1, 193100, 25, True)
+         (1, 193100, 25, False),
+         (1, 191295, 75, False),
+         (1, 196105, 75, False)
     ])
     def test_CmisManagerTask_config_laser_frequency_validate(self, lport, freq, grid, expected):
         mock_xcvr_api = MagicMock()
