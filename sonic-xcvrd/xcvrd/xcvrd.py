@@ -1217,10 +1217,7 @@ class CmisManagerTask(threading.Thread):
     def configure_laser_frequency(self, api, lport, freq, grid=75):
         if api.get_tuning_in_progress():
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
-        try:
-            return api.set_laser_freq(freq, grid)
-        except:
-            return False
+        return api.set_laser_freq(freq, grid)
 
     def post_port_active_apsel_to_db(self, api, lport, host_lanes_mask):
         try:
