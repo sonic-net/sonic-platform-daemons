@@ -1193,10 +1193,10 @@ class CmisManagerTask(threading.Thread):
         supported_grid, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
-            return false
+            return False
         if freq > highf:
             self.log_error("{} configured freq:{} GHz is higher than the supported freq:{} GHz".format(lport, freq, highf))
-            return false
+            return False
         if grid == 75:
             if (supported_grid >> 7) & 0x1 != 1:
                 self.log_error("{} 75GHz is not supported".format(lport))
@@ -1209,9 +1209,9 @@ class CmisManagerTask(threading.Thread):
             if (supported_grid >> 5) & 0x1 != 1:
                 self.log_error("{} 100GHz is not supported".format(lport))
                 return False
-            else:
-                self.log_error("{} {}GHz is not supported".format(lport, grid))
-                return False
+        else:
+            self.log_error("{} {}GHz is not supported".format(lport, grid))
+            return False
         return True
 
     def configure_laser_frequency(self, api, lport, freq, grid=75):
