@@ -579,9 +579,13 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, sfp_error_event)
         task._init_port_sfp_status_tbl(port_mapping, xcvr_table_helper, stop_event)
 
-    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', None)))
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', '/invalid/path')))
     def test_load_media_settings_missing_file(self):
         assert media_settings_parser.load_media_settings() == {}
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', '/invalid/path')))
+    def test_load_optical_si_settings_missing_file(self):
+        assert optics_si_parser.load_optics_si_settings() == {}
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.is_cmis_api')
@@ -837,6 +841,60 @@ class TestXcvrdScript(object):
         assert not is_error_block_eeprom_reading(int(SFP_STATUS_INSERTED))
         assert not is_error_block_eeprom_reading(int(SFP_STATUS_REMOVED))
 
+
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.Table')
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_handle_front_panel_filter(self, mock_select, mock_sub_table, mock_swsscommon_table):
+        class DummyPortChangeEventHandler:
+            def __init__(self):
+                self.port_event_cache = []
+
+            def handle_port_change_event(self, port_event):
+                self.port_event_cache.append(port_event)
+
+        CONFIG_DB = 'CONFIG_DB'
+        PORT_TABLE = swsscommon.CFG_PORT_TABLE_NAME
+        port_change_event_handler = DummyPortChangeEventHandler()
+
+        mock_table = MagicMock()
+        mock_table.getKeys =  MagicMock(return_value=['Ethernet0', 'Ethernet8', 'Ethernet16'])
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )),
+                                                (True, (('index', 2), ('role', 'Dpc'))),
+                                                (True, (('index', 3), ('role', 'Ext')))
+                                                ])
+        mock_swsscommon_table.return_value = mock_table
+
+        mock_selectable = MagicMock()
+        side_effect_list = [
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '40000'))),
+            ('Ethernet8', swsscommon.SET_COMMAND, (('index', '2'), ('speed', '80000'), ('role', 'Dpc'))),
+            ('Ethernet16', swsscommon.SET_COMMAND, (('index', '3'), ('speed', '80000'), ('role', 'Ext'))),
+            (None, None, None)
+        ]
+        mock_selectable.pop = MagicMock(side_effect=side_effect_list)
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+        logger = MagicMock()
+        stop_event = threading.Event()
+        stop_event.is_set = MagicMock(return_value=False)
+
+        observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event,
+                                     port_change_event_handler.handle_port_change_event,
+                                     [{CONFIG_DB: PORT_TABLE}])
+
+        # Only Ethernet8 is filled in the role map
+        assert observer.port_role_map['Ethernet8'] == 'Dpc'
+        assert observer.port_role_map['Ethernet16'] == 'Ext'
+        assert 'Ethernet0' not in observer.port_role_map
+
+        # Test basic single update event without filtering:
+        assert observer.handle_port_update_event()
+        assert len(port_change_event_handler.port_event_cache) == 2
+        assert list(observer.port_event_cache.keys()) == [('Ethernet0', CONFIG_DB, PORT_TABLE), ('Ethernet16', CONFIG_DB, PORT_TABLE)]
+
+
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
@@ -1025,8 +1083,9 @@ class TestXcvrdScript(object):
     @patch('swsscommon.swsscommon.Table')
     def test_get_port_mapping(self, mock_swsscommon_table):
         mock_table = MagicMock()
-        mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0'])
-        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), (True, (('index', 3), ))])
+        mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0', 'Ethernet8'])
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), 
+                        (True, (('index', 3), )), (True, (('index', 4), ('role', 'Dpc')))])
         mock_swsscommon_table.return_value = mock_table
         port_mapping = get_port_mapping(DEFAULT_NAMESPACE)
         assert port_mapping.logical_port_list.count('Ethernet0')
@@ -1043,6 +1102,11 @@ class TestXcvrdScript(object):
         assert port_mapping.get_asic_id_for_logical_port('Ethernet-IB0') == None
         assert port_mapping.get_physical_to_logical(3) == None
         assert port_mapping.get_logical_to_physical('Ethernet-IB0') == None
+
+        assert port_mapping.logical_port_list.count('Ethernet8') == 0
+        assert port_mapping.get_asic_id_for_logical_port('Ethernet8') == None
+        assert port_mapping.get_physical_to_logical(4) == None
+        assert port_mapping.get_logical_to_physical('Ethernet8') == None
 
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
@@ -2448,7 +2512,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))
-    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', '/tmp')))
     @patch('swsscommon.swsscommon.WarmStart', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     def test_DaemonXcvrd_init_deinit_fastboot_enabled(self):
@@ -2471,7 +2535,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))
-    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', '/tmp')))
     @patch('xcvrd.xcvrd.is_warm_reboot_enabled', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
     @patch('subprocess.check_output', MagicMock(return_value='false'))
@@ -2496,6 +2560,21 @@ class TestXcvrdScript(object):
 
             status_tbl.hdel.assert_called()
 
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=(test_path, '/invalid/path')))
+    def test_load_optical_si_file_from_platform_folder(self):
+        assert optics_si_parser.load_optics_si_settings() != {}
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', test_path)))
+    def test_load_optical_si_file_from_hwsku_folder(self):
+        assert optics_si_parser.load_optics_si_settings() != {}
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=(test_path, '/invalid/path')))
+    def test_load_media_settings_file_from_platform_folder(self):
+        assert media_settings_parser.load_media_settings() != {}
+
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', test_path)))
+    def test_load_media_settings_file_from_hwsku_folder(self):
+        assert media_settings_parser.load_media_settings() != {}
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
