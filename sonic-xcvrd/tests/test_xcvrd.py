@@ -75,11 +75,11 @@ media_settings_global_range_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPH
 
 media_settings_global_range_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
 media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-sm_media_interface')
-media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-active_cable_media_interface')
+media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR*'] = media_settings_global_range_generic_vendor_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS']['0-31'].pop('QSFP-DD-active_cable_media_interface')
 
 media_settings_global_range_generic_vendor_key_si = copy.deepcopy(media_settings_global_range_generic_vendor_key_lane_speed_si)
 media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['AMPHANOL-1234'].pop('speed:400GAUI-8')
-media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR'].pop('speed:100GAUI-2')
+media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR*'] = media_settings_global_range_generic_vendor_key_si['GLOBAL_MEDIA_SETTINGS']['0-31']['GENERIC_VENDOR*'].pop('speed:100GAUI-2')
 
 media_settings_global_list_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
 new_key = str(','.join([str(i) for i in range(32)]))
@@ -119,11 +119,11 @@ media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cab
 
 media_settings_port_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-sm_media_interface')
-media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-active_cable_media_interface')
+media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR*'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-active_cable_media_interface')
 
 media_settings_port_generic_vendor_key_si = copy.deepcopy(media_settings_port_generic_vendor_key_lane_speed_si)
 media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'].pop('speed:400GAUI-8')
-media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'] = media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'].pop('speed:100GAUI-2')
+media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR*'] = media_settings_port_generic_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR*'].pop('speed:100GAUI-2')
 
 media_settings_global_default_port_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
 port_media_settings_data = {'7': media_settings_global_default_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'].pop('0-31')}
