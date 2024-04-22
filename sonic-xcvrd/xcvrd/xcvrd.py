@@ -1207,18 +1207,40 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
-    def configure_laser_frequency(self, api, lport, freq, grid=75):
-        _, _,  _, lowf, highf = api.get_supported_freq_config()
+    # Verify if the configured frequency is valid or supported
+    # Now it only checks for grids 75 and 100. This needs to be implemented when more grids are supported.
+    def verify_config_laser_frequency(self, api, lport, freq, grid=75):
+        grid_supported, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
+            return False
         if freq > highf:
             self.log_error("{} configured freq:{} GHz is higher than the supported freq:{} GHz".format(lport, freq, highf))
-        chan = int(round((freq - 193100)/25))
-        if chan % 3 != 0:
-            self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+            return False
+        if grid == 75:
+            if (grid_supported >> 7) & 0x1 != 1:
+                self.log_error("{} 75GHz is not supported".format(lport))
+                return False
+            chan = int(round((freq - 193100)/25))
+            if chan % 3 != 0:
+                self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+                return False
+        elif grid == 100:
+            if (grid_supported >> 5) & 0x1 != 1:
+                self.log_error("{} 100GHz is not supported".format(lport))
+                return False
+        else:
+            self.log_error("{} {}GHz is not supported".format(lport, grid))
+            return False
+        return True
+
+    def configure_laser_frequency(self, api, lport, freq, grid=75):
         if api.get_tuning_in_progress():
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
-        return api.set_laser_freq(freq, grid)
+        try:
+            return api.set_laser_freq(freq, grid)
+        except:
+            return False
 
     def post_port_active_apsel_to_db(self, api, lport, host_lanes_mask):
         try:
@@ -1442,11 +1464,15 @@ class CmisManagerTask(threading.Thread):
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                           freq = self.port_dict[lport]['laser_freq']
-                           # If user requested frequency is NOT the same as configured on the module
-                           # force datapath re-initialization
-                           if 0 != freq and freq != api.get_laser_config_freq():
-                              need_update = True
+                            freq = self.port_dict[lport]['laser_freq']
+                            # If user requested frequency is NOT the same as configured on the module
+                            # force datapath re-initialization
+                            if 0 != freq and freq != api.get_laser_config_freq():
+                                if self.verify_config_laser_frequency(api, lport, freq) == True:
+                                    need_update = True
+                                else:
+                                    # clear the invalid freq to prevent setting in AP_CONFIGURED
+                                    self.port_dict[lport]['laser_freq'] = 0
 
                         if not need_update:
                             # No application updates
