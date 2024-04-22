@@ -242,7 +242,7 @@ class ModuleUpdater(logger.Logger):
         if isinstance(fvs, list) and fvs[0] is True:
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-        return ModuleBase.MODULE_STATUS_EMPTY        
+        return ModuleBase.MODULE_STATUS_EMPTY
             
     def module_db_update(self):
         notOnlineModules = []
@@ -302,16 +302,22 @@ class ModuleUpdater(logger.Logger):
                     elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
                         self.log_notice("Module {} is on-line!".format(key))
 
-                for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
-                    asic_global_id, asic_pci_addr = asic
-                    asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
-                    if not self._is_supervisor():
-                        asic_key = "%s|%s" % (key, asic_key)
+                    module_cfg_status = self.get_module_current_status(key)
+                    if module_cfg_status == ModuleBase.MODULE_STATUS_EMPTY:
+                        continue
+                    
+                    #Only populate the related tables when the module configure is down
+                    if module_cfg_status == 'down':
+                        for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
+                            asic_global_id, asic_pci_addr = asic
+                            asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
+                            if not self._is_supervisor():
+                                asic_key = "%s|%s" % (key, asic_key)
 
-                    asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
-                                                            (CHASSIS_MODULE_INFO_NAME_FIELD, key),
-                                                            (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
-                    self.asic_table.set(asic_key, asic_fvs)
+                            asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
+                                                                    (CHASSIS_MODULE_INFO_NAME_FIELD, key),
+                                                                    (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
+                            self.asic_table.set(asic_key, asic_fvs)
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
         # The hostname is used as key to access chassis app db entries 
