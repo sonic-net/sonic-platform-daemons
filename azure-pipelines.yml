@@ -18,8 +18,7 @@ pr:
     include:
       - '*'
 
-pool:
-  vmImage: 'ubuntu-20.04'
+pool: sonic-common
 
 resources:
   containers:
@@ -114,6 +113,7 @@ jobs:
         # Install .NET CORE
         curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
         sudo apt-add-repository https://packages.microsoft.com/debian/10/prod
+        sudo sed -i 's#http://deb.debian.org/debian/ buster-backports#https://archive.debian.org/debian/ buster-backports#' /etc/apt/sources.list
         sudo apt-get update
         sudo apt-get install -y dotnet-sdk-5.0
       displayName: "Install .NET CORE"
