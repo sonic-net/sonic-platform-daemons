@@ -1207,7 +1207,7 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
-    def config_laser_frequency_validate(self, api, lport, freq, grid=75):
+    def validate_frequency_and_grid(self, api, lport, freq, grid=75):
         supported_grid, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
@@ -1217,18 +1217,18 @@ class CmisManagerTask(threading.Thread):
             return False
         if grid == 75:
             if (supported_grid >> 7) & 0x1 != 1:
-                self.log_error("{} 75GHz is not supported".format(lport))
+                self.log_error("{} configured freq:{}GHz supported grid:{} 75GHz is not supported".format(lport, freq, supported_grid))
                 return False
             chan = int(round((freq - 193100)/25))
             if chan % 3 != 0:
-                self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+                self.log_error("{} configured freq:{}GHz is NOT in 75GHz grid".format(lport, freq))
                 return False
         elif grid == 100:
             if (supported_grid >> 5) & 0x1 != 1:
-                self.log_error("{} 100GHz is not supported".format(lport))
+                self.log_error("{} configured freq:{}GHz 100GHz is not supported".format(lport, freq))
                 return False
         else:
-            self.log_error("{} {}GHz is not supported".format(lport, grid))
+            self.log_error("{} configured freq:{}GHz {}GHz is not supported".format(lport, freq, grid))
             return False
         return True
 
@@ -1463,7 +1463,7 @@ class CmisManagerTask(threading.Thread):
                             # If user requested frequency is NOT the same as configured on the module
                             # force datapath re-initialization
                             if 0 != freq and freq != api.get_laser_config_freq():
-                                if self.config_laser_frequency_validate(api, lport, freq) == True:
+                                if self.validate_frequency_and_grid(api, lport, freq) == True:
                                     need_update = True
                                 else:
                                     # clear setting of invalid frequency config
