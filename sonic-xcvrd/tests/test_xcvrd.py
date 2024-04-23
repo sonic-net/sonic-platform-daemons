@@ -2599,14 +2599,14 @@ class TestXcvrdScript(object):
          (1, 191295, 75, False),
          (1, 196105, 75, False)
     ])
-    def test_CmisManagerTask_config_laser_frequency_validate(self, lport, freq, grid, expected):
+    def test_CmisManagerTask_validate_frequency_and_grid(self, lport, freq, grid, expected):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_supported_freq_config = MagicMock()
         mock_xcvr_api.get_supported_freq_config.return_value = (0x80, 0, 0, 191300, 196100)
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        result = task.config_laser_frequency_validate(mock_xcvr_api, lport, freq, grid)
+        result = task.validate_frequency_and_grid(mock_xcvr_api, lport, freq, grid)
         assert result == expected
 
 
