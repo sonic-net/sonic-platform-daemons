@@ -84,6 +84,7 @@ INVALID_SLOT = ModuleBase.MODULE_INVALID_SLOT
 INVALID_MODULE_INDEX = -1
 INVALID_IP = '0.0.0.0'
 
+CHASSIS_MODULE_ADMIN_STATUS = 'admin_status'
 MODULE_ADMIN_DOWN = 0
 MODULE_ADMIN_UP = 1
 
@@ -243,7 +244,17 @@ class ModuleUpdater(logger.Logger):
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
         return ModuleBase.MODULE_STATUS_EMPTY
-            
+
+    def get_module_admin_status(self, chassis_module_name):
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        vtable = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
+        fvs = vtable.get(chassis_module_name)
+        if isinstance(fvs, list) and fvs[0] is True:
+            fvs = dict(fvs[-1])
+            return fvs[CHASSIS_MODULE_ADMIN_STATUS]
+        else:
+            return 'up'
+
     def module_db_update(self):
         notOnlineModules = []
 
@@ -302,12 +313,10 @@ class ModuleUpdater(logger.Logger):
                     elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
                         self.log_notice("Module {} is on-line!".format(key))
 
-                    module_cfg_status = self.get_module_current_status(key)
-                    if module_cfg_status == ModuleBase.MODULE_STATUS_EMPTY:
-                        continue
-                    
-                    #Only populate the related tables when the module configure is down
-                    if module_cfg_status == 'down':
+                    module_cfg_status = self.get_module_admin_status(key)
+
+                    #Only populate the related tables when the module configure is up
+                    if module_cfg_status != 'down':
                         for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
                             asic_global_id, asic_pci_addr = asic
                             asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
