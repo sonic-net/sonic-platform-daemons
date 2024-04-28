@@ -110,3 +110,6 @@ class MockChassis:
 
     def get_revision(self):
         return "Rev C"
+
+    def is_smartswitch(self):
+        return False
