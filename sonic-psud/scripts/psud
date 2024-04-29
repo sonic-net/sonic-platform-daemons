@@ -12,6 +12,8 @@
 import signal
 import sys
 import threading
+import os
+import subprocess
 from datetime import datetime
 
 from sonic_platform.psu import Psu
@@ -279,6 +281,7 @@ class PsuStatus(object):
     def __init__(self, logger, psu, psu_index):
         self.psu = psu
         self.psu_index = psu_index
+        self.psu_model = None
         self.presence = True
         self.power_good = True
         self.voltage_good = True
@@ -577,6 +580,15 @@ class DaemonPsud(daemon_base.DaemonBase):
 
         if set_led:
             self._set_psu_led(psu, psu_status)
+
+        if self.first_run and power_good:
+            psu_status.psu_model = psu.get_model()
+        if not self.first_run and os.path.exists('/usr/share/sonic/platform/psu_sensors_conf_updater') and power_good and psu.get_model() != psu_status.psu_model:
+            psu_status.psu_model = psu.get_model()
+            subprocess.run("cp -f /etc/sensors.d/sensors.conf /tmp/sensors.conf.orig", shell=True)
+            subprocess.run("bash -c 'source /usr/share/sonic/platform/psu_sensors_conf_updater && update_psu_sensors_configuration /tmp/sensors.conf.orig'", shell=True)
+            subprocess.run("cp -f /tmp/sensors.conf /etc/sensors.d/", shell=True)
+            subprocess.run("service sensord restart", shell=True)
 
         fvs = swsscommon.FieldValuePairs(
             [(PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))),
