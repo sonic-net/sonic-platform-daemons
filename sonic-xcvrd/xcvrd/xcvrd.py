@@ -308,6 +308,15 @@ def _wrapper_get_transceiver_pm(physical_port):
             pass
     return {}
 
+def _wrapper_is_flat_memory(physical_port):
+    if platform_chassis is not None:
+        try:
+            sfp = platform_chassis.get_sfp(physical_port)
+            api = sfp.get_xcvr_api()
+            return api.is_flat_memory()
+        except NotImplementedError:
+            pass
+    return None
 
 # Soak SFP insert event until management init completes
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
@@ -584,6 +593,9 @@ def post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, table,
         if not _wrapper_get_presence(physical_port):
             continue
 
+        if _wrapper_is_flat_memory(physical_port) == True:
+            continue
+
         port_name = get_physical_port_name(logical_port_name,
                                            ganged_member_num, ganged_port)
         ganged_member_num += 1
@@ -619,6 +631,9 @@ def post_port_dom_info_to_db(logical_port_name, port_mapping, table, stop_event=
         if not _wrapper_get_presence(physical_port):
             continue
 
+        if _wrapper_is_flat_memory(physical_port) == True:
+            continue
+
         try:
             if dom_info_cache is not None and physical_port in dom_info_cache:
                 # If cache is enabled and dom information is in cache, just read from cache, no need read from EEPROM
@@ -648,6 +663,9 @@ def post_port_pm_info_to_db(logical_port_name, port_mapping, table, stop_event=t
             break
 
         if not _wrapper_get_presence(physical_port):
+            continue
+
+        if _wrapper_is_flat_memory(physical_port) == True:
             continue
 
         if pm_info_cache is not None and physical_port in pm_info_cache:
@@ -1189,15 +1207,32 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
-    def configure_laser_frequency(self, api, lport, freq, grid=75):
-        _, _,  _, lowf, highf = api.get_supported_freq_config()
+    def validate_frequency_and_grid(self, api, lport, freq, grid=75):
+        supported_grid, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
+            return False
         if freq > highf:
             self.log_error("{} configured freq:{} GHz is higher than the supported freq:{} GHz".format(lport, freq, highf))
-        chan = int(round((freq - 193100)/25))
-        if chan % 3 != 0:
-            self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+            return False
+        if grid == 75:
+            if (supported_grid >> 7) & 0x1 != 1:
+                self.log_error("{} configured freq:{}GHz supported grid:{} 75GHz is not supported".format(lport, freq, supported_grid))
+                return False
+            chan = int(round((freq - 193100)/25))
+            if chan % 3 != 0:
+                self.log_error("{} configured freq:{}GHz is NOT in 75GHz grid".format(lport, freq))
+                return False
+        elif grid == 100:
+            if (supported_grid >> 5) & 0x1 != 1:
+                self.log_error("{} configured freq:{}GHz 100GHz is not supported".format(lport, freq))
+                return False
+        else:
+            self.log_error("{} configured freq:{}GHz {}GHz is not supported".format(lport, freq, grid))
+            return False
+        return True
+
+    def configure_laser_frequency(self, api, lport, freq, grid=75):
         if api.get_tuning_in_progress():
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
@@ -1424,11 +1459,15 @@ class CmisManagerTask(threading.Thread):
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                           freq = self.port_dict[lport]['laser_freq']
-                           # If user requested frequency is NOT the same as configured on the module
-                           # force datapath re-initialization
-                           if 0 != freq and freq != api.get_laser_config_freq():
-                              need_update = True
+                            freq = self.port_dict[lport]['laser_freq']
+                            # If user requested frequency is NOT the same as configured on the module
+                            # force datapath re-initialization
+                            if 0 != freq and freq != api.get_laser_config_freq():
+                                if self.validate_frequency_and_grid(api, lport, freq) == True:
+                                    need_update = True
+                                else:
+                                    # clear setting of invalid frequency config
+                                    self.port_dict[lport]['laser_freq'] = 0
 
                         if not need_update:
                             # No application updates
