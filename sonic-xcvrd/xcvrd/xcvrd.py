@@ -30,7 +30,7 @@ try:
     from .xcvrd_utilities import port_mapping
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
-    
+
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
@@ -781,6 +781,14 @@ def is_fast_reboot_enabled():
     fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
     return "true" in fastboot_enabled
 
+
+def is_warm_reboot_enabled():
+    warmstart = swsscommon.WarmStart()
+    warmstart.initialize("xcvrd", "pmon")
+    warmstart.checkWarmStart("xcvrd", "pmon", False)
+    is_warm_start = warmstart.isWarmStart()
+    return is_warm_start
+
 #
 # Helper classes ===============================================================
 #
@@ -958,7 +966,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-	
+
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -1384,7 +1392,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-			
+
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -1454,8 +1462,8 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == CMIS_STATE_AP_CONF:
-                        # Explicit control bit to apply custom Host SI settings. 
-                        # It will be set to 1 and applied via set_application if 
+                        # Explicit control bit to apply custom Host SI settings.
+                        # It will be set to 1 and applied via set_application if
                         # custom SI settings is applicable
                         ec = 0
 
@@ -1487,13 +1495,13 @@ class CmisManagerTask(threading.Thread):
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-                            
+
                             self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                             for key, sub_dict in optics_si_dict.items():
                                 self.log_debug("{}".format(key))
                                 for sub_key, value in sub_dict.items():
                                     self.log_debug("{}: {}".format(sub_key, str(value)))
-                            
+
                             if optics_si_dict:
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                  format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
@@ -1842,11 +1850,7 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        warmstart = swsscommon.WarmStart()
-        warmstart.initialize("xcvrd", "pmon")
-        warmstart.checkWarmStart("xcvrd", "pmon", False)
-        is_warm_start = warmstart.isWarmStart()
-
+        is_warm_start = is_warm_reboot_enabled()
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -2429,6 +2433,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def deinit(self):
         self.log_info("Start daemon deinit...")
 
+        is_warm_fast_reboot = is_warm_reboot_enabled() or is_fast_reboot_enabled()
+
         # Delete all the information from DB and then exit
         port_mapping_data = port_mapping.get_port_mapping(self.namespaces)
         logical_port_list = port_mapping_data.logical_port_list
@@ -2439,15 +2445,18 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                 continue
 
+            intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index) if not is_warm_fast_reboot else None
+
             del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data,
-                                          self.xcvr_table_helper.get_intf_tbl(asic_index),
+                                          intf_tbl,
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
                                           self.xcvr_table_helper.get_pm_tbl(asic_index),
                                           self.xcvr_table_helper.get_firmware_info_tbl(asic_index))
-            delete_port_from_status_table_sw(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index))
-            delete_port_from_status_table_hw(logical_port_name, port_mapping_data, self.xcvr_table_helper.get_status_tbl(asic_index))
 
+            if not is_warm_fast_reboot:
+                delete_port_from_status_table_sw(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index))
+                delete_port_from_status_table_hw(logical_port_name, port_mapping_data, self.xcvr_table_helper.get_status_tbl(asic_index))
 
         del globals()['platform_chassis']
 
