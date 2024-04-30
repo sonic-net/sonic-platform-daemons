@@ -71,6 +71,7 @@ CHASSIS_MODULE_INFO_HOSTNAME_FIELD = 'hostname'
 
 CHASSIS_MODULE_REBOOT_INFO_TABLE = 'CHASSIS_MODULE_REBOOT_INFO_TABLE'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
+CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 REBOOT_SYSTEM_UP_WARNING_TIMEOUT = 180 
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
@@ -370,7 +371,9 @@ class ModuleUpdater(logger.Logger):
     def is_module_reboot_expected(self, key):
         fvs = self.module_reboot_table.get(key)
         if isinstance(fvs, list) and fvs[0] is True:
-            return True
+            fvs = dict(fvs[-1])
+            if fvs[CHASSIS_MODULE_REBOOT_REBOOT_FIELD] == "expected":
+                return True
         return False
     
     def module_reboot_set_time(self, key):
@@ -435,7 +438,7 @@ class ModuleUpdater(logger.Logger):
                     self.module_reboot_table._del(module_key)
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
-                    self.log_warning("Unexpected: Module {} lost midplane connectivity for more than 3 minutes".format(module_key))
+                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in 3 minutes".format(module_key))
                     
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
