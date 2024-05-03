@@ -72,7 +72,8 @@ CHASSIS_MODULE_INFO_HOSTNAME_FIELD = 'hostname'
 CHASSIS_MODULE_REBOOT_INFO_TABLE = 'CHASSIS_MODULE_REBOOT_INFO_TABLE'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
-REBOOT_SYSTEM_UP_WARNING_TIMEOUT = 180 
+DEFAULT_LINECARD_REBOOT_TIMEOUT = 180
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
 CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD = 30 # Minutes
@@ -207,6 +208,14 @@ class ModuleUpdater(logger.Logger):
         self.down_modules = {}
         self.chassis_app_db_clean_sha = None
 
+        self.linecard_reboot_timeout = DEFAULT_LINECARD_REBOOT_TIMEOUT
+        if os.path.isfile(PLATFORM_ENV_CONF_FILE):
+            with open(PLATFORM_ENV_CONF_FILE, 'r') as file:
+                for line in file:
+                    field = line.split('=')[0].strip()
+                    if field == "linecard_reboot_timeout":
+                        self.linecard_reboot_timeout = int(line.split('=')[1].strip())
+                        
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
             self.log_error("Chassisd midplane intialization failed")
@@ -388,7 +397,7 @@ class ModuleUpdater(logger.Logger):
             if CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD in fvs.keys():
                 timestamp= float(fvs[CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD])
                 time_now = time.time()
-                if time_now - timestamp >= REBOOT_SYSTEM_UP_WARNING_TIMEOUT:
+                if time_now - timestamp >= self.linecard_reboot_timeout:
                     self.module_reboot_table._del(key)
                     return True
         return False
@@ -438,7 +447,7 @@ class ModuleUpdater(logger.Logger):
                     self.module_reboot_table._del(module_key)
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
-                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in 3 minutes".format(module_key))
+                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.linecard_reboot_timeout))
                     
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
