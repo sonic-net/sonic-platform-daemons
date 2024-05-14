@@ -980,8 +980,9 @@ class CmisManagerTask(threading.Thread):
         """
         api.set_application(0xff, 0, 0)
         api.set_datapath_deinit(0xff)
-        api.scs_apply_datapath_init(0xff)
-        return
+        if not api.scs_apply_datapath_init(0xff):
+            return False
+        return True        
 
     def is_cmis_app_code_reset_required(self, api, app_new):
         """
@@ -992,9 +993,8 @@ class CmisManagerTask(threading.Thread):
             if app_cur != 0 and app_cur != app_new:
                 self.log_notice("Changing from default AppSel {} to non default AppSel code {}. Reset AppSel "
                                 "code for all lanes".format(app_cur, app_new))
-                self.reset_app_code_and_reinit_all_lanes(api)
-                break
-        return
+                return self.reset_app_code_and_reinit_all_lanes(api)
+        return True
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
@@ -1442,8 +1442,11 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-			# Reset and DP Init when non default app code needs to be configured
-			self.is_cmis_app_code_reset_required(api, appl)
+                        # Reset and DP Init when non default app code needs to be configured
+                        if not self.is_cmis_app_code_reset_required(api, appl):
+                           self.log_notice("{}: unable to reset application and  DP reinit".format(lport))
+                           self.force_cmis_reinit(lport, retries + 1)
+                           continue
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
