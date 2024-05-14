@@ -974,6 +974,28 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
+    def reset_app_code_and_reinit_all_lanes(self, api):
+        """
+	   Rest and DP init all the lanes
+        """
+        api.set_application(0xff, 0, 0)
+        api.set_datapath_deinit(0xff)
+        api.scs_apply_datapath_init(0xff)
+        return
+
+    def is_cmis_app_code_reset_required(self, api, app_new):
+        """
+	   Reset app code if non default app code needs to configured 
+        """
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            app_cur = api.get_application(lane)
+            if app_cur != 0 and app_cur != app_new:
+                self.log_notice("Changing from default AppSel {} to non default AppSel code {}. Reset AppSel "
+                                "code for all lanes".format(app_cur, app_new))
+                self.reset_app_code_and_reinit_all_lanes(api)
+                break
+        return
+
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
         Check if the CMIS application update is required
@@ -1000,22 +1022,12 @@ class CmisManagerTask(threading.Thread):
         for lane in range(self.CMIS_MAX_HOST_LANES):
             if ((1 << lane) & host_lanes_mask) == 0:
                 continue
-            app_cur = api.get_application(lane)
             if app_old == 0:
-                app_old = app_cur
-            elif app_cur != 0:
-                if app_cur != app_new:
-                    self.log_notice("Changing from default AppSel {} to non default "
-                                    "AppSel code {}. Reset AppSel code for all lanes"
-                                     .format(app_cur, app_new))
-                    api.set_application(0xff, 0, 0)
-                    api.set_datapath_deinit(0xff)
-                    api.scs_apply_datapath_init(0xff)
-                    return True
-            elif app_old != app_cur:
+                app_old = api.get_application(lane)
+            elif app_old != api.get_application(lane):
                 self.log_notice("Not all the lanes are in the same application mode "
                                 "app_old {} current app {} lane {} host_lanes_mask {}".format(
-                                app_old, app_cur, lane, host_lanes_mask))
+                                app_old, api.get_application(lane), lane, host_lanes_mask))
                 self.log_notice("Forcing application update...")
                 return True
 
@@ -1429,6 +1441,9 @@ class CmisManagerTask(threading.Thread):
                                  self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
+
+			# Reset and DP Init when non default app code needs to be configured
+			self.is_cmis_app_code_reset_required(api, appl)
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
