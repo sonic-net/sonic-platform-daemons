@@ -207,8 +207,6 @@ class DaemonStorage(daemon_base.DaemonBase):
 
     def _reconcile_fsio_rw_values(self, fsio_dict, device):
 
-        import pdb; pdb.set_trace()
-
         # If stormond is coming up for the first time, neither STATE_DB info nor JSON file would be present.
         # In that case, neither resource would have any prior information stored. The baseline is 0 for every field.
         if self.use_statedb_baseline == False and self.use_fsio_json_baseline == False:
