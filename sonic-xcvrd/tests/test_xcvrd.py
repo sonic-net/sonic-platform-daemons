@@ -1400,12 +1400,12 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    def test_CmisManagerTask_reset_app_code_and_reinit_all_lanes(self):
+    def test_CmisManagerTask_decommission_all_datapaths(self):
         mock_xcvr_api = MagicMock()
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        task.reset_app_code_and_reinit_all_lanes(mock_xcvr_api)
+        assert task.decommission_all_datapaths(mock_xcvr_api) == True
 
         assert mock_xcvr_api.set_application.call_count == 1
         assert mock_xcvr_api.set_datapath_deinit.call_count == 1
@@ -1415,7 +1415,7 @@ class TestXcvrdScript(object):
         (2, {0 : 1, 1 : 1, 2 : 1, 3 : 1, 4 : 2, 5 : 2, 6 : 2, 7 : 2}),
         (0, {0 : 1, 1 : 1, 2 : 1, 3 : 1},)
      ])
-    def test_CmisManagerTask_is_cmis_app_code_reset_required(self, app_new, lane_appl_code):
+    def test_CmisManagerTask_is_appl_reconfigure_required(self, app_new, lane_appl_code):
         mock_xcvr_api = MagicMock()
         def get_application(lane):
             return lane_appl_code.get(lane, 0)
@@ -1423,7 +1423,8 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        task.is_cmis_app_code_reset_required(mock_xcvr_api, app_new)
+        mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=True)
+        assert task.is_appl_reconfigure_required(mock_xcvr_api, app_new) == True
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
