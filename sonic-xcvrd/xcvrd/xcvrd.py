@@ -974,26 +974,27 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
-    def reset_app_code_and_reinit_all_lanes(self, api):
+    def decommission_all_datapaths(self, api):
         """
-	   Rest and DP init all the lanes
+	   Reset and DP init all the lanes
         """
-        api.set_application(0xff, 0, 0)
-        api.set_datapath_deinit(0xff)
-        if not api.scs_apply_datapath_init(0xff):
+        self.log_notice("Changing from default AppSel to non default AppSel code. Decommission all datapaths")
+        lanes = (1 << self.CMIS_MAX_HOST_LANES) - 1
+        api.set_datapath_deinit(lanes)
+        api.set_application(lanes, 0, 0)
+        if not api.scs_apply_datapath_init(lanes):
             return False
-        return True        
+        return True
+        
 
-    def is_cmis_app_code_reset_required(self, api, app_new):
+    def is_appl_reconfigure_required(self, api, app_new):
         """
 	   Reset app code if non default app code needs to configured 
         """
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
             if app_cur != 0 and app_cur != app_new:
-                self.log_notice("Changing from default AppSel {} to non default AppSel code {}. Reset AppSel "
-                                "code for all lanes".format(app_cur, app_new))
-                return self.reset_app_code_and_reinit_all_lanes(api)
+                return self.decommission_all_datapaths(api)
         return True
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
@@ -1442,9 +1443,9 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-                        # Reset and DP Init when non default app code needs to be configured
-                        if not self.is_cmis_app_code_reset_required(api, appl):
-                           self.log_notice("{}: unable to reset application and  DP reinit".format(lport))
+                        # Set all the AppSel to unused(0) when non default app code needs to be configured
+                        if not self.is_appl_reconfigure_required(api, appl):
+                           self.log_notice("{}: unable to reset application and DP reinit".format(lport))
                            self.force_cmis_reinit(lport, retries + 1)
                            continue
 
