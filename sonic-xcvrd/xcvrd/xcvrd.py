@@ -995,20 +995,7 @@ class CmisManagerTask(threading.Thread):
                             media_lane_assignment_option, media_lane_start_bit, media_lane_count,
                             lport, subport, appl))
 
-        return media_lanes_mask
-
-    def decommission_all_datapaths(self, api):
-        """
-	   Reset and DP init all the lanes
-        """
-        self.log_notice("Changing from default AppSel to non default AppSel code. Decommission all datapaths")
-        lanes = (1 << self.CMIS_MAX_HOST_LANES) - 1
-        api.set_datapath_deinit(lanes)
-        api.set_application(lanes, 0, 0)
-        if not api.scs_apply_datapath_init(lanes):
-            return False
-        return True
-        
+        return media_lanes_mask        
 
     def is_appl_reconfigure_required(self, api, app_new):
         """
@@ -1017,7 +1004,7 @@ class CmisManagerTask(threading.Thread):
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
             if app_cur != 0 and app_cur != app_new:
-                return self.decommission_all_datapaths(api)
+                return api.decommission_all_datapaths(api)
         return True
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
