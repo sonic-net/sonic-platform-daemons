@@ -1,5 +1,6 @@
 import os
 import sys
+import mock
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
@@ -39,6 +40,10 @@ CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
 
 CHASSIS_ASIC_PCI_ADDRESS_FIELD = 'asic_pci_address'
 CHASSIS_ASIC_ID_IN_MODULE_FIELD = 'asic_id_in_module'
+
+CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
+CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 def setup_function():
     ModuleUpdater.log_notice = MagicMock()
@@ -357,6 +362,125 @@ def test_midplane_presence_modules():
     fvs = midplane_table.get(name)
     assert fvs == None
 
+builtin_open = open  # save the unpatched version
+def mock_open(*args, **kwargs):
+    if args[0] == PLATFORM_ENV_CONF_FILE:
+        return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
+    # unpatched version for every other path
+    return builtin_open(*args, **kwargs)
+
+@patch("builtins.open", mock_open)
+@patch('os.path.isfile', MagicMock(return_value=True))
+def test_midplane_presence_modules_linecard_reboot():
+    chassis = MockChassis()
+        
+    #Supervisor
+    index = 0
+    name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    slot = 16
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard
+    index = 1
+    name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    slot = 1
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Fabric-card
+    index = 1
+    name = "FABRIC-CARD0"
+    desc = "Switch fabric card"
+    slot = 17
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
+    chassis.module_list.append(fabric)
+
+    #Run on supervisor
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.supervisor_slot = supervisor.get_slot()
+    module_updater.my_slot = supervisor.get_slot()
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    module_updater.check_midplane_reachability()
+
+    midplane_table = module_updater.midplane_table
+    #Check only one entry in database
+    assert 1 == midplane_table.size()
+
+    #Check fields in database
+    name = "LINE-CARD0"
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of line-card to Up (midplane connectivity is down initially)
+    module.set_midplane_reachable(True)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    
+    #Set access of line-card to Down (to mock midplane connectivity state change)
+    module.set_midplane_reachable(False)
+    # set expected reboot of linecard
+    module_reboot_table = module_updater.module_reboot_table
+    linecard_fvs = swsscommon.FieldValuePairs([("reboot", "expected")])
+    module_reboot_table.set(name,linecard_fvs)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of line-card to up on time (to mock midplane connectivity state change)
+    module.set_midplane_reachable(True)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    # test linecard reboot midplane connectivity restored timeout
+    # Set access of line-card to Down (to mock midplane connectivity state change)
+    module.set_midplane_reachable(False)
+    linecard_fvs = swsscommon.FieldValuePairs([("reboot", "expected")])
+    module_reboot_table.set(name,linecard_fvs)
+    module_updater.check_midplane_reachability()
+    time_now= time.time() - module_updater.linecard_reboot_timeout
+    linecard_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD, str(time_now))])
+    module_reboot_table.set(name,linecard_fvs)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]   
+    assert module_updater.linecard_reboot_timeout == 240    
+    
 def test_midplane_presence_supervisor():
     chassis = MockChassis()
 
@@ -652,8 +776,83 @@ def test_chassis_db_cleanup():
 
     # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD1
     down_module_key = lc2_name+"|"
-    module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
-    sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
-
-    # Run module database update from supervisor to run chassis db cleanup
+    assert  down_module_key not in sup_module_updater.down_modules.keys()
+    
     sup_module_updater.module_down_chassis_db_cleanup()
+
+def test_chassis_db_bootup_with_empty_slot():
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    sup_name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    sup_slot = 16
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, sup_name, desc, module_type, sup_slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard 0. Host name will be pushed for this to make clean up happen
+    index = 1
+    lc_name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    lc_slot = 1
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, lc_name, desc, module_type, lc_slot, serial)
+    module.set_midplane_ip()
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    #Linecard 1. Host name will not be pushed for this so that clean up will not happen
+    index = 2
+    lc2_name = u"LINE-CARD1"
+    desc = "Unavailable'"
+    lc2_slot = 2
+    serial = "N/A"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module2 = MockModule(index, lc2_name, desc, module_type, lc2_slot, serial)
+    module2.set_midplane_ip()
+    status = ModuleBase.MODULE_STATUS_EMPTY
+    module2.set_oper_status(status)
+    chassis.module_list.append(module2)
+
+    # Supervisor ModuleUpdater
+    sup_module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
+    sup_module_updater.modules_num_update()
+    
+    sup_module_updater.module_db_update()
+
+    # check LC1 STATUS ONLINE in module table
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert ModuleBase.MODULE_STATUS_ONLINE == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # check LC2 STATUS EMPTY in module table 
+    fvs = sup_module_updater.module_table.get(lc2_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert ModuleBase.MODULE_STATUS_EMPTY == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # Both should no tbe in down_module keys.
+    
+    down_module_lc1_key = lc_name+"|"
+    assert  down_module_lc1_key not in sup_module_updater.down_modules.keys()
+    down_module_lc2_key = lc_name+"|"
+    assert  down_module_lc2_key not in sup_module_updater.down_modules.keys()
+
+    # Change linecard module1 status to OFFLINE
+    status = ModuleBase.MODULE_STATUS_OFFLINE
+    module.set_oper_status(status)
+    sup_module_updater.module_db_update()
+
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert down_module_lc1_key in sup_module_updater.down_modules.keys()
+    
