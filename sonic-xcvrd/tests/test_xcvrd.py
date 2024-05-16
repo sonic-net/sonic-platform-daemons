@@ -1523,17 +1523,6 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    def test_CmisManagerTask_decommission_all_datapaths(self):
-        mock_xcvr_api = MagicMock()
-        port_mapping = PortMapping()
-        stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        assert task.decommission_all_datapaths(mock_xcvr_api) == True
-
-        assert mock_xcvr_api.set_application.call_count == 1
-        assert mock_xcvr_api.set_datapath_deinit.call_count == 1
-        assert mock_xcvr_api.scs_apply_datapath_init.call_count == 1
-
     @pytest.mark.parametrize("app_new, lane_appl_code", [
         (2, {0 : 1, 1 : 1, 2 : 1, 3 : 1, 4 : 2, 5 : 2, 6 : 2, 7 : 2}),
         (0, {0 : 1, 1 : 1, 2 : 1, 3 : 1},)
@@ -1548,6 +1537,9 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
         mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=True)
         assert task.is_appl_reconfigure_required(mock_xcvr_api, app_new) == True
+
+        mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=False)
+        assert task.is_appl_reconfigure_required(mock_xcvr_api, app_new) == False
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
