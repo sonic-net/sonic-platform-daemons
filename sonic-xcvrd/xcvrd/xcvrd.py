@@ -995,7 +995,7 @@ class CmisManagerTask(threading.Thread):
                             media_lane_assignment_option, media_lane_start_bit, media_lane_count,
                             lport, subport, appl))
 
-        return media_lanes_mask        
+        return media_lanes_mask
 
     def is_appl_reconfigure_required(self, api, app_new):
         """
