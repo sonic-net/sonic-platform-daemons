@@ -1879,14 +1879,14 @@ class TestXcvrdScript(object):
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
-        task.is_appl_reconfigure_required = MagicMock(return_value=False)
         # Fail test coverage - Module Inserted state failing to reach DP_DEINIT
+        task.is_appl_reconfigure_required = MagicMock(return_value=False)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_INSERTED
 
-        task.is_appl_reconfigure_required = MagicMock(return_value=True)
         # Case 1: Module Inserted --> DP_DEINIT
+        task.is_appl_reconfigure_required = MagicMock(return_value=True)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_DP_DEINIT
