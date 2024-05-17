@@ -169,6 +169,19 @@ def get_media_settings_value(physical_port, key):
     media_dict = {}
     default_dict = {}
 
+    def get_media_settings(key, media_dict):
+        for dict_key in media_dict.keys():
+            if ( re.match(dict_key, key[VENDOR_KEY]) or re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
+                 or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
+                if is_si_per_speed_supported(media_dict[dict_key]):
+                    if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[dict_key]: # e.g: 'speed:400GAUI-8'
+                        return media_dict[dict_key][key[LANE_SPEED_KEY]]
+                    else:
+                        return {}
+                else:
+                    return media_dict[dict_key]
+        return None
+
     # Keys under global media settings can be a list or range or list of ranges
     # of physical port numbers. Below are some examples
     # 1-32
@@ -194,19 +207,11 @@ def get_media_settings_value(physical_port, key):
 
             # If there is a match in the global profile for a media type,
             # fetch those values
-            for dict_key in media_dict.keys():
-                if ( re.match(dict_key, key[VENDOR_KEY]) or re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
-                     or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
-                    if is_si_per_speed_supported(media_dict[dict_key]):
-                        if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[dict_key]: # e.g: 'speed:400GAUI-8'
-                            return media_dict[dict_key][key[LANE_SPEED_KEY]]
-                        else:
-                            return {}
-                    else:
-                        return media_dict[dict_key]
-
+            media_settings = get_media_settings(key, media_dict)
+            if media_settings is not None:
+                return media_settings
             # Try to match 'default' key if it does not match any keys
-            if DEFAULT_KEY in media_dict:
+            elif DEFAULT_KEY in media_dict:
                 default_dict = media_dict[DEFAULT_KEY]
 
     media_dict = {}
@@ -224,19 +229,11 @@ def get_media_settings_value(physical_port, key):
                 helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
             return {}
 
-        for dict_key in media_dict.keys():
-            if ( re.match(dict_key, key[VENDOR_KEY]) or re.match(dict_key, key[VENDOR_KEY].split('-')[0])
-                 or re.match(dict_key, key[MEDIA_KEY]) ):
-                if is_si_per_speed_supported(media_dict[dict_key]):
-                    if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[dict_key]:
-                        return media_dict[dict_key][key[LANE_SPEED_KEY]]
-                    else:
-                        return {}
-                else:
-                    return media_dict[dict_key]
-
+        media_settings = get_media_settings(key, media_dict)
+        if media_settings is not None:
+            return media_settings
         # Try to match 'default' key if it does not match any keys
-        if DEFAULT_KEY in media_dict:
+        elif DEFAULT_KEY in media_dict:
             return media_dict[DEFAULT_KEY]
         elif len(default_dict) != 0:
             return default_dict

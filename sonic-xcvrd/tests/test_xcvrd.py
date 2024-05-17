@@ -48,9 +48,9 @@ media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = gl
 media_settings_with_regular_expression_dict = copy.deepcopy(media_settings_dict)
 media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32'] = {}
 # Generate regular expression patterns for QSFP28-40GBASE-CR4-xxM and QSFP+-40GBASE-CR4-xxM that have the same pre-emphasis value
-media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\+|28)-40GBASE-CR4-1M'] = global_media_settings['QSFP28-40GBASE-CR4-1M']
-media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\+|28)-40GBASE-CR4-2M'] = global_media_settings['QSFP28-40GBASE-CR4-2M']
-media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\+|28)-40GBASE-CR4-(3|4|5|7|10)M'] = global_media_settings['QSFP28-40GBASE-CR4-3M']
+media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\\+|28)-40GBASE-CR4-1M'] = global_media_settings['QSFP28-40GBASE-CR4-1M']
+media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\\+|28)-40GBASE-CR4-2M'] = global_media_settings['QSFP28-40GBASE-CR4-2M']
+media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32']['QSFP(\\+|28)-40GBASE-CR4-(3|4|5|7|10)M'] = global_media_settings['QSFP28-40GBASE-CR4-3M']
 
 with open(os.path.join(test_path, 'optics_si_settings.json'), 'r') as fn:
     optics_si_settings_dict = json.load(fn)
