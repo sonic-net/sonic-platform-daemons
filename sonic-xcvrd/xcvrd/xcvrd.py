@@ -1004,8 +1004,8 @@ class CmisManagerTask(threading.Thread):
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
             if app_cur != 0 and app_cur != app_new:
-                return api.decommission_all_datapaths(api)
-        return True
+                return True
+        return False
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
@@ -1475,11 +1475,13 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
-                        # Set all the AppSel to unused(0) when non default app code needs to be configured
-                        if not self.is_appl_reconfigure_required(api, appl):
-                           self.log_notice("{}: unable to reset application and DP reinit".format(lport))
-                           self.force_cmis_reinit(lport, retries + 1)
-                           continue
+                        # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
+                        if True == self.is_appl_reconfigure_required(api, appl):
+                            self.log_notice("{}: Decommissioning all lanes/datapaths to default AppSel=0".format(lport))
+                            if True != api.decommission_all_datapaths():
+                                self.log_notifce("{}: Failed to default to AppSel=0".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                continue
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
