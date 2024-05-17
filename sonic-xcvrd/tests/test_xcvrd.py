@@ -1538,9 +1538,6 @@ class TestXcvrdScript(object):
         mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=True)
         assert task.is_appl_reconfigure_required(mock_xcvr_api, app_new) == True
 
-        mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=False)
-        assert task.is_appl_reconfigure_required(mock_xcvr_api, app_new) == False
-
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
         'DP2State': 'DataPathActivated',
@@ -1882,6 +1879,13 @@ class TestXcvrdScript(object):
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
+        task.is_appl_reconfigure_required = MagicMock(return_value=False)
+        # Fail test coverage - Module Inserted state failing to reach DP_DEINIT
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_INSERTED
+
+        task.is_appl_reconfigure_required = MagicMock(return_value=True)
         # Case 1: Module Inserted --> DP_DEINIT
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
