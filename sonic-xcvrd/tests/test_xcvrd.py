@@ -318,6 +318,23 @@ class TestXcvrdScript(object):
         mock_xcvr_api.__class__ = mock_class
         assert is_cmis_api(mock_xcvr_api) == expected_return_value
 
+    @patch('swsscommon.swsscommon.SonicV2Connector')
+    def test_notify_system_ready(self, mock_dbconn):
+        mock_db = MagicMock()
+        mock_db.connect = MagicMock()
+        mock_db.delete = MagicMock()
+        mock_db.hmset = MagicMock()
+        mock_dbconn.return_value = mock_db
+
+        # Case 1: Report ready status
+        notify_system_ready()
+        mock_db.hmset.assert_called_once()
+
+        # Case 2: Should not report status again
+        mock_db.hmset.reset_mock()
+        notify_system_ready()
+        mock_db.hmset.assert_not_called()
+
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type')
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
