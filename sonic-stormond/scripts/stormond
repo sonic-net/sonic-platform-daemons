@@ -247,7 +247,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             try:
                 # Unlikely scenario
                 if storage_object is None:
-                    self.log_info("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
+                    self.log_error("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
                     continue
 
                 static_kvp_dict = {}
