@@ -16,7 +16,7 @@ import time
 
 from sonic_py_common import daemon_base, device_info, logger
 from swsscommon import swsscommon
-from sonic_platform_base.sonic_storage.storage_devices import StorageDevices
+from sonic_platform_base.sonic_storage.storage_devices import StorageDevices, BLKDEV_BASE_PATH
 
 #
 # Constants ====================================================================
@@ -59,7 +59,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.state_db = None
         self.config_db = None
         self.device_table = None
-        self.storage = StorageDevices(log_identifier)
+        self.storage = StorageDevices()
 
         # These booleans are for FSIO RW information reconciliation
         self.fsio_json_file_loaded = False
@@ -68,14 +68,11 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.use_statedb_baseline = False
 
         # These dicts are to load info from disk/database into memory, respectively
-        self.fsio_rw_json = dict((disk, {}) for disk in self.storage.devices)
-        self.fsio_rw_statedb = dict((disk, {}) for disk in self.storage.devices)
+        self.fsio_rw_json = {disk:{} for disk in self.storage.devices}
+        self.fsio_rw_statedb = {disk:{} for disk in self.storage.devices}
 
         # This time is set at init and then subsequently after each FSIO JSON file sync
         self.fsio_sync_time = time.time()
-
-        # these are the config timeout values we get from the config_db:
-        self.config_fields = ["daemon_polling_interval" , "fsstats_sync_interval"]
         
         # These are the various static and dynamic fields that are posted to state_db
         self.static_fields = ["device_model", "serial"]
@@ -94,9 +91,6 @@ class DaemonStorage(daemon_base.DaemonBase):
         # reboots or crashes
         self.statedb_json_sync_fields = self.dynamic_fields[3:7]
 
-        # Connect to CONFIG_DB and get polling and sync intervals
-        self._get_configdb_intervals()
-
         # Connect to STATE_DB and create Storage device table
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.device_table = swsscommon.Table(self.state_db, STORAGE_DEVICE_TABLE)
@@ -108,15 +102,9 @@ class DaemonStorage(daemon_base.DaemonBase):
 
     def _get_configdb_intervals(self):
         self.config_db = daemon_base.db_connect("CONFIG_DB")
-        config_info = dict((field, None) for field in self.config_fields)
-
-        for field in self.config_fields:
-            config_info[field] = self.config_db.hget('STORMOND_CONFIG|INTERVALS', field)
-
-        if config_info[self.config_fields[0]] != None:
-            self.timeout = int(config_info[self.config_fields[0]])
-        if config_info[self.config_fields[1]] != None:
-            self.fsstats_sync_interval = int(config_info[self.config_fields[1]])
+        config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
+        self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_MAIN_THREAD_SLEEP_SECS))
+        self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
 
         self.log_info("Polling Interval set to {} seconds".format(self.timeout))
         self.log_info("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
@@ -134,7 +122,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                self.fsio_json_file_loaded = True
 
         except Exception as e:
-            self.log_info("JSON file could not be loaded: {}".format(e))
+            self.log_error("JSON file could not be loaded: {}".format(e))
 
         return
 
@@ -143,8 +131,9 @@ class DaemonStorage(daemon_base.DaemonBase):
     def _sync_fsio_rw_json(self):
 
         self.log_info("Syncing total and latest procfs reads and writes from STATE_DB to JSON file")
+
+        json_file_dict = {}
         try:
-            json_file_dict = dict((disk, {}) for disk in self.storage.devices)
             for device in self.storage.devices:
                 for field in self.statedb_json_sync_fields:
                     json_file_dict[device][field] = self.state_db.hget('STORAGE_INFO|{}'.format(device), field)
@@ -153,13 +142,13 @@ class DaemonStorage(daemon_base.DaemonBase):
             json_file_dict["successful_sync_time"] = str(self.fsio_sync_time)
 
             with open(FSIO_RW_JSON_FILE, 'w+') as f:
-                f.write(json.dumps(json_file_dict))
+                json.dump(json_file_dict, f)
                 self.state_db.hset("{}|{}".format(STORAGE_DEVICE_TABLE,FSSTATS_SYNC_TIME_KEY), "successful_sync_time", str(self.fsio_sync_time))
 
         except Exception as ex:
-            self.log_info("Unable to sync state_db to disk: {}".format(ex))
+            self.log_error("Unable to sync state_db to disk: {}".format(ex))
 
-    # Run a sanity check ont he state_db. If successful, get total, latest 
+    # Run a sanity check on the state_db. If successful, get total, latest 
     # FSIO reads and writes for each storage device from STATE_DB
     def _load_fsio_rw_statedb(self):
 
@@ -182,7 +171,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             
             self.statedb_storage_info_loaded = True
         except Exception as e:
-            self.log_info("Reading STATE_DB failed with: {}".format(e))
+            self.log_error("Reading STATE_DB failed with: {}".format(e))
 
 
     def _determine_sot(self):
@@ -246,26 +235,25 @@ class DaemonStorage(daemon_base.DaemonBase):
     # Update the Storage device info to State DB
     def update_storage_info_status_db(self, disk_device, disk_fields, kvp_dict):
 
-        for field in disk_fields:
-            fvp = swsscommon.FieldValuePairs([(field, str(kvp_dict[field]))])
-            self.device_table.set(disk_device, fvp)
+        fvp = swsscommon.FieldValuePairs([(field, str(value)) for field, value in kvp_dict.items()])
+        self.device_table.set(disk_device, fvp)
 
 
     # Get Static attributes and update the State DB, once
     def get_static_fields(self):
 
         # Get relevant information about each Storage Device on the switch
-        for storage_device in self.storage.devices:
+        for storage_device, storage_object in self.storage.devices.items():
             try:
                 # Unlikely scenario
-                if self.storage.devices[storage_device] is None:
+                if storage_object is None:
                     self.log_info("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
                     continue
 
-                static_kvp_dict = dict((field, "") for field in self.static_fields)
+                static_kvp_dict = {}
 
-                static_kvp_dict["device_model"] = self.storage.devices[storage_device].get_model()
-                static_kvp_dict["serial"] = self.storage.devices[storage_device].get_serial()
+                static_kvp_dict["device_model"] = storage_object.get_model()
+                static_kvp_dict["serial"] = storage_object.get_serial()
 
                 self.log_info("Storage Device: {}, Device Model: {}, Serial: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"]))
 
@@ -273,30 +261,33 @@ class DaemonStorage(daemon_base.DaemonBase):
                 self.update_storage_info_status_db(storage_device, self.static_fields, static_kvp_dict)
 
             except Exception as ex:
-                self.log_info("get_static_fields() failed with: {}".format(str(ex)))
+                self.log_error("get_static_fields() failed with: {}".format(str(ex)))
 
     # Get Dynamic attributes and update the State DB
     def get_dynamic_fields(self):
 
         # Get relevant information about each storage disk on the device
-        for storage_device in self.storage.devices:
+        for storage_device, storage_object in self.storage.devices.items():
             try:
-                if self.storage.devices[storage_device] is None:
-                    self.log_info("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
+                if storage_object is None:
+                    self.log_error("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
                     continue
 
-                dynamic_kvp_dict = dict((field, "") for field in self.dynamic_fields)
+                # Fetch the latest dynamic info
+                blkdevice = os.path.join(BLKDEV_BASE_PATH, storage_device)
+                storage_object._fetch_parse_info(blkdevice)
 
-                dynamic_kvp_dict["firmware"] = self.storage.devices[storage_device].get_firmware()
-                dynamic_kvp_dict["health"] = self.storage.devices[storage_device].get_health()
-                dynamic_kvp_dict["temperature"] = self.storage.devices[storage_device].get_temperature()
-                dynamic_kvp_dict["latest_fsio_reads"] = self.storage.devices[storage_device].get_fs_io_reads()
-                dynamic_kvp_dict["latest_fsio_writes"] = self.storage.devices[storage_device].get_fs_io_writes()
-                dynamic_kvp_dict["disk_io_reads"] = self.storage.devices[storage_device].get_disk_io_reads()
-                dynamic_kvp_dict["disk_io_writes"] = self.storage.devices[storage_device].get_disk_io_writes()
-                dynamic_kvp_dict["reserved_blocks"] = self.storage.devices[storage_device].get_reserved_blocks()
+                dynamic_kvp_dict = {}
 
-                #import pdb; pdb.set_trace()
+                dynamic_kvp_dict["firmware"] = storage_object.get_firmware()
+                dynamic_kvp_dict["health"] = storage_object.get_health()
+                dynamic_kvp_dict["temperature"] = storage_object.get_temperature()
+                dynamic_kvp_dict["latest_fsio_reads"] = storage_object.get_fs_io_reads()
+                dynamic_kvp_dict["latest_fsio_writes"] = storage_object.get_fs_io_writes()
+                dynamic_kvp_dict["disk_io_reads"] = storage_object.get_disk_io_reads()
+                dynamic_kvp_dict["disk_io_writes"] = storage_object.get_disk_io_writes()
+                dynamic_kvp_dict["reserved_blocks"] = storage_object.get_reserved_blocks()
+
                 dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
 
                 self.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
@@ -338,6 +329,10 @@ class DaemonStorage(daemon_base.DaemonBase):
     # Main daemon logic
     def run(self):
 
+        # Connect to CONFIG_DB and get polling and sync intervals --
+        # this is to be able to dynamically configure the polling and sync times.
+        self._get_configdb_intervals()
+
         if self.stop_event.wait(self.timeout):
             # We received a fatal signal
             return False
@@ -350,6 +345,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         elapsed_time = time.time() - self.fsio_sync_time
         if (elapsed_time > self.fsstats_sync_interval) or ((self.fsstats_sync_interval - elapsed_time) < self.timeout):
             self._sync_fsio_rw_json()
+
 
         # Repeatedly read and update Dynamic Fields to the StateDB
         self.get_dynamic_fields()
