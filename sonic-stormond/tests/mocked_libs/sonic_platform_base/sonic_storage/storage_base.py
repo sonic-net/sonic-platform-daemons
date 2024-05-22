@@ -1,19 +1,7 @@
 #
 # storage_base.py
 #
-# Abstract base class for implementing platform-specific
-#  Storage information gathering functionality for SONiC
-#
-
-try:
-    import abc
-except ImportError as e:
-    raise ImportError(str(e) + " - required module not found")
-
-#
-# storage_base.py
-#
-# Base class for implementing common Storage Device health features
+# Base class for implementing common SSD health features
 #
 
 
@@ -30,7 +18,6 @@ class StorageBase(object):
         """
         pass
 
-    @abc.abstractmethod
     def get_health(self):
         """
         Retrieves current disk health in percentages
@@ -39,9 +26,8 @@ class StorageBase(object):
             A float number of current ssd health
             e.g. 83.5
         """
-        return 91.6
+        raise NotImplementedError
 
-    @abc.abstractmethod
     def get_temperature(self):
         """
         Retrieves current disk temperature in Celsius
@@ -50,9 +36,8 @@ class StorageBase(object):
             A float number of current temperature in Celsius
             e.g. 40.1
         """
-        return 32.3
+        raise NotImplementedError
 
-    @abc.abstractmethod
     def get_model(self):
         """
         Retrieves model for the given disk device
@@ -60,9 +45,8 @@ class StorageBase(object):
         Returns:
             A string holding disk model as provided by the manufacturer
         """
-        return ''
+        raise NotImplementedError
 
-    @abc.abstractmethod
     def get_firmware(self):
         """
         Retrieves firmware version for the given disk device
@@ -70,9 +54,8 @@ class StorageBase(object):
         Returns:
             A string holding disk firmware version as provided by the manufacturer
         """
-        return ''
+        raise NotImplementedError
 
-    @abc.abstractmethod
     def get_serial(self):
         """
         Retrieves serial number for the given disk device
@@ -80,9 +63,8 @@ class StorageBase(object):
         Returns:
             A string holding disk serial number as provided by the manufacturer
         """
-        return ''
+        raise NotImplementedError
 
-    @abc.abstractmethod
     def get_vendor_output(self):
         """
         Retrieves vendor specific data for the given disk device
@@ -90,33 +72,31 @@ class StorageBase(object):
         Returns:
             A string holding some vendor specific disk information
         """
-        return ''
+        raise NotImplementedError
 
-    def get_io_reads(self):
+    def get_disk_io_reads(self):
         """
-        Retrieves the total number of Input/Output (I/O) reads done on an SSD
+        Retrieves the total number of Input/Output (I/O) reads done on a storage disk
 
         Returns:
             An integer value of the total number of I/O reads
         """
-        return 20000
+        raise NotImplementedError
 
-    @abc.abstractmethod
-    def get_io_writes(self):
+    def get_disk_io_writes(self):
         """
-        Retrieves the total number of Input/Output (I/O) writes done on an SSD
+        Retrieves the total number of Input/Output (I/O) writes done on a storage disk
 
         Returns:
             An integer value of the total number of I/O writes
         """
-        return 20005
+        raise NotImplementedError
 
-    @abc.abstractmethod
-    def get_reserves_blocks(self):
+    def get_reserved_blocks(self):
         """
-        Retrieves the total number of reserved blocks in an SSD
+        Retrieves the total number of reserved blocks in an storage disk
 
         Returns:
             An integer value of the total number of reserved blocks
         """
-        return 3746218
+        raise NotImplementedError

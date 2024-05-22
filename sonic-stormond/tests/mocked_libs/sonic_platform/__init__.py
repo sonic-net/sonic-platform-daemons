@@ -2,5 +2,5 @@
     Mock implementation of sonic_platform package for unit testing
 """
 
-from . import ssd
+from . import pcie
 
