@@ -275,7 +275,7 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 # Fetch the latest dynamic info
                 blkdevice = os.path.join(BLKDEV_BASE_PATH, storage_device)
-                storage_object._fetch_parse_info(blkdevice)
+                storage_object.fetch_parse_info(blkdevice)
 
                 dynamic_kvp_dict = {}
 
