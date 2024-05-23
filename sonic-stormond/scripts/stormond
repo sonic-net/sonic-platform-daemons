@@ -316,7 +316,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             self.log_info("Syncing latest procfs reads and writes to disk")
             self._sync_fsio_rw_json()
 
-            self.log_info(" Exiting.")
+            self.log_info("Exiting with {}".format(SIGNALS_TO_NAMES_DICT[sig]))
 
             # Make sure we exit with a non-zero code so that supervisor will try to restart us
             exit_code = 128 + sig  
@@ -324,7 +324,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         elif sig in NONFATAL_SIGNALS:
             self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
         else:
-            self.log_info("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     # Main daemon logic
     def run(self):
