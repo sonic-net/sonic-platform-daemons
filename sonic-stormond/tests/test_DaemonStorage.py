@@ -268,3 +268,20 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log_info.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 0
         assert stormond.exit_code == 0
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_run(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.get_dynamic_fields = MagicMock()
+
+        def mock_intervals():
+            stormon_daemon.timeout = 10
+            stormon_daemon.fsstats_sync_interval = 30
+
+        with patch.object(stormon_daemon, '_get_configdb_intervals', new=mock_intervals):
+            stormon_daemon.run()
+
+            assert stormon_daemon.get_dynamic_fields.call_count == 1
+
+
