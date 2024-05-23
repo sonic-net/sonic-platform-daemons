@@ -333,6 +333,9 @@ class DaemonStorage(daemon_base.DaemonBase):
         # this is to be able to dynamically configure the polling and sync times.
         self._get_configdb_intervals()
 
+        # Repeatedly read and update Dynamic Fields to the StateDB
+        self.get_dynamic_fields()
+
         if self.stop_event.wait(self.timeout):
             # We received a fatal signal
             return False
@@ -345,10 +348,6 @@ class DaemonStorage(daemon_base.DaemonBase):
         elapsed_time = time.time() - self.fsio_sync_time
         if (elapsed_time > self.fsstats_sync_interval) or ((self.fsstats_sync_interval - elapsed_time) < self.timeout):
             self._sync_fsio_rw_json()
-
-
-        # Repeatedly read and update Dynamic Fields to the StateDB
-        self.get_dynamic_fields()
 
         return True
 #
