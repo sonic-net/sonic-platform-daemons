@@ -167,7 +167,10 @@ class DaemonStorage(daemon_base.DaemonBase):
 
                 # Get the total and latest procfs reads and writes from STATE_DB
                 for field in self.statedb_json_sync_fields:
-                    self.fsio_rw_statedb[storage_device][field] = self.state_db.hget('STORAGE_INFO|{}'.format(storage_device), field)
+                    value = self.state_db.hget('STORAGE_INFO|{}'.format(storage_device), field)
+                    self.fsio_rw_statedb[storage_device][field] = "0" if value is None else value
+
+                    if value is None: self.log_warning("{}:{} value = None in StateDB".format(storage_device, field))
             
             self.statedb_storage_info_loaded = True
         except Exception as e:
