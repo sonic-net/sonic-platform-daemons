@@ -90,6 +90,7 @@ INVALID_SLOT = ModuleBase.MODULE_INVALID_SLOT
 INVALID_MODULE_INDEX = -1
 INVALID_IP = '0.0.0.0'
 
+CHASSIS_MODULE_ADMIN_STATUS = 'admin_status'
 MODULE_ADMIN_DOWN = 0
 MODULE_ADMIN_UP = 1
 
@@ -257,8 +258,18 @@ class ModuleUpdater(logger.Logger):
         if isinstance(fvs, list) and fvs[0] is True:
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-        return ModuleBase.MODULE_STATUS_EMPTY        
-            
+        return ModuleBase.MODULE_STATUS_EMPTY
+
+    def get_module_admin_status(self, chassis_module_name):
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        vtable = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
+        fvs = vtable.get(chassis_module_name)
+        if isinstance(fvs, list) and fvs[0] is True:
+            fvs = dict(fvs[-1])
+            return fvs[CHASSIS_MODULE_ADMIN_STATUS]
+        else:
+            return 'up'
+
     def module_db_update(self):
         notOnlineModules = []
 
@@ -317,16 +328,20 @@ class ModuleUpdater(logger.Logger):
                     elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
                         self.log_notice("Module {} is on-line!".format(key))
 
-                for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
-                    asic_global_id, asic_pci_addr = asic
-                    asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
-                    if not self._is_supervisor():
-                        asic_key = "%s|%s" % (key, asic_key)
+                    module_cfg_status = self.get_module_admin_status(key)
 
-                    asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
-                                                            (CHASSIS_MODULE_INFO_NAME_FIELD, key),
-                                                            (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
-                    self.asic_table.set(asic_key, asic_fvs)
+                    #Only populate the related tables when the module configure is up
+                    if module_cfg_status != 'down':
+                        for asic_id, asic in enumerate(module_info_dict[CHASSIS_MODULE_INFO_ASICS]):
+                            asic_global_id, asic_pci_addr = asic
+                            asic_key = "%s%s" % (CHASSIS_ASIC, asic_global_id)
+                            if not self._is_supervisor():
+                                asic_key = "%s|%s" % (key, asic_key)
+
+                            asic_fvs = swsscommon.FieldValuePairs([(CHASSIS_ASIC_PCI_ADDRESS_FIELD, asic_pci_addr),
+                                                                    (CHASSIS_MODULE_INFO_NAME_FIELD, key),
+                                                                    (CHASSIS_ASIC_ID_IN_MODULE_FIELD, str(asic_id))])
+                            self.asic_table.set(asic_key, asic_fvs)
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
         # The hostname is used as key to access chassis app db entries 
