@@ -280,7 +280,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         for storage_device, storage_object in self.storage.devices.items():
             try:
                 if storage_object is None:
-                    self.log_error("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
+                    self.log_info("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
                     continue
 
                 # Fetch the latest dynamic info
