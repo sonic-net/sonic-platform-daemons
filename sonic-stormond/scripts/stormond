@@ -14,7 +14,7 @@ import shutil
 import json
 import time
 
-from sonic_py_common import daemon_base, device_info, logger
+from sonic_py_common import daemon_base, device_info, syslogger
 from swsscommon import swsscommon
 from sonic_platform_base.sonic_storage.storage_devices import StorageDevices, BLKDEV_BASE_PATH
 
@@ -39,7 +39,7 @@ STORMOND_SYNC_TO_DISK_SECS = 86400 #one day
 
 STORAGEUTIL_LOAD_ERROR = 127
 
-log = logger.Logger(SYSLOG_IDENTIFIER)
+log = syslogger.SysLogger(SYSLOG_IDENTIFIER)
 
 exit_code = 0
 
