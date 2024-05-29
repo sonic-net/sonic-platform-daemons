@@ -121,6 +121,13 @@ class DaemonStorage(daemon_base.DaemonBase):
                self.fsio_rw_json = json.load(f)
                self.fsio_json_file_loaded = True
 
+            for storage_device in self.storage.devices:
+               for field in self.statedb_json_sync_fields:
+
+                   value = self.fsio_rw_json[storage_device][field]
+
+                   self.fsio_rw_json[storage_device][field] = "0" if value == "null" else value
+
         except Exception as e:
             self.log_error("JSON file could not be loaded: {}".format(str(e)))
 
