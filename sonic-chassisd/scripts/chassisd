@@ -533,9 +533,9 @@ class ModuleUpdater(logger.Logger):
             asic = CHASSIS_ASIC+str(asic_id)
 
             # Cleanup the chassis app db entries using lua script
-            redis_cmd = 'redis-cli -h redis_chassis.server -p 6380 -n 12 EVALSHA ' + self.chassis_app_db_clean_sha + ' 0 ' + lc + ' ' + asic
+            redis_cmd = ['redis-cli', '-h', 'redis_chassis.server', '-p', '6380', '-n', '12', 'EVALSHA', self.chassis_app_db_clean_sha, '0', lc, asic]
             try:
-                subp = subprocess.Popen(redis_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                subp = subprocess.Popen(redis_cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
                 subp.communicate()
                 self.log_notice("Cleaned up chassis app db entries for {}({})/{}".format(module, lc, asic))
             except Exception:
