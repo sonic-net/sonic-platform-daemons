@@ -1423,7 +1423,7 @@ class CmisManagerTask(threading.Thread):
 
                 try:
                     # CMIS state transitions
-                    if state == CMIS_STATE_INSERTED:
+                    if state == CMIS_STATE_INSERTED and not is_warm_reboot_enabled():
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] is None:
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
