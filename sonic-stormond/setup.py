@@ -18,11 +18,11 @@ setup(
         'wheel'
     ],
     install_requires=[
-        'enum34; python_version < "3.4"',
+        'enum34',
         'sonic-py-common',
     ],
     tests_require=[
-        'mock>=2.0.0; python_version < "3.3"',
+        'mock>=2.0.0',
         'pytest',
         'pytest-cov',
     ],
@@ -35,7 +35,6 @@ setup(
         'License :: OSI Approved :: Apache Software License',
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
-        'Programming Language :: Python :: 2.7',
         'Topic :: System :: Hardware',
     ],
     keywords='sonic SONiC ssd Ssd SSD ssdmond storage stormond storagemond',

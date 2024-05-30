@@ -22,19 +22,15 @@ from sonic_platform_base.sonic_storage.storage_devices import StorageDevices, BL
 # Constants ====================================================================
 #
 
-# TODO: Once we no longer support Python 2, we can eliminate this and get the
-# name using the 'name' field (e.g., `signal.SIGINT.name`) starting with Python 3.5
-SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n)
-                             for n in dir(signal) if n.startswith('SIG') and '_' not in n)
-
 SYSLOG_IDENTIFIER = "stormond"
 
 STORAGE_DEVICE_TABLE = "STORAGE_INFO"
 FSSTATS_SYNC_TIME_KEY = "FSSTATS_SYNC"
 
+# This directory binds to /host/pmon/stormond/ on the host
 FSIO_RW_JSON_FILE = "/usr/share/stormond/fsio-rw-stats.json"
 
-STORMOND_MAIN_THREAD_SLEEP_SECS = 3600 #one hour
+STORMOND_PERIODIC_STATEDB_SYNC_SECS = 3600 #one hour
 STORMOND_SYNC_TO_DISK_SECS = 86400 #one day
 
 STORAGEUTIL_LOAD_ERROR = 127
@@ -53,7 +49,7 @@ class DaemonStorage(daemon_base.DaemonBase):
     def __init__(self, log_identifier):
         super(DaemonStorage, self).__init__(log_identifier)
 
-        self.timeout = STORMOND_MAIN_THREAD_SLEEP_SECS
+        self.timeout = STORMOND_PERIODIC_STATEDB_SYNC_SECS
         self.fsstats_sync_interval = STORMOND_SYNC_TO_DISK_SECS
         self.stop_event = threading.Event()
         self.state_db = None
@@ -103,7 +99,7 @@ class DaemonStorage(daemon_base.DaemonBase):
     def _get_configdb_intervals(self):
         self.config_db = daemon_base.db_connect("CONFIG_DB")
         config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
-        self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_MAIN_THREAD_SLEEP_SECS))
+        self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_PERIODIC_STATEDB_SYNC_SECS))
         self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
 
         self.log_info("Polling Interval set to {} seconds".format(self.timeout))
@@ -321,20 +317,20 @@ class DaemonStorage(daemon_base.DaemonBase):
         global exit_code
 
         if sig in FATAL_SIGNALS:
-            self.log_info("Caught signal '{}'".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_info("Caught signal '{}'".format(signal.Signals(sig).name))
             
             self.log_info("Syncing latest procfs reads and writes to disk")
             self._sync_fsio_rw_json()
 
-            self.log_info("Exiting with {}".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_info("Exiting with {}".format(signal.Signals(sig).name))
 
             # Make sure we exit with a non-zero code so that supervisor will try to restart us
             exit_code = 128 + sig  
             self.stop_event.set()
         elif sig in NONFATAL_SIGNALS:
-            self.log_info("Caught signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_info("Caught signal '{}' - ignoring...".format(signal.Signals(sig).name))
         else:
-            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
+            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(signal.Signals(sig).name))
 
     # Main daemon logic
     def run(self):
