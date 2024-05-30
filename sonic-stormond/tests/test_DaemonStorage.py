@@ -72,14 +72,14 @@ class TestDaemonStorage(object):
             assert(list(stormon_daemon.storage.devices.keys()) == ['sda'])
 
     @patch('os.path.exists', MagicMock(return_value=True))
-    @patch('json.load', MagicMock(return_value={}))
+    @patch('json.load', MagicMock(return_value={'sda':{}}))
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_load_fsio_rw_json(self):
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
             stormon_daemon = stormond.DaemonStorage(log_identifier)
 
-            assert stormon_daemon.fsio_json_file_loaded == True
+            assert stormon_daemon.fsio_json_file_loaded == False
 
 
     @patch('os.path.exists', MagicMock(return_value=True))
@@ -93,12 +93,12 @@ class TestDaemonStorage(object):
             assert stormon_daemon.fsio_json_file_loaded == False
     
     @patch('sonic_py_common.daemon_base.db_connect')
-    def test_get_configdb_intervals(self, mock_daemon_base):
+    def testget_configdb_intervals(self, mock_daemon_base):
 
         mock_daemon_base = MagicMock()
 
         stormon_daemon = stormond.DaemonStorage(log_identifier)
-        stormon_daemon._get_configdb_intervals()
+        stormon_daemon.get_configdb_intervals()
 
         assert mock_daemon_base.call_count == 0
 
@@ -109,7 +109,7 @@ class TestDaemonStorage(object):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
-            stormon_daemon._sync_fsio_rw_json()
+            stormon_daemon.sync_fsio_rw_json()
 
             assert stormon_daemon.state_db.call_count == 0
 
@@ -120,7 +120,7 @@ class TestDaemonStorage(object):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
-            stormon_daemon._sync_fsio_rw_json()
+            stormon_daemon.sync_fsio_rw_json()
 
             assert stormon_daemon.state_db.call_count == 0
 
@@ -168,7 +168,7 @@ class TestDaemonStorage(object):
     def test_update_storage_info_status_db(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
-        stormon_daemon.update_storage_info_status_db('sda', 'mock_field', fsio_json_dict['sda'])
+        stormon_daemon.update_storage_info_status_db('sda', fsio_json_dict['sda'])
 
         assert stormon_daemon.device_table.getKeys() == ['sda']
     
@@ -182,7 +182,7 @@ class TestDaemonStorage(object):
         mock_storage_device_object.get_serial.return_value = "T1000"
 
         stormon_daemon.storage.devices = {'sda' : mock_storage_device_object}
-        stormon_daemon.get_static_fields()
+        stormon_daemon.get_static_fields_update_state_db()
 
         assert stormon_daemon.device_table.getKeys() == ['sda']
         assert stormon_daemon.device_table.get('sda') == {'device_model': 'Skynet', 'serial': 'T1000'}
@@ -203,7 +203,7 @@ class TestDaemonStorage(object):
         mock_storage_device_object.get_reserved_blocks.return_value = "3"
 
         stormon_daemon.storage.devices = {'sda' : mock_storage_device_object}
-        stormon_daemon.get_dynamic_fields()
+        stormon_daemon.get_dynamic_fields_update_state_db()
 
         assert stormon_daemon.device_table.getKeys() == ['sda']
         for field, value in dynamic_dict.items():
@@ -213,7 +213,7 @@ class TestDaemonStorage(object):
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_signal_handler(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
-        stormon_daemon._sync_fsio_rw_json = MagicMock()
+        stormon_daemon.sync_fsio_rw_json = MagicMock()
 
         stormon_daemon.stop_event.set = MagicMock()
         stormon_daemon.log_info = MagicMock()
@@ -235,7 +235,7 @@ class TestDaemonStorage(object):
         # Test SIGINT
         test_signal = stormond.signal.SIGINT
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 3
+        assert stormon_daemon.log_info.call_count == 2
         stormon_daemon.log_info.assert_called_with("Exiting with SIGINT")
         assert stormon_daemon.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
@@ -249,7 +249,7 @@ class TestDaemonStorage(object):
         # Test SIGTERM
         test_signal = stormond.signal.SIGTERM
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 3
+        assert stormon_daemon.log_info.call_count == 2
         stormon_daemon.log_info.assert_called_with("Exiting with SIGTERM")
         assert stormon_daemon.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
@@ -273,15 +273,15 @@ class TestDaemonStorage(object):
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_run(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
-        stormon_daemon.get_dynamic_fields = MagicMock()
+        stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
 
         def mock_intervals():
             stormon_daemon.timeout = 10
             stormon_daemon.fsstats_sync_interval = 30
 
-        with patch.object(stormon_daemon, '_get_configdb_intervals', new=mock_intervals):
+        with patch.object(stormon_daemon, 'get_configdb_intervals', new=mock_intervals):
             stormon_daemon.run()
 
-            assert stormon_daemon.get_dynamic_fields.call_count == 1
+            assert stormon_daemon.get_dynamic_fields_update_state_db.call_count == 1
 
 
