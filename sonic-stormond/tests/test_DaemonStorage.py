@@ -41,6 +41,7 @@ fsstats_sync_interval,
 
 fsio_dict = {"total_fsio_reads": "", "total_fsio_writes": "", "latest_fsio_reads": "1000", "latest_fsio_writes": "2000"}
 fsio_json_dict = { 'sda' : {"total_fsio_reads": "10500", "total_fsio_writes": "21000", "latest_fsio_reads": "1000", "latest_fsio_writes": "2000"}}
+bad_fsio_json_dict = { 'sda' : {"total_fsio_reads": None, "total_fsio_writes": "21000", "latest_fsio_reads": "1000", "latest_fsio_writes": "2000"}}
 fsio_statedb_dict = { 'sda' : {"total_fsio_reads": "10500", "total_fsio_writes": "21000", "latest_fsio_reads": "200", "latest_fsio_writes": "400"}}
 
 dynamic_dict = {'firmware': 'ILLBBK', 'health': '40', 'temperature': '5000', 'latest_fsio_reads': '150', 'latest_fsio_writes': '270', 'disk_io_reads': '1000', 'disk_io_writes': '2000', 'reserved_blocks': '3'}
@@ -72,14 +73,24 @@ class TestDaemonStorage(object):
             assert(list(stormon_daemon.storage.devices.keys()) == ['sda'])
 
     @patch('os.path.exists', MagicMock(return_value=True))
-    @patch('json.load', MagicMock(return_value={'sda':{}}))
+    @patch('json.load', MagicMock(return_value=bad_fsio_json_dict))
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
-    def test_load_fsio_rw_json(self):
+    def test_load_fsio_rw_json_false(self):
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
             stormon_daemon = stormond.DaemonStorage(log_identifier)
 
             assert stormon_daemon.fsio_json_file_loaded == False
+    
+    @patch('os.path.exists', MagicMock(return_value=True))
+    @patch('json.load', MagicMock(return_value=fsio_json_dict))
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_load_fsio_rw_json_true(self):
+
+        with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
+            stormon_daemon = stormond.DaemonStorage(log_identifier)
+
+            assert stormon_daemon.fsio_json_file_loaded == True
 
 
     @patch('os.path.exists', MagicMock(return_value=True))
@@ -209,6 +220,16 @@ class TestDaemonStorage(object):
         for field, value in dynamic_dict.items():
             assert stormon_daemon.device_table.get('sda')[field] == value
     
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('json.dump', MagicMock())
+    @patch('time.time', MagicMock(return_value=1000))
+    def test_write_sync_time_statedb(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.sync_fsio_rw_json = MagicMock(return_value=True)
+
+        stormon_daemon.write_sync_time_statedb()
+        assert stormon_daemon.state_db.call_count == 0
+
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_signal_handler(self):
