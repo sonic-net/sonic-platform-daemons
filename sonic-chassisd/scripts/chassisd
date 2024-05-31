@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 
 """
     chassisd
@@ -161,20 +161,9 @@ class ModuleConfigUpdater(logger.Logger):
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             # Setting the module to administratively up/down state
             self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
-            # Acquire the lock before submitting the callback function
-            with self.lock:
-                # Submit the callback function as a separate thread
-                t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
-                t.start()
+            try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
         else:
             self.log_warning("Invalid admin_state value: {}".format(admin_state))
-
-    def submit_callback(self, module_index, admin_state):
-        # Implement the callback function here
-        # Example: self.chassis.get_module(module_index).set_admin_state(admin_state)
-        # Ensure that the callback function is thread-safe
-        try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
-        pass
 
 #
 # Module Updater ==============================================================
@@ -622,9 +611,15 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 self.log_error("Chassisd not supported for this platform")
                 sys.exit(CHASSIS_NOT_SUPPORTED)
 
-        config_manager = ConfigManagerTask()
-        thread1 = threading.Thread(target=config_manager.task_worker)
-        thread1.start()
+        smartswitch = self.module_updater.chassis.is_smartswitch()
+        sup_slot = self.module_updater.supervisor_slot
+        my_slot = self.module_updater.my_slot
+
+        if smartswitch or not smartswitch and sup_slot == my_slot:
+            config_manager = ConfigManagerTask()
+            config_manager.task_run()
+        else:
+            config_manager = None
 
         # Start main loop
         self.log_info("Start daemon main loop")
