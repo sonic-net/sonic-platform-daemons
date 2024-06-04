@@ -121,7 +121,12 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 #
 # Helper functions =============================================================
 #
-
+def log_exception_traceback():
+    exc_type, exc_value, exc_traceback = sys.exc_info()
+    msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
+    for tb_line in msg:
+        for tb_line_split in tb_line.splitlines():
+            helper_logger.log_error(tb_line_split)
 
 def is_cmis_api(api):
    return isinstance(api, CmisApi)
@@ -992,6 +997,16 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
+    def is_appl_reconfigure_required(self, api, app_new):
+        """
+	   Reset app code if non default app code needs to configured 
+        """
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            app_cur = api.get_application(lane)
+            if app_cur != 0 and app_cur != app_new:
+                return True
+        return False
+
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
         Check if the CMIS application update is required
@@ -1207,15 +1222,32 @@ class CmisManagerTask(threading.Thread):
            self.log_error("{} configured tx power {} > maximum power {} supported".format(lport, tx_power, max_p))
         return api.set_tx_power(tx_power)
 
-    def configure_laser_frequency(self, api, lport, freq, grid=75):
-        _, _,  _, lowf, highf = api.get_supported_freq_config()
+    def validate_frequency_and_grid(self, api, lport, freq, grid=75):
+        supported_grid, _,  _, lowf, highf = api.get_supported_freq_config()
         if freq < lowf:
             self.log_error("{} configured freq:{} GHz is lower than the supported freq:{} GHz".format(lport, freq, lowf))
+            return False
         if freq > highf:
             self.log_error("{} configured freq:{} GHz is higher than the supported freq:{} GHz".format(lport, freq, highf))
-        chan = int(round((freq - 193100)/25))
-        if chan % 3 != 0:
-            self.log_error("{} configured freq:{} GHz is NOT in 75GHz grid".format(lport, freq))
+            return False
+        if grid == 75:
+            if (supported_grid >> 7) & 0x1 != 1:
+                self.log_error("{} configured freq:{}GHz supported grid:{} 75GHz is not supported".format(lport, freq, supported_grid))
+                return False
+            chan = int(round((freq - 193100)/25))
+            if chan % 3 != 0:
+                self.log_error("{} configured freq:{}GHz is NOT in 75GHz grid".format(lport, freq))
+                return False
+        elif grid == 100:
+            if (supported_grid >> 5) & 0x1 != 1:
+                self.log_error("{} configured freq:{}GHz 100GHz is not supported".format(lport, freq))
+                return False
+        else:
+            self.log_error("{} configured freq:{}GHz {}GHz is not supported".format(lport, freq, grid))
+            return False
+        return True
+
+    def configure_laser_frequency(self, api, lport, freq, grid=75):
         if api.get_tuning_in_progress():
             self.log_error("{} Tuning in progress, subport selection may fail!".format(lport))
         return api.set_laser_freq(freq, grid)
@@ -1359,6 +1391,11 @@ class CmisManagerTask(threading.Thread):
                     # Skip if these essential routines are not available
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                     continue
+                except Exception as e:
+                    self.log_error("{}: Exception in xcvr api: {}".format(lport, e))
+                    log_exception_traceback()
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
+                    continue
 
                 # CMIS expiration and retries
                 #
@@ -1438,15 +1475,27 @@ class CmisManagerTask(threading.Thread):
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
+                        # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
+                        if True == self.is_appl_reconfigure_required(api, appl):
+                            self.log_notice("{}: Decommissioning all lanes/datapaths to default AppSel=0".format(lport))
+                            if True != api.decommission_all_datapaths():
+                                self.log_notice("{}: Failed to default to AppSel=0".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                continue
+
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
                         # For ZR module, Datapath needes to be re-initlialized on new channel selection
                         if api.is_coherent_module():
-                           freq = self.port_dict[lport]['laser_freq']
-                           # If user requested frequency is NOT the same as configured on the module
-                           # force datapath re-initialization
-                           if 0 != freq and freq != api.get_laser_config_freq():
-                              need_update = True
+                            freq = self.port_dict[lport]['laser_freq']
+                            # If user requested frequency is NOT the same as configured on the module
+                            # force datapath re-initialization
+                            if 0 != freq and freq != api.get_laser_config_freq():
+                                if self.validate_frequency_and_grid(api, lport, freq) == True:
+                                    need_update = True
+                                else:
+                                    # clear setting of invalid frequency config
+                                    self.port_dict[lport]['laser_freq'] = 0
 
                         if not need_update:
                             # No application updates
@@ -1587,8 +1636,9 @@ class CmisManagerTask(threading.Thread):
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                         self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
 
-                except (NotImplementedError, AttributeError) as e:
+                except Exception as e:
                     self.log_error("{}: internal errors due to {}".format(lport, e))
+                    log_exception_traceback()
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
         self.log_notice("Stopped")
@@ -1606,11 +1656,7 @@ class CmisManagerTask(threading.Thread):
             self.task_worker()
         except Exception as e:
             helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            for tb_line in msg:
-                for tb_line_split in tb_line.splitlines():
-                    helper_logger.log_error(tb_line_split)
+            log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
@@ -1770,11 +1816,7 @@ class DomInfoUpdateTask(threading.Thread):
             self.task_worker()
         except Exception as e:
             helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            for tb_line in msg:
-                for tb_line_split in tb_line.splitlines():
-                    helper_logger.log_error(tb_line_split)
+            log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
@@ -2195,11 +2237,7 @@ class SfpStateUpdateTask(threading.Thread):
             self.task_worker(self.task_stopping_event, self.sfp_error_event)
         except Exception as e:
             helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            for tb_line in msg:
-                for tb_line_split in tb_line.splitlines():
-                    helper_logger.log_error(tb_line_split)
+            log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
