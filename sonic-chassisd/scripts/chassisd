@@ -204,8 +204,15 @@ class ModuleUpdater(logger.Logger):
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
 
         if not self.chassis.is_smartswitch():
+            if self._is_supervisor():
+                self.asic_table = swsscommon.Table(self.chassis_state_db,
+                                                CHASSIS_FABRIC_ASIC_INFO_TABLE)
+            else:
+                self.asic_table = swsscommon.Table(self.chassis_state_db,
+                                                CHASSIS_ASIC_INFO_TABLE)
+
             self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
-            self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE) 
+            self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
             self.down_modules = {}
             self.chassis_app_db_clean_sha = None
 
