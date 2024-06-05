@@ -685,16 +685,104 @@ def test_signal_handler():
     assert exit_code == 0
 
 def test_daemon_run_supervisor():
-    #TDB: Need a different test for Smartswitch
-    return
+    # Test the chassisd run
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.run()
 
 def test_daemon_run_linecard():
-    #TDB: Need a different test for Smartswitch
+    # Test the chassisd run
+    # Fix Me
     return
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+
+    import sonic_platform.platform
+    with patch.object(sonic_platform.platform.Chassis, 'get_my_slot') as mock:
+       mock.return_value = sonic_platform.platform.Platform().get_chassis().get_supervisor_slot() + 1
+       daemon_chassisd.run()
 
 def test_chassis_db_cleanup():
-    #TDB: Need a different test for Smartswitch
+    # Fix Me
     return
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    sup_name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    sup_slot = 16
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, sup_name, desc, module_type, sup_slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard 0. Host name will be pushed for this to make clean up happen
+    index = 1
+    lc_name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    lc_slot = 1
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, lc_name, desc, module_type, lc_slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Linecard 1. Host name will not be pushed for this so that clean up will not happen
+    index = 2
+    lc2_name = "LINE-CARD1"
+    desc = "36 port 400G card"
+    lc2_slot = 2
+    serial = "LC2000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module2 = MockModule(index, lc2_name, desc, module_type, lc2_slot, serial)
+    module2.set_midplane_ip()
+    chassis.module_list.append(module2)
+
+    # Supervisor ModuleUpdater
+    sup_module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
+    sup_module_updater.modules_num_update()
+    # Mock hostname table update for the line card LINE-CARD0
+    hostname = "lc1-host-00"
+    num_asics = 1
+    hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(lc_slot)), 
+                                    (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
+                                    (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(num_asics))])
+    sup_module_updater.hostname_table.set(lc_name, hostname_fvs)
+
+    # Set linecard initial state to ONLINE
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    sup_module_updater.module_db_update()
+
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # Change linecard module status to OFFLINE
+    status = ModuleBase.MODULE_STATUS_OFFLINE
+    module.set_oper_status(status)
+    sup_module_updater.module_db_update()
+
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD0
+    down_module_key = lc_name+"|"+hostname
+    module_down_time = sup_module_updater.down_modules[down_module_key]["down_time"]
+    sup_module_updater.down_modules[down_module_key]["down_time"] = module_down_time - ((CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD+10)*60)
+
+    # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD1
+    down_module_key = lc2_name+"|"
+    assert  down_module_key not in sup_module_updater.down_modules.keys()
+    
+    sup_module_updater.module_down_chassis_db_cleanup()
 
 def test_chassis_db_bootup_with_empty_slot():
     chassis = MockChassis()
