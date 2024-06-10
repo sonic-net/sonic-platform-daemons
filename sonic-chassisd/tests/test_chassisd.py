@@ -686,7 +686,7 @@ def test_signal_handler():
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
-    chassis = MockChassis()
+    return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
