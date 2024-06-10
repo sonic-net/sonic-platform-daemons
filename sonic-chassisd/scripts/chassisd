@@ -211,10 +211,10 @@ class ModuleUpdater(logger.Logger):
                 self.asic_table = swsscommon.Table(self.chassis_state_db,
                                                 CHASSIS_ASIC_INFO_TABLE)
 
-            self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
-            self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
-            self.down_modules = {}
-            self.chassis_app_db_clean_sha = None
+        self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
+        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
+        self.down_modules = {}
+        self.chassis_app_db_clean_sha = None
 
         self.linecard_reboot_timeout = DEFAULT_LINECARD_REBOOT_TIMEOUT
         if os.path.isfile(PLATFORM_ENV_CONF_FILE):
