@@ -1463,7 +1463,7 @@ class CmisManagerTask(threading.Thread):
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
-                               self.log_notice("{} Skip re-init flow".format(lport))
+                               self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
                            else:
                                self.log_notice("{} Forcing Tx laser OFF".format(lport))
                                # Force DataPath re-init
