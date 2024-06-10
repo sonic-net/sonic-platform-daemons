@@ -1283,6 +1283,8 @@ class CmisManagerTask(threading.Thread):
         for lport in logical_port_list:
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
 
+        is_fast_reboot = is_fast_reboot_enabled()
+
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         sel, asic_context = port_mapping.subscribe_port_update_event(self.namespaces, helper_logger)
         while not self.task_stopping_event.is_set():
@@ -1430,9 +1432,12 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
-                           self.log_notice("{} Forcing Tx laser OFF".format(lport))
-                           # Force DataPath re-init
-                           api.tx_disable_channel(media_lanes_mask, True)
+                           if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
+                               self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
+                           else:
+                               self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                               # Force DataPath re-init
+                               api.tx_disable_channel(media_lanes_mask, True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
                     # Configure the target output power if ZR module
