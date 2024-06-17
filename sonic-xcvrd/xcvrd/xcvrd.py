@@ -164,6 +164,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
             return (index & 0xf)
 
+    helper_logger.log_error(f'Failed to get desired application from {appl_dict}')
     return None
 
 
@@ -197,8 +198,7 @@ def get_interface_speed(ifname):
         speed = 10000
     elif '1000BASE' in ifname:
         speed = 1000
-    else:
-        helper_logger.log_error("No interface speed found for: '{}'".format(ifname))
+
     return speed
 
 
