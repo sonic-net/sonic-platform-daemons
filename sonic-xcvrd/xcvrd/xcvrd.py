@@ -194,8 +194,7 @@ def get_interface_speed(ifname):
         speed = 10000
     elif '1000BASE' in ifname:
         speed = 1000
-    else:
-        helper_logger.log_error("No interface speed found for: '{}'".format(ifname))
+
     return speed
 
 
