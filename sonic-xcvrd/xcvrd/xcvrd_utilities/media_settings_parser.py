@@ -6,7 +6,6 @@ import json
 import os
 import ast
 
-from sonic_platform.device_data import DeviceDataManager
 from sonic_py_common import device_info, logger
 from swsscommon import swsscommon
 from xcvrd import xcvrd
@@ -24,7 +23,9 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 def load_media_settings():
     global g_dict
 
-    if device_info.get_sonic_version_info()['asic_type'] == 'mellanox':
+    version_info = device_info.get_sonic_version_info()
+    if version_info and version_info['asic_type'] == 'mellanox':
+        from sonic_platform.device_data import DeviceDataManager
         if not DeviceDataManager.is_module_host_management_mode():
             return {}
 
