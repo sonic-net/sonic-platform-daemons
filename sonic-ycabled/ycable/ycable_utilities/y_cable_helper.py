@@ -641,7 +641,7 @@ def process_loopback_interface_and_get_read_side(loopback_keys):
     return -1
 
 
-def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl):
+def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl):
     global grpc_port_stubs
     global grpc_port_channels
 
@@ -665,7 +665,6 @@ def check_identifier_presence_and_setup_channel(logical_port_name, port_tbl, hw_
             if val in CONFIG_MUX_STATES and cable_type == "active-active":
 
                 # import the module and load the port instance
-                y_cable_presence[:] = [True]
                 physical_port_list = logical_port_name_to_physical_port_list(
                     logical_port_name)
 
@@ -753,7 +752,7 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
 
         if logical_port_name in port_table_keys[asic_index]:
             check_identifier_presence_and_setup_channel(
-                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+                logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1155,7 +1154,7 @@ def create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_t
     post_port_mux_static_info_to_db(
         logical_port_name, static_tbl[asic_index], y_cable_tbl)
 
-def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence):
+def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name):
 
     global y_cable_port_instances
     global y_cable_port_locks
@@ -1254,7 +1253,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                             mux_asic_table = mux_tbl.get(asic_index, None)
                             static_mux_asic_table = static_tbl.get(
                                 asic_index, None)
-                            if y_cable_presence[0] is True and y_cable_asic_table is not None and mux_asic_table is not None and static_mux_asic_table is not None:
+                            if y_cable_asic_table is not None and mux_asic_table is not None and static_mux_asic_table is not None:
                                 # fill in the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
@@ -1263,7 +1262,6 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
                             else:
                                 # first create the state db y cable table and then fill in the entry
-                                y_cable_presence[:] = [True]
                                 # fill the newly found entry
                                 read_y_cable_and_update_statedb_port_tbl(
                                     logical_port_name, y_cable_tbl[asic_index])
@@ -1295,11 +1293,8 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                 "Could not retreive state value inside mux_info_dict for {}, inside MUX_CABLE table".format(logical_port_name))
 
 
-def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl):
+def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asic_index, logical_port_name, delete_change_event, y_cable_tbl, static_tbl, mux_tbl):
 
-    # if there is No Y cable do not do anything here
-    if y_cable_presence[0] is False:
-        return
 
     (status, fvs) = port_tbl[asic_index].get(logical_port_name)
     if status is False:
@@ -1311,37 +1306,36 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
         # Convert list of tuples to a dictionary
         mux_table_dict = dict(fvs)
         if "state" in mux_table_dict:
-            if y_cable_presence[0] is True:
-                # delete this entry in the y cable table found and update the delete event
-                #We dont delete the values here, rather just update the values in state DB
-                (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
-                if status is False:
-                    helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {} while deleting mux entry".format(
-                        logical_port_name, y_cable_tbl[asic_index].getTableName()))
-                mux_port_dict = dict(fvs)
-                read_side = mux_port_dict.get("read_side", None)
-                active_side = -1
-                update_table_mux_status_for_statedb_port_tbl(
-                    y_cable_tbl[asic_index], "unknown", read_side, active_side, logical_port_name)
-                #delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
-                #delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
-                delete_change_event[:] = [True]
-                # delete the y_cable instance
-                physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+            # delete this entry in the y cable table found and update the delete event
+            #We dont delete the values here, rather just update the values in state DB
+            (status, fvs) = y_cable_tbl[asic_index].get(logical_port_name)
+            if status is False:
+                helper_logger.log_debug("Could not retreive fieldvalue pairs for {}, inside state_db table {} while deleting mux entry".format(
+                    logical_port_name, y_cable_tbl[asic_index].getTableName()))
+            mux_port_dict = dict(fvs)
+            read_side = mux_port_dict.get("read_side", None)
+            active_side = -1
+            update_table_mux_status_for_statedb_port_tbl(
+                y_cable_tbl[asic_index], "unknown", read_side, active_side, logical_port_name)
+            #delete_port_from_y_cable_table(logical_port_name, static_tbl[asic_index])
+            #delete_port_from_y_cable_table(logical_port_name, mux_tbl[asic_index])
+            delete_change_event[:] = [True]
+            # delete the y_cable instance
+            physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
 
-                if len(physical_port_list) == 1:
+            if len(physical_port_list) == 1:
 
-                    physical_port = physical_port_list[0]
-                    if y_cable_port_instances.get(physical_port) is not None:
-                        y_cable_port_instances.pop(physical_port)
-                    if y_cable_port_instances.get(physical_port) is not None:
-                        y_cable_port_locks.pop(physical_port)
-                else:
-                    helper_logger.log_warning(
-                        "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
+                physical_port = physical_port_list[0]
+                if y_cable_port_instances.get(physical_port) is not None:
+                    y_cable_port_instances.pop(physical_port)
+                if y_cable_port_instances.get(physical_port) is not None:
+                    y_cable_port_locks.pop(physical_port)
+            else:
+                helper_logger.log_warning(
+                    "Error: Retreived multiple ports for a Y cable port {} while delete entries".format(logical_port_name))
 
 
-def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_client, fwd_state_response_tbl, stop_event=threading.Event(), is_vs=False):
+def init_ports_status_for_y_cable(platform_sfp, platform_chassis, state_db ,port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys,  loopback_keys , hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_client, fwd_state_response_tbl, stop_event=threading.Event(), is_vs=False):
     global y_cable_platform_sfputil
     global y_cable_platform_chassis
     global y_cable_port_instances
@@ -1377,11 +1371,11 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
             (status, cable_type) = check_mux_cable_port_type(logical_port_name, port_tbl, asic_index)
             if status and cable_type == "active-standby":
                 check_identifier_presence_and_update_mux_table_entry(
-                    state_db, port_tbl, hw_mux_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                    state_db, port_tbl, hw_mux_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             if status and cable_type == "active-active":
                 grpc_port_stats[logical_port_name] = {}
                 check_identifier_presence_and_setup_channel(
-                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+                    logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
         else:
             # This port does not exist in Port table of config but is present inside
             # logical_ports after loading the port_mappings from port_config_file
@@ -1390,7 +1384,7 @@ def init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presen
                 "Could not retreive port inside config_db PORT table {} for Y-Cable initiation".format(logical_port_name))
 
 
-def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event()):
+def change_ports_status_for_y_cable_change_event(port_dict, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event()):
 
     global read_side
     delete_change_event = [False]
@@ -1419,21 +1413,21 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
                 (status, cable_type) = check_mux_cable_port_type(logical_port_name, port_tbl, asic_index)
                 if status and cable_type == "active-standby":
                     check_identifier_presence_and_update_mux_table_entry(
-                        state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                        state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
                 if status and cable_type == "active-active":
                     check_identifier_presence_and_setup_channel(
-                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl,  y_cable_presence, grpc_client, fwd_state_response_tbl)
+                        logical_port_name, port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
             elif value == SFP_STATUS_REMOVED:
                 helper_logger.log_info("Got SFP deleted ycable event")
                 check_identifier_presence_and_delete_mux_table_entry(
-                    state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
+                    state_db, port_tbl, asic_index, logical_port_name, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
             else:
                 try:
                     # Now that the value is in bitmap format, let's convert it to number
                     event_bits = int(value)
                     if event_bits in errors_block_eeprom_reading:
                         check_identifier_presence_and_delete_mux_table_entry(
-                            state_db, port_tbl, asic_index, logical_port_name, y_cable_presence, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
+                            state_db, port_tbl, asic_index, logical_port_name, delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
                 except (TypeError, ValueError) as e:
                     helper_logger.log_error("Got unrecognized event {}, ignored".format(value))
 
@@ -1442,9 +1436,8 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
                 continue
 
     # If there was a delete event and y_cable_presence was true, reaccess the y_cable presence
-    if y_cable_presence[0] is True and delete_change_event[0] is True:
+    if delete_change_event[0] is True:
 
-        y_cable_presence[:] = [False]
         state_db = {}
         yc_hw_mux_cable_table = {}
         namespaces = multi_asic.get_front_end_namespaces()
@@ -1455,9 +1448,6 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
             yc_hw_mux_cable_table[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
             y_cable_table_size = len(yc_hw_mux_cable_table[asic_id].getKeys())
-            if y_cable_table_size > 0:
-                y_cable_presence[:] = [True]
-                break
 
 
 def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, grpc_config):
