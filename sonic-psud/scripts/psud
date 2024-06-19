@@ -122,6 +122,11 @@ def _wrapper_get_psu_status(psu_index):
 #
 
 def get_psu_key(psu_index):
+    if platform_chassis is not None:
+        try:
+            return platform_chassis.get_psu(psu_index - 1).get_name()
+        except NotImplementedError:
+            pass
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
 
 
