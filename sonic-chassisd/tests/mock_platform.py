@@ -103,10 +103,13 @@ class MockChassis:
         return True
 
     def get_serial(self):
-        return "Serial No"
+        return "Service Tag"
 
     def get_model(self):
         return "Model A"
 
     def get_revision(self):
         return "Rev C"
+
+    def get_serial_num(self):
+        return "Serial No"
