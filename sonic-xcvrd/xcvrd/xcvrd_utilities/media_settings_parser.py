@@ -171,8 +171,9 @@ def get_media_settings_value(physical_port, key):
 
     def get_media_settings(key, media_dict):
         for dict_key in media_dict.keys():
-            if ( re.match(dict_key, key[VENDOR_KEY]) or re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
-                 or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
+            if (re.match(dict_key, key[VENDOR_KEY]) or \
+                re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
+                or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
                 if is_si_per_speed_supported(media_dict[dict_key]):
                     if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[dict_key]: # e.g: 'speed:400GAUI-8'
                         return media_dict[dict_key][key[LANE_SPEED_KEY]]
