@@ -2226,6 +2226,44 @@ class TestXcvrdScript(object):
         task.do_task(False)
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_TXON
 
+    # test https://github.com/sonic-net/sonic-buildimage/issues/19336 is fixed
+    @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
+    def test_CmisManagerTask_get_cmis_application_desired(self):
+        mock_api = MagicMock()
+        mock_api.get_application_advertisement.return_value = {
+            1: {
+                'host_electrical_interface_id': '100G',
+                'module_media_interface_id': '100G',
+                'media_lane_count': 2,
+                'host_lane_count': 2,
+                'host_lane_assignment_options': 0b01010101,
+                'media_lane_assignment_options': 0b01010101,
+            },
+        }
+
+        assert get_cmis_application_desired(mock_api, 8, 100000) == 1
+
+        mock_api.get_application_advertisement.return_value = {
+            1: {
+                'host_electrical_interface_id': '100G',
+                'module_media_interface_id': '100G',
+                'media_lane_count': 2,
+                'host_lane_count': 2,
+                'host_lane_assignment_options': 0b01010101,
+                'media_lane_assignment_options': 0b01010101,
+            },
+            2: {
+                'host_electrical_interface_id': '100G',
+                'module_media_interface_id': '100G',
+                'media_lane_count': 1,
+                'host_lane_count': 1,
+                'host_lane_assignment_options': 0b11111111,
+                'media_lane_assignment_options': 0b11111111,
+            },
+        }
+
+        assert get_cmis_application_desired(mock_api, 8, 100000) == 2
+
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.is_fast_reboot_enabled', MagicMock(return_value=(True)))

@@ -155,10 +155,16 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         return None
 
     appl_dict = api.get_application_advertisement()
-    for index, app_info in appl_dict.items():
-        if (app_info.get('host_lane_count') == host_lane_count and
-        get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
-            return (index & 0xf)
+    current_lane_count = 0xffff # big enough value
+    index = -1
+    for i, app_info in appl_dict.items():
+        app_speed = get_interface_speed(app_info.get('host_electrical_interface_id'))
+        app_lane_count = app_info.get('host_lane_count')
+        if app_speed == speed and app_lane_count <= host_lane_count and app_lane_count < current_lane_count:
+            index = i
+
+    if index != -1:
+        return index & 0xf
 
     helper_logger.log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
     return None
