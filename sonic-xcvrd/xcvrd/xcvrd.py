@@ -1769,7 +1769,7 @@ class DomInfoUpdateTask(threading.Thread):
         TEMP_LOW_WARNING = 4
 
         TEMP_ERROR_TO_DESCRIPTION_DICT = {
-            TEMP_NORMAL: "normal",
+            TEMP_NORMAL: "temperature normal",
             TEMP_HIGH_ALARM: "temperature high alarm",
             TEMP_LOW_ALARM: "temperature low alarm",
             TEMP_HIGH_WARNING: "temperature high warning",
@@ -1777,10 +1777,10 @@ class DomInfoUpdateTask(threading.Thread):
         }
 
         for physical_port, physical_port_name in get_physical_port_name_dict(logical_port_name, self.port_mapping).items():
-            ori_temp_status = temperature_status.get(physical_port)
-            if ori_temp_status is None:
-                ori_temp_status = TEMP_NORMAL
-                temperature_status[physical_port] = ori_temp_status
+            orig_temp_status = temperature_status.get(physical_port)
+            if orig_temp_status is None:
+                orig_temp_status = TEMP_NORMAL
+                temperature_status[physical_port] = orig_temp_status
             new_temp_status = TEMP_NORMAL
 
             dom_info_dict = dom_info_cache.get(physical_port)
@@ -1808,11 +1808,11 @@ class DomInfoUpdateTask(threading.Thread):
                     else:
                         new_temp_status = TEMP_NORMAL
 
-                if ori_temp_status != new_temp_status:
+                if orig_temp_status != new_temp_status:
                     temperature_status[physical_port] = new_temp_status
-                    helper_logger.log_notice("{}: temperature status change from {} to {}".format(
+                    helper_logger.log_notice("{}: temperature status changed from {} to {}".format(
                                              physical_port_name,
-                                             TEMP_ERROR_TO_DESCRIPTION_DICT[ori_temp_status],
+                                             TEMP_ERROR_TO_DESCRIPTION_DICT[orig_temp_status],
                                              TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
                 elif new_temp_status > 0:
                     helper_logger.log_notice("{}: {}".format(physical_port_name, TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
