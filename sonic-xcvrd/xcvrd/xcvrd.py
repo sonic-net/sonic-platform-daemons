@@ -827,6 +827,9 @@ class CmisManagerTask(threading.Thread):
     def log_notice(self, message):
         helper_logger.log_notice("CMIS: {}".format(message))
 
+    def log_warning(self, message):
+        helper_logger.log_warning("CMIS: {}".format(message))
+
     def log_error(self, message):
         helper_logger.log_error("CMIS: {}".format(message))
 
@@ -840,6 +843,15 @@ class CmisManagerTask(threading.Thread):
 
         fvs = swsscommon.FieldValuePairs([('cmis_state', cmis_state_to_set)])
         status_table.set(lport, fvs)
+
+    def delete_port_transceiver_status_table_sw_cmis_state(self, lport):
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        status_table = self.xcvr_table_helper.get_status_tbl(asic_index)
+        if status_table is None:
+            helper_logger.log_error("status_table is None while deleting "
+                                    "sw CMIS state for lport {}".format(lport))
+            return
+        status_table.delete(lport)
 
     def on_port_update_event(self, port_change_event):
         if port_change_event.event_type not in [port_change_event.PORT_SET, port_change_event.PORT_DEL]:
@@ -866,33 +878,56 @@ class CmisManagerTask(threading.Thread):
 
         # Skip if the port/cage type is not a CMIS
         # 'index' can be -1 if STATE_DB|PORT_TABLE
-        if lport not in self.port_dict:
-            self.port_dict[lport] = {}
 
         if port_change_event.port_dict is None:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
-            if pport >= 0:
-                self.port_dict[lport]['index'] = pport
-            if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
-                self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
-            if 'lanes' in port_change_event.port_dict:
-                self.port_dict[lport]['lanes'] = port_change_event.port_dict['lanes']
-            if 'host_tx_ready' in port_change_event.port_dict:
-                self.port_dict[lport]['host_tx_ready'] = port_change_event.port_dict['host_tx_ready']
-            if 'admin_status' in port_change_event.port_dict:
-                self.port_dict[lport]['admin_status'] = port_change_event.port_dict['admin_status']
-            if 'laser_freq' in port_change_event.port_dict:
-                self.port_dict[lport]['laser_freq'] = int(port_change_event.port_dict['laser_freq'])
-            if 'tx_power' in port_change_event.port_dict:
-                self.port_dict[lport]['tx_power'] = float(port_change_event.port_dict['tx_power'])
-            if 'subport' in port_change_event.port_dict:
-                self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
+            force_reinit = False
 
-            self.force_cmis_reinit(lport, 0)
+            if pport >= 0:
+                if lport not in self.port_dict:
+                    self.port_dict[lport] = {'index': pport}
+
+            #Skip if STATE_DB update is received without update from CONFIG_DB
+            if lport not in self.port_dict:
+                return
+
+            for key in port_change_event.port_dict.keys():
+                if key in ['host_tx_ready'] or pport >= 0:
+                    if key in self.port_dict[lport]:
+                        if self.port_dict[lport][key] != port_change_event.port_dict[key]:
+                            self.port_dict[lport][key] = port_change_event.port_dict[key]
+                            # Trigger reinit only when there is change
+                            # Only CONFIG_DB has the field 'index' as > 0 value
+                            force_reinit = True
+                    else:
+                        self.port_dict[lport][key] = port_change_event.port_dict[key]
+                        # Trigger reinit only when there is change
+                        # Only CONFIG_DB has the field 'index' as > 0 value
+                        force_reinit = True
+
+            if 'alias' in port_change_event.port_dict:
+                try:
+                    subport_idx = int(port_change_event.port_dict['alias'].split('/')[-1])
+                except ValueError:
+                    subport_idx = 1
+                num_lanes = len(self.port_dict[lport]['lanes'].split(','))
+                subport_num = int((subport_idx / num_lanes) + (subport_idx % num_lanes))
+                if 'subport' in self.port_dict[lport]:
+                    if self.port_dict[lport]['subport'] != subport_num:
+                        self.port_dict[lport]['subport'] = subport_num
+                        force_reinit = True
+                else:
+                    self.port_dict[lport]['subport'] = subport_num
+                    force_reinit = True
+
+            if force_reinit:
+                self.force_cmis_reinit(lport, 0)
         else:
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+            if pport >= 0:
+                self.port_dict.pop(lport)
+                self.delete_port_transceiver_status_table_sw_cmis_state(lport)
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
@@ -1293,6 +1328,7 @@ class CmisManagerTask(threading.Thread):
                                                   asic_context,
                                                   self.task_stopping_event,
                                                   helper_logger,
+                                                  self.port_mapping,
                                                   self.on_port_update_event)
 
             for lport, info in self.port_dict.items():
@@ -1561,7 +1597,7 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if hasattr(api, 'get_cmis_rev'):
+                        if hasattr(api, 'get_cmis_rev') and False:
                             # Check datapath init pending on module that supports CMIS 5.x
                             majorRev = int(api.get_cmis_rev().split('.')[0])
                             if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):

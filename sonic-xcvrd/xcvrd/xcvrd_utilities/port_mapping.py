@@ -80,7 +80,11 @@ class PortMapping:
 
     def get_physical_to_logical(self, physical_port: int):
         assert isinstance(physical_port, int), "{} is NOT integer".format(physical_port)
-        return self.physical_to_logical.get(physical_port)
+        logical_port_list = self.physical_to_logical.get(physical_port)
+        if logical_port_list:
+            # Sorting based on the number in port_name eg: 128 in Ethernet128
+            logical_port_list.sort(key=lambda intf: int(intf[8:]))
+        return logical_port_list
 
     def logical_port_name_to_physical_port_list(self, port_name):
         try:
@@ -115,7 +119,6 @@ def subscribe_port_update_event(namespaces, logger):
     """
     port_tbl_map = [
         {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
-        {'STATE_DB': 'TRANSCEIVER_INFO'},
         {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
     ]
 
@@ -141,7 +144,7 @@ def apply_filter_to_fvp(filter, fvp):
             if key not in (set(filter) | set({'index', 'key', 'asic_id', 'op'})):
                 del fvp[key]
 
-def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_event_handler):
+def handle_port_update_event(sel, asic_context, stop_event, logger, port_mapping, port_change_event_handler):
     """
     Select PORT update events, notify the observers upon a port update in CONFIG_DB
     or a XCVR insertion/removal in STATE_DB
@@ -163,8 +166,42 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
                 if not validate_port(key):
                     continue
                 fvp = dict(fvp) if fvp is not None else {}
-                logger.log_warning("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
-                                                        key, op, port_tbl.db_name, port_tbl.table_name, fvp))
+                logger.log_debug("handle_port_update_event key:{} op:{} DB:{} Table:{} fvp:{}"\
+                                 .format(key, op, port_tbl.db_name, port_tbl.table_name, fvp))
+                if port_tbl.db_name == "CONFIG_DB" and\
+                    port_tbl.table_name == swsscommon.CFG_PORT_TABLE_NAME:
+                    if op == swsscommon.SET_COMMAND and\
+                           'index' in fvp:
+                        new_physical_index = int(fvp['index'])
+                        if not port_mapping.is_logical_port(key):
+                            # New logical port created
+                            port_change_event = PortChangeEvent(key,\
+                                                                new_physical_index,\
+                                                                asic_context[port_tbl],\
+                                                                PortChangeEvent.PORT_ADD)
+                            port_mapping.handle_port_change_event(port_change_event)
+                        else:
+                            current_physical_index = port_mapping.get_logical_to_physical(key)[0]
+                            if current_physical_index != new_physical_index:
+                                port_change_event = PortChangeEvent(key,
+                                                                    current_physical_index,
+                                                                    asic_context[port_tbl],
+                                                                    PortChangeEvent.PORT_REMOVE)
+                                port_mapping.handle_port_change_event(port_change_event)
+
+                                port_change_event = PortChangeEvent(key,\
+                                                                    new_physical_index,\
+                                                                    asic_context[port_tbl],\
+                                                                    PortChangeEvent.PORT_ADD)
+                                port_mapping.handle_port_change_event(port_change_event)
+                    elif op == swsscommon.DEL_COMMAND and\
+                        port_mapping.is_logical_port(key):
+                        fvp['index'] = port_mapping.get_logical_to_physical(key)[0]
+                        port_change_event = PortChangeEvent(key,\
+                                                            port_mapping.get_logical_to_physical(key)[0],\
+                                                            asic_context[port_tbl],\
+                                                            PortChangeEvent.PORT_REMOVE)
+                        port_mapping.handle_port_change_event(port_change_event)
 
                 if 'index' not in fvp:
                    fvp['index'] = '-1'
@@ -185,30 +222,29 @@ def handle_port_update_event(sel, asic_context, stop_event, logger, port_change_
             apply_filter_to_fvp(filter, fvp)
 
             if key in PortChangeEvent.PORT_EVENT:
-               diff = dict(set(fvp.items()) - set(PortChangeEvent.PORT_EVENT[key].items()))
-               # Ignore duplicate events
-               if not diff:
-                  PortChangeEvent.PORT_EVENT[key] = fvp
-                  continue
+                diff = dict(set(fvp.items()) - set(PortChangeEvent.PORT_EVENT[key].items()))
+                # Ignore duplicate events
+                if not diff:
+                    PortChangeEvent.PORT_EVENT[key] = fvp
+                    continue
             PortChangeEvent.PORT_EVENT[key] = fvp
 
             if fvp['op'] == swsscommon.SET_COMMAND:
-               port_change_event = PortChangeEvent(fvp['key'],
-                                                        port_index,
-                                                        fvp['asic_id'],
-                                                        PortChangeEvent.PORT_SET,
-                                                        fvp)
+                port_change_event = PortChangeEvent(fvp['key'],
+                                                    port_index,
+                                                    fvp['asic_id'],
+                                                    PortChangeEvent.PORT_SET,
+                                                    fvp)
             elif fvp['op'] == swsscommon.DEL_COMMAND:
-               port_change_event = PortChangeEvent(fvp['key'],
-                                                        port_index,
-                                                        fvp['asic_id'],
-                                                        PortChangeEvent.PORT_DEL,
-                                                        fvp)
+                port_change_event = PortChangeEvent(fvp['key'],
+                                                    port_index,
+                                                    fvp['asic_id'],
+                                                    PortChangeEvent.PORT_DEL,
+                                                    fvp)
             # This is the final event considered for processing
-            logger.log_warning("*** {} handle_port_update_event() fvp {}".format(
-                key, fvp))
+            logger.log_debug("handle_port_update_event Key={} fvp {}".format(key, fvp))
             if port_change_event is not None:
-               port_change_event_handler(port_change_event)
+                port_change_event_handler(port_change_event)
 
 
 def handle_port_config_change(sel, asic_context, stop_event, port_mapping, logger, port_change_event_handler):
