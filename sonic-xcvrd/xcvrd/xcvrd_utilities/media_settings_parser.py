@@ -58,6 +58,12 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
+    else:
+        speed_per_lane = int(port_speed) / 1000 / lane_count
+        speed_per_lane_int = int(speed_per_lane)
+        if speed_per_lane - speed_per_lane_int == 0:
+            speed_per_lane = speed_per_lane_int
+        lane_speed_key = LANE_SPEED_KEY_PREFIX + str(speed_per_lane) + 'G:' + str(lane_count)
 
     return lane_speed_key
 
@@ -88,14 +94,16 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
             media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
             if sup_compliance_str in media_compliance_dict:
                 media_compliance_code = media_compliance_dict[sup_compliance_str]
+                if media_compliance_code == 'Extended' or media_compliance_code == 'Unknown':
+                    media_compliance_code = media_compliance_dict['Extended Specification Compliance']
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
 
     media_type = transceiver_dict[physical_port]['type_abbrv_name']
 
-    if len(media_type) != 0:
+    if media_type:
         media_key += media_type
-    if len(media_compliance_code) != 0:
+    if media_compliance_code:
         media_key += '-' + media_compliance_code
         sfp = xcvrd.platform_chassis.get_sfp(physical_port)
         api = sfp.get_xcvr_api()

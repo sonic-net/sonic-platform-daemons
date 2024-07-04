@@ -660,12 +660,21 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': None }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G:2' }
+        
+        # Test a special 'specification_compliance' value
+        specification_compliance_dict = {
+            '10/40G Ethernet Compliance Code': 'Extended',
+            'Extended Specification Compliance': '100GBASE-SR10'
+        }
+        xcvr_info_dict[0]['specification_compliance'] = str(specification_compliance_dict)
+        result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-100GBASE-SR10-255M', 'lane_speed_key': 'speed:50G:2' }
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': None }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G:2' }
         # TODO: Ensure that error message was logged
 
         mock_is_cmis_api.return_value = True
