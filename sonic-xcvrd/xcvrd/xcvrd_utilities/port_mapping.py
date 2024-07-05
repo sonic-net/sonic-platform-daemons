@@ -120,6 +120,7 @@ def subscribe_port_update_event(namespaces, logger):
     port_tbl_map = [
         {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
         {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
+        {'STATE_DB': 'TRANSCEIVER_STATUS', 'FILTER': ['status']},
     ]
 
     sel = swsscommon.Select()

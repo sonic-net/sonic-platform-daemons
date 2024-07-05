@@ -894,7 +894,7 @@ class CmisManagerTask(threading.Thread):
                 return
 
             for key in port_change_event.port_dict.keys():
-                if key in ['host_tx_ready'] or pport >= 0:
+                if key in ['host_tx_ready', 'status'] or pport >= 0:
                     if key in self.port_dict[lport]:
                         if self.port_dict[lport][key] != port_change_event.port_dict[key]:
                             self.port_dict[lport][key] = port_change_event.port_dict[key]
