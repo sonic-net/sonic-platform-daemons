@@ -1273,7 +1273,7 @@ class CmisManagerTask(threading.Thread):
             return
         found, _ = intf_tbl.get(lport)
         if not found:
-            helper_logger.log_debug("Active ApSel db update: {} not found in INTF_TABLE".format(lport))
+            helper_logger.log_warning("Active ApSel db update: {} not found in INTF_TABLE".format(lport))
             return
         fvs = swsscommon.FieldValuePairs(tuple_list)
         intf_tbl.set(lport, fvs)
