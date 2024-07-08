@@ -127,6 +127,9 @@ def get_psu_key(psu_index):
             return platform_chassis.get_psu(psu_index - 1).get_name()
         except NotImplementedError:
             pass
+        except IndexError:
+            #some functionality is expectent on returning an expected key even if the psu object itself does not exist
+            pass
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
 
 
