@@ -7764,3 +7764,14 @@ class TestYcableScriptExecution(object):
         assert swsscommon.Select.select.call_count == 1
 
 
+    def test_ycable_wait_for_state_change(self):
+
+        chaneel_conn = grpc.ChannelConnectivity.TRANSIENT_FAILURE
+        rc = wait_for_state_change(channel_conn, port)
+
+        assert (rc == None)
+
+        chaneel_conn = grpc.ChannelConnectivity.CONNECTING
+        rc = wait_for_state_change(channel_conn, port)
+
+        assert (rc == None)
