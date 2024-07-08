@@ -907,21 +907,6 @@ class CmisManagerTask(threading.Thread):
                         # Only CONFIG_DB has the field 'index' as > 0 value
                         force_reinit = True
 
-            if 'alias' in port_change_event.port_dict:
-                try:
-                    subport_idx = int(port_change_event.port_dict['alias'].split('/')[-1])
-                except ValueError:
-                    subport_idx = 1
-                num_lanes = len(self.port_dict[lport]['lanes'].split(','))
-                subport_num = int((subport_idx / num_lanes) + (subport_idx % num_lanes))
-                if 'subport' in self.port_dict[lport]:
-                    if self.port_dict[lport]['subport'] != subport_num:
-                        self.port_dict[lport]['subport'] = subport_num
-                        force_reinit = True
-                else:
-                    self.port_dict[lport]['subport'] = subport_num
-                    force_reinit = True
-
             if force_reinit:
                 self.force_cmis_reinit(lport, 0)
         else:
