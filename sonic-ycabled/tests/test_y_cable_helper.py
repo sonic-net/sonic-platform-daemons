@@ -7767,6 +7767,7 @@ class TestYcableScriptExecution(object):
     def test_ycable_wait_for_state_change(self):
 
         channel_conn = grpc.ChannelConnectivity.TRANSIENT_FAILURE
+        port = 'Ethernet0'
         rc = wait_for_state_change(channel_conn, port)
 
         assert (rc == None)
