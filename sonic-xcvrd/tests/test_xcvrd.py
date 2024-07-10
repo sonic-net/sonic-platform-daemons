@@ -1003,6 +1003,10 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task.xcvr_table_helper = MagicMock()
+        status_tbl = MagicMock()
+        status_tbl.delete = MagicMock()
+        task.xcvr_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
@@ -1017,10 +1021,6 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL)
-        task.on_port_update_event(port_change_event)
-        assert len(task.port_dict) == 0
-
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
@@ -1028,6 +1028,10 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {'index':1})
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL, {'index':1})
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 0
 
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
