@@ -474,27 +474,27 @@ def wait_for_state_change(channel_connectivity, port):
     asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
 
     if channel_connectivity == grpc.ChannelConnectivity.TRANSIENT_FAILURE:
-        helper_logger.log_notice("gRPC port {} state changed to TRANSIENT_FAILURE".format(port))
+        helper_logger.log_notice("gRPC port {} state changed to TRANSIENT_FAILURE tid {}".format(port, threading.currentThread().getName()))
         # for connectivity state to FAILURE/IDLE report a failure
         fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
         fwd_state_response_tbl[asic_index].set(port, fvs_updated)
         grpc_port_connectivity[port] = "TRANSIENT_FAILURE"
 
     if channel_connectivity == grpc.ChannelConnectivity.CONNECTING:
-        helper_logger.log_notice("gRPC port {} state changed to CONNECTING".format(port))
+        helper_logger.log_notice("gRPC port {} state changed to CONNECTING tid {}".format(port, threading.currentThread().getName()))
         grpc_port_connectivity[port] = "CONNECTING"
     if channel_connectivity == grpc.ChannelConnectivity.READY:
-        helper_logger.log_notice("gRPC port {} state changed to READY".format(port))
+        helper_logger.log_notice("gRPC port {} state changed to READY tid {}".format(port, threading.currentThread().getName()))
         grpc_port_connectivity[port] = "READY"
     if channel_connectivity == grpc.ChannelConnectivity.IDLE:
-        helper_logger.log_notice("gRPC port {} state changed to IDLE".format(port))
+        helper_logger.log_notice("gRPC port {} state changed to IDLE tid {}".format(port, threading.currentThread().getName()))
         # for connectivity state to FAILURE/IDLE report a failure
         fvs_updated = swsscommon.FieldValuePairs([('response', 'failure')])
         fwd_state_response_tbl[asic_index].set(port, fvs_updated) 
         grpc_port_connectivity[port] = "IDLE"
 
     if channel_connectivity == grpc.ChannelConnectivity.SHUTDOWN:
-        helper_logger.log_notice("gRPC port {} state changed to SHUTDOWN".format(port))
+        helper_logger.log_notice("gRPC port {} state changed to SHUTDOWN tid {}".format(port, threading.currentThread().getName()))
         grpc_port_connectivity[port] = "SHUTDOWN"
 
 
@@ -600,7 +600,7 @@ def put_init_values_for_grpc_states(port, read_side, hw_mux_cable_tbl, hw_mux_ca
     stub = grpc_port_stubs.get(port, None)
     request = linkmgr_grpc_driver_pb2.AdminRequest(portid=DEFAULT_PORT_IDS, state=[0, 0])
     if stub is None:
-        helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {}".format(port))
+        helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {} tid {} writing unknown".format(port, threading.currentThread().getName()))
         fvs_updated = swsscommon.FieldValuePairs([('state', 'unknown'),
                                                   ('read_side', str(read_side)),
                                                   ('active_side', 'unknown')])
@@ -615,9 +615,9 @@ def put_init_values_for_grpc_states(port, read_side, hw_mux_cable_tbl, hw_mux_ca
         fwd_response_port_ids = response.portid
         fwd_response_port_ids_state = response.state
         helper_logger.log_notice(
-            "forwarding state RPC received response port ids = {} port {}".format(fwd_response_port_ids, port))
+            "initial forwarding state RPC received response port ids = {} port {} tid {}".format(fwd_response_port_ids, port, threading.currentThread().getName()))
         helper_logger.log_notice(
-            "forwarding state RPC received response state values = {} port {}".format(fwd_response_port_ids_state, port))
+            "initial forwarding state RPC received response state values = {} port {} tid {}".format(fwd_response_port_ids_state, port, threading.currentThread().getName()))
     else:
         helper_logger.log_warning("response was none while doing init config state for gRPC HW_MUX_CABLE_TABLE {} ".format(port))
 
@@ -3298,7 +3298,7 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
             # TODO state only for dummy value in this request MSG remove this
             request = linkmgr_grpc_driver_pb2.AdminRequest(portid=DEFAULT_PORT_IDS, state=[0, 0])
             helper_logger.log_debug(
-                "Y_CABLE_DEBUG:calling RPC for getting cli forwarding state read_side portid = {} Ethernet port {}".format(read_side, port))
+                "Y_CABLE_DEBUG:calling RPC for getting cli forwarding state read_side portid = {} Ethernet port {} tid {}".format(read_side, port, threading.currentThread().getName()))
 
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
@@ -3316,10 +3316,10 @@ def handle_show_hwmode_state_cmd_arg_tbl_notification(fvp, port_tbl, xcvrd_show_
                 # Debug only, remove this section once Server side is Finalized
                 fwd_response_port_ids = response.portid
                 fwd_response_port_ids_state = response.state
-                helper_logger.log_notice(
-                    "forwarding state RPC received response port ids = {} port {}".format(fwd_response_port_ids, port))
-                helper_logger.log_notice(
-                    "forwarding state RPC received response state values = {} port {}".format(fwd_response_port_ids_state, port))
+                helper_logger.log_debug(
+                    "procesing request hwmode forwarding state RPC received response port ids = {} port {} tid {}".format(fwd_response_port_ids, port, threading.currentThread().getName()))
+                helper_logger.log_debug(
+                    "processing request hwmode  forwarding state RPC received response state values = {} port {} tid {}".format(fwd_response_port_ids_state, port, threading.currentThread().getName()))
             else:
                 helper_logger.log_notice("response was none cli handle_fwd_state_command_grpc_notification {} ".format(port))
 
@@ -3422,14 +3422,14 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
             helper_logger.log_debug("Y_CABLE_DEBUG:before invoking RPC fwd_state read_side = {}".format(read_side))
             # TODO state only for dummy value in this request MSG remove this
             request = linkmgr_grpc_driver_pb2.AdminRequest(portid=DEFAULT_PORT_IDS, state=[0, 0])
-            helper_logger.log_notice(
-                "calling RPC for getting forwarding state port = {} portid {} peer portid {} read_side {}".format(port, read_side, 1 - int(read_side), read_side))
+            helper_logger.log_debug(
+                "processing request for fwd_state calling RPC for getting forwarding state port = {} portid {} peer portid {} read_side {} tid {}".format(port, read_side, 1 - int(read_side), read_side, threading.currentThread().getName()))
 
             self_state = "unknown"
             peer_state = "unknown"
             stub = grpc_port_stubs.get(port, None)
             if stub is None:
-                helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {}".format(port))
+                helper_logger.log_notice("stub is None for getting admin port forwarding state RPC port {} tid ".format(port, threading.currentThread().getName()))
                 retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client)
                 stub = grpc_port_stubs.get(port, None)
                 if stub is None:
@@ -3447,10 +3447,10 @@ def handle_fwd_state_command_grpc_notification(fvp_m, hw_mux_cable_tbl, fwd_stat
                 # Debug only, remove this section once Server side is Finalized
                 fwd_response_port_ids = response.portid
                 fwd_response_port_ids_state = response.state
-                helper_logger.log_notice(
-                    "forwarding state RPC received response port = {} portids {} read_side {}".format(port, fwd_response_port_ids,read_side))
-                helper_logger.log_notice(
-                    "forwarding state RPC received response port = {} state values = {} read_side {}".format(port, fwd_response_port_ids_state, read_side))
+                helper_logger.log_debug(
+                    "processing request for fwd_state forwarding state RPC received response port = {} portids {} read_side {} tid {}".format(port, fwd_response_port_ids, read_side, threading.currentThread().getName()))
+                helper_logger.log_debug(
+                    "processing request for fwd state forwarding state RPC received response port = {} state values = {} read_side {} tid {}".format(port, fwd_response_port_ids_state, read_side, threading.currentThread().getName()))
             else:
                 helper_logger.log_notice("response was none handle_fwd_state_command_grpc_notification {} ".format(port))
 
@@ -3536,11 +3536,11 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                 hw_response_port_ids = response.portid
                 hw_response_port_ids_state = response.state
                 helper_logger.log_notice(
-                    "Set admin state RPC received response port {} port ids = {} curr_read_side {} read_side {}".format(port, hw_response_port_ids, curr_read_side, read_side))
+                    "Set admin state RPC received response port {} port ids = {} curr_read_side {} read_side {} tid {}".format(port, hw_response_port_ids, curr_read_side, read_side, threading.currentThread().getName()))
                 helper_logger.log_notice(
-                    "Set admin state RPC received response port {} state values = {} curr_read_side {} read_side {}".format(port, hw_response_port_ids_state, curr_read_side, read_side))
+                    "Set admin state RPC received response port {} state values = {} curr_read_side {} read_side {} tid {}".format(port, hw_response_port_ids_state, curr_read_side, read_side, threading.currentThread().getName()))
             else:
-                helper_logger.log_notice("response was none hw_mux_cable_table_grpc_notification {} ".format(port))
+                helper_logger.log_notice("response was none hw_mux_cable_table_grpc_notification {} tid {}".format(port, threading.currentThread().getName()))
 
             active_side = parse_grpc_response_hw_mux_cable_change_state(ret, response, curr_read_side, port)
 
@@ -4055,7 +4055,7 @@ class GracefulRestartClient:
                 response_stream = self.stub.NotifyGracefulRestartStart(request)
                 index = 0
                 async for response in response_stream:
-                    helper_logger.log_notice("Async client received from direct read period port = {}: period = {} index = {} guid = {} notifytype {} msgtype = {}".format(self.port, response.period, index, response.guid, response.notifytype, response.msgtype))
+                    helper_logger.log_debug("Async client received from direct read period port = {}: period = {} index = {} guid = {} notifytype {} msgtype = {} tid {}".format(self.port, response.period, index, response.guid, response.notifytype, response.msgtype, threading.currentThread().getName()))
                     helper_logger.log_debug("Async Debug only :{} {}".format(dir(response_stream), dir(response)))
                     index = index+1
                     if response == grpc.aio.EOF:
@@ -4063,14 +4063,14 @@ class GracefulRestartClient:
                 helper_logger.log_notice("Async client finished loop from direct read period port:{} ".format(self.port))
                 index = index+1
             except grpc.RpcError as e:
-                helper_logger.log_notice("Async client port = {} exception occured because of {} ".format(self.port, e.code()))
+                helper_logger.log_notice("Async client port = {} exception occured because of {} tid {}".format(self.port, e.code(), threading.currentThread().getName()))
 
             await self.response_queue.put(response)
 
     async def process_response(self):
         while True:
             response = await self.response_queue.get()
-            helper_logger.log_debug("Async recieved a response from {} {}".format(self.port, response))
+            helper_logger.log_debug("Async recieved a response from {} {} tid {}".format(self.port, response, threading.currentThread().getName()))
             # do something with response
             if response is not None:
                 await asyncio.sleep(response.period)

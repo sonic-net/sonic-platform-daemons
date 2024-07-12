@@ -3,7 +3,7 @@
     helper utlities configuring y_cable tables for ycabled daemon
 """
 
-
+import threading
 from sonic_py_common import daemon_base, logger
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
@@ -551,6 +551,7 @@ class YcableChannelStateTableHelper(object):
             self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
             self.fwd_state_response_tbl[asic_id] = swsscommon.Table(
                 self.appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
+        helper_logger.log_notice('created table instance from tid {}'.format(threading.currentThread().getName()))
 
     def get_fwd_state_response_tbl(self):
         return self.fwd_state_response_tbl
