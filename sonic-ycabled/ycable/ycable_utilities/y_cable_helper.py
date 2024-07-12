@@ -3558,7 +3558,7 @@ def handle_hw_mux_cable_table_grpc_notification(fvp, hw_mux_cable_tbl, asic_inde
                                                       ('read_side', read_side),
                                                       ('active_side', str(active_side))])
             hw_mux_cable_tbl[asic_index].set(port, fvs_updated)
-            helper_logger.log_debug("Y_CABLE_DEBUG: processed the notification hw mux state cleanly {}".format(port))
+            helper_logger.log_debug("Y_CABLE_DEBUG: processed the notification hw mux state cleanly {} stubs {} channels {}".format(port, len(grpc_port_stubs), len(grpc_port_channels)))
         else:
             helper_logger.log_info("Got a change event on port {} of table {} that does not contain state".format(
                 port, swsscommon.APP_HW_MUX_CABLE_TABLE_NAME))

@@ -7776,3 +7776,13 @@ class TestYcableScriptExecution(object):
         rc = wait_for_state_change(channel_conn, port)
 
         assert (rc == None)
+
+        channel_conn = grpc.ChannelConnectivity.READY
+        rc = wait_for_state_change(channel_conn, port)
+
+        assert (rc == None)
+
+        channel_conn = grpc.ChannelConnectivity.SHUTDOWN
+        rc = wait_for_state_change(channel_conn, port)
+
+        assert (rc == None)
