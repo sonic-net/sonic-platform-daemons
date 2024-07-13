@@ -1269,7 +1269,7 @@ class CmisManagerTask(threading.Thread):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
         intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
         if not intf_tbl:
-            self.log_error("Active ApSel db update: intf_tbl not found for {}".format(lport))
+            helper_logger.log_warning("Active ApSel db update: intf_tbl not found for {}".format(lport))
             return
         found, _ = intf_tbl.get(lport)
         if not found:
