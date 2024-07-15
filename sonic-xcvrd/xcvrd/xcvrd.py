@@ -1269,7 +1269,7 @@ class CmisManagerTask(threading.Thread):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
         intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
         if not intf_tbl:
-            helper_logger.log_warning("Active ApSel db update: intf_tbl not found for {}".format(lport))
+            helper_logger.log_warning("Active ApSel db update: TRANSCEIVER_INFO table not found for {}".format(lport))
             return
         found, _ = intf_tbl.get(lport)
         if not found:
@@ -1501,6 +1501,11 @@ class CmisManagerTask(threading.Thread):
 
                         if not need_update:
                             # No application updates
+                            # As part of xcvrd restart, the TRANSCEIVER_INFO table is deleted and
+                            # created with default value of 'N/A' for all the active apsel fields.
+                            # The below (post_port_active_apsel_to_db) will ensure that the
+                            # active apsel fields are updated correctly in the DB since
+                            # the CMIS state remains unchanged during xcvrd restart
                             self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
                             self.log_notice("{}: no CMIS application update required...READY".format(lport))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
