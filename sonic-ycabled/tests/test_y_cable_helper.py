@@ -1171,7 +1171,7 @@ class TestYCableScript(object):
         port_tbl[asic_index].get.return_value = (status, fvs)
 
         rc = check_identifier_presence_and_update_mux_table_entry(
-            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1202,7 +1202,7 @@ class TestYCableScript(object):
         port_tbl[asic_index].get.return_value = (status, fvs)
 
         rc = check_identifier_presence_and_update_mux_table_entry(
-            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1233,7 +1233,7 @@ class TestYCableScript(object):
         port_tbl[asic_index].get.return_value = (status, fvs)
 
         rc = check_identifier_presence_and_update_mux_table_entry(
-            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1264,7 +1264,7 @@ class TestYCableScript(object):
         port_tbl[asic_index].get.return_value = (status, fvs)
 
         rc = check_identifier_presence_and_update_mux_table_entry(
-            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+            state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1298,7 +1298,7 @@ class TestYCableScript(object):
             patched_util.get_transceiver_info_dict.return_value = None
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0, 1, 2]))
@@ -1333,7 +1333,7 @@ class TestYCableScript(object):
                 'manufacturer': 'Microsoft', 'model': 'simulated'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1368,7 +1368,7 @@ class TestYCableScript(object):
                 'bad_manufacturer': 'Microsoft', 'model': 'simulated'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1403,7 +1403,7 @@ class TestYCableScript(object):
                 'manufacturer': 'Microsoft', 'bad_model': 'simulated'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1438,7 +1438,7 @@ class TestYCableScript(object):
                 'manufacturer': 'not_Microsoft', 'model': 'simulated'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1474,7 +1474,7 @@ class TestYCableScript(object):
                 'manufacturer': 'Microsoft', 'model': 'bad_model1'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1513,7 +1513,7 @@ class TestYCableScript(object):
                 mock_mapping.get.return_value = None
 
                 rc = check_identifier_presence_and_update_mux_table_entry(
-                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                    state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
                 assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1550,7 +1550,7 @@ class TestYCableScript(object):
                 'manufacturer': 'not_Microsoft', 'model': 'model1'}
 
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1588,7 +1588,7 @@ class TestYCableScript(object):
 
             sys.modules['builtins.getattr'] = MagicMock()
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1626,7 +1626,7 @@ class TestYCableScript(object):
 
             sys.modules['builtins.getattr'] = MagicMock()
             rc = check_identifier_presence_and_update_mux_table_entry(
-                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name,  y_cable_presence)
+                state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
             assert(rc == None)
 
 
@@ -1664,7 +1664,7 @@ class TestYCableScript(object):
 
         with patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances') as port_instance:
             rc = check_identifier_presence_and_delete_mux_table_entry(
-                state_db, port_tbl, asic_index, logical_port_name, y_cable_presence,  delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
+                state_db, port_tbl, asic_index, logical_port_name,  delete_change_event, y_cable_tbl, static_tbl, mux_tbl)
             assert(rc == None)
         
 
@@ -1721,7 +1721,7 @@ class TestYCableScript(object):
         grpc_config[asic_index].get.return_value = (status, fvs)
         fwd_state_response_tbl = {}
 
-        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis, y_cable_presence,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_config, fwd_state_response_tbl, stop_event=threading.Event())
+        rc = init_ports_status_for_y_cable(platform_sfp, platform_chassis,  state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, port_table_keys, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, grpc_config, fwd_state_response_tbl, stop_event=threading.Event())
 
         assert(rc == None)
 
@@ -1754,7 +1754,7 @@ class TestYCableScript(object):
             patched_util.get_asic_id_for_logical_port.return_value = 0
 
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+                logical_port_dict, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1787,7 +1787,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+                logical_port_dict, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1831,7 +1831,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+                logical_port_dict,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1878,7 +1878,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,  port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+                logical_port_dict, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -1918,7 +1918,7 @@ class TestYCableScript(object):
 
             patched_util.get_asic_id_for_logical_port.return_value = 0
             rc = change_ports_status_for_y_cable_change_event(
-                logical_port_dict,  y_cable_presence,port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
+                logical_port_dict, port_tbl, port_table_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stop_event=threading.Event())
 
             assert(rc == None)
 
@@ -6619,7 +6619,7 @@ class TestYCableScript(object):
         mux_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
 
         assert(rc == None)
 
@@ -6655,7 +6655,7 @@ class TestYCableScript(object):
         mux_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
 
         assert(rc == None)
 
@@ -6692,7 +6692,7 @@ class TestYCableScript(object):
         mux_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
         assert(rc == None)
 
 
@@ -6730,7 +6730,7 @@ class TestYCableScript(object):
         mux_tbl[asic_index] = swsscommon.Table(
             test_db[asic_index], "MUX_INFO_TABLE")
 
-        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, y_cable_presence, grpc_client, fwd_state_response_tbl)
+        rc = check_identifier_presence_and_setup_channel("Ethernet0", port_tbl, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, asic_index, read_side, mux_tbl, grpc_client, fwd_state_response_tbl)
 
         assert(rc == None)
 
