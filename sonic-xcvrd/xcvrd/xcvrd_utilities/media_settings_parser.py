@@ -7,7 +7,7 @@ import os
 import ast
 import re
 
-from sonic_py_common import device_info, logger
+from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
 from xcvrd import xcvrd
 
@@ -18,7 +18,7 @@ VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
 SYSLOG_IDENTIFIER = "xcvrd"
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
 
 def load_media_settings():
