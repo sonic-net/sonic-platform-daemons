@@ -17,6 +17,7 @@ LANE_SPEED_KEY_PREFIX = "speed:"
 VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
+MEDIA_LANE_SPEED_KEY = 'media_lane_speed_key'
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
@@ -62,6 +63,26 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
 
     return lane_speed_key
 
+def get_media_lane_speed_key(physical_port, port_speed, lane_count):
+    is_copper = None
+    media_lane_speed = ""
+
+    lane_speed = int(int(port_speed)/int(lane_count))
+    try:
+        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+        api = sfp.get_xcvr_api()
+        is_copper = api.is_copper()
+
+    except Exception as e:
+        helper_logger.log_notice("Invalid information of xcvrd is_copper api for port {}".format(physical_port))
+
+    if is_copper is True: # For Copper lane_speed =25000, '25000,CR'
+        media_lane_speed = "{},CR".format(lane_speed)
+    elif is_copper is False: # For Fiber lane_speed =25000, '25000'
+        media_lane_speed = "{}".format(lane_speed)
+    else: # For known media lane_speed =25000, '25000,UNKNOWN'
+        media_lane_speed = "{},UNKNOWN".format(lane_speed)
+    return media_lane_speed
 
 def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count):
     sup_compliance_str = '10/40G Ethernet Compliance Code'
@@ -111,11 +132,13 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
+    media_lane_speed_key = get_media_lane_speed_key(physical_port,port_speed,lane_count)
     # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
-        LANE_SPEED_KEY: lane_speed_key
+        LANE_SPEED_KEY: lane_speed_key,
+        MEDIA_LANE_SPEED_KEY: media_lane_speed_key
     }
 
 
@@ -180,6 +203,7 @@ def get_media_settings_value(physical_port, key):
         for dict_key in media_dict.keys():
             if (re.match(dict_key, key[VENDOR_KEY]) or \
                 re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
+                or (key.get(MEDIA_LANE_SPEED_KEY) and re.match(dict_key, key[MEDIA_LANE_SPEED_KEY])) # e.g: '50000,CR' or '50000'
                 or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
                 if is_si_per_speed_supported(media_dict[dict_key]):
                     if key[LANE_SPEED_KEY] is not None and key[LANE_SPEED_KEY] in media_dict[dict_key]: # e.g: 'speed:400GAUI-8'

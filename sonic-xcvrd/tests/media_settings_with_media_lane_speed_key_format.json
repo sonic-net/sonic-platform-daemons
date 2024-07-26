@@ -1,0 +1,54 @@
+{
+    "GLOBAL_MEDIA_SETTINGS": {
+        "1-32": {
+           "10000,CR":{
+                "preemphasis": {
+                    "lane0":"0x16440A",
+                    "lane1":"0x16440A",
+                    "lane2":"0x16440A",
+                    "lane3":"0x16440A"
+                }
+            },
+            "25000,CR":{
+                "preemphasis": {
+                    "lane0":"0x16440B",
+                    "lane1":"0x16440B",
+                    "lane2":"0x16440B",
+                    "lane3":"0x16440B"
+                }
+            },
+            "50000,CR":{
+                "preemphasis": {
+                    "lane0":"0x16440C",
+                    "lane1":"0x16440C",
+                    "lane2":"0x16440C",
+                    "lane3":"0x16440C"
+                }
+            },
+            "10000":{
+                "preemphasis": {
+                    "lane0":"0x1A400A",
+                    "lane1":"0x1A400A",
+                    "lane2":"0x1A400A",
+                    "lane3":"0x1A400A"
+                }
+            },
+            "25000":{
+                "preemphasis": {
+                    "lane0":"0x1A400B",
+                    "lane1":"0x1A400B",
+                    "lane2":"0x1A400B",
+                    "lane3":"0x1A400B"
+                }
+            },
+            "50000":{
+                "preemphasis": {
+                    "lane0":"0x1A400C",
+                    "lane1":"0x1A400C",
+                    "lane2":"0x1A400C",
+                    "lane3":"0x1A400C"
+                }
+            }
+        }
+    }
+}
