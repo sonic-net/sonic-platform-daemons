@@ -79,8 +79,16 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     media_key = ''
     media_compliance_dict = {}
 
+    sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+
     try:
-        sfp = xcvrd.platform_chassis.get_sfp(physical_port)
+        media_key = sfp.get_platform_media_key(transceiver_dict[physical_port], int(port_speed), lane_count)
+    except NotImplementedError:
+        pass
+    else:
+        return media_key
+
+    try:
         api = sfp.get_xcvr_api()
         if xcvrd.is_cmis_api(api):
             media_compliance_code = media_compliance_dict_str
@@ -140,7 +148,7 @@ def get_media_val_str_from_dict(media_dict):
     return media_str
 
 
-def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
+def get_media_val_str(num_logical_ports, lane_dict, logical_idx, lane_count):
     LANE_STR = 'lane'
 
     logical_media_dict = {}
@@ -149,9 +157,10 @@ def get_media_val_str(num_logical_ports, lane_dict, logical_idx):
     # The physical ports has more than one logical port meaning it is
     # in breakout mode. So fetch the corresponding lanes from the file
     media_val_str = ''
-    if (num_logical_ports > 1) and \
+    if ((num_logical_ports > 1) or (num_lanes_on_port != lane_count)) and \
        (num_lanes_on_port >= num_logical_ports):
-        num_lanes_per_logical_port = num_lanes_on_port//num_logical_ports
+        # Assuming the lanes are split evenly
+        num_lanes_per_logical_port = lane_count
         start_lane = logical_idx * num_lanes_per_logical_port
 
         for lane_idx in range(start_lane, start_lane +
@@ -338,7 +347,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             if type(media_dict[media_key]) is dict:
                 media_val_str = get_media_val_str(num_logical_ports,
                                                   media_dict[media_key],
-                                                  logical_idx)
+                                                  logical_idx,
+                                                  lane_count)
             else:
                 media_val_str = media_dict[media_key]
             helper_logger.log_debug("{}:({},{}) ".format(index, str(media_key), str(media_val_str)))
