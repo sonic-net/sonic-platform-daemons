@@ -82,6 +82,7 @@ class MockChassis:
     def __init__(self):
         self.module_list = []
         self.midplane_supervisor_access = False
+        self._is_smartswitch = False
 
     def get_num_modules(self):
         return len(self.module_list)
@@ -110,3 +111,6 @@ class MockChassis:
 
     def get_revision(self):
         return "Rev C"
+
+    def is_smartswitch(self):
+        return self._is_smartswitch
