@@ -686,7 +686,6 @@ def test_signal_handler():
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
-    return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -694,8 +693,6 @@ def test_daemon_run_supervisor():
 
 def test_daemon_run_linecard():
     # Test the chassisd run
-    # Fix Me
-    return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -706,8 +703,6 @@ def test_daemon_run_linecard():
        daemon_chassisd.run()
 
 def test_chassis_db_cleanup():
-    # Fix Me
-    return
     chassis = MockChassis()
 
     #Supervisor
