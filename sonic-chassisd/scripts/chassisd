@@ -315,7 +315,7 @@ class ModuleUpdater(logger.Logger):
                         # identifying module operational status change. But the clean up will not be attempted for supervisor
 
                         if down_module_key not in self.down_modules:
-                            self.log_warning("Module {} went off-line!".format(key))
+                            self.log_warning("Module {} (Slot {}) went off-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]))
                             self.down_modules[down_module_key] = {}
                             self.down_modules[down_module_key]['down_time'] = time.time()
                             self.down_modules[down_module_key]['cleaned'] = False
@@ -323,10 +323,10 @@ class ModuleUpdater(logger.Logger):
                 else:
                     # Module is operational. Remove it from down time tracking.
                     if down_module_key in self.down_modules:
-                        self.log_notice("Module {} recovered on-line!".format(key))
+                        self.log_notice("Module {} (Slot {}) recovered on-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]))
                         del self.down_modules[down_module_key]
                     elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
-                        self.log_notice("Module {} is on-line!".format(key))
+                        self.log_notice("Module {} (Slot {}) is on-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] ))
 
                     module_cfg_status = self.get_module_admin_status(key)
 
