@@ -160,6 +160,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
             return (index & 0xf)
 
+    helper_logger.log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
     return None
 
 
@@ -193,8 +194,7 @@ def get_interface_speed(ifname):
         speed = 10000
     elif '1000BASE' in ifname:
         speed = 1000
-    else:
-        helper_logger.log_error("No interface speed found for: '{}'".format(ifname))
+
     return speed
 
 
@@ -349,6 +349,8 @@ def _wrapper_is_flat_memory(physical_port):
         try:
             sfp = platform_chassis.get_sfp(physical_port)
             api = sfp.get_xcvr_api()
+            if not api:
+                return True
             return api.is_flat_memory()
         except NotImplementedError:
             pass
@@ -509,30 +511,20 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                         if 'media_interface_code' in port_info_dict else 'N/A'),
                         ('host_electrical_interface', port_info_dict['host_electrical_interface']
                         if 'host_electrical_interface' in port_info_dict else 'N/A'),
-                        ('host_lane_count', str(port_info_dict['host_lane_count'])
-                        if 'host_lane_count' in port_info_dict else 'N/A'),
-                        ('media_lane_count', str(port_info_dict['media_lane_count'])
-                        if 'media_lane_count' in port_info_dict else 'N/A'),
+                        ('host_lane_count', 'N/A'),
+                        ('media_lane_count', 'N/A'),
                         ('host_lane_assignment_option', str(port_info_dict['host_lane_assignment_option'])
                         if 'host_lane_assignment_option' in port_info_dict else 'N/A'),
                         ('media_lane_assignment_option', str(port_info_dict['media_lane_assignment_option'])
                         if 'media_lane_assignment_option' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane1', str(port_info_dict['active_apsel_hostlane1'])
-                        if 'active_apsel_hostlane1' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane2', str(port_info_dict['active_apsel_hostlane2'])
-                        if 'active_apsel_hostlane2' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane3', str(port_info_dict['active_apsel_hostlane3'])
-                        if 'active_apsel_hostlane3' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane4', str(port_info_dict['active_apsel_hostlane4'])
-                        if 'active_apsel_hostlane4' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane5', str(port_info_dict['active_apsel_hostlane5'])
-                        if 'active_apsel_hostlane5' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane6', str(port_info_dict['active_apsel_hostlane6'])
-                        if 'active_apsel_hostlane6' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane7', str(port_info_dict['active_apsel_hostlane7'])
-                        if 'active_apsel_hostlane7' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane8', str(port_info_dict['active_apsel_hostlane8'])
-                        if 'active_apsel_hostlane8' in port_info_dict else 'N/A'),
+                        ('active_apsel_hostlane1', 'N/A'),
+                        ('active_apsel_hostlane2', 'N/A'),
+                        ('active_apsel_hostlane3', 'N/A'),
+                        ('active_apsel_hostlane4', 'N/A'),
+                        ('active_apsel_hostlane5', 'N/A'),
+                        ('active_apsel_hostlane6', 'N/A'),
+                        ('active_apsel_hostlane7', 'N/A'),
+                        ('active_apsel_hostlane8', 'N/A'),
                         ('media_interface_technology', port_info_dict['media_interface_technology']
                         if 'media_interface_technology' in port_info_dict else 'N/A'),
                         ('supported_max_tx_power', str(port_info_dict['supported_max_tx_power'])
@@ -860,7 +852,6 @@ class CmisManagerTask(threading.Thread):
         self.main_thread_stop_event = main_thread_stop_event
         self.port_dict = {}
         self.port_mapping = copy.deepcopy(port_mapping)
-        self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
@@ -1309,6 +1300,13 @@ class CmisManagerTask(threading.Thread):
 
         asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
         intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+        if not intf_tbl:
+            helper_logger.log_warning("Active ApSel db update: TRANSCEIVER_INFO table not found for {}".format(lport))
+            return
+        found, _ = intf_tbl.get(lport)
+        if not found:
+            helper_logger.log_warning("Active ApSel db update: {} not found in INTF_TABLE".format(lport))
+            return
         fvs = swsscommon.FieldValuePairs(tuple_list)
         intf_tbl.set(lport, fvs)
         self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
@@ -1344,6 +1342,8 @@ class CmisManagerTask(threading.Thread):
         logical_port_list = self.port_mapping.logical_port_list
         for lport in logical_port_list:
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+
+        is_fast_reboot = is_fast_reboot_enabled()
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
@@ -1491,9 +1491,12 @@ class CmisManagerTask(threading.Thread):
 
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
-                           self.log_notice("{} Forcing Tx laser OFF".format(lport))
-                           # Force DataPath re-init
-                           api.tx_disable_channel(media_lanes_mask, True)
+                           if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
+                               self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
+                           else:
+                               self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                               # Force DataPath re-init
+                               api.tx_disable_channel(media_lanes_mask, True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
                     # Configure the target output power if ZR module
@@ -1510,7 +1513,7 @@ class CmisManagerTask(threading.Thread):
                         if True == self.is_appl_reconfigure_required(api, appl):
                             self.log_notice("{}: Decommissioning all lanes/datapaths to default AppSel=0".format(lport))
                             if True != api.decommission_all_datapaths():
-                                self.log_notifce("{}: Failed to default to AppSel=0".format(lport))
+                                self.log_notice("{}: Failed to default to AppSel=0".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                                 continue
 
@@ -1530,6 +1533,12 @@ class CmisManagerTask(threading.Thread):
 
                         if not need_update:
                             # No application updates
+                            # As part of xcvrd restart, the TRANSCEIVER_INFO table is deleted and
+                            # created with default value of 'N/A' for all the active apsel fields.
+                            # The below (post_port_active_apsel_to_db) will ensure that the
+                            # active apsel fields are updated correctly in the DB since
+                            # the CMIS state remains unchanged during xcvrd restart
+                            self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
                             self.log_notice("{}: no CMIS application update required...READY".format(lport))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                             continue
