@@ -2415,11 +2415,6 @@ class SfpStateUpdateTask(threading.Thread):
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
 
-        # If we were here and now retry_eeprom_set is empty, then we can state
-        # that all SFPs accessible
-        if not self.retry_eeprom_set:
-            notify_system_ready()
-
 
 #
 # Daemon =======================================================================
@@ -2596,6 +2591,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for thread in self.threads:
             self.log_notice("Started thread {}".format(thread.getName()))
 
+        notify_system_ready()
         self.stop_event.wait()
 
         self.log_info("Stop daemon main loop")
@@ -2611,6 +2607,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                     generate_sigkill = True
 
         if generate_sigkill is True:
+            # Notify system not ready
+            notify_system_ready(False, "Exception occured in xcvrd daemon")
             self.log_error("Exiting main loop as child thread raised exception!")
             os.kill(os.getpid(), signal.SIGKILL)
 
@@ -2639,6 +2637,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Shutting down...")
 
         if self.sfp_error_event.is_set():
+            # Notify system not ready
+            notify_system_ready(False, "SFP system error")
             sys.exit(SFP_SYSTEM_ERROR)
 
 
