@@ -1,4 +1,4 @@
-# from unittest.mock import DEFAULT
+#from unittest.mock import DEFAULT
 from xcvrd.xcvrd_utilities.port_event_helper import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd_utilities.media_settings_parser import *
@@ -28,7 +28,7 @@ swsscommon.Table = MagicMock()
 swsscommon.ProducerStateTable = MagicMock()
 swsscommon.SubscriberStateTable = MagicMock()
 swsscommon.SonicDBConfig = MagicMock()
-# swsscommon.Select = MagicMock()
+#swsscommon.Select = MagicMock()
 
 test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
