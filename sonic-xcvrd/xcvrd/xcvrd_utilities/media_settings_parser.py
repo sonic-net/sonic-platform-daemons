@@ -76,7 +76,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
-    else:
+    if not lane_speed_key:
         # Directly calculate lane speed and use it as key, this is especially useful for
         # non-CMIS transceivers which typically have no host_electrical_interface_id
         lane_speed_key = '{}{}G'.format(LANE_SPEED_KEY_PREFIX, port_speed // lane_count // 1000)
@@ -86,6 +86,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
 def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count):
     sup_compliance_str = '10/40G Ethernet Compliance Code'
     sup_len_str = 'Length Cable Assembly(m)'
+    sup_compliance_extended_values = ['Extended', 'Unknown']
     extended_spec_compliance_str = 'Extended Specification Compliance'
     vendor_name_str = transceiver_dict[physical_port]['manufacturer']
     vendor_pn_str = transceiver_dict[physical_port]['model']
@@ -111,7 +112,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
             if sup_compliance_str in media_compliance_dict:
                 media_compliance_code = media_compliance_dict[sup_compliance_str]
                 # For 100G transceivers, it's usually in extended specification compliance
-                if extended_spec_compliance_str in media_compliance_dict:
+                if media_compliance_code in sup_compliance_extended_values and \
+                        extended_spec_compliance_str in media_compliance_dict:
                     media_compliance_code = media_compliance_dict[extended_spec_compliance_str]
     except ValueError as e:
         helper_logger.log_error("Invalid value for port {} 'specification_compliance': {}".format(physical_port, media_compliance_dict_str))
