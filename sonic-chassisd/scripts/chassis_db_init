@@ -30,6 +30,7 @@ CHASSIS_INFO_TABLE = 'CHASSIS_INFO'
 CHASSIS_INFO_KEY_TEMPLATE = 'chassis {}'
 CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
 CHASSIS_INFO_SERIAL_FIELD = 'serial'
+CHASSIS_INFO_SERIAL_NUM_FIELD = 'serial_num'
 CHASSIS_INFO_MODEL_FIELD = 'model'
 CHASSIS_INFO_REV_FIELD = 'revision'
 
@@ -75,7 +76,8 @@ def provision_db(platform_chassis, log):
     fvs = swsscommon.FieldValuePairs([
                                         (CHASSIS_INFO_SERIAL_FIELD, try_get(platform_chassis.get_serial)),
                                         (CHASSIS_INFO_MODEL_FIELD, try_get(platform_chassis.get_model)),
-                                        (CHASSIS_INFO_REV_FIELD, try_get(platform_chassis.get_revision))
+                                        (CHASSIS_INFO_REV_FIELD, try_get(platform_chassis.get_revision)),
+                                        (CHASSIS_INFO_SERIAL_NUM_FIELD, try_get(platform_chassis.get_serial_num))
                                     ])
     chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
     log.log_info("STATE_DB provisioned with chassis info.")
