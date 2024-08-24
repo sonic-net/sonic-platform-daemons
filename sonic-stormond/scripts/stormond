@@ -49,6 +49,8 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.log = syslogger.SysLogger(SYSLOG_IDENTIFIER)
         super(DaemonStorage, self).__init__(log_identifier)
 
+        self.log_info("Starting Storage Monitoring Daemon")
+
         self.timeout = STORMOND_PERIODIC_STATEDB_SYNC_SECS
         self.fsstats_sync_interval = STORMOND_SYNC_TO_DISK_SECS
         self.stop_event = threading.Event()
@@ -388,8 +390,6 @@ class DaemonStorage(daemon_base.DaemonBase):
 
 def main():
     stormon = DaemonStorage(SYSLOG_IDENTIFIER)
-
-    stormon.log_info("Starting Storage Monitoring Daemon")
 
     # Read and update Static Fields to the StateDB once
     stormon.get_static_fields_update_state_db()
