@@ -82,7 +82,8 @@ class DaemonStorage(daemon_base.DaemonBase):
                                "total_fsio_writes", \
                                "disk_io_reads", \
                                "disk_io_writes", \
-                               "reserved_blocks"]
+                               "reserved_blocks", \
+                               "last_sync_time"]
 
         # These are the fields that we are interested in saving to disk to protect against
         # reboots or crashes
@@ -309,17 +310,20 @@ class DaemonStorage(daemon_base.DaemonBase):
                 dynamic_kvp_dict["disk_io_reads"] = storage_object.get_disk_io_reads()
                 dynamic_kvp_dict["disk_io_writes"] = storage_object.get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = storage_object.get_reserved_blocks()
+                dynamic_kvp_dict["last_sync_time"] = time.time()
 
                 dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
 
+                # Update storage device statistics to STATE_DB
+                self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
+
+                # Log to syslog
                 self.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
                 storage_device, dynamic_kvp_dict["firmware"], dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["total_fsio_reads"],dynamic_kvp_dict["total_fsio_writes"]))
                 self.log_info("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(dynamic_kvp_dict["latest_fsio_reads"], dynamic_kvp_dict["latest_fsio_writes"]))
                 self.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
                 dynamic_kvp_dict["reserved_blocks"]))
-
-                # Update storage device statistics to STATE_DB
-                self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
+                self.log_info("Last successful sync time to STATE_DB: {}".format(dynamic_kvp_dict["last_sync_time"]))
 
             except Exception as ex:
                 self.log_info("get_dynamic_fields_update_state_db() failed with: {}".format(str(ex)))
