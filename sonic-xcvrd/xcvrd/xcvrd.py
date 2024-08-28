@@ -2400,7 +2400,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def signal_handler(self, sig, frame):
         if sig == signal.SIGHUP:
             self.log_notice("Caught SIGHUP...")
-            syslogger.SysLogger.update_log_level()
+            self.update_log_level()
         elif sig == signal.SIGINT:
             self.log_info("Caught SIGINT - exiting...")
             self.stop_event.set()
