@@ -267,7 +267,7 @@ def get_media_settings_value(physical_port, key):
             if len(default_dict) != 0:
                 return default_dict
             else:
-                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+                helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
             return {}
 
         media_settings = get_media_settings(key, media_dict)
