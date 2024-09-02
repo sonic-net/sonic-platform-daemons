@@ -434,7 +434,7 @@ def test_midplane_presence_dpu_modules():
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
-    chassis.module_list.append(module)_lot
+    chassis.module_list.append(module)
 
     #DPU1
     index = 1
@@ -445,7 +445,8 @@ def test_midplane_presence_dpu_modules():
     serial = "DPU1-1111"
     module_type = ModuleBase.MODULE_TYPE_DPU
     fabric = MockModule(index, name, desc, module_type, slot, serial)
-    chassis.module_list.append(fabric)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
 
     #Run on supervisor
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
@@ -467,7 +468,7 @@ def test_midplane_presence_dpu_modules():
     assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #Set access of DPU to Up (midplane connectivity is down initially)
+    #DPU Down to Up (midplane connectivity is down initially)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
@@ -477,7 +478,7 @@ def test_midplane_presence_dpu_modules():
     assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
     assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #Set access of DPU to Down (to mock midplane connectivity state change)
+    #DPU Up to Down (to mock midplane connectivity state change)
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
