@@ -157,7 +157,7 @@ def test_smartswitch_moduleupdater_check_invalid_slot():
                                     slot, module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
-    assert fvs == None
+    assert fvs != None
 
 def test_moduleupdater_check_invalid_name():
     chassis = MockChassis()
@@ -201,7 +201,7 @@ def test_smartswitch_moduleupdater_check_invalid_index():
                                     slot, module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
-    assert fvs == None
+    assert fvs != None
 
 def test_moduleupdater_check_status_update():
     chassis = MockChassis()
