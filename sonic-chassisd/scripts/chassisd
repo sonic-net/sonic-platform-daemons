@@ -905,21 +905,21 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                                                       default=INVALID_SLOT)
 
         # Check if module list is populated
-        smartswitch = platform_chassis.is_smartswitch()
-        if smartswitch:
+        self.smartswitch = platform_chassis.is_smartswitch()
+        if self.smartswitch:
             self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         else:
             self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
-        if not smartswitch:
+        if not self.smartswitch:
             if ((self.module_updater.my_slot == INVALID_SLOT) or
                     (self.module_updater.supervisor_slot == INVALID_SLOT)):
                 self.log_error("Chassisd not supported for this platform")
                 sys.exit(CHASSIS_NOT_SUPPORTED)
 
         # Start configuration manager task on supervisor module
-        if smartswitch:
+        if self.smartswitch:
             config_manager = SmartSwitchConfigManagerTask()
             config_manager.task_run()
         elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
