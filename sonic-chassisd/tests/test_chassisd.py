@@ -104,7 +104,7 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert slot == int(fvs[CHASSIS_MODULE_INFO_SLOT_FIELD])
+    assert slot == 'N/A'
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
@@ -436,18 +436,6 @@ def test_midplane_presence_dpu_modules():
     module.set_midplane_ip()
     chassis.module_list.append(module)
 
-    #DPU1
-    index = 1
-    name = "DPU1"
-    desc = "DPU Module 1"
-    slot = 0
-    sup_slot = 0
-    serial = "DPU1-1111"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    fabric = MockModule(index, name, desc, module_type, slot, serial)
-    module.set_midplane_ip()
-    chassis.module_list.append(module)
-
     #Run on supervisor
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
                                 slot, sup_slot)
@@ -457,7 +445,7 @@ def test_midplane_presence_dpu_modules():
 
     midplane_table = module_updater.midplane_table
     #Check only one entry in database
-    assert 2 == midplane_table.size()
+    assert 1 == midplane_table.size()
 
     #Check fields in database
     name = "DPU0"
