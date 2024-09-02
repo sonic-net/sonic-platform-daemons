@@ -973,6 +973,8 @@ def test_daemon_run_supervisor_invalid_slot():
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
+    module_updater.my_slot = ModuleBase.MODULE_INVALID_SLOT
+    module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
     daemon_chassisd.run()
 
 def test_daemon_run_supervisor():
