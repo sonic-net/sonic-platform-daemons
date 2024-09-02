@@ -194,8 +194,8 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
     def module_config_update(self, key, admin_state):
         if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
-            self.log_error("Incorrect module-name {}. Should start with {} or {} or {}".format(key,
-                                                                                               ModuleBase.MODULE_TYPE_DPU))
+            self.log_error("Incorrect module-name {}. Should start with {}".format(key,
+                                                        ModuleBase.MODULE_TYPE_DPU))
             return
 
         module_index = try_get(self.chassis.get_module_index, key, default=INVALID_MODULE_INDEX)
