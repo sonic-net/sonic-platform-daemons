@@ -689,7 +689,7 @@ def test_daemon_run_supervisor():
     # Depends on PR: https://github.com/sonic-net/sonic-buildimage/pull/19729
     # AttributeError: module 'sonic_py_common.device_info' has no attribute 'is_smartswitch'
     # Work around: return
-    return
+    # return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -698,7 +698,7 @@ def test_daemon_run_supervisor():
 def test_daemon_run_linecard():
     # Test the chassisd run
     # Depends on PR:19729
-    return
+    # return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -710,7 +710,7 @@ def test_daemon_run_linecard():
 
 def test_chassis_db_cleanup():
     # Depends on PR:19729
-    return
+    # return
     chassis = MockChassis()
 
     #Supervisor
