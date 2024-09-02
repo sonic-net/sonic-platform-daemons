@@ -137,6 +137,35 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     # No change since invalid key
     assert module.get_admin_state() != admin_state
 
+def test_smartswitch_moduleupdater_check_invalid_admin_state():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                    slot, module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    assert fvs == None
+
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    admin_state = 2
+    config_updater.module_config_update(name, admin_state)
+
+    # No change since invalid key
+    assert module.get_admin_state() != admin_state
+
 def test_smartswitch_moduleupdater_check_invalid_slot():
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -579,6 +608,33 @@ def test_midplane_presence_dpu_modules():
     fvs = midplane_table.get(name)
     assert fvs == None
 
+def test_midplane_presence_uninitialized_dpu_modules():
+    chassis = MockChassis()
+
+    #DPU0
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    sup_slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Run on supervisor
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                slot, sup_slot)
+    module_updater.midplane_initialized = False
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    module_updater.check_midplane_reachability()
+
+    midplane_table = module_updater.midplane_table
+    #Check only one entry in database
+    assert 1 != midplane_table.size()
+
 @patch("builtins.open", mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
 def test_midplane_presence_modules_linecard_reboot():
@@ -906,6 +962,19 @@ def test_daemon_run_smartswitch():
     with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock:
        mock.return_value = True
        daemon_chassisd.run()
+
+def test_daemon_run_supervisor_invalid_slot():
+    chassis = MockChassis()
+    #Supervisor
+    index = 0
+    sup_slot = -1
+    # Supervisor ModuleUpdater
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.run()
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
