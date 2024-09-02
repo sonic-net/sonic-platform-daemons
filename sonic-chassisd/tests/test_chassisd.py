@@ -984,6 +984,21 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
+@patch.object(SmartSwitchConfigManagerTask, 'task_worker')
+def test_task_worker(self, mock_task_worker):
+    # Simulate the task worker's behavior for coverage
+    # Break the loop after the first call
+    mock_task_worker.side_effect = [None, KeyboardInterrupt]
+
+    config_manager = SmartSwitchConfigManagerTask()
+    # Expecting the loop to terminate due to side effect
+    with self.assertRaises(KeyboardInterrupt):
+        config_manager.task_run()
+
+    # Verify that task_worker was called
+    self.assertTrue(mock_task_worker.called)
+    self.assertEqual(mock_task_worker.call_count, 1)
+
 def test_daemon_run_linecard():
     # Test the chassisd run
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
