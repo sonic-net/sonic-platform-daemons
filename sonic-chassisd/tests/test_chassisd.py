@@ -130,6 +130,7 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
@@ -350,11 +351,11 @@ def test_smartswitch_configupdater_check_admin_state():
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
-    #assert module.get_admin_state() == admin_state
+    assert module.get_admin_state() == admin_state
 
     admin_state = 1
     config_updater.module_config_update(name, admin_state)
-    #assert module.get_admin_state() == admin_state
+    assert module.get_admin_state() == admin_state
 
 
 def test_configupdater_check_num_modules():
