@@ -81,6 +81,58 @@ def test_moduleupdater_check_valid_fields():
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
+def test_moduleupdater_invalid_slot():
+    chassis = MockChassis()
+    index = 0
+    name = "FABRIC-CARD0"
+    desc = "Switch Fabric Module"
+    slot = -1
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc != fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial != fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+
+def test_moduleupdater_invalid_index():
+    chassis = MockChassis()
+    index = -1
+    name = "FABRIC-CARD0"
+    desc = "Switch Fabric Module"
+    slot = 10
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc != fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial != fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -850,6 +902,16 @@ def test_signal_handler():
     assert daemon_chassisd.log_info.call_count == 0
     assert daemon_chassisd.stop.set.call_count == 0
     assert exit_code == 0
+
+def test_run_smartswitch_config_manager():
+    # Test the chassisd run
+    chassis = MockSmartSwitchChassis()
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.smartswitch = True
+    config_manager = SmartSwitchConfigManagerTask()
+    config_manager.task_worker()
 
 def test_daemon_run_smartswitch():
     # Test the chassisd run
