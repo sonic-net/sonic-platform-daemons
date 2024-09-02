@@ -104,7 +104,7 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert 'N/A' == vs[CHASSIS_MODULE_INFO_SLOT_FIELD]
+    assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
