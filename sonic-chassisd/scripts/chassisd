@@ -682,8 +682,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
 
                 if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
-                    self.log_error("Incorrect module-name {}. Should start with {} or {} or {} or {}".format(key,
-                                                                                                       ModuleBase.MODULE_TYPE_DPU))
+                    self.log_error("Incorrect module-name {}. Should start with {} ".format(key,
+                                                            ModuleBase.MODULE_TYPE_DPU))
                     continue
 
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),

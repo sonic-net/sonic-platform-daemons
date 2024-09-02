@@ -128,13 +128,13 @@ def test_smartswitch_moduleupdater_check_invalid_name():
                                     slot, module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
-    # assert fvs == None
+    assert fvs == None
 
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
     # No change since invalid key
-    # assert module.get_admin_state() != admin_state
+    assert module.get_admin_state() != admin_state
 
 def test_moduleupdater_check_invalid_name():
     chassis = MockChassis()
