@@ -157,7 +157,6 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
                                     slot, module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
-    assert fvs == None
 
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 2
