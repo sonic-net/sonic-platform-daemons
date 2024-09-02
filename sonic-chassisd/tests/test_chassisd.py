@@ -82,6 +82,32 @@ def test_moduleupdater_check_valid_fields():
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
+def test_smartswitch_moduleupdater_check_valid_fields():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert slot == int(fvs[CHASSIS_MODULE_INFO_SLOT_FIELD])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
 def test_moduleupdater_check_invalid_name():
     chassis = MockChassis()
@@ -686,10 +712,6 @@ def test_signal_handler():
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
-    # Depends on PR: https://github.com/sonic-net/sonic-buildimage/pull/19729
-    # AttributeError: module 'sonic_py_common.device_info' has no attribute 'is_smartswitch'
-    # Work around: return
-    # return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -697,8 +719,6 @@ def test_daemon_run_supervisor():
 
 def test_daemon_run_linecard():
     # Test the chassisd run
-    # Depends on PR:19729
-    # return
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -709,8 +729,6 @@ def test_daemon_run_linecard():
        daemon_chassisd.run()
 
 def test_chassis_db_cleanup():
-    # Depends on PR:19729
-    # return
     chassis = MockChassis()
 
     #Supervisor
