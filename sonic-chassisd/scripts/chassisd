@@ -905,7 +905,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                                                       default=INVALID_SLOT)
 
         # Check if module list is populated
-        smartswitch = device_info.is_smartswitch()
+        smartswitch = platform_chassis.is_smartswitch()
         if smartswitch:
             self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         else:
