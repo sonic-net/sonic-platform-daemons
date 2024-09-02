@@ -304,6 +304,31 @@ def test_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
+def test_smartswitch_configupdater_check_admin_state():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 1
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    admin_state = 0
+    config_updater.module_config_update(name, admin_state)
+    assert module.get_admin_state() == admin_state
+
+    admin_state = 1
+    config_updater.module_config_update(name, admin_state)
+    assert module.get_admin_state() == admin_state
+
+
 def test_configupdater_check_num_modules():
     chassis = MockChassis()
     index = 0
