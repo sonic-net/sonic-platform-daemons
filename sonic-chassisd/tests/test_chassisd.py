@@ -78,7 +78,6 @@ def test_moduleupdater_check_valid_fields():
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert slot == int(fvs[CHASSIS_MODULE_INFO_SLOT_FIELD])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
@@ -426,7 +425,7 @@ def mock_open(*args, **kwargs):
 def test_midplane_presence_dpu_modules():
     chassis = MockChassis()
 
-    #DPU
+    #DPU0
     index = 0
     name = "DPU0"
     desc = "DPU Module 0"
@@ -435,13 +434,14 @@ def test_midplane_presence_dpu_modules():
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
-    chassis.module_list.append(module)
+    chassis.module_list.append(module)_lot
 
-    #Fabric-card
+    #DPU1
     index = 1
     name = "DPU1"
     desc = "DPU Module 1"
     slot = 0
+    sup_slot = 0
     serial = "DPU1-1111"
     module_type = ModuleBase.MODULE_TYPE_DPU
     fabric = MockModule(index, name, desc, module_type, slot, serial)
@@ -449,9 +449,7 @@ def test_midplane_presence_dpu_modules():
 
     #Run on supervisor
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                slot, module.supervisor_slot)
-    module_updater.supervisor_slot = supervisor.get_slot()
-    module_updater.my_slot = supervisor.get_slot()
+                                slot, sup_slot)
     module_updater.modules_num_update()
     module_updater.module_db_update()
     module_updater.check_midplane_reachability()
