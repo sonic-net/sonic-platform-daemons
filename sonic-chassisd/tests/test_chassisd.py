@@ -6,7 +6,7 @@ from imp import load_source
 from mock import Mock, MagicMock, patch
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockModule
+from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
 
 SYSLOG_IDENTIFIER = 'chassisd_test'
@@ -98,8 +98,8 @@ def test_smartswitch_moduleupdater_check_valid_fields():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
-                                   module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                   slot, module.supervisor_slot)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     if isinstance(fvs, list):
@@ -205,6 +205,34 @@ def test_moduleupdater_check_deinit():
     fvs = module_table.get(name)
     assert fvs == None
 
+def test_smartswitch_moduleupdater_check_deinit():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                   slot, module.supervisor_slot)
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    module_table = module_updater.module_table
+    module_updater.deinit()
+    fvs = module_table.get(name)
+    assert fvs == None
 
 def test_configupdater_check_valid_names():
     chassis = MockChassis()
@@ -394,6 +422,77 @@ def mock_open(*args, **kwargs):
         return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
     # unpatched version for every other path
     return builtin_open(*args, **kwargs)
+
+def test_midplane_presence_dpu_modules():
+    chassis = MockChassis()
+
+    #DPU
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Fabric-card
+    index = 1
+    name = "DPU1"
+    desc = "DPU Module 1"
+    slot = 0
+    serial = "DPU1-1111"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
+    chassis.module_list.append(fabric)
+
+    #Run on supervisor
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                slot, module.supervisor_slot)
+    module_updater.supervisor_slot = supervisor.get_slot()
+    module_updater.my_slot = supervisor.get_slot()
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    module_updater.check_midplane_reachability()
+
+    midplane_table = module_updater.midplane_table
+    #Check only one entry in database
+    assert 2 == midplane_table.size()
+
+    #Check fields in database
+    name = "DPU0"
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of DPU to Up (midplane connectivity is down initially)
+    module.set_midplane_reachable(True)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Set access of DPU to Down (to mock midplane connectivity state change)
+    module.set_midplane_reachable(False)
+    module_updater.check_midplane_reachability()
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+    #Deinit
+    module_updater.deinit()
+    fvs = midplane_table.get(name)
+    assert fvs == None
 
 @patch("builtins.open", mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
