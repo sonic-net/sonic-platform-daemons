@@ -104,7 +104,7 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert slot == 'N/A'
+    assert 'N/A' == vs[CHASSIS_MODULE_INFO_SLOT_FIELD]
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
@@ -430,6 +430,7 @@ def test_midplane_presence_dpu_modules():
     name = "DPU0"
     desc = "DPU Module 0"
     slot = 0
+    sup_slot = 0
     serial = "DPU0-0000"
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
