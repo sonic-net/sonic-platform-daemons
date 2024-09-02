@@ -548,7 +548,7 @@ def mock_open(*args, **kwargs):
     return builtin_open(*args, **kwargs)
 
 def test_midplane_presence_dpu_modules():
-    chassis = MockChassis()
+    chassis = MockSmartSwitchChassis()
 
     #DPU0
     index = 0
@@ -608,7 +608,7 @@ def test_midplane_presence_dpu_modules():
     assert fvs == None
 
 def test_midplane_presence_uninitialized_dpu_modules():
-    chassis = MockChassis()
+    chassis = MockSmartSwitchChassis()
 
     #DPU0
     index = 0
