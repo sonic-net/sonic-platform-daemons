@@ -858,7 +858,11 @@ def test_daemon_run_smartswitch():
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
-    daemon_chassisd.run()
+
+    import sonic_platform.platform
+    with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock:
+       mock.return_value = True
+       daemon_chassisd.run()
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
