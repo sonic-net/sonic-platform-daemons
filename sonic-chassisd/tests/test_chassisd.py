@@ -990,15 +990,18 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
+def import_mock_swsscommon():
+    return importlib.import_module('tests.mock_swsscommon')
+
 def test_task_worker_loop():
     # Create a mock for the Select object
     mock_select = MagicMock()
 
     # Set up the mock to raise a KeyboardInterrupt after the first call
-    mock_select.select.side_effect = [(swsscommon.Select.TIMEOUT, None), KeyboardInterrupt]
+    mock_select.select.side_effect = [(mock_select.TIMEOUT, None), KeyboardInterrupt]
 
     # Patch the swsscommon.Select to use this mock
-    with patch('swsscommon.Select', return_value=mock_select):
+    with patch('tests.mock_swsscommon.Select', return_value=mock_select):
         config_manager = SmartSwitchConfigManagerTask()
 
         try:
