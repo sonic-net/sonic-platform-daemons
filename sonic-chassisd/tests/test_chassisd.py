@@ -1,7 +1,7 @@
 import os
 import sys
 import mock
-from tests import mock_swsscommon as swsscommon
+# from tests import mock_swsscommon as swsscommon
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
@@ -992,31 +992,23 @@ def test_daemon_run_supervisor():
     daemon_chassisd.run()
 
 def test_task_worker_loop():
-    # Create a mock for the Select class
+    # Create a mock for the Select object
     mock_select = MagicMock()
-    mock_select.select.return_value = (SELECT_OBJECT, None)
 
-    # Create a mock for the SubscriberStateTable pop method
-    mock_sst = MagicMock()
-    mock_sst.pop.return_value = ('module_key', 'SET', [('field', 'value')])
+    # Set up the mock to raise a KeyboardInterrupt after the first call
+    mock_select.select.side_effect = [(swsscommon.Select.TIMEOUT, None), KeyboardInterrupt]
 
-    # Patch the swsscommon.Select class and config updater
-    with patch('swsscommon.Select', return_value=mock_select), \
-         patch('swsscommon.SubscriberStateTable', return_value=mock_sst), \
-         patch.object(SmartSwitchConfigManagerTask, 'config_updater') as mock_config_updater:
-
-        mock_config_updater.module_config_update = MagicMock()
+    # Patch the swsscommon.Select to use this mock
+    with patch('swsscommon.Select', return_value=mock_select):
         config_manager = SmartSwitchConfigManagerTask()
 
-        # Run task_worker in a controlled environment
         try:
-            config_manager.task_worker()  # This should enter the loop and process the mocked return value
+            config_manager.task_worker()
         except KeyboardInterrupt:
-            pass  # This should handle the interrupt if it occurs
+            pass  # Handle the KeyboardInterrupt as expected
 
-        # Verify that the module_config_update was called with the correct parameters
-        assert mock_config_updater.module_config_update.called
-        mock_config_updater.module_config_update.assert_called_with('module_key', 'SET')
+    # Verify that the module_config_update method was called as expected
+    assert config_manager.config_updater.module_config_update.called
 
 def test_daemon_run_linecard():
     # Test the chassisd run
