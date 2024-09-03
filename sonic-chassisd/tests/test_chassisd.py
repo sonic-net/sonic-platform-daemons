@@ -1,7 +1,6 @@
 import os
 import sys
 import mock
-from tests import mock_swsscommon as mock_swsscommon
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
@@ -996,10 +995,10 @@ def test_task_worker_loop():
     mock_select = MagicMock()
 
     # Set up the mock to raise a KeyboardInterrupt after the first call
-    mock_select.select.side_effect = [(mock_swsscommon.Select.TIMEOUT, None), KeyboardInterrupt]
+    mock_select.select.side_effect = [(swsscommon.Select.TIMEOUT, None), KeyboardInterrupt]
 
-    # Patch the mock_swsscommon.Select to use this mock
-    with patch('mock_swsscommon.Select', return_value=mock_select):
+    # Patch the swsscommon.Select to use this mock
+    with patch('swsscommon.Select', return_value=mock_select):
         config_manager = SmartSwitchConfigManagerTask()
 
         try:
