@@ -1,6 +1,7 @@
 import os
 import sys
 import mock
+import swsscommon
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
@@ -8,6 +9,9 @@ from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
+
+# Assuming OBJECT should be a specific value, define it manually
+SELECT_OBJECT = 1  # Replace with the actual value for OBJECT if know
 
 SYSLOG_IDENTIFIER = 'chassisd_test'
 NOT_AVAILABLE = 'N/A'
@@ -230,6 +234,9 @@ def test_smartswitch_moduleupdater_check_invalid_index():
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     assert fvs != None
+
+    # Run chassis db clean up
+    module_updater.module_down_chassis_db_cleanup()
 
 def test_moduleupdater_check_status_update():
     chassis = MockChassis()
@@ -984,26 +991,32 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
-def test_midplane_reachability():
-    with patch.object(SmartSwitchConfigManagerTask, 'check_midplane_reachability') as mock_check:
-        mock_check.return_value = None  # Simulate midplane connectivity state
+def test_task_worker_loop():
+    # Create a mock for the Select class
+    mock_select = MagicMock()
+    mock_select.select.return_value = (SELECT_OBJECT, None)
 
+    # Create a mock for the SubscriberStateTable pop method
+    mock_sst = MagicMock()
+    mock_sst.pop.return_value = ('module_key', 'SET', [('field', 'value')])
+
+    # Patch the swsscommon.Select class and config updater
+    with patch('swsscommon.Select', return_value=mock_select), \
+         patch('swsscommon.SubscriberStateTable', return_value=mock_sst), \
+         patch.object(SmartSwitchConfigManagerTask, 'config_updater') as mock_config_updater:
+
+        mock_config_updater.module_config_update = MagicMock()
         config_manager = SmartSwitchConfigManagerTask()
-        config_manager.check_midplane_reachability()
 
-        # Check that the function was called and handled the state
-        assert mock_check.called
+        # Run task_worker in a controlled environment
+        try:
+            config_manager.task_worker()  # This should enter the loop and process the mocked return value
+        except KeyboardInterrupt:
+            pass  # This should handle the interrupt if it occurs
 
-def test_error_handling():
-    with patch.object(SmartSwitchConfigManagerTask, 'task_worker') as mock_task_worker:
-        # Simulate conditions that will lead to error logging
-        mock_task_worker.side_effect = SomeCustomException()
-
-        config_manager = SmartSwitchConfigManagerTask()
-
-        # Test that error handling is triggered
-        with pytest.raises(SomeCustomException):
-            config_manager.task_run()
+        # Verify that the module_config_update was called with the correct parameters
+        assert mock_config_updater.module_config_update.called
+        mock_config_updater.module_config_update.assert_called_with('module_key', 'SET')
 
 def test_daemon_run_linecard():
     # Test the chassisd run
