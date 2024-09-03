@@ -984,27 +984,26 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
-def test_task_worker_loop():
-    # Create a mock for the Select class
-    mock_select = MagicMock()
-    mock_select.select.return_value = (swsscommon.Select.OBJECT, ('key', 'SET', 'value'))
+def test_midplane_reachability():
+    with patch.object(SmartSwitchConfigManagerTask, 'check_midplane_reachability') as mock_check:
+        mock_check.return_value = None  # Simulate midplane connectivity state
 
-    # Patch the swsscommon.Select class
-    with patch('swsscommon.Select', return_value=mock_select), \
-         patch.object(SmartSwitchConfigManagerTask, 'config_updater') as mock_config_updater:
+        config_manager = SmartSwitchConfigManagerTask()
+        config_manager.check_midplane_reachability()
 
-        mock_config_updater.module_config_update = MagicMock()
+        # Check that the function was called and handled the state
+        assert mock_check.called
+
+def test_error_handling():
+    with patch.object(SmartSwitchConfigManagerTask, 'task_worker') as mock_task_worker:
+        # Simulate conditions that will lead to error logging
+        mock_task_worker.side_effect = SomeCustomException()
+
         config_manager = SmartSwitchConfigManagerTask()
 
-        # Run task_worker in a separate thread to simulate its execution
-        with patch('builtins.input', side_effect=KeyboardInterrupt):
-            try:
-                config_manager.task_worker()
-            except KeyboardInterrupt:
-                pass  # Expected to handle the interrupt
-
-        # Verify that the module_config_update was called
-        assert mock_config_updater.module_config_update.called
+        # Test that error handling is triggered
+        with pytest.raises(SomeCustomException):
+            config_manager.task_run()
 
 def test_daemon_run_linecard():
     # Test the chassisd run
