@@ -1,7 +1,7 @@
 import os
 import sys
 import mock
-import swsscommon
+from tests import mock_swsscommon as swsscommon
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
