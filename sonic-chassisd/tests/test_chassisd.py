@@ -984,22 +984,27 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
-def test_task_worker():
-    with patch.object(SmartSwitchConfigManagerTask, 'task_worker') as mock_task_worker:
-        mock_task_worker.side_effect = [None, KeyboardInterrupt]
+def test_task_worker_loop():
+    # Create a mock for the Select class
+    mock_select = MagicMock()
+    mock_select.select.return_value = (swsscommon.Select.OBJECT, ('key', 'SET', 'value'))
 
+    # Patch the swsscommon.Select class
+    with patch('swsscommon.Select', return_value=mock_select), \
+         patch.object(SmartSwitchConfigManagerTask, 'config_updater') as mock_config_updater:
+
+        mock_config_updater.module_config_update = MagicMock()
         config_manager = SmartSwitchConfigManagerTask()
-        config_manager.task_worker()
 
-#        # Test task_run, expecting it to terminate due to KeyboardInterrupt
-#        try:
-#            config_manager.task_run()
-#        except KeyboardInterrupt:
-#            pass  # This is expected, so we handle it
-#
-        # Verify that task_worker was called
-        assert mock_task_worker.called
-        assert mock_task_worker.call_count == 1
+        # Run task_worker in a separate thread to simulate its execution
+        with patch('builtins.input', side_effect=KeyboardInterrupt):
+            try:
+                config_manager.task_worker()
+            except KeyboardInterrupt:
+                pass  # Expected to handle the interrupt
+
+        # Verify that the module_config_update was called
+        assert mock_config_updater.module_config_update.called
 
 def test_daemon_run_linecard():
     # Test the chassisd run
