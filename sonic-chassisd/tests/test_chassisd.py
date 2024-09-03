@@ -1004,13 +1004,15 @@ def test_task_worker_loop():
     with patch('tests.mock_swsscommon.Select', return_value=mock_select):
         config_manager = SmartSwitchConfigManagerTask()
 
+        config_manager.config_updater = MagicMock()
+
         try:
             config_manager.task_worker()
         except KeyboardInterrupt:
             pass  # Handle the KeyboardInterrupt as expected
 
     # Verify that the module_config_update method was called as expected
-    config_manager.config_updater.module_config_update.assert_called()
+    assert config_manager.config_updater.module_config_update.called
 
 def test_daemon_run_linecard():
     # Test the chassisd run
