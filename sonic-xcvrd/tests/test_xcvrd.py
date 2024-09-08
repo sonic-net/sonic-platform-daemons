@@ -792,12 +792,12 @@ class TestXcvrdScript(object):
         (True, [('speed', '400000'), ('mtu', '9100')], (0, 0, 0)),
         (False, [], (0, 0, 0))
     ])
-    def test_get_speed_and_lane_count_and_subport(self, data_found, data, expected):
+    def test_get_speed_lane_count_and_subport(self, data_found, data, expected):
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.get = MagicMock(return_value=(data_found, data))
         port = MagicMock()
 
-        assert media_settings_parser.get_speed_and_lane_count_and_subport(port, cfg_port_tbl) == expected
+        assert media_settings_parser.get_speed_lane_count_and_subport(port, cfg_port_tbl) == expected
 
     def test_is_si_per_speed_supported(self):
         media_dict = {
@@ -898,7 +898,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_optic_copper_si)
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
            MagicMock(return_value={'vendor_key': 'INNOLIGHT-X-DDDDD-NNN', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:400GAUI-8'}))
-    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count_and_subport', MagicMock(return_value=(400000, 8, 0)))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(400000, 8, 0)))
     def test_notify_media_setting(self):
         # Test matching 400G optical transceiver (lane speed 50G)
         self._check_notify_media_setting(1, True, asic_serdes_si_settings_example4_expected_value_in_db)
@@ -906,31 +906,31 @@ class TestXcvrdScript(object):
         # Test matching 100G optical transceiver (lane speed 25G), via regular expression lane speed pattern
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
                             get_media_settings_key=MagicMock(return_value={'vendor_key':'INNOLIGHT-X-DDDDD-NNN', 'media_key': 'QSFP28-100GBASE-SR4', 'lane_speed_key': 'speed:25G'}),
-                            get_speed_and_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
+                            get_speed_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
             self._check_notify_media_setting(1, True, asic_serdes_si_settings_example3_expected_value_in_db_4_lanes)
 
         # Test matching 100G copper transceiver (lane speed 25G)
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
                             get_media_settings_key=MagicMock(return_value={'vendor_key':'INNOLIGHT-X-DDDDD-NNN', 'media_key': 'QSFP28-100GBASE-CR4, 25GBASE-CR CA-25G-L or 50GBASE-CR2 with RS-1.0M', 'lane_speed_key': 'speed:25G'}),
-                            get_speed_and_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
+                            get_speed_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
             self._check_notify_media_setting(1, True, asic_serdes_si_settings_example4_expected_value_in_db_4_lanes)
 
         # Test with lane speed None
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
                             get_media_settings_key=MagicMock(return_value={'vendor_key':'INNOLIGHT-X-DDDDD-NNN', 'media_key': 'QSFP28-100GBASE-CR4', 'lane_speed_key': None}),
-                            get_speed_and_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
+                            get_speed_lane_count_and_subport=MagicMock(return_value=(100000, 4, 0))):
             self._check_notify_media_setting(1)
 
         # Test default value in the case of no matched lane speed for 800G copper transceiver (lane speed 100G)
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
                             get_media_settings_key=MagicMock(return_value={'vendor_key':'INNOLIGHT-X-DDDDD-NNN', 'media_key': 'QSFP-DD-passive_copper_media_interface', 'lane_speed_key': 'speed:800G-ETC-CR8'}),
-                            get_speed_and_lane_count_and_subport=MagicMock(return_value=(800000, 8, 0))):
+                            get_speed_lane_count_and_subport=MagicMock(return_value=(800000, 8, 0))):
             self._check_notify_media_setting(1, True, asic_serdes_si_settings_example5_expected_value_in_db)
 
         # Test lane speed matching under 'Default' vendor/media for 400G transceiver (lane speed 50G)
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
                             get_media_settings_key=MagicMock(return_value={'vendor_key':'Molex', 'media_key': 'QSFP-DD-passive_copper_media_interface', 'lane_speed_key': 'speed:400GAUI-8'}),
-                            get_speed_and_lane_count_and_subport=MagicMock(return_value=(400000, 8, 0))):
+                            get_speed_lane_count_and_subport=MagicMock(return_value=(400000, 8, 0))):
             self._check_notify_media_setting(41, True, asic_serdes_si_settings_example3_expected_value_in_db)
 
         # Test with empty xcvr_info_dict
@@ -945,7 +945,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_with_comma_dict)
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key', MagicMock(return_value={ 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:100GBASE-CR2' }))
-    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_and_lane_count_and_subport', MagicMock(return_value=(100000, 2, 0)))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 0)))
     def test_notify_media_setting_with_comma(self):
         self._check_notify_media_setting(1, True, {'preemphasis': ','.join(['0x164509'] * 2)})
         self._check_notify_media_setting(6, True, {'preemphasis': ','.join(['0x124A08'] * 2)})

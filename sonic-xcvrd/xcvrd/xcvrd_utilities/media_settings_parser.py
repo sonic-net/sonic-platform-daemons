@@ -57,7 +57,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
 
     Args:
         physical_port: physical port number for this logical port
-        port_speed: logical port speed in Gbps
+        port_speed: logical port speed in Mbps
         lane_count: number of lanes for this logical port
 
     Returns:
@@ -190,7 +190,7 @@ def get_media_settings_for_speed(settings_dict, lane_speed_key):
 
     Returns:
         dictionary containing the settings for the given lane speed key if matched, return {} if no match
-        If no lane speed key defined in intput dictionary, return the input dictionary as is
+        If no lane speed key defined in input dictionary, return the input dictionary as is
     """
     if not is_si_per_speed_supported(settings_dict):
         return settings_dict
@@ -285,7 +285,7 @@ def get_media_settings_value(physical_port, key):
     return {}
 
 
-def get_speed_and_lane_count_and_subport(port, cfg_port_tbl):
+def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     port_speed, lane_count, subport_num = 0, 0, 0
     found, port_info = cfg_port_tbl.get(port)
     port_info_dict = dict(port_info)
@@ -305,7 +305,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
     if not media_settings_present():
         return
 
-    port_speed, lane_count, subport_num = get_speed_and_lane_count_and_subport(logical_port_name, cfg_port_tbl)
+    port_speed, lane_count, subport_num = get_speed_lane_count_and_subport(logical_port_name, cfg_port_tbl)
 
     ganged_port = False
     ganged_member_num = 1
