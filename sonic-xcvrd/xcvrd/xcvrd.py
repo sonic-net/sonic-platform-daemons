@@ -604,12 +604,12 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.port_dict = {}
-        self.port_mapping = copy.deepcopy(port_mapping)
+        self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
     def log_debug(self, message):
         helper_logger.log_debug("CMIS: {}".format(message))
@@ -620,9 +620,11 @@ class CmisManagerTask(threading.Thread):
     def log_error(self, message):
         helper_logger.log_error("CMIS: {}".format(message))
 
+    def get_asic_id(self, lport):
+        return self.port_dict.get(lport, {}).get("asic_id", -1)
+
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        status_table = self.xcvr_table_helper.get_status_tbl(asic_index)
+        status_table = self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport))
         if status_table is None:
             helper_logger.log_error("status_table is None while updating "
                                     "sw CMIS state for lport {}".format(lport))
@@ -654,15 +656,12 @@ class CmisManagerTask(threading.Thread):
         if pport is None:
             return
 
-        # Skip if the port/cage type is not a CMIS
-        # 'index' can be -1 if STATE_DB|PORT_TABLE
-        if lport not in self.port_dict:
-            self.port_dict[lport] = {}
-
         if port_change_event.port_dict is None:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
+            if lport not in self.port_dict:
+                self.port_dict[lport] = {"asic_id": port_change_event.asic_id}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
@@ -681,8 +680,13 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
             self.force_cmis_reinit(lport, 0)
-        else:
+
+        # PORT_DEL event for the same lport happens 3 times because
+        # we are subscribing to CONFIG_DB, STATE_DB|TRANSCEIVER_INFO, and STATE_DB|PORT_TABLE.
+        # To only handle the first one, check if the lport exists in the port_dict.
+        elif lport in self.port_dict:
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+            self.port_dict.pop(lport)
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
@@ -946,8 +950,7 @@ class CmisManagerTask(threading.Thread):
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
         freq = 0
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = port_tbl.get(lport)
         if found and 'laser_freq' in dict(port_info):
@@ -959,8 +962,7 @@ class CmisManagerTask(threading.Thread):
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
         power = 0
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = port_tbl.get(lport)
         if found and 'tx_power' in dict(port_info):
@@ -970,8 +972,7 @@ class CmisManagerTask(threading.Thread):
     def get_host_tx_status(self, lport):
         host_tx_ready = 'false'
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
 
         found, port_info = state_port_tbl.get(lport)
         if found and 'host_tx_ready' in dict(port_info):
@@ -981,8 +982,7 @@ class CmisManagerTask(threading.Thread):
     def get_port_admin_status(self, lport):
         admin_status = 'down'
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = cfg_port_tbl.get(lport)
         if found:
@@ -1060,8 +1060,7 @@ class CmisManagerTask(threading.Thread):
                 tuple_list.append(('host_lane_count', 'N/A'))
                 tuple_list.append(('media_lane_count', 'N/A'))
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+        intf_tbl = self.xcvr_table_helper.get_intf_tbl(self.get_asic_id(lport))
         if not intf_tbl:
             helper_logger.log_warning("Active ApSel db update: TRANSCEIVER_INFO table not found for {}".format(lport))
             return
@@ -1095,16 +1094,6 @@ class CmisManagerTask(threading.Thread):
                 break
 
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-
-        self.log_notice("Waiting for PortConfigDone...")
-        for namespace in self.namespaces:
-            self.wait_for_port_config_done(namespace)
-
-        logical_port_list = self.port_mapping.logical_port_list
-        for lport in logical_port_list:
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
-
         is_fast_reboot = is_fast_reboot_enabled()
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
@@ -1123,7 +1112,7 @@ class CmisManagerTask(threading.Thread):
                 if lport not in self.port_dict:
                     continue
 
-                state = get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_tbl(self.port_mapping.get_asic_id_for_logical_port(lport)))
+                state = get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport)))
                 if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
                     if state != CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
@@ -1457,6 +1446,14 @@ class CmisManagerTask(threading.Thread):
             return
 
         try:
+
+            self.log_notice("Waiting for PortConfigDone...")
+            for namespace in self.namespaces:
+                self.wait_for_port_config_done(namespace)
+
+            for lport in self.port_dict.keys():
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+
             self.task_worker()
         except Exception as e:
             helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
