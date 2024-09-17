@@ -17,6 +17,7 @@ LANE_SPEED_KEY_PREFIX = "speed:"
 VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
+MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 
@@ -46,6 +47,14 @@ def media_settings_present():
         return True
     return False
 
+def get_is_copper(physical_port):
+    if xcvrd.platform_chassis:
+        try:
+            return xcvrd.platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+        except (NotImplementedError, AttributeError):
+            helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
+            return True
+    return True
 
 def get_lane_speed_key(physical_port, port_speed, lane_count):
     sfp = xcvrd.platform_chassis.get_sfp(physical_port)
@@ -111,11 +120,15 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
-    # return (vendor_key, media_key, lane_speed_key)
+    medium = "COPPER" if get_is_copper(physical_port) else "OPTICAL"
+    medium_lane_speed_key = medium + str(int(int(port_speed) /lane_count))
+
+    # return (vendor_key, media_key, lane_speed_key, medium_lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
-        LANE_SPEED_KEY: lane_speed_key
+        LANE_SPEED_KEY: lane_speed_key,
+       MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key
     }
 
 
@@ -188,6 +201,8 @@ def get_media_settings_value(physical_port, key):
                         return {}
                 else:
                     return media_dict[dict_key]
+            elif key[MEDIUM_LANE_SPEED_KEY] in media_dict: # e.g. COPPER50000 or OPTICAL25000
+                return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
         return None
 
     # Keys under global media settings can be a list or range or list of ranges
