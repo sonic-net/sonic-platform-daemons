@@ -140,6 +140,17 @@ media_settings_global_default_port_media_key_lane_speed_si['PORT_MEDIA_SETTINGS'
 media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {'speed:400GAUI-8': {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}}
 
+# Creating instances of media_settings.json for media_lane_speed_key
+with open(os.path.join(test_path, 'media_settings_with_media_lane_speed_key_format.json'), 'r') as f:
+        media_settings_mls_key_dict = json.load(f)
+
+# Generate media_settings in 'GLOBAL_MEDIA_SETTINGS' with media_lane_speed_key for range port[1-32]
+media_settings_global_range_mls_key_dict = copy.deepcopy(media_settings_mls_key_dict)
+
+# Generate media_settings in 'PORT_MEDIA_SETTINGS' with media_lane_speed_key for port list
+media_settings_port_list_mls_key_dict = {'PORT_MEDIA_SETTINGS':{}}
+media_settings_port_list_mls_key_dict['PORT_MEDIA_SETTINGS'] = {f'{i}': copy.deepcopy(media_settings_mls_key_dict['GLOBAL_MEDIA_SETTINGS']['1-32']) for i in range(1,33) }
+
 media_settings_empty = {}
 
 
@@ -642,6 +653,60 @@ class TestXcvrdScript(object):
     def test_load_media_settings_missing_file(self):
         assert media_settings_parser.load_media_settings() == {}
 
+    @pytest.mark.parametrize("physical_port, port_speed, lane_count", [
+            (1,"10000","1"),
+            (1, "10000","1"),
+            (1, "40000","4"),
+            (1,"40000","4"),
+            (1,"25000","1"),
+            (1,"25000","1"),
+            (1,"100000","4"),
+            (1,"100000","4")
+    ])
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_get_media_lane_speed_key(self, mock_chassis, physical_port, port_speed, lane_count):
+        #print("\ntest_get_media_lane_speed_key-start")
+
+        # Mock objects
+        mock_api = MagicMock(name="mock api")
+        mock_sfp = MagicMock(name="mock sfp")
+        mock_sfp.get_xcvr_api.return_value = mock_api
+        mock_chassis.get_sfp.return_value = mock_sfp
+
+        expect_lane_speed = int(int(port_speed)/int(lane_count))
+
+        # Test case for is_copper mock is True
+        mock_api.is_copper.return_value = True
+        result = get_media_lane_speed_key(physical_port, port_speed, lane_count)
+        expected = "{},CR".format(expect_lane_speed)
+        assert  result ==  expected
+
+        # Test case for is_copper mock is False
+        mock_api.is_copper.return_value = False
+        result = get_media_lane_speed_key(physical_port, port_speed, lane_count)
+        expected = "{}".format(expect_lane_speed)
+        assert  result ==  expected
+
+        # Test case for is_copper mock is None
+        mock_api.is_copper.return_value = None
+        result = get_media_lane_speed_key(physical_port, port_speed, lane_count)
+        expected = "{},UNKNOWN".format(expect_lane_speed)
+        assert  result ==  expected
+
+        # Test casese for mock as api.is_copper raises [NotImplementedError]
+        mock_api.is_copper.reset_mock()
+        mock_api.is_copper.side_effect  = NotImplementedError
+        expected = "{},UNKNOWN".format(expect_lane_speed)
+        result = get_media_lane_speed_key(physical_port, port_speed, lane_count)
+        assert  result ==  expected
+
+        # Test casese for mock as sfp = xcvrd.platform_chassis.get_sfp(physical_port)= IndexError
+        mock_chassis.get_sfp.reset_mock()
+        mock_chassis.get_sfp.side_effect = IndexError
+        result = get_media_lane_speed_key(physical_port, port_speed, lane_count)
+        expected = "{},UNKNOWN".format(expect_lane_speed)
+        assert  result ==  expected
+
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', '/invalid/path')))
     def test_load_optical_si_settings_missing_file(self):
         assert optics_si_parser.load_optics_si_settings() == {}
@@ -654,6 +719,7 @@ class TestXcvrdScript(object):
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
         mock_is_cmis_api.return_value = False
+        mock_api.is_copper.return_value = True
 
         xcvr_info_dict = {
             0: {
@@ -668,12 +734,12 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': None }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': None ,'media_lane_speed_key': '50000,CR' }
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': None }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': None, 'media_lane_speed_key': '50000,CR' }
         # TODO: Ensure that error message was logged
 
         mock_is_cmis_api.return_value = True
@@ -700,8 +766,9 @@ class TestXcvrdScript(object):
         }
 
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
+        mock_api.is_copper.return_value = False
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'media_lane_speed_key': '50000'  }
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], ('400000', 8)),
@@ -802,7 +869,11 @@ class TestXcvrdScript(object):
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-2M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x18420A', 'lane1': '0x18420A', 'lane2': '0x18420A', 'lane3': '0x18420A'}}),
-    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}})
+    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}}),
+    (media_settings_global_range_mls_key_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'MISSING', 'lane_speed_key': 'UNKOWN', 'media_lane_speed_key': '50000,CR'}, {'preemphasis': {'lane0': '0x16440C', 'lane1': '0x16440C', 'lane2': '0x16440C', 'lane3': '0x16440C'}}),
+    (media_settings_global_range_mls_key_dict, 7, {'vendor_key': 'UNKOWN','media_key': 'MISSING' , 'lane_speed_key': 'UNKOWN', 'media_lane_speed_key': '50000'}, {'preemphasis': {'lane0': '0x1A400C', 'lane1': '0x1A400C', 'lane2': '0x1A400C', 'lane3': '0x1A400C'}} ),
+    (media_settings_port_list_mls_key_dict, 7, {'vendor_key': 'UNKOWN','media_key': 'MISSING' , 'lane_speed_key': 'UNKOWN', 'media_lane_speed_key': '25000,CR'}, {'preemphasis': {'lane0': '0x16440B', 'lane1': '0x16440B', 'lane2': '0x16440B', 'lane3': '0x16440B'}}),
+    (media_settings_port_list_mls_key_dict, 7, {'vendor_key': 'UNKOWN','media_key': 'MISSING' , 'lane_speed_key': 'UNKOWN', 'media_lane_speed_key': '25000'}, {'preemphasis': {'lane0': '0x1A400B', 'lane1': '0x1A400B', 'lane2': '0x1A400B', 'lane3': '0x1A400B'}})
     ])
     def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
