@@ -440,7 +440,7 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
             break
 
         if not _wrapper_get_presence(physical_port):
-            helper_logger.log_warning("Transceiver not present in port {}".format(logical_port_name))
+            helper_logger.log_notice("Transceiver not present in port {}".format(logical_port_name))
             continue
 
         port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
