@@ -350,6 +350,8 @@ class TestXcvrdScript(object):
         mock_state_port_table.get = MagicMock(return_value=(None, None))
         assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
 
+        mock_state_port_table.get = MagicMock(return_value=(True, {'A' : 'B'}))
+        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
         mock_state_port_table.get = MagicMock(return_value=(True, {NPU_SI_SETTINGS_SYNC_STATUS_KEY : NPU_SI_SETTINGS_DEFAULT_VALUE}))
         assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == NPU_SI_SETTINGS_DEFAULT_VALUE
 
