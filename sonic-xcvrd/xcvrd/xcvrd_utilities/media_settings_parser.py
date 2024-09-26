@@ -76,7 +76,10 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
-    if not lane_speed_key:
+        if not lane_speed_key:
+            helper_logger.log_error("No host_electrical_interface_id found for CMIS module on physical port {}"
+                                    ", failed to construct lane_speed_key".format(physical_port))
+    else:
         # Directly calculate lane speed and use it as key, this is especially useful for
         # non-CMIS transceivers which typically have no host_electrical_interface_id
         lane_speed_key = '{}{}G'.format(LANE_SPEED_KEY_PREFIX, port_speed // lane_count // 1000)
@@ -163,14 +166,14 @@ def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
         string containing SerDes settings for the given subport, separated by comma
         e.g. '0x1f,0x1f,0x1f,0x1f'
     """
-    if subport_num * lane_count > len(val_dict):
-        helper_logger.log_info(
-            "subport_num {} x lane_count {} is beyond length of {}, "
-            "default subport_num to 0".format(subport_num, lane_count, val_dict)
-        )
-        subport_num = 0
-    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
     start_lane_idx = (subport_num - 1) * lane_count if subport_num else 0
+    if start_lane_idx + lane_count > len(val_dict):
+        helper_logger.log_notice(
+            "start_lane_idx + lane_count ({}) is beyond length of {}, "
+            "default start_lane_idx to 0 as a best effort".format(start_lane_idx + lane_count, val_dict)
+        )
+        start_lane_idx = 0
+    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
     # If subport_num ('subport') is not specified in config_db, return values for first lane_count number of lanes
     return ','.join(val_list[start_lane_idx:start_lane_idx + lane_count])
 
@@ -331,7 +334,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
-        helper_logger.log_notice("Retrieving media settings for port {}, operating at a speed of {} with a lane count of {}, using the following lookup keys: {}".format(logical_port_name, port_speed, lane_count, key))
+        helper_logger.log_notice("Retrieving media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
         media_dict = get_media_settings_value(physical_port, key)
 
         if len(media_dict) == 0:
