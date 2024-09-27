@@ -100,8 +100,7 @@ def test_smartswitch_moduleupdater_check_valid_fields():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                   slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     if isinstance(fvs, list):
@@ -127,8 +126,7 @@ def test_smartswitch_moduleupdater_check_invalid_name():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                    slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     assert fvs == None
@@ -156,8 +154,7 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                    slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
 
@@ -184,8 +181,7 @@ def test_smartswitch_moduleupdater_check_invalid_slot():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                    slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     assert fvs != None
@@ -228,8 +224,7 @@ def test_smartswitch_moduleupdater_check_invalid_index():
 
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                    slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
     assert fvs != None
@@ -325,8 +320,7 @@ def test_smartswitch_moduleupdater_check_deinit():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                   slot, module.supervisor_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.modules_num_update()
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
@@ -569,8 +563,7 @@ def test_midplane_presence_dpu_modules():
     chassis.module_list.append(module)
 
     #Run on supervisor
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                slot, sup_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.modules_num_update()
     module_updater.module_db_update()
     module_updater.check_midplane_reachability()
@@ -629,8 +622,7 @@ def test_midplane_presence_uninitialized_dpu_modules():
     chassis.module_list.append(module)
 
     #Run on supervisor
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis,
-                                slot, sup_slot)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.midplane_initialized = False
     module_updater.modules_num_update()
     module_updater.module_db_update()
