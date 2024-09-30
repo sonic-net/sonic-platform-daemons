@@ -203,7 +203,7 @@ def get_media_settings_for_speed(settings_dict, lane_speed_key):
     lane_speed_str = lane_speed_key[len(LANE_SPEED_KEY_PREFIX):]
     for candidate_lane_speed_key, value_dict in settings_dict.items():
         lane_speed_pattern = candidate_lane_speed_key[len(LANE_SPEED_KEY_PREFIX):]
-        if re.match(lane_speed_pattern, lane_speed_str):
+        if re.fullmatch(lane_speed_pattern, lane_speed_str):
             return value_dict
     # If no match found, return default settings if present (defined as LANE_SPEED_DEFAULT_KEY)
     return settings_dict.get(LANE_SPEED_DEFAULT_KEY, {})
