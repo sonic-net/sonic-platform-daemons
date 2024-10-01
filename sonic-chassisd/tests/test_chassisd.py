@@ -983,6 +983,41 @@ def test_daemon_run_smartswitch():
         with patch.object(module_updater, 'num_modules', 1):
             daemon_chassisd.run()
 
+def test_daemon_dpu_init():
+    # Test the chassisd run
+    chassis = MockSmartSwitchChassis()
+
+    # DPU0
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    sup_slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.smartswitch = True
+
+    # Set num_modules to 1 directly
+    daemon_chassisd.module_updater.num_modules = 1
+
+    # Call set_initial_dpu_admin_state with force=True to ensure it's covered
+    daemon_chassisd.set_initial_dpu_admin_state(force=True)
+
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
     #Supervisor
