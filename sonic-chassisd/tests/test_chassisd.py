@@ -969,7 +969,7 @@ def test_daemon_run_smartswitch():
     # Supervisor ModuleUpdater
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    sup_module_updater.modules_num_update()
+    module_updater.modules_num_update()
 
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
