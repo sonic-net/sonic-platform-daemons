@@ -950,6 +950,19 @@ def test_signal_handler():
 def test_daemon_run_smartswitch():
     # Test the chassisd run
     chassis = MockSmartSwitchChassis()
+
+    #DPU0
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    sup_slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True

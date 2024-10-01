@@ -884,7 +884,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     def set_initial_dpu_admin_state(self):
-        """Send set_admit_state trigger once to modules those are UP."""
+        """Send admin_state trigger once to modules those are powered up"""
         lock = threading.Lock()
         threads = []
         for module_index in range(0, self.module_updater.num_modules):
@@ -975,15 +975,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start configuration manager task on supervisor module
         if self.smartswitch:
-            self.log_info("smartswitch loop")
             config_manager = SmartSwitchConfigManagerTask()
             config_manager.task_run()
         elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
-            self.log_info("Non smartswitch loop")
             config_manager = ConfigManagerTask()
             config_manager.task_run()
         else:
-            self.log_info("None loop")
             config_manager = None
 
         # Start main loop
