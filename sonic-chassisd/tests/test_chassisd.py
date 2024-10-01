@@ -978,8 +978,9 @@ def test_daemon_run_smartswitch():
 
     import sonic_platform.platform
     with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock:
-       mock.return_value = True
-       daemon_chassisd.run()
+        mock.return_value = True
+        with patch(module_updater.num_modules, 1):
+            daemon_chassisd.run()
 
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
