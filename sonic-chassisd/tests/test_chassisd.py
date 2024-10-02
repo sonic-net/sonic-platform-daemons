@@ -991,7 +991,7 @@ def test_set_initial_dpu_admin_state(self, mock_db_connect, mock_platform):
     mock_module_updater = MagicMock()
 
     # Set up the platform chassis mock
-    mock_plat form_instance = mock_platform.return_value
+    mock_platform_instance = mock_platform.return_value
     mock_platform_instance.get_chassis.return_value = mock_chassis
     
     # Setup mock module updater
