@@ -1016,6 +1016,10 @@ def test_set_initial_dpu_admin_state():
     import sonic_platform.platform
     platform_chassis = chassis
 
+    # Mock objects
+    mock_chassis = MagicMock()
+    mock_module_updater = MagicMock()
+
     # Mock the module
     mock_module = MagicMock()
     mock_module.get_name.return_value = "DPU0"
