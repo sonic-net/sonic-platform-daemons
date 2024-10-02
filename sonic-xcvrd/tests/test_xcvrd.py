@@ -187,7 +187,7 @@ class TestXcvrdThreadException(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_tbl.return_value = mock_get_status_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
-                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+                                            {'index':1, 'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
 
         # Case 1: get_xcvr_api() raises an exception
         task.on_port_update_event(port_change_event)
@@ -201,6 +201,8 @@ class TestXcvrdThreadException(object):
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
         mock_xcvr_api.is_flat_memory = MagicMock(side_effect=AttributeError)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'index':1, 'speed':'200000', 'lanes':'1,2,3,4,5,6,7,8'})
         task.on_port_update_event(port_change_event)
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
@@ -210,6 +212,8 @@ class TestXcvrdThreadException(object):
         mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'index':1, 'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
         task.on_port_update_event(port_change_event)
         task.get_cmis_host_lanes_mask = MagicMock()
         task.task_worker()
@@ -626,6 +630,7 @@ class TestXcvrdScript(object):
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
+        mock_sfp.get_platform_media_key = MagicMock(side_effect=NotImplementedError)
         mock_is_cmis_api.return_value = False
 
         xcvr_info_dict = {
@@ -901,7 +906,7 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         stop_event.is_set = MagicMock(return_value=False)
         handle_port_update_event(sel, asic_context, stop_event,
-                                  logger, port_mapping.handle_port_change_event)
+                                  logger, port_mapping, port_mapping.handle_port_change_event)
 
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
@@ -1010,6 +1015,10 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task.xcvr_table_helper = MagicMock()
+        status_tbl = MagicMock()
+        status_tbl.delete = MagicMock()
+        task.xcvr_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
@@ -1024,13 +1033,17 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL)
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 0
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {'index':1})
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
 
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL, {'index':1})
         task.on_port_update_event(port_change_event)
-        assert len(task.port_dict) == 1
+        assert len(task.port_dict) == 0
 
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
@@ -2465,11 +2478,13 @@ class TestXcvrdScript(object):
         num_logical_ports = 1
         lane_dict = {'lane0': '1', 'lane1': '2', 'lane2': '3', 'lane3': '4'}
         logical_idx = 1
-        media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx)
+        lane_count = 4
+        media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx, lane_count)
         assert media_str == '1,2,3,4'
         num_logical_ports = 2
         logical_idx = 1
-        media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx)
+        lane_count = 2
+        media_str = get_media_val_str(num_logical_ports, lane_dict, logical_idx, lane_count)
         assert media_str == '3,4'
 
     class MockPortMapping:
