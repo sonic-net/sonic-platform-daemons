@@ -1031,6 +1031,7 @@ def test_set_initial_dpu_admin_state():
     mock_state_db.get.return_value = fvs_mock
 
     # Mock db_connect
+    mock_db_connect = MagicMock()
     mock_db_connect.return_value = mock_state_db
 
     # Mock admin_status
