@@ -1017,7 +1017,7 @@ def test_daemon_dpu_init():
     daemon_chassisd.module_updater.num_modules = 1
 
     # Call set_initial_dpu_admin_state with force=True to ensure it's covered
-    daemon_chassisd.set_initial_dpu_admin_state(force=True)
+    daemon_chassisd.set_initial_dpu_admin_state()
 
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
