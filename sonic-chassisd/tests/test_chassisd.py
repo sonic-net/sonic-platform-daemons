@@ -984,40 +984,48 @@ def test_daemon_run_smartswitch():
             daemon_chassisd.run()
 
 def test_daemon_dpu_init():
-    # Test the chassisd run
+    # Create a mock SmartSwitchChassis
     chassis = MockSmartSwitchChassis()
 
-    # DPU0
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    sup_slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-    module.set_midplane_ip()
-    # Set initial state
-    status = ModuleBase.MODULE_STATUS_PRESENT
-    module.set_oper_status(status)
-    chassis.module_list.append(module)
+    # Mock the module that will be returned by get_module
+    mock_module = MagicMock()
+    mock_module.get_name.return_value = "DPU0"
+    mock_module.get_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
+    mock_module.get_oper_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
+    mock_module.get_admin_state.return_value = ModuleBase.MODULE_ADMIN_STATE_ENABLED
 
-    # Supervisor ModuleUpdater
+    # Ensure platform_chassis.get_module() returns the mock_module
+    chassis.get_module = MagicMock(return_value=mock_module)
+
+    # Mock the SmartSwitchModuleUpdater and relevant methods
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.module_db_update()
-    module_updater.modules_num_update()
+    module_updater.module_db_update = MagicMock()
+    module_updater.modules_num_update = MagicMock()
 
+    # Initialize ChassisdDaemon
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
-    daemon_chassisd.module_updater = module_updater
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
 
-    # Set num_modules to 1 directly
+    # Mock module_updater within daemon_chassisd
+    daemon_chassisd.module_updater = module_updater
     daemon_chassisd.module_updater.num_modules = 1
 
-    # Call set_initial_dpu_admin_state with force=True to ensure it's covered
+    # Mock platform_chassis and other attributes accessed in set_initial_dpu_admin_state()
+    platform_chassis_mock = MagicMock()
+    daemon_chassisd.platform_chassis = platform_chassis_mock
+    platform_chassis_mock.get_module.return_value = mock_module
+
+    # Call set_initial_dpu_admin_state without force parameter
     daemon_chassisd.set_initial_dpu_admin_state()
+
+    # Assertions to validate behavior
+    platform_chassis_mock.get_module.assert_called_once_with(0)  # Ensure get_module was called with index 0
+    mock_module.get_name.assert_called_once()  # Ensure get_name was called on the module
+    mock_module.get_status.assert_called_once()  # Ensure get_status was called
+    mock_module.get_oper_status.assert_called_once()  # Ensure get_oper_status was called
+    mock_module.get_admin_state.assert_called_once()  # Ensure get_admin_state was called
 
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
