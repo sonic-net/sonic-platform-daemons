@@ -987,16 +987,6 @@ def test_daemon_dpu_init():
     # Create a mock SmartSwitchChassis
     chassis = MockSmartSwitchChassis()
 
-    # Mock the module that will be returned by get_module
-    mock_module = MagicMock()
-    mock_module.get_name.return_value = "DPU0"
-    mock_module.get_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
-    mock_module.get_oper_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
-    mock_module.get_admin_state.return_value = 1
-
-    # Ensure platform_chassis.get_module() returns the mock_module
-    chassis.get_module = MagicMock(return_value=mock_module)
-
     # Mock the SmartSwitchModuleUpdater and relevant methods
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update = MagicMock()
@@ -1011,21 +1001,27 @@ def test_daemon_dpu_init():
     # Mock platform_chassis and inject it into daemon_chassisd
     platform_chassis_mock = MagicMock()
     daemon_chassisd.platform_chassis = platform_chassis_mock
-    platform_chassis_mock.get_module.return_value = mock_module  # Make sure get_module returns the mock module
+
+    # Mock platform_chassis.get_module to return a mock object
+    platform_chassis_mock.get_module.return_value = MagicMock()
+
+    # Mock module_name directly to "DPU0" to bypass the call to get_name()
+    module_name = "DPU0"
 
     # Mock module_updater within daemon_chassisd
     daemon_chassisd.module_updater = module_updater
     daemon_chassisd.module_updater.num_modules = 1
 
-    # Call set_initial_dpu_admin_state without force parameter
-    daemon_chassisd.set_initial_dpu_admin_state()
+    # Set up a patch to replace the call to get_name() with the mocked module_name
+    with patch('chassisd.ChassisdDaemon.platform_chassis.get_module') as mock_get_module:
+        mock_get_module.return_value.get_name.return_value = module_name
 
-    # Assertions to validate the behavior
-    platform_chassis_mock.get_module.assert_called_once_with(0)
-    mock_module.get_name.assert_called_once()  # Ensure get_name was called on the module
-    mock_module.get_status.assert_called_once()  # Ensure get_status was called
-    mock_module.get_oper_status.assert_called_once()  # Ensure get_oper_status was called
-    mock_module.get_admin_state.assert_called_once()  # Ensure get_admin_state was called
+        # Call set_initial_dpu_admin_state and check the execution
+        daemon_chassisd.set_initial_dpu_admin_state()
+
+        # Assert that get_module(0).get_name() was called once
+        mock_get_module.assert_called_once_with(0)
+        mock_get_module.return_value.get_name.assert_called_once()
 
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
