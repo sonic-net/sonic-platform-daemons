@@ -984,10 +984,10 @@ def test_daemon_run_smartswitch():
             daemon_chassisd.run()
 
 def test_set_initial_dpu_admin_state():
-    # Test the chassisd run
+
+    # Arrange: Create necessary mock objects and variables
     chassis = MockSmartSwitchChassis()
 
-    # DPU0
     index = 0
     name = "DPU0"
     desc = "DPU Module 0"
@@ -997,12 +997,10 @@ def test_set_initial_dpu_admin_state():
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
-    # Set initial state
     status = ModuleBase.MODULE_STATUS_PRESENT
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    # Supervisor ModuleUpdater
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     module_updater.modules_num_update()
@@ -1014,34 +1012,13 @@ def test_set_initial_dpu_admin_state():
     daemon_chassisd.smartswitch = True
 
     import sonic_platform.platform
-    platform_chassis = chassis
 
-    # Mock objects
-    mock_chassis = MagicMock()
-    mock_module_updater = MagicMock()
-
-    # Mock the module
-    mock_module = MagicMock()
-    mock_module.get_name.return_value = "DPU0"
-    mock_chassis.get_module.return_value = mock_module
-
-    # Mock state_db
-    mock_state_db = MagicMock()
-    fvs_mock = [True, {CHASSIS_MIDPLANE_INFO_ACCESS_FIELD: 'True'}]
-    mock_state_db.get.return_value = fvs_mock
-
-    # Mock db_connect
-    mock_db_connect = MagicMock()
-    mock_db_connect.return_value = mock_state_db
-
-    # Mock admin_status
-    mock_module_updater.get_module_admin_status.return_value = 'down'
-
-    with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch:
-        mock_is_smartswitch.return_value = True
-
-        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1):
-            daemon_chassisd.set_initial_dpu_admin_state()
+    # Act: Patch platform_chassis in the daemon and the get_module method
+    with patch.object(daemon_chassisd, 'platform_chassis', new=chassis):
+        with patch.object(chassis, 'get_module', return_value=module) as mock_get_module:
+            with patch.object(daemon_chassisd.module_updater, 'num_modules', 1):
+                # Act: Call the method under test
+                daemon_chassisd.set_initial_dpu_admin_state()
 
 def test_daemon_run_supervisor_invalid_slot():
     chassis = MockChassis()
