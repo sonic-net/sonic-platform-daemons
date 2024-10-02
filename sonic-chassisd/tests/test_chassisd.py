@@ -1008,20 +1008,20 @@ def test_daemon_dpu_init():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
 
+    # Mock platform_chassis and inject it into daemon_chassisd
+    platform_chassis_mock = MagicMock()
+    daemon_chassisd.platform_chassis = platform_chassis_mock
+    platform_chassis_mock.get_module.return_value = mock_module  # Make sure get_module returns the mock module
+
     # Mock module_updater within daemon_chassisd
     daemon_chassisd.module_updater = module_updater
     daemon_chassisd.module_updater.num_modules = 1
 
-    # Mock platform_chassis and other attributes accessed in set_initial_dpu_admin_state()
-    platform_chassis_mock = MagicMock()
-    daemon_chassisd.platform_chassis = platform_chassis_mock
-    platform_chassis_mock.get_module.return_value = mock_module
-
     # Call set_initial_dpu_admin_state without force parameter
     daemon_chassisd.set_initial_dpu_admin_state()
 
-    # Assertions to validate behavior
-    platform_chassis_mock.get_module.assert_called_once_with(0)  # Ensure get_module was called with index 0
+    # Assertions to validate the behavior
+    platform_chassis_mock.get_module.assert_called_once_with(0)
     mock_module.get_name.assert_called_once()  # Ensure get_name was called on the module
     mock_module.get_status.assert_called_once()  # Ensure get_status was called
     mock_module.get_oper_status.assert_called_once()  # Ensure get_oper_status was called
