@@ -1028,7 +1028,7 @@ def test_set_initial_dpu_admin_state():
     # Mock state_db
     mock_state_db = MagicMock()
     fvs_mock = [True, {CHASSIS_MIDPLANE_INFO_ACCESS_FIELD: 'True'}]
-    mock_stat_db.get.return_value = fvs_mock
+    mock_state_db.get.return_value = fvs_mock
 
     # Mock db_connect
     mock_db_connect.return_value = mock_state_db
