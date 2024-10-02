@@ -984,40 +984,38 @@ def test_daemon_run_smartswitch():
             daemon_chassisd.run()
 
 @patch('daemon_base.db_connect')  # Mock db_connect to control state_db behavior
-def test_set_initial_dpu_admin_state(self, mock_db_connect):
-    import sonic_platform.platform  # Import the module to patch the Platform class
-    
+@patch('sonic_platform.platform.Platform')  # Mock the Platform class
+def test_set_initial_dpu_admin_state(self, mock_platform, mock_db_connect):
     # Arrange: Set up mocks
     mock_chassis_instance = MagicMock()
-    
-    with patch('sonic_platform.platform.Platform') as mock_platform:  # Mock the Platform class
-        mock_platform.return_value.get_chassis.return_value = mock_chassis_instance
-        
-        mock_db = MagicMock()
-        mock_db_connect.return_value = mock_db
-        
-        # Mock the chain in one line
-        mock_chassis_instance.get_module.return_value.get_name.return_value = "DPU0"
+    mock_platform.return_value.get_chassis.return_value = mock_chassis_instance
 
-        # Mocking the module updater
-        mock_module_updater = MagicMock()
-        mock_module_updater.num_modules = 1
-        mock_module_updater._get_module_info.return_value = {
-            'name': 'DPU0'
-        }
-        mock_module_updater.get_module_admin_status.return_value = 'down'
+    # Mock the database connection
+    mock_db = MagicMock()
+    mock_db_connect.return_value = mock_db
 
-        # Create an instance of ChassisdDaemon with the mocked platform
-        daemon_chassisd = ChassisdDaemon('SYSLOG_IDENTIFIER')
-        daemon_chassisd.module_updater = mock_module_updater
-        daemon_chassisd.platform_chassis = mock_chassis_instance
+    # Mock the chain in one line
+    mock_chassis_instance.get_module.return_value.get_name.return_value = "DPU0"
 
-        # Act: Call the method to test
-        daemon_chassisd.set_initial_dpu_admin_state()
+    # Mocking the module updater
+    mock_module_updater = MagicMock()
+    mock_module_updater.num_modules = 1
+    mock_module_updater._get_module_info.return_value = {
+        'name': 'DPU0'
+    }
+    mock_module_updater.get_module_admin_status.return_value = 'down'
 
-        # Assert: Check that the correct calls were made
-        mock_module_updater._get_module_info.assert_called_once_with(0)
-        mock_module_updater.chassis.get_module(0).set_admin_state.assert_called_once_with(ModuleBase.MODULE_ADMIN_DOWN)
+    # Create an instance of ChassisdDaemon with the mocked platform
+    daemon_chassisd = ChassisdDaemon('SYSLOG_IDENTIFIER')
+    daemon_chassisd.module_updater = mock_module_updater
+    daemon_chassisd.platform_chassis = mock_chassis_instance
+
+    # Act: Call the method to test
+    daemon_chassisd.set_initial_dpu_admin_state()
+
+    # Assert: Check that the correct calls were made
+    mock_module_updater._get_module_info.assert_called_once_with(0)
+    mock_module_updater.chassis.get_module(0).set_admin_state.assert_called_once_with(ModuleBase.MODULE_ADMIN_DOWN)
 
 def test_set_initial_dpu_admin_state_a():
     # Test the chassisd run
@@ -1044,6 +1042,7 @@ def test_set_initial_dpu_admin_state_a():
     module_updater.modules_num_update()
 
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.module_updater = module_updater
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
@@ -1052,7 +1051,7 @@ def test_set_initial_dpu_admin_state_a():
     with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch:
         mock_is_smartswitch.return_value = True
 
-        with patch.object(module_updater, 'num_modules', 1):
+        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1):
             daemon_chassisd.set_initial_dpu_admin_state()
 
 def test_daemon_run_supervisor_invalid_slot():
