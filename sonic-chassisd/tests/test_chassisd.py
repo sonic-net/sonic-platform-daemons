@@ -992,7 +992,7 @@ def test_daemon_dpu_init():
     mock_module.get_name.return_value = "DPU0"
     mock_module.get_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
     mock_module.get_oper_status.return_value = ModuleBase.MODULE_STATUS_PRESENT
-    mock_module.get_admin_state.return_value = ModuleBase.MODULE_ADMIN_STATE_ENABLED
+    mock_module.get_admin_state.return_value = 1
 
     # Ensure platform_chassis.get_module() returns the mock_module
     chassis.get_module = MagicMock(return_value=mock_module)
