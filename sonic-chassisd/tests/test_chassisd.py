@@ -1008,6 +1008,7 @@ def test_daemon_dpu_init():
     module_updater.modules_num_update()
 
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd.module_updater = module_updater
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
