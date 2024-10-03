@@ -14,6 +14,7 @@ import shutil
 import json
 import time
 
+from datetime import datetime
 from sonic_py_common import daemon_base, device_info, syslogger
 from swsscommon import swsscommon
 from sonic_platform_base.sonic_storage.storage_devices import StorageDevices, BLKDEV_BASE_PATH
@@ -70,8 +71,14 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.fsio_rw_json = {disk:{} for disk in self.storage.devices}
         self.fsio_rw_statedb = {disk:{} for disk in self.storage.devices}
 
+        # This is the time format string
+        self.time_format_string = "%Y-%m-%d %H:%M:%S"
+
         # This time is set at init and then subsequently after each FSIO JSON file sync
-        self.fsio_sync_time = time.time()
+        self.fsio_sync_time = self.get_formatted_time(time.time())
+
+        # This is the time at epoch
+        self.epoch = datetime(1970, 1, 1)
         
         # These are the various static and dynamic fields that are posted to state_db
         self.static_fields = ["device_model", "serial"]
@@ -99,6 +106,15 @@ class DaemonStorage(daemon_base.DaemonBase):
         self._load_fsio_rw_statedb()
         self._load_fsio_rw_json()
         self._determine_sot()
+
+    # This function is used to convert the epoch time to a user friendly formatted string
+    def get_formatted_time(self, time_since_epoch):
+        return datetime.fromtimestamp(time_since_epoch).strftime(self.time_format_string)
+
+    # This function is used to convert the user friendly formatted string to epoch time
+    def get_epoch_time(self, formatted_time):
+        return int((datetime.strptime(formatted_time, self.time_format_string) - self.epoch).total_seconds())
+
 
     def get_configdb_intervals(self):
         self.config_db = daemon_base.db_connect("CONFIG_DB")
@@ -148,7 +164,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                 for field in self.statedb_json_sync_fields:
                     json_file_dict[device][field] = self.state_db.hget('STORAGE_INFO|{}'.format(device), field)
             
-            self.fsio_sync_time = time.time()
+            self.fsio_sync_time = self.get_formatted_time(time.time())
             json_file_dict["successful_sync_time"] = str(self.fsio_sync_time)
 
             with open(FSIO_RW_JSON_FILE, 'w+') as f:
@@ -312,7 +328,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                 dynamic_kvp_dict["disk_io_reads"] = storage_object.get_disk_io_reads()
                 dynamic_kvp_dict["disk_io_writes"] = storage_object.get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = storage_object.get_reserved_blocks()
-                dynamic_kvp_dict["last_sync_time"] = time.time()
+                dynamic_kvp_dict["last_sync_time"] = self.get_formatted_time(time.time())
 
                 dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
 
@@ -375,7 +391,7 @@ class DaemonStorage(daemon_base.DaemonBase):
 
         # If so, sync the appropriate fields to FSIO JSON file
         
-        elapsed_time = time.time() - self.fsio_sync_time
+        elapsed_time = time.time() - self.get_epoch_time(self.fsio_sync_time)
         if (elapsed_time > self.fsstats_sync_interval) or ((self.fsstats_sync_interval - elapsed_time) < self.timeout):
             if self.sync_fsio_rw_json():
                 self.write_sync_time_statedb()
