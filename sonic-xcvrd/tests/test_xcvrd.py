@@ -305,7 +305,7 @@ class TestXcvrdThreadException(object):
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.on_port_update_event(port_change_event)
         task.task_worker()
-        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_READY
 
         # Case 3: get_cmis_application_desired() raises an exception
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
@@ -1959,6 +1959,18 @@ class TestXcvrdScript(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, port_dict)
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
+
+        # STATE_DB DEL event doesn't remove port from port_dict
+        # this happens when transceiver is plugged-out or DPB is used
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL, {}, db_name='STATE_DB')
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 1
+
+        # CONFIG_DB DEL event removes port from port_dict
+        # this happens when DPB is used
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 0
 
     @patch('xcvrd.xcvrd.XcvrTableHelper')
     def test_CmisManagerTask_get_configured_freq(self, mock_table_helper):

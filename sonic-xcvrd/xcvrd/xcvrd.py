@@ -681,12 +681,44 @@ class CmisManagerTask(threading.Thread):
 
             self.force_cmis_reinit(lport, 0)
 
-        # PORT_DEL event for the same lport happens 3 times because
-        # we are subscribing to CONFIG_DB, STATE_DB|TRANSCEIVER_INFO, and STATE_DB|PORT_TABLE.
-        # To only handle the first one, check if the lport exists in the port_dict.
-        elif lport in self.port_dict:
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
-            self.port_dict.pop(lport)
+        elif port_change_event.event_type == port_change_event.PORT_DEL:
+            # In handling the DEL event, the following two scenarios must be considered:
+            # 1. PORT_DEL event due to transceiver plug-out
+            # 2. PORT_DEL event due to Dynamic Port Breakout (DPB)
+            #
+            # Scenario 1 is simple, as only a STATE_DB|TRANSCEIVER_INFO PORT_DEL event occurs,
+            # so we just need to set SW_CMIS_STATE to CMIS_STATE_REMOVED.
+            #
+            # Scenario 2 is a bit more complex. First, for the port(s) before DPB, a CONFIG_DB|PORT PORT_DEL
+            # and a STATE_DB|PORT_TABLE PORT_DEL event occur. Next, for the port(s) after DPB,
+            # a CONFIG_DB|PORT PORT_SET and a STATE_DB|PORT_TABLE PORT_SET event occur.
+            # After that (after a short delay), a STATE_DB|TRANSCEIVER_INFO PORT_DEL event
+            # occurs for the port(s) before DPB, and finally, a STATE_DB|TRANSCEIVER_INFO
+            # PORT_SET event occurs for the port(s) after DPB.
+            #
+            # Below is the event sequence when configuring Ethernet0 from "2x200G" to "1x400G"
+            # (based on actual logs).
+            #
+            # 1.  SET Ethernet0 CONFIG_DB|PORT
+            # 2.  DEL Ethernet2 CONFIG_DB|PORT
+            # 3.  DEL Ethernet0 CONFIG_DB|PORT
+            # 4.  DEL Ethernet0 STATE_DB|PORT_TABLE
+            # 5.  DEL Ethernet2 STATE_DB|PORT_TABLE
+            # 6.  SET Ethernet0 CONFIG_DB|PORT
+            # 7.  SET Ethernet0 STATE_DB|PORT_TABLE
+            # 8.  SET Ethernet0 STATE_DB|PORT_TABLE
+            # 9.  DEL Ethernet2 STATE_DB|TRANSCEIVER_INFO
+            # 10. DEL Ethernet0 STATE_DB|TRANSCEIVER_INFO
+            # 11. SET Ethernet0 STATE_DB|TRANSCEIVER_INFO
+            #
+            # To handle both scenarios, if the lport exists in port_dict for any DEL EVENT,
+            # set SW_CMIS_STATE to REMOVED. Additionally, for DEL EVENTS from CONFIG_DB due to DPB,
+            # remove the lport from port_dict.
+            if lport in self.port_dict:
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+
+            if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
+                self.port_dict.pop(lport)
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
