@@ -24,7 +24,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockPsu, MockSfp, MockThermal
+from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
@@ -267,6 +267,26 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message',)")
 
+    def test_update_module_fans(self):
+        chassis = MockChassis()
+        module = MockModule()
+        mock_fan = MockFan()
+        chassis.set_modular_chassis(True)
+        module._fan_list.append(mock_fan)
+        chassis._module_list.append(module)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 0
+
+        fan_updater._refresh_fan_status = mock.MagicMock(side_effect=Exception("Test message"))
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 1
+
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message')")
+        else:
+            fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
 class TestThermalMonitor(object):
     """
