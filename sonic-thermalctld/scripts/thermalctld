@@ -5,6 +5,7 @@
     Thermal control daemon for SONiC
 """
 
+from enum import Enum, auto
 import signal
 import sys
 import threading
@@ -61,18 +62,23 @@ def update_entity_info(table, parent_name, key, device, device_index):
     table.set(key, fvs)
 
 
+class FanType(Enum):
+    DRAWER = auto()
+    PSU = auto()
+    MODULE = auto()
+
 class FanStatus(logger.Logger):
     absent_fan_count = 0
     faulty_fan_count = 0
 
-    def __init__(self, fan=None, is_psu_fan=False):
+    def __init__(self, fan=None, fan_type=FanType.DRAWER):
         """
         Initializer of FanStatus
         """
         super(FanStatus, self).__init__(SYSLOG_IDENTIFIER)
 
         self.fan = fan
-        self.is_psu_fan = is_psu_fan
+        self.fan_type = fan_type
         self.presence = True
         self.status = True
         self.under_speed = False
@@ -95,7 +101,7 @@ class FanStatus(logger.Logger):
         :param presence: Fan presence status
         :return: True if status changed else False
         """
-        if not presence and not self.is_psu_fan:
+        if not presence and self.fan_type == FanType.DRAWER:
             FanStatus.absent_fan_count += 1
 
         if presence == self.presence:
@@ -228,7 +234,16 @@ class FanUpdater(logger.Logger):
                 if self.task_stopping_event.is_set():
                     return
                 try:
-                    self._refresh_fan_status(drawer, drawer_index, fan, fan_index)
+                    self._refresh_fan_status(drawer, drawer_index, fan, fan_index, FanType.DRAWER)
+                except Exception as e:
+                    self.log_warning('Failed to update fan status - {}'.format(repr(e)))
+
+        for module_index, module in enumerate(self.chassis.get_all_modules()):
+            for fan_index, fan in enumerate(module.get_all_fans()):
+                if self.task_stopping_event.is_set():
+                    return
+                try:
+                    self._refresh_fan_status(module, module_index, fan, fan_index, FanType.MODULE)
                 except Exception as e:
                     self.log_warning('Failed to update fan status - {}'.format(repr(e)))
 
@@ -237,7 +252,7 @@ class FanUpdater(logger.Logger):
                 if self.task_stopping_event.is_set():
                     return
                 try:
-                    self._refresh_fan_status(psu, psu_index, fan, fan_index, True)
+                    self._refresh_fan_status(psu, psu_index, fan, fan_index, FanType.PSU)
                 except Exception as e:
                     self.log_warning('Failed to update PSU fan status - {}'.format(repr(e)))
 
@@ -270,7 +285,7 @@ class FanUpdater(logger.Logger):
 
         self.drawer_table.set(drawer_name, fvs)
 
-    def _refresh_fan_status(self, parent, parent_index, fan, fan_index, is_psu_fan=False):
+    def _refresh_fan_status(self, parent, parent_index, fan, fan_index, fan_type=FanType.DRAWER):
         """
         Get Fan status by platform API and write to database for a given Fan
         :param parent: Parent device of this fan
@@ -280,15 +295,17 @@ class FanUpdater(logger.Logger):
         :param name_prefix: name prefix of Fan object if Fan.get_name not presented
         :return:
         """
-        drawer_name = NOT_AVAILABLE if is_psu_fan else str(try_get(parent.get_name))
-        if is_psu_fan:
+        drawer_name = NOT_AVAILABLE if fan_type != FanType.DRAWER else str(try_get(parent.get_name))
+        if fan_type == FanType.PSU:
             parent_name = 'PSU {}'.format(parent_index + 1)
+        elif fan_type == FanType.MODULE:
+            parent_name = 'Module {}'.format(parent_index + 1)
         else:
             parent_name = drawer_name if drawer_name != NOT_AVAILABLE else CHASSIS_INFO_KEY
         fan_name = try_get(fan.get_name, '{} fan {}'.format(parent_name, fan_index + 1))
         update_entity_info(self.phy_entity_table, parent_name, fan_name, fan, fan_index + 1)
         if fan_name not in self.fan_status_dict:
-            self.fan_status_dict[fan_name] = FanStatus(fan, is_psu_fan)
+            self.fan_status_dict[fan_name] = FanStatus(fan, fan_type)
 
         fan_status = self.fan_status_dict[fan_name]
 
@@ -342,7 +359,7 @@ class FanUpdater(logger.Logger):
 
         # We don't set PSU led here, PSU led will be handled in psud
         if set_led:
-            if not is_psu_fan:
+            if fan_type == FanType.DRAWER:
                 self._set_fan_led(parent, fan, fan_name, fan_status)
 
         if fan_fault_status != NOT_AVAILABLE:
