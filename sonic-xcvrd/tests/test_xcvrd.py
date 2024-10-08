@@ -2642,6 +2642,7 @@ class TestXcvrdScript(object):
         task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task.check_transceiver_temperature = MagicMock()
         mock_detect_error.return_value = True
         task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
@@ -2660,6 +2661,48 @@ class TestXcvrdScript(object):
         assert mock_post_dom_info.call_count == 1
         assert mock_update_status_hw.call_count == 1
         assert mock_post_pm_info.call_count == 1
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @pytest.mark.parametrize("dom_info_cache, dom_th_info, expected", [
+        ({0: {'temperature': '75'}},
+         (('temphighalarm', '80'),
+          ('templowalarm', '0'),
+          ('temphighwarning', '70'),
+          ('templowwarning', '0')),
+         3), #TEMP_NORMAL = 0
+        ({0: {'temperature': '85'}},
+         (('temphighalarm', '80'),
+          ('templowalarm', '0'),
+          ('temphighwarning', '70'),
+          ('templowwarning', '10')),
+         1), #TEMP_HIGH_ALARM = 1
+        ({0: {'temperature': '5'}},
+         (('temphighalarm', '80'),
+          ('templowalarm', '0'),
+          ('temphighwarning', '70'),
+          ('templowwarning', '10')),
+         4), #TEMP_LOW_WARNING = 4
+    ])
+    def test_check_transceiver_temperature(self, dom_info_cache, dom_th_info, expected):
+        class MockTable:
+            data = {}
+            def set(self, key, fvs):
+                self.data[key] = fvs
+
+            def get(self, key):
+                return self.data.get(key)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager)
+        logical_port_name = 'Ethernet0'
+        temperature_status = {}
+        dom_th_tbl = MockTable()
+        dom_th_tbl.get = MagicMock(return_value=(True, dom_th_info))
+        task.check_transceiver_temperature(logical_port_name, dom_th_tbl, dom_info_cache, temperature_status)
+        assert temperature_status[0] == expected
 
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd.XcvrTableHelper')
