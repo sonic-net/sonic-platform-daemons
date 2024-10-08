@@ -73,6 +73,7 @@ CHASSIS_MODULE_REBOOT_INFO_TABLE = 'CHASSIS_MODULE_REBOOT_INFO_TABLE'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 DEFAULT_LINECARD_REBOOT_TIMEOUT = 180
+DEFAULT_DPU_REBOOT_TIMEOUT = 180
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
@@ -168,6 +169,59 @@ class ModuleConfigUpdater(logger.Logger):
             try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
 
 #
+# SmartSwitch Module Config Updater ========================================================
+#
+
+
+class SmartSwitchModuleConfigUpdater(logger.Logger):
+
+    def __init__(self, log_identifier, chassis):
+        """
+        Constructor for SmartSwitchModuleConfigUpdater
+        :param chassis: Object representing a platform chassis
+        """
+        super(SmartSwitchModuleConfigUpdater, self).__init__(log_identifier)
+
+        self.chassis = chassis
+        # The threading.Lock is required for concurrent setting of admin_state
+        # on multiple DPUs for faster bring-up and shutdown.
+        self.lock = threading.Lock()
+
+    def deinit(self):
+        """
+        Destructor of SmartSwitchModuleConfigUpdater
+        :return:
+        """
+
+    def module_config_update(self, key, admin_state):
+        if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
+            self.log_error("Incorrect module-name {}. Should start with {}".format(key,
+                                                        ModuleBase.MODULE_TYPE_DPU))
+            return
+
+        module_index = try_get(self.chassis.get_module_index, key, default=INVALID_MODULE_INDEX)
+
+        # Continue if the index is invalid
+        if module_index < 0:
+            self.log_error("Unable to get module-index for key {} to set admin-state {}". format(key, admin_state))
+            return
+
+        if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
+            self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
+            # Acquire the lock before submitting the callback function
+            with self.lock:
+                # Submit the callback function as a separate thread. It is the responsibility
+                # of the module to handle multiple b2b requests to the same module
+                t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
+                t.start()
+        else:
+            self.log_warning("Invalid admin_state value: {}".format(admin_state))
+
+    def submit_callback(self, module_index, admin_state):
+        try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        pass
+
+#
 # Module Updater ==============================================================
 #
 
@@ -198,14 +252,14 @@ class ModuleUpdater(logger.Logger):
 
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
         if self._is_supervisor():
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
+            self.asic_table = swsscommon.Table(self.chassis_state_db,
                                             CHASSIS_FABRIC_ASIC_INFO_TABLE)
         else:
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
+            self.asic_table = swsscommon.Table(self.chassis_state_db,
                                             CHASSIS_ASIC_INFO_TABLE)
 
         self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
-        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE) 
+        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
         self.down_modules = {}
         self.chassis_app_db_clean_sha = None
 
@@ -345,11 +399,11 @@ class ModuleUpdater(logger.Logger):
                             self.asic_table.set(asic_key, asic_fvs)
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
-        # The hostname is used as key to access chassis app db entries 
+        # The hostname is used as key to access chassis app db entries
         if not self._is_supervisor():
            hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
            hostname = try_get(device_info.get_hostname, default="None")
-           hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)), 
+           hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)),
                                                         (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
                                                         (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
            self.hostname_table.set(hostname_key, hostname_fvs)
@@ -559,6 +613,157 @@ class ModuleUpdater(logger.Logger):
                         self._cleanup_chassis_app_db(module)
                     self.down_modules[module]['cleaned'] = True
 
+#
+# Module Updater ==============================================================
+#
+
+
+class SmartSwitchModuleUpdater(ModuleUpdater):
+
+    def __init__(self, log_identifier, chassis):
+        """
+        Constructor for ModuleUpdater
+        :param chassis: Object representing a platform chassis
+        """
+        super(ModuleUpdater, self).__init__(log_identifier)
+
+        self.chassis = chassis
+        self.num_modules = self.chassis.get_num_modules()
+        # Connect to STATE_DB and create chassis info tables
+        state_db = daemon_base.db_connect("STATE_DB")
+        self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        self.module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
+        self.midplane_table = swsscommon.Table(state_db, CHASSIS_MIDPLANE_INFO_TABLE)
+        self.info_dict_keys = [CHASSIS_MODULE_INFO_NAME_FIELD,
+                               CHASSIS_MODULE_INFO_DESC_FIELD,
+                               CHASSIS_MODULE_INFO_SLOT_FIELD,
+                               CHASSIS_MODULE_INFO_SERIAL_FIELD,
+                               CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+        self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
+        self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
+        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
+        self.down_modules = {}
+        self.chassis_app_db_clean_sha = None
+
+        self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
+        if not self.midplane_initialized:
+            self.log_error("Chassisd midplane intialization failed")
+
+    def deinit(self):
+        """
+        Destructor of ModuleUpdater
+        :return:
+        """
+        # Delete all the information from DB and then exit
+        for module_index in range(0, self.num_modules):
+            name = try_get(self.chassis.get_module(module_index).get_name)
+            self.module_table._del(name)
+            if self.midplane_table.get(name) is not None:
+                self.midplane_table._del(name)
+
+        if self.chassis_table is not None:
+            self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+
+    def module_db_update(self):
+        notOnlineModules = []
+
+        for module_index in range(0, self.num_modules):
+            module_info_dict = self._get_module_info(module_index)
+            if module_info_dict is not None:
+                key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
+
+                if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
+                    self.log_error("Incorrect module-name {}. Should start with {} ".format(key,
+                                                            ModuleBase.MODULE_TYPE_DPU))
+                    continue
+
+                fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
+                                                  (CHASSIS_MODULE_INFO_SLOT_FIELD,
+                                                   module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
+                                                  (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
+                                                  (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
+                prev_status = self.get_module_current_status(key)
+                self.module_table.set(key, fvs)
+
+    def _get_module_info(self, module_index):
+        """
+        Retrieves module info of this module
+        """
+        module_info_dict = {}
+        module_info_dict = dict.fromkeys(self.info_dict_keys, 'N/A')
+        name = try_get(self.chassis.get_module(module_index).get_name)
+        desc = try_get(self.chassis.get_module(module_index).get_description)
+        status = try_get(self.chassis.get_module(module_index).get_oper_status,
+                         default=ModuleBase.MODULE_STATUS_OFFLINE)
+        asics = try_get(self.chassis.get_module(module_index).get_all_asics,
+                        default=[])
+        serial = try_get(self.chassis.get_module(module_index).get_serial)
+
+        module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = name
+        module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(desc)
+        module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = 'N/A'
+        module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(status)
+        module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD] = str(serial)
+
+        return module_info_dict
+
+    def _is_supervisor(self):
+        return False
+
+    def check_midplane_reachability(self):
+        if not self.midplane_initialized:
+            return
+
+        index = -1
+        for module in self.chassis.get_all_modules():
+            index += 1
+
+            module_key = try_get(module.get_name, default='MODULE {}'.format(index))
+            midplane_ip = try_get(module.get_midplane_ip, default=INVALID_IP)
+            midplane_access = try_get(module.is_midplane_reachable, default=False)
+
+            # Generate syslog for the loss of midplane connectivity when midplane connectivity
+            # loss is detected for the first time
+            current_midplane_state = 'False'
+            fvs = self.midplane_table.get(module_key)
+            if isinstance(fvs, list) and fvs[0] is True:
+                fvs = dict(fvs[-1])
+                current_midplane_state = fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+            if midplane_access is False and current_midplane_state == 'True':
+                if self.is_module_reboot_expected(module_key):
+                    self.module_reboot_set_time(module_key)
+                    self.log_warning("Expected: Module {} lost midplane connectivity".format(module_key))
+                else:
+                    self.log_warning("Unexpected: Module {} lost midplane connectivity".format(module_key))
+            elif midplane_access is True and current_midplane_state == 'False':
+                self.log_notice("Module {} midplane connectivity is up".format(module_key))
+                # clean up the reboot_info_table
+                if self.module_reboot_table.get(module_key) is not None:
+                    self.module_reboot_table._del(module_key)
+            elif midplane_access is False and current_midplane_state == 'False':
+                if self.is_module_reboot_system_up_expired(module_key):
+                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, DEFAULT_DPU_REBOOT_TIMEOUT))
+
+            # Update db with midplane information
+            fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
+                                              (CHASSIS_MIDPLANE_INFO_ACCESS_FIELD, str(midplane_access))])
+            self.midplane_table.set(module_key, fvs)
+
+    def module_down_chassis_db_cleanup(self):
+        # cleanup CHASSIS_STATE_DB
+        chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
+        for module_index in range(0, self.num_modules):
+            name = try_get(self.chassis.get_module(module_index).get_name)
+
+            if self.get_module_admin_status(name) != 'up':
+                key = "*|" + name
+                chassis_state_db.delete(key)
+        return
+
 
 #
 # Config Manager task ========================================================
@@ -574,6 +779,52 @@ class ConfigManagerTask(ProcessTaskBase):
 
     def task_worker(self):
         self.config_updater = ModuleConfigUpdater(SYSLOG_IDENTIFIER, platform_chassis)
+        config_db = daemon_base.db_connect("CONFIG_DB")
+
+        # Subscribe to CHASSIS_MODULE table notifications in the Config DB
+        sel = swsscommon.Select()
+        sst = swsscommon.SubscriberStateTable(config_db, CHASSIS_CFG_TABLE)
+        sel.addSelectable(sst)
+
+        # Listen indefinitely for changes to the CFG_CHASSIS_MODULE_TABLE table in the Config DB
+        while True:
+            # Use timeout to prevent ignoring the signals we want to handle
+            # in signal_handler() (e.g. SIGTERM for graceful shutdown)
+            (state, c) = sel.select(SELECT_TIMEOUT)
+
+            if state == swsscommon.Select.TIMEOUT:
+                # Do not flood log when select times out
+                continue
+            if state != swsscommon.Select.OBJECT:
+                self.logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                continue
+
+            (key, op, fvp) = sst.pop()
+
+            if op == 'SET':
+                admin_state = MODULE_ADMIN_DOWN
+            elif op == 'DEL':
+                admin_state = MODULE_ADMIN_UP
+            else:
+                continue
+
+            self.config_updater.module_config_update(key, admin_state)
+
+
+#
+# SmartSwitch Config Manager task ========================================================
+#
+
+
+class SmartSwitchConfigManagerTask(ProcessTaskBase):
+    def __init__(self):
+        ProcessTaskBase.__init__(self)
+
+        # TODO: Refactor to eliminate the need for this Logger instance
+        self.logger = logger.Logger(SYSLOG_IDENTIFIER)
+
+    def task_worker(self):
+        self.config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, platform_chassis)
         config_db = daemon_base.db_connect("CONFIG_DB")
 
         # Subscribe to CHASSIS_MODULE table notifications in the Config DB
@@ -632,6 +883,61 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
+    def set_initial_dpu_admin_state(self):
+        """Send admin_state trigger once to modules those are powered up"""
+        lock = threading.Lock()
+        threads = []
+        for module_index in range(0, self.module_updater.num_modules):
+            op = None
+            # Get midplane state of DPU
+            module_info_dict = self.module_updater._get_module_info(module_index)
+            module_name = platform_chassis.get_module(module_index).get_name()
+            state_db = daemon_base.db_connect("STATE_DB")
+            midplane_table = swsscommon.Table(state_db, CHASSIS_MIDPLANE_INFO_TABLE)
+            fvs = midplane_table.get(module_name)
+            midplane_state = 'False'
+            if isinstance(fvs, list) and fvs[0] is True:
+                fvs = dict(fvs[-1])
+                midplane_state = fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+            try:
+                if module_info_dict is not None:
+                    # Get admin state of DPU
+                    key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
+                    admin_state = self.module_updater.get_module_admin_status(key)
+                    if admin_state == 'down' and midplane_state == 'True':
+                        # shutdown DPU
+                        op = MODULE_ADMIN_DOWN
+                    if admin_state != 'down' and midplane_state == 'False':
+                        # startup DPU
+                        op = MODULE_ADMIN_UP
+
+                    if op is not None:
+                        # Spawn a thread to handle the DPU logic
+                        def handle_dpu_logic():
+                            try:
+                                with lock:
+                                    module = self.module_updater.chassis.get_module(module_index)
+                                    if module:
+                                        module.set_admin_state(op)
+                                    else:
+                                        self.log_warning(f"Module {module_index} not found")
+                            except Exception as e:
+                                self.log_error(f"Error in setting admin state for module {module_index}: {str(e)}", exc_info=True)
+
+                        # Create and start a thread for the DPU logic
+                        thread = threading.Thread(target=handle_dpu_logic)
+                        thread.daemon = True  # Set as a daemon thread
+                        thread.start()
+                        threads.append(thread)
+
+            except Exception as e:
+                self.log_error(f"Error in run: {str(e)}", exc_info=True)
+
+        # Wait for all threads to finish
+        for thread in threads:
+            thread.join()
+
     # Run daemon
     def run(self):
         global platform_chassis
@@ -651,19 +957,27 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                                               default=INVALID_SLOT)
         supervisor_slot = try_get(platform_chassis.get_supervisor_slot,
                                                       default=INVALID_SLOT)
-        
+
         # Check if module list is populated
-        self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
+        self.smartswitch = platform_chassis.is_smartswitch()
+        self.log_info("smartswitch: {}".format(self.smartswitch))
+        if self.smartswitch:
+            self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis)
+        else:
+            self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
-
-        if ((self.module_updater.my_slot == INVALID_SLOT) or
-                (self.module_updater.supervisor_slot == INVALID_SLOT)):
-            self.log_error("Chassisd not supported for this platform")
-            sys.exit(CHASSIS_NOT_SUPPORTED)
+        if not self.smartswitch:
+            if ((self.module_updater.my_slot == INVALID_SLOT) or
+                    (self.module_updater.supervisor_slot == INVALID_SLOT)):
+                self.log_error("Chassisd not supported for this platform")
+                sys.exit(CHASSIS_NOT_SUPPORTED)
 
         # Start configuration manager task on supervisor module
-        if self.module_updater.supervisor_slot == self.module_updater.my_slot:
+        if self.smartswitch:
+            config_manager = SmartSwitchConfigManagerTask()
+            config_manager.task_run()
+        elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
             config_manager = ConfigManagerTask()
             config_manager.task_run()
         else:
@@ -671,6 +985,10 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start main loop
         self.log_info("Start daemon main loop")
+
+        # Call the function to handle DPU admin state for SmartSwitch
+        if self.smartswitch:
+            self.set_initial_dpu_admin_state()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
             self.module_updater.module_db_update()
