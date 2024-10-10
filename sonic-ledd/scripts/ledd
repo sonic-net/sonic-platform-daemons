@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
     ledd
@@ -15,7 +15,7 @@ from swsscommon import swsscommon
 
 #============================= Constants =============================
 
-VERSION = '1.0'
+VERSION = '2.0'
 
 SYSLOG_IDENTIFIER = "ledd"
 
@@ -33,6 +33,7 @@ LED_CLASS_NAME = "LedControl"
 SELECT_TIMEOUT = 1000
 
 LEDUTIL_LOAD_ERROR = 1
+LEDUTIL_RUNTIME_ERROR = 2
 
 
 class DaemonLedd(daemon_base.DaemonBase):
@@ -56,15 +57,51 @@ class DaemonLedd(daemon_base.DaemonBase):
         namespaces = multi_asic.get_front_end_namespaces()
 
         # Subscribe to PORT table notifications in the Application DB
-        appl_db = {}
-        self.sst = {}
+        self.tables = {}
         self.sel = swsscommon.Select()
 
         for namespace in namespaces:
-            # Open a handle to the Application database, in all namespaces
-            appl_db[namespace] = daemon_base.db_connect("APPL_DB", namespace=namespace)
-            self.sst[namespace] = swsscommon.SubscriberStateTable(appl_db[namespace], swsscommon.APP_PORT_TABLE_NAME)
-            self.sel.addSelectable(self.sst[namespace])
+            self.subscribeDbTable("APPL_DB", swsscommon.APP_PORT_TABLE_NAME, namespace)
+    
+    def connectDB(self, dbname, namespace):
+        db = daemon_base.db_connect(dbname, namespace=namespace)
+        return db
+    
+    def subscribeDbTable(self, dbname, tblname, namespace):
+        db = self.connectDB(dbname, namespace)
+        self.tables[namespace] = swsscommon.SubscriberStateTable(db, tblname)
+        self.sel.addSelectable(self.tables[namespace])
+
+    def isFrontPanelPort(self, port_name):
+        return not port_name.startswith((backplane_prefix(), inband_prefix(), recirc_prefix()))
+
+    def updatePortLedColor(self, port_name, port_status):
+        self.led_control.port_link_state_change(port_name, port_status)
+
+    def getEventNamespace(self, selectObj):
+        # Get the corresponding namespace from redisselect db connector object
+        return selectObj.getDbConnector().getNamespace()
+    
+    def processPortTableEvent(self, selectableObj):
+        ''' Process (if any) event from the PORT table in the Application DB '''
+
+        # Get the redisselect object from selectable object
+        redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(selectableObj)
+        namespace = self.getEventNamespace(redisSelectObj)
+
+        (key, op, fvp) = self.tables[namespace].pop()
+        if fvp:
+            # TODO: Once these flag entries have been removed from the DB,
+            # we can remove this check
+            if key in ["PortConfigDone", "PortInitDone"]:
+                return
+
+            fvp_dict = dict(fvp)
+
+            if op == "SET" and "oper_status" in fvp_dict and self.isFrontPanelPort(key):
+                self.updatePortLedColor(key, fvp_dict["oper_status"])
+
+
 
     # Run daemon
     def run(self):
@@ -73,33 +110,14 @@ class DaemonLedd(daemon_base.DaemonBase):
         (state, selectableObj) = self.sel.select(SELECT_TIMEOUT)
 
         if state == swsscommon.Select.TIMEOUT:
-            # Do not flood log when select times out
-            return 1
+            # NOOP - Nothing to process here
+            return 0
 
         if state != swsscommon.Select.OBJECT:
-            self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-            return 2
+            self.log_warning("sel.select() did not return swsscommon.Select.OBJECT - May be socket closed???")
+            return -1 ## Fail here so that the daemon can be restarted
 
-        # Get the redisselect object from selectable object
-        redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(selectableObj)
-
-        # Get the corresponding namespace from redisselect db connector object
-        namespace = redisSelectObj.getDbConnector().getNamespace()
-
-        (key, op, fvp) = self.sst[namespace].pop()
-        if fvp:
-            # TODO: Once these flag entries have been removed from the DB,
-            # we can remove this check
-            if key in ["PortConfigDone", "PortInitDone"]:
-                return 3
-
-            fvp_dict = dict(fvp)
-
-            if op == "SET" and "oper_status" in fvp_dict:
-                if not key.startswith((backplane_prefix(), inband_prefix(), recirc_prefix())):
-                    self.led_control.port_link_state_change(key, fvp_dict["oper_status"])
-        else:
-            return 4
+        self.processPortTableEvent(selectableObj)
 
         return 0
 
@@ -126,8 +144,9 @@ def main():
 
     # Listen indefinitely for changes to the PORT table in the Application DB's
     while True:
-        ledd.run()
-
+        if 0 != ledd.run():
+            print("ledd.run() failed... Exiting")
+            sys.exit(LEDUTIL_RUNTIME_ERROR)
 
 if __name__ == '__main__':
     main()
