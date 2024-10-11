@@ -194,6 +194,38 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         """
 
     def module_config_update(self, key, admin_state):
+        """
+        Updates the administrative state of a module based on the provided key and state.
+
+        This function first validates the module key to ensure it starts with the expected
+        prefix (ModuleBase.MODULE_TYPE_DPU) and retrieves the corresponding module index.
+        If the index is valid, and the desired admin state is either MODULE_ADMIN_DOWN or
+        MODULE_ADMIN_UP, a new thread is started to handle the state change by calling the
+        submit_callback function.
+
+        A lock is used to ensure thread safety during the creation of the new thread. The
+        lock prevents race conditions by ensuring that only one thread can modify shared
+        resources, such as self.chassis, at a time.
+
+        Args:
+            key (str): The unique identifier of the module. Must start with the prefix
+                    defined by ModuleBase.MODULE_TYPE_DPU.
+            admin_state (str): The desired administrative state of the module. Can be either
+                            MODULE_ADMIN_DOWN or MODULE_ADMIN_UP.
+
+        Returns:
+            None
+
+        Logs:
+            - Logs an error if the module name is incorrect or if the module index is invalid.
+            - Logs the state change information or a warning for an invalid admin_state.
+
+        Thread Safety:
+            - A lock is acquired before creating a new thread to prevent concurrent access to
+            shared resources. If the submit_callback accesses shared data, consider adding
+            the lock inside that function as well to ensure complete thread safety.
+        """
+
         if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
             self.log_error("Incorrect module-name {}. Should start with {}".format(key,
                                                         ModuleBase.MODULE_TYPE_DPU))
@@ -971,7 +1003,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 self.log_error("Chassisd not supported for this platform")
                 sys.exit(CHASSIS_NOT_SUPPORTED)
 
-        # Start configuration manager task on supervisor module
+        # Start configuration manager task
         if self.smartswitch:
             config_manager = SmartSwitchConfigManagerTask()
             config_manager.task_run()
