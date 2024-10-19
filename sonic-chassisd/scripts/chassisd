@@ -183,9 +183,6 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         super(SmartSwitchModuleConfigUpdater, self).__init__(log_identifier)
 
         self.chassis = chassis
-        # The threading.Lock is required for concurrent setting of admin_state
-        # on multiple DPUs for faster bring-up and shutdown.
-        self.lock = threading.Lock()
 
     def deinit(self):
         """
@@ -203,10 +200,6 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         MODULE_ADMIN_UP, a new thread is started to handle the state change by calling the
         submit_callback function.
 
-        A lock is used to ensure thread safety during the creation of the new thread. The
-        lock prevents race conditions by ensuring that only one thread can modify shared
-        resources, such as self.chassis, at a time.
-
         Args:
             key (str): The unique identifier of the module. Must start with the prefix
                     defined by ModuleBase.MODULE_TYPE_DPU.
@@ -219,11 +212,6 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         Logs:
             - Logs an error if the module name is incorrect or if the module index is invalid.
             - Logs the state change information or a warning for an invalid admin_state.
-
-        Thread Safety:
-            - A lock is acquired before creating a new thread to prevent concurrent access to
-            shared resources. If the submit_callback accesses shared data, consider adding
-            the lock inside that function as well to ensure complete thread safety.
         """
 
         if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
@@ -240,12 +228,8 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
-            # Acquire the lock before submitting the callback function
-            with self.lock:
-                # Submit the callback function as a separate thread. It is the responsibility
-                # of the module to handle multiple b2b requests to the same module
-                t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
-                t.start()
+            t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
+            t.start()
         else:
             self.log_warning("Invalid admin_state value: {}".format(admin_state))
 
@@ -913,9 +897,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
+    def platform_set_admin_cb(self, module_index, admin_state):
+        try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        pass
+
     def set_initial_dpu_admin_state(self):
         """Send admin_state trigger once to modules those are powered up"""
-        lock = threading.Lock()
         threads = []
         for module_index in range(0, self.module_updater.num_modules):
             op = None
@@ -943,20 +930,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                         op = MODULE_ADMIN_UP
 
                     if op is not None:
-                        # Spawn a thread to handle the DPU logic
-                        def handle_dpu_logic():
-                            try:
-                                with lock:
-                                    module = self.module_updater.chassis.get_module(module_index)
-                                    if module:
-                                        module.set_admin_state(op)
-                                    else:
-                                        self.log_warning(f"Module {module_index} not found")
-                            except Exception as e:
-                                self.log_error(f"Error in setting admin state for module {module_index}: {str(e)}", exc_info=True)
-
-                        # Create and start a thread for the DPU logic
-                        thread = threading.Thread(target=handle_dpu_logic)
+                        thread = threading.Thread(target=self.platform_set_admin_cb, args=(module_index, op))
                         thread.daemon = True  # Set as a daemon thread
                         thread.start()
                         threads.append(thread)
