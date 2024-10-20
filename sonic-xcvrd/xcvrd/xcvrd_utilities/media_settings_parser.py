@@ -79,7 +79,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
         if not lane_speed_key:
-            helper_logger.log_error("No host_electrical_interface_id found for CMIS module on physical port {}"
+            helper_logger.log_notice("No host_electrical_interface_id found for CMIS module on physical port {}"
                                     ", failed to construct lane_speed_key".format(physical_port))
     else:
         # Directly calculate lane speed and use it as key, this is especially useful for
