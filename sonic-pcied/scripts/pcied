@@ -151,6 +151,25 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         self.status_table.set("status", fvs)
 
+    # Check if any interface is in detaching mode by querying the state_db
+    def is_device_in_detaching_mode(self, pcie_dev):
+        try:
+            # Query the state_db for the device detaching status
+            keys = sonic_db_cli.keys("state_db", "PCIE_DETACH_INFO")
+            if not keys:
+                return False
+
+            for key in keys:
+                state_info = sonic_db_cli.get("state_db", key)
+                if state_info:
+                    state_data = json.loads(state_info)
+                    if state_data.get("bus_info") == pcie_dev and state_data.get("dpu_state") == "detaching":
+                        return True
+        except Exception as e:
+            self.log_error("Error checking detaching status for {pcie_dev}: {e}")
+
+        return False
+
     # Check the PCIe devices
     def check_pcie_devices(self):
         self.resultInfo = platform_pcieutil.get_pcie_check()
@@ -160,6 +179,14 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         for result in self.resultInfo:
             if result["result"] == "Failed":
+                # Convert bus, device, and function to a bus_info format like "0000:03:00.0"
+                pcie_dev = "0000:{int(result['bus'], 16):02x}:{int(result['dev'], 16):02x}.{int(result['fn'], 16)}"
+
+                # Check if the device is in detaching mode
+                if self.is_device_in_detaching_mode(pcie_dev):
+                    self.log_info("PCIe Device: {pcie_dev} is in detaching mode, skipping warning.")
+                    continue
+
                 self.log_warning("PCIe Device: " + result["name"] + " Not Found")
                 err += 1
             else:
