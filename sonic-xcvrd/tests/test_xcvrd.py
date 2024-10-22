@@ -1871,6 +1871,26 @@ class TestXcvrdScript(object):
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
     @patch('swsscommon.swsscommon.FieldValuePairs')
+    def test_CmisManagerTask_reset_port_active_apsel_to_db_error_cases(self, mock_field_value_pairs):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        lport = "Ethernet0"
+        host_lanes_mask = 0xff
+
+        # Case: table does not exist
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=None)
+        task.reset_port_active_apsel_to_db(lport, host_lanes_mask)
+        assert mock_field_value_pairs.call_count == 0
+
+        # Case: lport is not in the table
+        int_tbl = MagicMock()
+        int_tbl.get = MagicMock(return_value=(False, dict))
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+        task.reset_port_active_apsel_to_db(lport, host_lanes_mask)
+        assert mock_field_value_pairs.call_count == 0
+
+    @patch('swsscommon.swsscommon.FieldValuePairs')
     def test_CmisManagerTask_post_port_active_apsel_to_db_error_cases(self, mock_field_value_pairs):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_active_apsel_hostlane = MagicMock()
