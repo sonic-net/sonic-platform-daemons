@@ -15,6 +15,7 @@ try:
     import sys
     import threading
     import time
+    import json
 
     from sonic_py_common import daemon_base, logger, device_info
     from sonic_py_common.task_base import ProcessTaskBase
@@ -73,8 +74,9 @@ CHASSIS_MODULE_REBOOT_INFO_TABLE = 'CHASSIS_MODULE_REBOOT_INFO_TABLE'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 DEFAULT_LINECARD_REBOOT_TIMEOUT = 180
-DEFAULT_DPU_REBOOT_TIMEOUT = 180
+DEFAULT_DPU_REBOOT_TIMEOUT = 360
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
+PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
 
 CHASSIS_INFO_UPDATE_PERIOD_SECS = 10
 CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD = 30 # Minutes
@@ -191,29 +193,6 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         """
 
     def module_config_update(self, key, admin_state):
-        """
-        Updates the administrative state of a module based on the provided key and state.
-
-        This function first validates the module key to ensure it starts with the expected
-        prefix (ModuleBase.MODULE_TYPE_DPU) and retrieves the corresponding module index.
-        If the index is valid, and the desired admin state is either MODULE_ADMIN_DOWN or
-        MODULE_ADMIN_UP, a new thread is started to handle the state change by calling the
-        submit_callback function.
-
-        Args:
-            key (str): The unique identifier of the module. Must start with the prefix
-                    defined by ModuleBase.MODULE_TYPE_DPU.
-            admin_state (str): The desired administrative state of the module. Can be either
-                            MODULE_ADMIN_DOWN or MODULE_ADMIN_UP.
-
-        Returns:
-            None
-
-        Logs:
-            - Logs an error if the module name is incorrect or if the module index is invalid.
-            - Logs the state change information or a warning for an invalid admin_state.
-        """
-
         if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
             self.log_error("Incorrect module-name {}. Should start with {}".format(key,
                                                         ModuleBase.MODULE_TYPE_DPU))
@@ -385,18 +364,19 @@ class ModuleUpdater(logger.Logger):
                         # identifying module operational status change. But the clean up will not be attempted for supervisor
 
                         if down_module_key not in self.down_modules:
-                            self.log_warning("Module {} went off-line!".format(key))
+                            self.log_warning("Module {} (Slot {}) went off-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]))
                             self.down_modules[down_module_key] = {}
                             self.down_modules[down_module_key]['down_time'] = time.time()
                             self.down_modules[down_module_key]['cleaned'] = False
+                            self.down_modules[down_module_key]['slot'] = module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]
                     continue
                 else:
                     # Module is operational. Remove it from down time tracking.
                     if down_module_key in self.down_modules:
-                        self.log_notice("Module {} recovered on-line!".format(key))
+                        self.log_notice("Module {} (Slot {}) recovered on-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]))
                         del self.down_modules[down_module_key]
                     elif prev_status != ModuleBase.MODULE_STATUS_ONLINE:
-                        self.log_notice("Module {} is on-line!".format(key))
+                        self.log_notice("Module {} (Slot {}) is on-line!".format(key, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] ))
 
                     module_cfg_status = self.get_module_admin_status(key)
 
@@ -522,17 +502,17 @@ class ModuleUpdater(logger.Logger):
             if midplane_access is False and current_midplane_state == 'True':
                 if self.is_module_reboot_expected(module_key):
                     self.module_reboot_set_time(module_key)
-                    self.log_warning("Expected: Module {} lost midplane connectivity".format(module_key))
+                    self.log_warning("Expected: Module {} (Slot {}) lost midplane connectivity".format(module_key, module.get_slot()))
                 else:
-                    self.log_warning("Unexpected: Module {} lost midplane connectivity".format(module_key))
+                    self.log_warning("Unexpected: Module {} (Slot {}) lost midplane connectivity".format(module_key, module.get_slot()))
             elif midplane_access is True and current_midplane_state == 'False':
-                self.log_notice("Module {} midplane connectivity is up".format(module_key))
+                self.log_notice("Module {} (Slot {}) midplane connectivity is up".format(module_key, module.get_slot()))
                 # clean up the reboot_info_table
                 if self.module_reboot_table.get(module_key) is not None:
                     self.module_reboot_table._del(module_key)
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
-                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.linecard_reboot_timeout))
+                    self.log_warning("Unexpected: Module {} (Slot {}) midplane connectivity is not restored in {} seconds".format(module_key, module.get_slot(), self.linecard_reboot_timeout))
                     
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -619,11 +599,12 @@ class ModuleUpdater(logger.Logger):
         for module in self.down_modules:
             if self.down_modules[module]['cleaned'] == False:
                 down_time = self.down_modules[module]['down_time']
+                slot = self.down_modules[module]['slot']
                 delta = (time_now - down_time) / 60
                 if delta >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD:
                     if module.startswith(ModuleBase.MODULE_TYPE_LINE):
                         # Module is down for more than 30 minutes. Do the chassis clean up
-                        self.log_notice("Module {} is down for long time. Initiating chassis app db clean up".format(module))
+                        self.log_notice("Module {} (Slot {}) is down for long time. Initiating chassis app db clean up".format(module, slot))
                         self._cleanup_chassis_app_db(module)
                     self.down_modules[module]['cleaned'] = True
 
@@ -633,6 +614,8 @@ class ModuleUpdater(logger.Logger):
 
 
 class SmartSwitchModuleUpdater(ModuleUpdater):
+
+    prev_status = []
 
     def __init__(self, log_identifier, chassis):
         """
@@ -665,6 +648,21 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if not self.midplane_initialized:
             self.log_error("Chassisd midplane intialization failed")
 
+        for module_index in range(0, self.num_modules):
+            self.prev_status.append(ModuleBase.MODULE_STATUS_OFFLINE)
+
+        self.dpu_reboot_timeout = DEFAULT_DPU_REBOOT_TIMEOUT
+        if os.path.isfile(PLATFORM_JSON_FILE):
+            try:
+                with open(PLATFORM_JSON_FILE, 'r') as f:
+                    platform_cfg = json.load(f)
+                # Extract the "dpu_reboot_timeout" if it exists
+                self.dpu_reboot_timeout = int(platform_cfg.get("dpu_reboot_timeout", DEFAULT_DPU_REBOOT_TIMEOUT))
+            except (json.JSONDecodeError, ValueError) as e:
+                self.log_error("Error parsing {}: {}".format(PLATFORM_JSON_FILE, e))
+            except Exception as e:
+                self.log_error("Unexpected error: {}".format(e))
+
     def deinit(self):
         """
         Destructor of ModuleUpdater
@@ -682,7 +680,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def module_db_update(self):
         notOnlineModules = []
-
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
             if module_info_dict is not None:
@@ -698,7 +695,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                                                    module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
-                prev_status = self.get_module_current_status(key)
+                current_status = self.get_module_current_status(key)
+                if self.prev_status[module_index] == ModuleBase.MODULE_STATUS_OFFLINE:
+                    if current_status != ModuleBase.MODULE_STATUS_OFFLINE:
+                        # DPU module has been turned on, update the reboot-cause
+                        # If the reboot-cause file not already present save it
+                        # If the STATE_DB REBOOT_CAUSE table already doesn't have
+                        # an entry for the recent reboot update the DB
+                        reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+
+                self.prev_status[module_index] = current_status
                 self.module_table.set(key, fvs)
 
     def _get_module_info(self, module_index):
@@ -759,7 +765,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     self.module_reboot_table._del(module_key)
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
-                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, DEFAULT_DPU_REBOOT_TIMEOUT))
+                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.dpu_reboot_timeout))
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -772,10 +778,12 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         for module_index in range(0, self.num_modules):
             name = try_get(self.chassis.get_module(module_index).get_name)
-
+            pattern = "*" + name + "*"
             if self.get_module_admin_status(name) != 'up':
-                key = "*|" + name
-                chassis_state_db.delete(key)
+                keys = chassis_state_db.keys(pattern)
+                if keys:
+                    for key in keys:
+                        chassis_state_db.delete(key)
         return
 
 
@@ -897,7 +905,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
-    def platform_set_admin_cb(self, module_index, admin_state):
+    def submit_dpu_callback(self, module_index, admin_state):
         try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
         pass
 
@@ -930,7 +938,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                         op = MODULE_ADMIN_UP
 
                     if op is not None:
-                        thread = threading.Thread(target=self.platform_set_admin_cb, args=(module_index, op))
+                        # Create and start a thread for the DPU logic
+                        thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op)) 
                         thread.daemon = True  # Set as a daemon thread
                         thread.start()
                         threads.append(thread)
