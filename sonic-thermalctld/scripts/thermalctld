@@ -725,7 +725,7 @@ class ThermalMonitor(ProcessTaskBase):
     # Update elapse threshold. If update used time is larger than the value, generate a warning log.
     UPDATE_ELAPSED_THRESHOLD = 30
 
-    def __init__(self, chassis):
+    def __init__(self, chassis, stop_event):
         """
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
@@ -740,14 +740,14 @@ class ThermalMonitor(ProcessTaskBase):
         # Set minimum logging level to INFO
         self.logger.set_min_log_priority_info()
 
-        self.fan_updater = FanUpdater(chassis, self.task_stopping_event)
-        self.temperature_updater = TemperatureUpdater(chassis, self.task_stopping_event)
+        self.fan_updater = FanUpdater(chassis, stop_event)
+        self.temperature_updater = TemperatureUpdater(chassis, stop_event)
 
     def main(self):
-        begin = time.time()
+        begin = time.monotonic()
         self.fan_updater.update()
         self.temperature_updater.update()
-        elapsed = time.time() - begin
+        elapsed = time.monotonic() - begin
         if elapsed < self.UPDATE_INTERVAL:
             self.wait_time = self.UPDATE_INTERVAL - elapsed
         else:
@@ -797,7 +797,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.chassis = sonic_platform.platform.Platform().get_chassis()
 
-        self.thermal_monitor = ThermalMonitor(self.chassis)
+        self.thermal_monitor = ThermalMonitor(self.chassis, self.stop_event)
         self.thermal_monitor.task_run()
 
         self.thermal_manager = None
@@ -861,7 +861,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             # We received a fatal signal
             return False
 
-        begin = time.time()
+        begin = time.monotonic()
         try:
             if self.thermal_manager:
                 self.thermal_manager.run_policy(self.chassis)
@@ -869,7 +869,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while running thermal policy - {}'.format(repr(e)))
 
         interval = self.thermal_manager.get_interval() if self.thermal_manager else self.INTERVAL
-        elapsed = time.time() - begin
+        elapsed = time.monotonic() - begin
         if elapsed < interval:
             self.wait_time = interval - elapsed
         else:
