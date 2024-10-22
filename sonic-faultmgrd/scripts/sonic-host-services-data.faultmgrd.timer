@@ -1,0 +1,11 @@
+[Unit]
+Description=Delays faultmgrd daemon until SONiC, other services have started
+PartOf=faultmgrd.service
+
+[Timer]
+OnUnitActiveSec=0 sec
+OnBootSec=1min 30 sec
+Unit=hostcfgd.service
+
+[Install]
+WantedBy=timers.target sonic.target
