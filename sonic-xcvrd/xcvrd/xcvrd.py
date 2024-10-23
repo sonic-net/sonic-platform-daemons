@@ -1281,6 +1281,27 @@ class CmisManagerTask(threading.Thread):
         intf_tbl.set(lport, fvs)
         self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
 
+    def reset_port_active_apsel_to_db(self, lport, host_lanes_mask):
+        tuple_list = []
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
+                continue
+            tuple_list.append(('active_apsel_hostlane{}'.format(lane + 1), 'N/A'))
+        tuple_list.append(('host_lane_count', 'N/A'))
+        tuple_list.append(('media_lane_count', 'N/A'))
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
+        intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+        if not intf_tbl:
+            helper_logger.log_warning("Active ApSel db update: TRANSCEIVER_INFO table not found for {}".format(lport))
+            return
+        found, _ = intf_tbl.get(lport)
+        if not found:
+            helper_logger.log_warning("Active ApSel db update: {} not found in INTF_TABLE".format(lport))
+            return
+        fvs = swsscommon.FieldValuePairs(tuple_list)
+        intf_tbl.set(lport, fvs)
+        self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
+
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
@@ -1468,6 +1489,7 @@ class CmisManagerTask(threading.Thread):
                                self.log_notice("{} Forcing Tx laser OFF".format(lport))
                                # Force DataPath re-init
                                api.tx_disable_channel(media_lanes_mask, True)
+                               self.reset_port_active_apsel_to_db(lport, host_lanes_mask)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
                     # Configure the target output power if ZR module

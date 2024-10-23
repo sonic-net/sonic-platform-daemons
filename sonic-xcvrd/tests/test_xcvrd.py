@@ -1871,6 +1871,27 @@ class TestXcvrdScript(object):
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
     @patch('swsscommon.swsscommon.FieldValuePairs')
+    def test_CmisManagerTask_reset_port_active_apsel_to_db_error_cases(self, mock_field_value_pairs):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        lport = "Ethernet0"
+        host_lanes_mask = 0xff
+
+        # Case: table does not exist
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=None)
+        task.reset_port_active_apsel_to_db(lport, host_lanes_mask)
+        assert mock_field_value_pairs.call_count == 0
+
+        # Case: lport is not in the table
+        int_tbl = MagicMock()
+        int_tbl.get = MagicMock(return_value=(False, dict))
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+        task.reset_port_active_apsel_to_db(lport, host_lanes_mask)
+        assert mock_field_value_pairs.call_count == 0
+
+    @patch('swsscommon.swsscommon.FieldValuePairs')
     def test_CmisManagerTask_post_port_active_apsel_to_db_error_cases(self, mock_field_value_pairs):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_active_apsel_hostlane = MagicMock()
@@ -2384,10 +2405,13 @@ class TestXcvrdScript(object):
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
+        task.reset_port_active_apsel_to_db = MagicMock()
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
 
+        assert mock_xcvr_api.tx_disable_channel.call_count == 1
+        assert task.reset_port_active_apsel_to_db.call_count == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
 
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_tbl')
@@ -2519,10 +2543,12 @@ class TestXcvrdScript(object):
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
+        task.reset_port_active_apsel_to_db = MagicMock()
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
 
+        assert task.reset_port_active_apsel_to_db.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
 
