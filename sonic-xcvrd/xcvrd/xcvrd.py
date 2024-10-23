@@ -1046,7 +1046,7 @@ class CmisManagerTask(threading.Thread):
                     skip = False
                     break
                 name = "ConfigStatusLane{}".format(lane + 1)
-                if conf_state[name] != 'ConfigSuccess':
+                if conf_state[name] != 'ConfigSuccess' and conf_state[name] != 'ConfigUndefined':
                     skip = False
                     break
             return (not skip)

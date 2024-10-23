@@ -1777,7 +1777,7 @@ class TestXcvrdScript(object):
         (1, 0x0F, {0 : 1, 1 : 1, 2 : 1, 3 : 1}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, False),
         (1, 0x0F, {0 : 1, 1 : 1, 2 : 1, 3 : 0}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, True),
         (1, 0xF0, {4 : 1, 5 : 1, 6 : 1, 7 : 1}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, False),
-        (1, 0xF0, {4 : 1, 5 : 1, 6 : 1, 7 : 1}, DEFAULT_DP_STATE, CONFIG_LANE_8_UNDEFINED, True),
+        (1, 0xF0, {4 : 1, 5 : 1, 6 : 1, 7 : 1}, DEFAULT_DP_STATE, CONFIG_LANE_8_UNDEFINED, False),
         (1, 0xF0, {4 : 1, 5 : 7, 6 : 1, 7 : 1}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, True),
         (4, 0xF0, {4 : 1, 5 : 7, 6 : 1, 7 : 1}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, True),
         (3, 0xC0, {7 : 3, 8 : 3}, DEFAULT_DP_STATE, DEFAULT_CONFIG_STATUS, False),
