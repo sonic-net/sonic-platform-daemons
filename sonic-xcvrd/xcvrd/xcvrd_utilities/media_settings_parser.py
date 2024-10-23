@@ -8,7 +8,7 @@ import ast
 import re
 from natsort import natsorted
 
-from sonic_py_common import device_info, logger
+from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
 from xcvrd import xcvrd
 from .xcvr_table_helper import *
@@ -23,7 +23,7 @@ DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
 SYSLOG_IDENTIFIER = "xcvrd"
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
 PHYSICAL_PORT_NOT_EXIST = -1
 
