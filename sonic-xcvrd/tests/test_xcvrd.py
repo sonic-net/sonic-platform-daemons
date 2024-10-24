@@ -468,17 +468,25 @@ class TestXcvrdScript(object):
         dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
                                                                               'inactive_firmware': '1.2.4'}))
-    def test_post_port_sfp_firmware_info_to_db(self):
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory')
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    def test_post_port_sfp_firmware_info_to_db(self, mock_get_presence, mock_is_flat_memory):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager, helper_logger)
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
+        stop_event.set()
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size() == 0
+        stop_event.clear()
+        mock_get_presence.return_value = False
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        assert firmware_info_tbl.get_size() == 0
+        mock_get_presence.return_value = True
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
 
