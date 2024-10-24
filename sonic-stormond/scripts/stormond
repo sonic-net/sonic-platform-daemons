@@ -14,6 +14,7 @@ import shutil
 import json
 import time
 
+from datetime import datetime
 from sonic_py_common import daemon_base, device_info, syslogger
 from swsscommon import swsscommon
 from sonic_platform_base.sonic_storage.storage_devices import StorageDevices, BLKDEV_BASE_PATH
@@ -49,6 +50,8 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.log = syslogger.SysLogger(SYSLOG_IDENTIFIER)
         super(DaemonStorage, self).__init__(log_identifier)
 
+        self.log_info("Starting Storage Monitoring Daemon")
+
         self.timeout = STORMOND_PERIODIC_STATEDB_SYNC_SECS
         self.fsstats_sync_interval = STORMOND_SYNC_TO_DISK_SECS
         self.stop_event = threading.Event()
@@ -68,6 +71,9 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.fsio_rw_json = {disk:{} for disk in self.storage.devices}
         self.fsio_rw_statedb = {disk:{} for disk in self.storage.devices}
 
+        # This is the time format string
+        self.time_format_string = "%Y-%m-%d %H:%M:%S"
+
         # This time is set at init and then subsequently after each FSIO JSON file sync
         self.fsio_sync_time = time.time()
         
@@ -82,7 +88,8 @@ class DaemonStorage(daemon_base.DaemonBase):
                                "total_fsio_writes", \
                                "disk_io_reads", \
                                "disk_io_writes", \
-                               "reserved_blocks"]
+                               "reserved_blocks", \
+                               "last_sync_time"]
 
         # These are the fields that we are interested in saving to disk to protect against
         # reboots or crashes
@@ -97,6 +104,11 @@ class DaemonStorage(daemon_base.DaemonBase):
         self._load_fsio_rw_json()
         self._determine_sot()
 
+    # This function is used to convert the epoch time to a user friendly formatted string
+    def get_formatted_time(self, time_since_epoch):
+        return datetime.fromtimestamp(time_since_epoch).strftime(self.time_format_string)
+
+    # This function is used to configure the polling and sync intervals for the daemon
     def get_configdb_intervals(self):
         self.config_db = daemon_base.db_connect("CONFIG_DB")
         config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
@@ -146,7 +158,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                     json_file_dict[device][field] = self.state_db.hget('STORAGE_INFO|{}'.format(device), field)
             
             self.fsio_sync_time = time.time()
-            json_file_dict["successful_sync_time"] = str(self.fsio_sync_time)
+            json_file_dict["successful_sync_time"] = str(self.get_formatted_time(self.fsio_sync_time))
 
             with open(FSIO_RW_JSON_FILE, 'w+') as f:
                 json.dump(json_file_dict, f)
@@ -160,7 +172,7 @@ class DaemonStorage(daemon_base.DaemonBase):
 
     # Update the successful sync time to STATE_DB 
     def write_sync_time_statedb(self):
-        self.state_db.hset("{}|{}".format(STORAGE_DEVICE_TABLE,FSSTATS_SYNC_TIME_KEY), "successful_sync_time", str(self.fsio_sync_time))
+        self.state_db.hset("{}|{}".format(STORAGE_DEVICE_TABLE,FSSTATS_SYNC_TIME_KEY), "successful_sync_time", str(self.get_formatted_time(self.fsio_sync_time)))
 
     # Run a sanity check on the state_db. If successful, get total, latest 
     # FSIO reads and writes for each storage device from STATE_DB
@@ -309,17 +321,20 @@ class DaemonStorage(daemon_base.DaemonBase):
                 dynamic_kvp_dict["disk_io_reads"] = storage_object.get_disk_io_reads()
                 dynamic_kvp_dict["disk_io_writes"] = storage_object.get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = storage_object.get_reserved_blocks()
+                dynamic_kvp_dict["last_sync_time"] = self.get_formatted_time(time.time())
 
                 dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
 
+                # Update storage device statistics to STATE_DB
+                self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
+
+                # Log to syslog
                 self.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
                 storage_device, dynamic_kvp_dict["firmware"], dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["total_fsio_reads"],dynamic_kvp_dict["total_fsio_writes"]))
                 self.log_info("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(dynamic_kvp_dict["latest_fsio_reads"], dynamic_kvp_dict["latest_fsio_writes"]))
                 self.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
                 dynamic_kvp_dict["reserved_blocks"]))
-
-                # Update storage device statistics to STATE_DB
-                self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
+                self.log_info("Last successful sync time to STATE_DB: {}".format(dynamic_kvp_dict["last_sync_time"]))
 
             except Exception as ex:
                 self.log_info("get_dynamic_fields_update_state_db() failed with: {}".format(str(ex)))
@@ -384,8 +399,6 @@ class DaemonStorage(daemon_base.DaemonBase):
 
 def main():
     stormon = DaemonStorage(SYSLOG_IDENTIFIER)
-
-    stormon.log_info("Starting Storage Monitoring Daemon")
 
     # Read and update Static Fields to the StateDB once
     stormon.get_static_fields_update_state_db()
