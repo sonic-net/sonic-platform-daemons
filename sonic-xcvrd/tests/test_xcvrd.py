@@ -414,9 +414,10 @@ class TestXcvrdScript(object):
         assert xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
         assert not xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
 
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory')
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type')
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_dom_info', MagicMock(return_value={'temperature': '22.75',
                                                                                     'voltage': '0.5',
                                                                                     'rx1power': '0.7',
@@ -443,13 +444,25 @@ class TestXcvrdScript(object):
                                                                                     'tx6power': '0.7',
                                                                                     'tx7power': '0.7',
                                                                                     'tx8power': '0.7', }))
-    def test_post_port_dom_info_to_db(self, mock_get_sfp_type):
+    def test_post_port_dom_info_to_db(self, mock_get_sfp_type, mock_get_presence, mock_is_flat_memory):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_cmis_manager, helper_logger)
+        stop_event.set()
+        dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
+        assert dom_tbl.get_size() == 0
+        stop_event.clear()
+        mock_get_presence.return_value = False
+        dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
+        assert dom_tbl.get_size() == 0
+        mock_get_presence.return_value = True
+        mock_is_flat_memory.return_value = True
+        dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
+        assert dom_tbl.get_size() == 0
+        mock_is_flat_memory.return_value = False
         dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
         mock_get_sfp_type.return_value = 'QSFP_DD'
         dom_info_update.post_port_dom_info_to_db(logical_port_name, port_mapping, dom_tbl, stop_event)
@@ -474,9 +487,9 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         dom_threshold_tbl = Table("STATE_DB", TRANSCEIVER_DOM_THRESHOLD_TABLE)
-        post_port_dom_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
+        post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
         mock_get_sfp_type.return_value = 'QSFP_DD'
-        post_port_dom_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
+        post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, dom_threshold_tbl, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -2588,6 +2601,34 @@ class TestXcvrdScript(object):
         if is_asic_index_none:
             lport='INVALID_PORT'
         assert task.is_port_in_cmis_initialization_process(lport) == expected_result
+
+    def test_beautify_dom_info_dict(self):
+        dom_info_dict = {
+            'temperature': '0C',
+            'eSNR' : 1.1,
+        }
+        expected_dom_info_dict = {
+            'temperature': '0',
+            'eSNR' : '1.1',
+        }
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock(), helper_logger)
+        task.beautify_dom_info_dict(dom_info_dict, None)
+        assert dom_info_dict == expected_dom_info_dict
+
+    def test_beautify_info_dict(self):
+        dom_info_dict = {
+            'eSNR' : 1.1,
+        }
+        expected_dom_info_dict = {
+            'eSNR' : '1.1',
+        }
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock(), helper_logger)
+        task.beautify_info_dict(dom_info_dict)
+        assert dom_info_dict == expected_dom_info_dict
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.delete_port_from_status_table_hw')
