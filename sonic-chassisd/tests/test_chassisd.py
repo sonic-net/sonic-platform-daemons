@@ -1,6 +1,7 @@
 import os
 import sys
 import mock
+import tempfile
 from imp import load_source
 
 from mock import Mock, MagicMock, patch
@@ -547,90 +548,106 @@ def mock_open(*args, **kwargs):
     # unpatched version for every other path
     return builtin_open(*args, **kwargs)
 
-def test_midplane_presence_dpu_modules():
-    chassis = MockSmartSwitchChassis()
+@patch('os.makedirs')
+def test_midplane_presence_dpu_modules(mock_makedirs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Assume your method uses a path variable that you can set for testing
+        path = os.path.join(temp_dir, 'subdir')
 
-    #DPU0
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    sup_slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-    module.set_midplane_ip()
-    chassis.module_list.append(module)
+        # Set up your mock or variable to use temp_dir
+        mock_makedirs.side_effect = lambda x, **kwargs: None  # Prevent actual call
 
-    #Run on supervisor
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.modules_num_update()
-    module_updater.module_db_update()
-    module_updater.check_midplane_reachability()
+        chassis = MockSmartSwitchChassis()
 
-    midplane_table = module_updater.midplane_table
-    #Check only one entry in database
-    assert 1 == midplane_table.size()
+        #DPU0
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = 0
+        sup_slot = 0
+        serial = "DPU0-0000"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+        module.set_midplane_ip()
+        chassis.module_list.append(module)
 
-    #Check fields in database
-    name = "DPU0"
-    fvs = midplane_table.get(name)
-    assert fvs != None
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        #Run on supervisor
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+        module_updater.modules_num_update()
+        module_updater.module_db_update()
+        module_updater.check_midplane_reachability()
 
-    #DPU Down to Up (midplane connectivity is down initially)
-    module.set_midplane_reachable(True)
-    module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
-    assert fvs != None
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        midplane_table = module_updater.midplane_table
+        #Check only one entry in database
+        assert 1 == midplane_table.size()
 
-    #DPU Up to Down (to mock midplane connectivity state change)
-    module.set_midplane_reachable(False)
-    module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
-    assert fvs != None
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        #Check fields in database
+        name = "DPU0"
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #Deinit
-    module_updater.deinit()
-    fvs = midplane_table.get(name)
-    assert fvs == None
+        #DPU Down to Up (midplane connectivity is down initially)
+        module.set_midplane_reachable(True)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-def test_midplane_presence_uninitialized_dpu_modules():
-    chassis = MockSmartSwitchChassis()
+        #DPU Up to Down (to mock midplane connectivity state change)
+        module.set_midplane_reachable(False)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
-    #DPU0
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    sup_slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-    module.set_midplane_ip()
-    chassis.module_list.append(module)
+        #Deinit
+        module_updater.deinit()
+        fvs = midplane_table.get(name)
+        assert fvs == None
 
-    #Run on supervisor
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.midplane_initialized = False
-    module_updater.modules_num_update()
-    module_updater.module_db_update()
-    module_updater.check_midplane_reachability()
+@patch('os.makedirs')
+def test_midplane_presence_uninitialized_dpu_modules(mock_makedirs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Assume your method uses a path variable that you can set for testing
+        path = os.path.join(temp_dir, 'subdir')
 
-    midplane_table = module_updater.midplane_table
-    #Check only one entry in database
-    assert 1 != midplane_table.size()
+        # Set up your mock or variable to use temp_dir
+        mock_makedirs.side_effect = lambda x, **kwargs: None  # Prevent actual call
+
+        chassis = MockSmartSwitchChassis()
+
+        #DPU0
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = 0
+        sup_slot = 0
+        serial = "DPU0-0000"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+        module.set_midplane_ip()
+        chassis.module_list.append(module)
+
+        #Run on supervisor
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+        module_updater.midplane_initialized = False
+        module_updater.modules_num_update()
+        module_updater.module_db_update()
+        module_updater.check_midplane_reachability()
+
+        midplane_table = module_updater.midplane_table
+        #Check only one entry in database
+        assert 1 != midplane_table.size()
 
 @patch("builtins.open", mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
