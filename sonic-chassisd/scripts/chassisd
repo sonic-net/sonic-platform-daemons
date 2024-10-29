@@ -16,6 +16,7 @@ try:
     import threading
     import time
     import json
+    from datetime import datetime
 
     from sonic_py_common import daemon_base, logger, device_info
     from sonic_py_common.task_base import ProcessTaskBase
@@ -96,6 +97,8 @@ INVALID_IP = '0.0.0.0'
 CHASSIS_MODULE_ADMIN_STATUS = 'admin_status'
 MODULE_ADMIN_DOWN = 0
 MODULE_ADMIN_UP = 1
+REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
+MAX_HISTORY_FILES = 10
 
 # This daemon should return non-zero exit code so that supervisord will
 # restart it automatically.
@@ -615,8 +618,6 @@ class ModuleUpdater(logger.Logger):
 
 class SmartSwitchModuleUpdater(ModuleUpdater):
 
-    prev_status = []
-
     def __init__(self, log_identifier, chassis):
         """
         Constructor for ModuleUpdater
@@ -648,9 +649,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if not self.midplane_initialized:
             self.log_error("Chassisd midplane intialization failed")
 
-        for module_index in range(0, self.num_modules):
-            self.prev_status.append(ModuleBase.MODULE_STATUS_OFFLINE)
-
         self.dpu_reboot_timeout = DEFAULT_DPU_REBOOT_TIMEOUT
         if os.path.isfile(PLATFORM_JSON_FILE):
             try:
@@ -678,6 +676,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if self.chassis_table is not None:
             self.chassis_table._del(CHASSIS_INFO_KEY_TEMPLATE.format(1))
 
+    def get_module_admin_status(self, chassis_module_name):
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        vtable = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
+        fvs = vtable.get(chassis_module_name)
+        if isinstance(fvs, list) and fvs[0] is True:
+            fvs = dict(fvs[-1])
+            return fvs[CHASSIS_MODULE_ADMIN_STATUS]
+        else:
+            return 'down'
+
     def module_db_update(self):
         notOnlineModules = []
         for module_index in range(0, self.num_modules):
@@ -695,16 +703,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                                                    module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
-                current_status = self.get_module_current_status(key)
-                if self.prev_status[module_index] == ModuleBase.MODULE_STATUS_OFFLINE:
-                    if current_status != ModuleBase.MODULE_STATUS_OFFLINE:
-                        # DPU module has been turned on, update the reboot-cause
-                        # If the reboot-cause file not already present save it
-                        # If the STATE_DB REBOOT_CAUSE table already doesn't have
-                        # an entry for the recent reboot update the DB
-                        reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-
-                self.prev_status[module_index] = current_status
                 self.module_table.set(key, fvs)
 
     def _get_module_info(self, module_index):
@@ -732,6 +730,158 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def _is_supervisor(self):
         return False
 
+    def update_dpu_state(self, key):
+        """
+        Update DPU state in chassisStateDB using the given key.
+        """
+        try:
+            # Connect to the CHASSIS_STATE_DB using daemon_base
+            self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
+            # Fetch the current data for the given key and convert it to a dict
+            current_data = self._convert_to_dict(self.chassis_state_db.hgetall(key))
+
+            if current_data:
+                self.chassis_state_db.delete(key)
+
+            # Prepare the updated data
+            updates = {
+                "dpu_midplane_link_state": "DOWN",
+                "dpu_midplane_link_reason": "unknown",
+                "dpu_midplane_link_time": datetime.now().strftime("%Y%m%d %H:%M:%S"),
+            }
+            current_data.update(updates)
+
+            for field, value in current_data.items():
+                self.chassis_state_db.hset(key, field, value)
+
+        except Exception as e:
+            self.log_error(f"Unexpected error: {e}")
+
+    def _convert_to_dict(self, data):
+        """
+        Converts SWIG proxy object or native dict to a Python dictionary.
+        """
+        if isinstance(data, dict):
+            return data  # Already a dict, return as-is
+        else:
+            return dict(data)  # Convert SWIG proxy object to dict
+
+    def _get_current_time_str(self):
+        """Returns the current time as a string in 'YYYY_MM_DD_HH_MM_SS' format."""
+        return datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+    def _get_history_path(self, module, file_name):
+        """Generates the full path for history files."""
+        return os.path.join(REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
+
+    def _is_first_boot(self, module):
+        """Checks if the reboot-cause file indicates a first boot."""
+        file_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
+
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read().strip()
+                return content == "First boot"
+        except FileNotFoundError:
+                return False
+
+    def persist_dpu_reboot_time(self, module):
+        """Persist the current reboot time to a file."""
+        time_str = self._get_current_time_str()
+        path = self._get_history_path(module, "prev_reboot_time.txt")
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(time_str)
+
+    def retrieve_dpu_reboot_time(self, module):
+        """Retrieve the persisted reboot time from a file."""
+        path = self._get_history_path(module, "prev_reboot_time.txt")
+
+        try:
+            with open(path, 'r') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+
+    def persist_dpu_reboot_cause(self, reboot_cause, module):
+        """Persist the reboot cause information and handle file rotation."""
+        prev_reboot_time = self.retrieve_dpu_reboot_time(module)
+        if prev_reboot_time is None:
+            prev_reboot_time = self._get_current_time_str()
+
+        file_name = f"{prev_reboot_time}_reboot_cause.txt"
+        prev_reboot_path = self._get_history_path(module, "prev_reboot_time.txt")
+
+        if os.path.exists(prev_reboot_path):
+            os.remove(prev_reboot_path)
+
+        file_path = self._get_history_path(module, file_name)
+        dt_obj = datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S")
+        formatted_time = dt_obj.strftime("%a %b %d %I:%M:%S %p UTC %Y")
+
+        reboot_cause_dict = {
+            "cause": reboot_cause,
+            "comment": "N/A",
+            "device": module,
+            "time": dt_obj.strftime("%Y-%m-%d %H:%M:%S"),
+            "name": prev_reboot_time,
+        }
+
+        with open(file_path, 'w') as f:
+            json.dump(reboot_cause_dict, f)
+
+        # Write the reboot_cause content to the reboot-cause.txt file, overwriting it
+        reboot_cause_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
+        os.makedirs(os.path.dirname(reboot_cause_path), exist_ok=True)
+        with open(reboot_cause_path, 'w') as cause_file:
+            cause_file.write(reboot_cause + '\n')
+
+        # Update symlink to the latest reboot cause file
+        symlink_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
+        if os.path.exists(symlink_path):
+            os.remove(symlink_path)
+        os.symlink(file_path, symlink_path)
+
+        # Perform file rotation if necessary
+        self._rotate_files(module)
+
+    def _rotate_files(self, module):
+        """Rotate history files if they exceed the maximum limit."""
+        history_dir = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "history")
+        files = sorted(os.listdir(history_dir))
+
+        if len(files) > MAX_HISTORY_FILES:
+            for old_file in files[:-MAX_HISTORY_FILES]:
+                os.remove(os.path.join(history_dir, old_file))
+
+    def update_dpu_reboot_cause_to_db(self, module):
+        """Update the reboot cause in CHASSIS_STATE_DB."""
+        reboot_cause_dict = self.retrieve_latest_reboot_cause(module)
+        if not reboot_cause_dict:
+            raise ValueError(f"No reboot cause data found for module: {module}")
+
+        reboot_time = reboot_cause_dict.get("name", self._get_current_time_str())
+        key = f"REBOOT_CAUSE|{module.upper()}|{reboot_time}"
+
+        if not self.chassis_state_db:
+            self.chassis_state_db = ConfigDBConnector()
+            self.chassis_state_db.connect("CHASSIS_STATE_DB")
+
+        # Use hset to store the updated data in one call
+        for field, value in reboot_cause_dict.items():
+            self.chassis_state_db.hset(key, field, value)
+
+    def retrieve_latest_reboot_cause(self, module):
+        """Retrieve the most recent reboot cause file content."""
+        symlink_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
+        try:
+            with open(symlink_path, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
     def check_midplane_reachability(self):
         if not self.midplane_initialized:
             return
@@ -743,6 +893,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             module_key = try_get(module.get_name, default='MODULE {}'.format(index))
             midplane_ip = try_get(module.get_midplane_ip, default=INVALID_IP)
             midplane_access = try_get(module.is_midplane_reachable, default=False)
+            dpu_admin_state = self.get_module_admin_status(module_key)
 
             # Generate syslog for the loss of midplane connectivity when midplane connectivity
             # loss is detected for the first time
@@ -753,19 +904,34 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 current_midplane_state = fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
             if midplane_access is False and current_midplane_state == 'True':
-                if self.is_module_reboot_expected(module_key):
-                    self.module_reboot_set_time(module_key)
-                    self.log_warning("Expected: Module {} lost midplane connectivity".format(module_key))
-                else:
-                    self.log_warning("Unexpected: Module {} lost midplane connectivity".format(module_key))
+                self.log_warning("Unexpected: Module {} lost midplane connectivity".format(module_key))
+
+                # Update midplane state in the chassisStateDB DPU_STATE table
+                key = "DPU_STATE|" + module_key
+                self.update_dpu_state(key)
+
+                # Persist dpu down time
+                self.persist_dpu_reboot_time(module_key)
+
             elif midplane_access is True and current_midplane_state == 'False':
                 self.log_notice("Module {} midplane connectivity is up".format(module_key))
-                # clean up the reboot_info_table
-                if self.module_reboot_table.get(module_key) is not None:
-                    self.module_reboot_table._del(module_key)
+                reboot_cause = try_get(self.chassis.get_module(index).get_reboot_cause)
+
+                if not self.retrieve_dpu_reboot_time(module_key) is None or self._is_first_boot(module_key):
+                    # persist reboot cause
+                    self.persist_dpu_reboot_cause(reboot_cause, module_key)
+
+                    # update reboot cause to db
+                    time = self.retrieve_dpu_reboot_time(module_key)
+                    if time is None:
+                       time = self._get_current_time_str()
+
+                    key = "REBOOT_CAUSE|" + module_key + "|" + time
+                    self.update_dpu_reboot_cause_to_db(module_key)
+
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
-                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.dpu_reboot_timeout))
+                    self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.linecard_reboot_timeout))
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -930,12 +1096,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     # Get admin state of DPU
                     key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
                     admin_state = self.module_updater.get_module_admin_status(key)
-                    if admin_state == 'down' and midplane_state == 'True':
-                        # shutdown DPU
-                        op = MODULE_ADMIN_DOWN
-                    if admin_state != 'down' and midplane_state == 'False':
+                    if admin_state == 'up' and midplane_state == 'False':
                         # startup DPU
                         op = MODULE_ADMIN_UP
+                    elif admin_state != 'up' and midplane_state == 'True':
+                        # shutdown DPU
+                        op = MODULE_ADMIN_DOWN
 
                     if op is not None:
                         # Create and start a thread for the DPU logic
