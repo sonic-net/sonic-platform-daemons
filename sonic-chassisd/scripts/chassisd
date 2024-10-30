@@ -872,7 +872,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         """Update the reboot cause in CHASSIS_STATE_DB."""
         reboot_cause_dict = self.retrieve_latest_reboot_cause(module)
         if not reboot_cause_dict:
-            raise ValueError(f"No reboot cause data found for module: {module}")
+            self.log_warning("No reboot cause data found for module:{}".format(module))
+            return
 
         reboot_time = reboot_cause_dict.get("name", self._get_current_time_str())
         key = f"REBOOT_CAUSE|{module.upper()}|{reboot_time}"
