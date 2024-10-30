@@ -458,7 +458,7 @@ def test_smartswitch_configupdater_check_admin_state():
         module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
 
         # Call the method that should trigger _is_first_boot
-        result = module_updater._is_first_boot(name)
+        result = module_updater.check_midplane_reachability()
 
         # Assert that the mock was called
         mock_is_first_boot.assert_called_once_with(name)
@@ -510,6 +510,8 @@ def test_dpu_is_first_boot():
     with patch("builtins.open", mock_open_wrapper), \
          patch("os.path.isfile", MagicMock(return_value=True)), \
          patch.object(module_updater, '_is_first_boot', return_value=True):
+
+         module_updater.check_midplane_reachability()
 
         # Run the test to check the first boot condition
         assert module_updater._is_first_boot(name) is True
