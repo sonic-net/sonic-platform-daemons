@@ -6,6 +6,7 @@ from imp import load_source
 
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
+from mock import mock_open as dpu_mock_open
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
@@ -541,16 +542,9 @@ def test_midplane_presence_modules():
     fvs = midplane_table.get(name)
     assert fvs == None
 
-builtin_open = open  # save the unpatched version
-def mock_open(*args, **kwargs):
-    if args[0] == PLATFORM_ENV_CONF_FILE:
-        return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
-    # unpatched version for every other path
-    return builtin_open(*args, **kwargs)
-
 @patch('os.makedirs')
-@patch('builtins.open', new_callable=mock_open)
-def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
+@patch('builtins.open', new_callable=dpu_mock_open)
+def test_midplane_presence_dpu_modules(dpu_mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
         path = os.path.join(temp_dir, 'subdir')
@@ -617,8 +611,8 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         assert fvs == None
 
 @patch('os.makedirs')
-@patch('builtins.open', new_callable=mock_open)
-def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
+@patch('builtins.open', new_callable=dpu_mock_open)
+def test_midplane_presence_uninitialized_dpu_modules(dpu_mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
         path = os.path.join(temp_dir, 'subdir')
@@ -650,6 +644,13 @@ def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
         midplane_table = module_updater.midplane_table
         #Check only one entry in database
         assert 1 != midplane_table.size()
+
+builtin_open = open  # save the unpatched version
+def mock_open(*args, **kwargs):
+    if args[0] == PLATFORM_ENV_CONF_FILE:
+        return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
+    # unpatched version for every other path
+    return builtin_open(*args, **kwargs)
 
 @patch("builtins.open", mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
