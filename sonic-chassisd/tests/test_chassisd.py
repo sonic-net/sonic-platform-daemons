@@ -49,6 +49,8 @@ CHASSIS_ASIC_ID_IN_MODULE_FIELD = 'asic_id_in_module'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
+PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
+DEFAULT_DPU_REBOOT_TIMEOUT = 30
 
 def setup_function():
     ModuleUpdater.log_notice = MagicMock()
@@ -450,17 +452,48 @@ def test_dpu_is_first_boot_true():
     chassis.module_list.append(module)
 
     # Create the module updater instance
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
 
     # Define the path to the reboot-cause file
     file_path = os.path.join("/host/reboot-cause/module", name.lower(), "reboot-cause.txt")
 
-    # Mock the file read operation to simulate 'First boot'
-    mocked_open = mock_open(read_data="First boot")
+    # Save the original open function
+    builtin_open = open
 
-    # Use patch to mock 'open' and validate the function behavior
-    with patch("builtins.open", mocked_open):
+    # Custom mock_open with safer handling
+    def mock_open_wrapper(*args, **kwargs):
+        # Check if args is non-empty to avoid IndexError
+        if args and args[0] == PLATFORM_JSON_FILE:
+            return mock_open(read_data='{"dpu_reboot_timeout": 240}')(*args, **kwargs)
+        # Use the original open for other paths
+        return builtin_open(*args, **kwargs)
+
+    # Apply the necessary patches
+    with patch("builtins.open", mock_open_wrapper), \
+         patch("os.path.isfile", MagicMock(return_value=True)):
+
+        # Run the test to check the first boot condition
         assert module_updater._is_first_boot(name) is True
+
+
+def test_platform_json_file_exists_and_valid():
+    """Test case where the platform JSON file exists with valid data."""
+    chassis = MockSmartSwitchChassis()
+
+    # Define the custom mock_open function to handle specific file paths
+    def custom_mock_open(*args, **kwargs):
+        if args[0] == PLATFORM_JSON_FILE:
+            return mock_open(read_data='{"dpu_reboot_timeout": 60}')(*args, **kwargs)
+        return open(*args, **kwargs)  # Call the real open for other files
+
+    with patch("os.path.isfile", return_value=True), \
+         patch("builtins.open", custom_mock_open):
+
+        # Initialize the updater; it should read the mocked JSON data
+        updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
+
+        # Check that the extracted dpu_reboot_timeout value is as expected
+        assert updater.dpu_reboot_timeout == 60
 
 
 def test_configupdater_check_num_modules():
