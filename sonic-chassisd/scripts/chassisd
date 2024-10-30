@@ -855,7 +855,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def _rotate_files(self, module):
         """Rotate history files if they exceed the maximum limit."""
         history_dir = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "history")
+        os.makedirs(history_dir, exist_ok=True)
         files = sorted(os.listdir(history_dir))
+
+        if not files:
+            return
 
         if len(files) > MAX_HISTORY_FILES:
             for old_file in files[:-MAX_HISTORY_FILES]:
