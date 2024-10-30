@@ -564,6 +564,7 @@ def test_midplane_presence_dpu_modules(dpu_mock_open, mock_makedirs):
         module_type = ModuleBase.MODULE_TYPE_DPU
         module = MockModule(index, name, desc, module_type, slot, serial)
         module.set_midplane_ip()
+        module.prev_reboot_time = "2024_10_30_02_44_50"
         chassis.module_list.append(module)
 
         #Run on supervisor
@@ -632,6 +633,7 @@ def test_midplane_presence_uninitialized_dpu_modules(dpu_mock_open, mock_makedir
         module_type = ModuleBase.MODULE_TYPE_DPU
         module = MockModule(index, name, desc, module_type, slot, serial)
         module.set_midplane_ip()
+        module.prev_reboot_time = "2024_10_30_02_44_50"
         chassis.module_list.append(module)
 
         #Run on supervisor
