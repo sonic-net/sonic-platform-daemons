@@ -818,14 +818,18 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             os.remove(prev_reboot_path)
 
         file_path = self._get_history_path(module, file_name)
-        dt_obj = datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S")
+        try:
+            dt_obj = datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S")
+        except ValueError:
+            dt_obj = datetime.now()
+
         formatted_time = dt_obj.strftime("%a %b %d %I:%M:%S %p UTC %Y")
 
         reboot_cause_dict = {
             "cause": reboot_cause,
             "comment": "N/A",
             "device": module,
-            "time": dt_obj.strftime("%Y-%m-%d %H:%M:%S"),
+            "time": formatted_time,
             "name": prev_reboot_time,
         }
 
