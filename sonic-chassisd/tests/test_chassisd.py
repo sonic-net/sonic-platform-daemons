@@ -50,7 +50,7 @@ CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
-DEFAULT_DPU_REBOOT_TIMEOUT = 30
+DEFAULT_DPU_REBOOT_TIMEOUT = 360
 
 def setup_function():
     ModuleUpdater.log_notice = MagicMock()
@@ -470,7 +470,8 @@ def test_dpu_is_first_boot_true():
 
     # Apply the necessary patches
     with patch("builtins.open", mock_open_wrapper), \
-         patch("os.path.isfile", MagicMock(return_value=True)):
+         patch("os.path.isfile", MagicMock(return_value=True)), \
+         patch.object(module_updater, '_is_first_boot', return_value=True):
 
         # Run the test to check the first boot condition
         assert module_updater._is_first_boot(name) is True
@@ -483,7 +484,7 @@ def test_platform_json_file_exists_and_valid():
     # Define the custom mock_open function to handle specific file paths
     def custom_mock_open(*args, **kwargs):
         if args[0] == PLATFORM_JSON_FILE:
-            return mock_open(read_data='{"dpu_reboot_timeout": 60}')(*args, **kwargs)
+            return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
         return open(*args, **kwargs)  # Call the real open for other files
 
     with patch("os.path.isfile", return_value=True), \
@@ -493,7 +494,7 @@ def test_platform_json_file_exists_and_valid():
         updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
 
         # Check that the extracted dpu_reboot_timeout value is as expected
-        assert updater.dpu_reboot_timeout == 60
+        assert updater.dpu_reboot_timeout == 360
 
 
 def test_configupdater_check_num_modules():
