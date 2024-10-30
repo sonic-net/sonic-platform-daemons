@@ -846,7 +846,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         symlink_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
         if os.path.exists(symlink_path):
             os.remove(symlink_path)
-        os.symlink(file_path, symlink_path)
+        if os.path.exists(file_path):
+            os.symlink(file_path, symlink_path)
 
         # Perform file rotation if necessary
         self._rotate_files(module)
