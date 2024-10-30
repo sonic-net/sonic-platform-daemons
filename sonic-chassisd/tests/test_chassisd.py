@@ -431,6 +431,38 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
+def test_dpu_is_first_boot_true():
+    # Initialize mock chassis and module
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = -1
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set the initial state to 'PRESENT'
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    # Append the module to the chassis module list
+    chassis.module_list.append(module)
+
+    # Create the module updater instance
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # Define the path to the reboot-cause file
+    file_path = os.path.join("/host/reboot-cause/module", name.lower(), "reboot-cause.txt")
+
+    # Mock the file read operation to simulate 'First boot'
+    mocked_open = mock_open(read_data="First boot")
+
+    # Use patch to mock 'open' and validate the function behavior
+    with patch("builtins.open", mocked_open):
+        assert module_updater._is_first_boot(name) is True
+
+
 def test_configupdater_check_num_modules():
     chassis = MockChassis()
     index = 0
