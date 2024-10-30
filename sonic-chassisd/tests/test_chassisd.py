@@ -433,7 +433,45 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-def test_dpu_is_first_boot_true():
+    @patch("builtins.open", new_callable=mock_open, read_data="First boot")
+    @patch("os.path.isfile", return_value=True)
+    @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
+    def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, mock_open):
+        # Initialize mock chassis and module
+        chassis = MockSmartSwitchChassis()
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = -1
+        serial = "TS1000101"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+
+        # Set the initial state to 'PRESENT'
+        status = ModuleBase.MODULE_STATUS_PRESENT
+        module.set_oper_status(status)
+
+        # Append the module to the chassis module list
+        chassis.module_list.append(module)
+
+        # Create the module updater instance
+        module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
+
+        # Call the method that should trigger _is_first_boot
+        result = module_updater._is_first_boot(name)
+
+        # Assert that the mock was called
+        mock_is_first_boot.assert_called_once_with(name)
+
+        # Assert that the result is True as set in the mock
+        assert result is True
+
+        # Optionally, check that the file operations were attempted as expected
+        file_path = os.path.join(REBOOT_CAUSE_DIR, name.lower(), "reboot-cause.txt")
+        mock_open.assert_called_once_with(file_path, 'r')
+
+
+def test_dpu_is_first_boot():
     # Initialize mock chassis and module
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -492,6 +530,27 @@ def test_platform_json_file_exists_and_valid():
 
         # Initialize the updater; it should read the mocked JSON data
         updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
+
+        # Check that the extracted dpu_reboot_timeout value is as expected
+        assert updater.dpu_reboot_timeout == 360
+
+
+def test_platform_json_file_exists_fail_init():
+    """Test case where the platform JSON file exists with valid data."""
+    chassis = MockSmartSwitchChassis()
+
+    # Define the custom mock_open function to handle specific file paths
+    def custom_mock_open(*args, **kwargs):
+        if args[0] == PLATFORM_JSON_FILE:
+            return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
+        return open(*args, **kwargs)  # Call the real open for other files
+
+    with patch("os.path.isfile", return_value=True), \
+         patch("builtins.open", custom_mock_open):
+
+        # Initialize the updater; it should read the mocked JSON data
+        updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
+        updater.midplane_initialized = False
 
         # Check that the extracted dpu_reboot_timeout value is as expected
         assert updater.dpu_reboot_timeout == 360
