@@ -4,7 +4,7 @@ import mock
 import tempfile
 from imp import load_source
 
-from mock import Mock, MagicMock, patch
+from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
@@ -549,7 +549,8 @@ def mock_open(*args, **kwargs):
     return builtin_open(*args, **kwargs)
 
 @patch('os.makedirs')
-def test_midplane_presence_dpu_modules(mock_makedirs):
+@patch('builtins.open', new_callable=mock_open)
+def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
         path = os.path.join(temp_dir, 'subdir')
@@ -616,7 +617,8 @@ def test_midplane_presence_dpu_modules(mock_makedirs):
         assert fvs == None
 
 @patch('os.makedirs')
-def test_midplane_presence_uninitialized_dpu_modules(mock_makedirs):
+@patch('builtins.open', new_callable=mock_open)
+def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
         path = os.path.join(temp_dir, 'subdir')
