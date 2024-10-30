@@ -884,7 +884,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         # Use hset to store the updated data in one call
         for field, value in reboot_cause_dict.items():
-            self.chassis_state_db.hset(key, field, value)
+            if field and value is not None:
+                self.chassis_state_db.hset(key, field, value)
 
     def retrieve_latest_reboot_cause(self, module):
         """Retrieve the most recent reboot cause file content."""
