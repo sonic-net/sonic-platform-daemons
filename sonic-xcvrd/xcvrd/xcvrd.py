@@ -712,6 +712,10 @@ class CmisManagerTask(threading.Thread):
         if pport is None:
             return
 
+        if not self.port_mapping.is_logical_port(lport):
+            helper_logger.log_info("lport {} does not exist in CONFIG DB. Ignoring port update event".format(lport))
+            return
+
         # Skip if the port/cage type is not a CMIS
         # 'index' can be -1 if STATE_DB|PORT_TABLE
         if lport not in self.port_dict:
