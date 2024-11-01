@@ -1043,7 +1043,8 @@ def test_asic_presence():
 
 def test_signal_handler():
     exit_code = 0
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    chassis = MockChassis()
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop.set = MagicMock()
     daemon_chassisd.log_info = MagicMock()
     daemon_chassisd.log_warning = MagicMock()
@@ -1226,7 +1227,14 @@ def test_daemon_run_supervisor_invalid_slot():
 
 def test_daemon_run_supervisor():
     # Test the chassisd run
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    chassis = MockChassis()
+
+    chassis.get_supervisor_slot = Mock()
+    chassis.get_supervisor_slot.return_value = 0
+    chassis.get_my_slot = Mock()
+    chassis.get_my_slot.return_value = 0
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
@@ -1254,14 +1262,17 @@ def test_task_worker_loop():
 
 def test_daemon_run_linecard():
     # Test the chassisd run
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    chassis = MockChassis()
+
+    chassis.get_supervisor_slot = Mock()
+    chassis.get_supervisor_slot.return_value = 0
+    chassis.get_my_slot = Mock()
+    chassis.get_my_slot.return_value = 1
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
-
-    import sonic_platform.platform
-    with patch.object(sonic_platform.platform.Chassis, 'get_my_slot') as mock:
-       mock.return_value = sonic_platform.platform.Platform().get_chassis().get_supervisor_slot() + 1
-       daemon_chassisd.run()
+    daemon_chassisd.run()
 
 def test_chassis_db_cleanup():
     chassis = MockChassis()
