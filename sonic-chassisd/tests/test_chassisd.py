@@ -508,10 +508,10 @@ def test_dpu_is_first_boot():
 
     # Apply the necessary patches
     with patch("builtins.open", mock_open_wrapper), \
-         patch("os.path.isfile", MagicMock(return_value=True)), \
-         patch.object(module_updater, '_is_first_boot', return_value=True):
+        patch("os.path.isfile", MagicMock(return_value=True)), \
+        patch.object(module_updater, '_is_first_boot', return_value=True):
 
-         module_updater.check_midplane_reachability()
+        module_updater.check_midplane_reachability()
 
         # Run the test to check the first boot condition
         assert module_updater._is_first_boot(name) is True
@@ -528,7 +528,7 @@ def test_platform_json_file_exists_and_valid():
         return open(*args, **kwargs)  # Call the real open for other files
 
     with patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", custom_mock_open):
+        patch("builtins.open", custom_mock_open):
 
         # Initialize the updater; it should read the mocked JSON data
         updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
@@ -548,7 +548,7 @@ def test_platform_json_file_exists_fail_init():
         return open(*args, **kwargs)  # Call the real open for other files
 
     with patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", custom_mock_open):
+        patch("builtins.open", custom_mock_open):
 
         # Initialize the updater; it should read the mocked JSON data
         updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
