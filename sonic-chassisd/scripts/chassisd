@@ -1032,7 +1032,7 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
 
     def task_worker(self):
-        self.config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, platform_chassis)
+        self.config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, get_chassis())
         config_db = daemon_base.db_connect("CONFIG_DB")
 
         # Subscribe to CHASSIS_MODULE table notifications in the Config DB
@@ -1208,7 +1208,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             op = None
             # Get midplane state of DPU
             module_info_dict = self.module_updater._get_module_info(module_index)
-            module_name = platform_chassis.get_module(module_index).get_name()
+            module_name = self.platform_chassis.get_module(module_index).get_name()
             state_db = daemon_base.db_connect("STATE_DB")
             midplane_table = swsscommon.Table(state_db, CHASSIS_MIDPLANE_INFO_TABLE)
             fvs = midplane_table.get(module_name)
