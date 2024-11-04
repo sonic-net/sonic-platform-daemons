@@ -129,6 +129,9 @@ class MockChassis:
         return self._is_smartswitch
 
     def get_my_slot(self):
+        return 1
+
+    def get_supervisor_slot(self):
         return 0
 
 class MockSmartSwitchChassis:
