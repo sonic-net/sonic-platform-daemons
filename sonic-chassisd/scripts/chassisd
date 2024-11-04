@@ -928,6 +928,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     reboot_cause_dict = json.load(file)
 
                 if not reboot_cause_dict:
+                    self.log_warning(f"{module} reboot_cause_dict is empty")
                     continue
 
                 # Generate the key based on module and reboot time
@@ -1257,9 +1258,16 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     if admin_state == 'up' and midplane_state == 'False':
                         # startup DPU
                         op = MODULE_ADMIN_UP
+                        # Update midplane state UP in the chassisStateDB DPU_STATE table
+                        dbkey = "DPU_STATE|" + module_name
+                        self.module_updater.update_dpu_state(dbkey, "UP")
+
                     elif admin_state != 'up' and midplane_state == 'True':
                         # shutdown DPU
                         op = MODULE_ADMIN_DOWN
+                        # Update midplane state UP in the chassisStateDB DPU_STATE table
+                        dbkey = "DPU_STATE|" + module_name
+                        self.module_updater.update_dpu_state(dbkey, "DOWN")
 
                     if op is not None:
                         # Create and start a thread for the DPU logic
@@ -1279,18 +1287,18 @@ class ChassisdDaemon(daemon_base.DaemonBase):
     def run(self):
         self.log_info("Starting up...")
 
-        # Check for valid slot numbers
-        my_slot = try_get(self.platform_chassis.get_my_slot,
-                                              default=INVALID_SLOT)
-        supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot,
-                                                      default=INVALID_SLOT)
-
         # Check if module list is populated
         self.smartswitch = self.platform_chassis.is_smartswitch()
         self.log_info("smartswitch: {}".format(self.smartswitch))
+
         if self.smartswitch:
             self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis)
         else:
+            # Check for valid slot numbers
+            my_slot = try_get(self.platform_chassis.get_my_slot,
+                                                default=INVALID_SLOT)
+            supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot,
+                                                        default=INVALID_SLOT)
             self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
