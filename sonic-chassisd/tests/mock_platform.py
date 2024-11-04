@@ -45,6 +45,9 @@ class MockModule(MockDevice):
     def get_slot(self):
         return self.hw_slot
 
+    def get_my_slot(self):
+        return self.hw_slot
+
     def get_oper_status(self):
         return self.module_status
 
