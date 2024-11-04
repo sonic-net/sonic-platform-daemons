@@ -1121,7 +1121,7 @@ def test_daemon_run_smartswitch():
     module_updater.module_db_update()
     module_updater.modules_num_update()
 
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.smartswitch = True
@@ -1159,7 +1159,7 @@ def test_set_initial_dpu_admin_state():
     module_updater.modules_num_update()
    
     # ChassisdDaemon setup
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.module_updater = module_updater
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
@@ -1218,7 +1218,7 @@ def test_daemon_run_supervisor_invalid_slot():
     # Supervisor ModuleUpdater
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
 
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     module_updater.my_slot = ModuleBase.MODULE_INVALID_SLOT
