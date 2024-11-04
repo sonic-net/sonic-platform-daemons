@@ -58,6 +58,8 @@ class MockModule(MockDevice):
         return self.admin_state
 
     def get_midplane_ip(self):
+        if "DPU" in self.get_name():
+            self.midplane_ip = '169.254.200.0'
         return self.midplane_ip
 
     def set_midplane_ip(self):
