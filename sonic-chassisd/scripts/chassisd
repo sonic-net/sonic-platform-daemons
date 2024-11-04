@@ -985,6 +985,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 if self.is_module_reboot_system_up_expired(module_key):
                     self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.linecard_reboot_timeout))
 
+            if self._is_first_boot(module_key):
+                if midplane_access is False:
+                    # Update midplane state DOWN in the chassisStateDB DPU_STATE table
+                    key = "DPU_STATE|" + module_key
+                    self.update_dpu_state(key, "DOWN")
+                else:
+                    # Update midplane state UP in the chassisStateDB DPU_STATE table
+                    key = "DPU_STATE|" + module_key
+                    self.update_dpu_state(key, "UP")
+
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
                                               (CHASSIS_MIDPLANE_INFO_ACCESS_FIELD, str(midplane_access))])
@@ -1258,16 +1268,10 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     if admin_state == 'up' and midplane_state == 'False':
                         # startup DPU
                         op = MODULE_ADMIN_UP
-                        # Update midplane state UP in the chassisStateDB DPU_STATE table
-                        dbkey = "DPU_STATE|" + module_name
-                        self.module_updater.update_dpu_state(dbkey, "UP")
 
                     elif admin_state != 'up' and midplane_state == 'True':
                         # shutdown DPU
                         op = MODULE_ADMIN_DOWN
-                        # Update midplane state UP in the chassisStateDB DPU_STATE table
-                        dbkey = "DPU_STATE|" + module_name
-                        self.module_updater.update_dpu_state(dbkey, "DOWN")
 
                     if op is not None:
                         # Create and start a thread for the DPU logic

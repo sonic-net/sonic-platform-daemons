@@ -45,9 +45,6 @@ class MockModule(MockDevice):
     def get_slot(self):
         return self.hw_slot
 
-    def get_my_slot(self):
-        return self.hw_slot
-
     def get_oper_status(self):
         return self.module_status
 
@@ -130,6 +127,9 @@ class MockChassis:
 
     def is_smartswitch(self):
         return self._is_smartswitch
+
+    def get_my_slot(self):
+        return 0
 
 class MockSmartSwitchChassis:
     def __init__(self):
