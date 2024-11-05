@@ -459,6 +459,7 @@ def test_smartswitch_configupdater_check_admin_state():
 
         # Call the method that should trigger _is_first_boot
         result = module_updater.check_midplane_reachability()
+        result = module_updater.module_db_update()
 
         # Assert that the mock was called
         mock_is_first_boot.assert_called_once_with(name)
@@ -512,6 +513,7 @@ def test_dpu_is_first_boot():
         patch.object(module_updater, '_is_first_boot', return_value=True):
 
         module_updater.check_midplane_reachability()
+        module_updater.module_db_update()
 
         # Run the test to check the first boot condition
         assert module_updater._is_first_boot(name) is True
