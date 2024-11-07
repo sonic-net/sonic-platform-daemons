@@ -2179,7 +2179,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for namespace in self.namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             transceiver_info_table = self.xcvr_table_helper.get_intf_tbl(asic_id)
-            ports_in_transceiver_only = list(set(transceiver_info_table.get_keys()) - set(logical_ports_list))
+            ports_in_transceiver_only = list(set(transceiver_info_table.getKeys()) - set(logical_ports_list))
 
             for trans_port in ports_in_transceiver_only:
                 transceiver_info_table._del(trans_port)
