@@ -50,7 +50,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.log = syslogger.SysLogger(SYSLOG_IDENTIFIER)
         super(DaemonStorage, self).__init__(log_identifier)
 
-        self.log_info("Starting Storage Monitoring Daemon")
+        self.log.log_info("Starting Storage Monitoring Daemon")
 
         self.timeout = STORMOND_PERIODIC_STATEDB_SYNC_SECS
         self.fsstats_sync_interval = STORMOND_SYNC_TO_DISK_SECS
@@ -115,15 +115,15 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_PERIODIC_STATEDB_SYNC_SECS))
         self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
 
-        self.log_info("Polling Interval set to {} seconds".format(self.timeout))
-        self.log_info("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
+        self.log.log_info("Polling Interval set to {} seconds".format(self.timeout))
+        self.log.log_info("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
         
 
     # Get the total and latest FSIO reads and writes from JSON file
     def _load_fsio_rw_json(self):
         try:
             if not os.path.exists(FSIO_RW_JSON_FILE):
-                self.log_info("{} not present.".format(FSIO_RW_JSON_FILE))
+                self.log.log_info("{} not present.".format(FSIO_RW_JSON_FILE))
                 return
 
             # Load JSON file
@@ -135,13 +135,13 @@ class DaemonStorage(daemon_base.DaemonBase):
                 for field in self.statedb_json_sync_fields:
 
                     if self.fsio_rw_json[storage_device][field] == None:
-                        self.log_warning("{}:{} value = None in JSON file".format(storage_device, field))
+                        self.log.log_warning("{}:{} value = None in JSON file".format(storage_device, field))
                         return
 
             self.fsio_json_file_loaded = True
 
         except Exception as e:
-            self.log_error("JSON file could not be loaded: {}".format(str(e)))
+            self.log.log_error("JSON file could not be loaded: {}".format(str(e)))
 
         return
 
@@ -149,7 +149,7 @@ class DaemonStorage(daemon_base.DaemonBase):
     # Sync the total and latest procfs reads and writes from STATE_DB to JSON file on disk
     def sync_fsio_rw_json(self):
 
-        self.log_info("Syncing total and latest procfs reads and writes from STATE_DB to JSON file")
+        self.log.log_info("Syncing total and latest procfs reads and writes from STATE_DB to JSON file")
 
         json_file_dict = {disk:{} for disk in self.storage.devices}
         try:
@@ -166,7 +166,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             return True
 
         except Exception as ex:
-            self.log_error("Unable to sync state_db to disk: {}".format(str(ex)))
+            self.log.log_error("Unable to sync state_db to disk: {}".format(str(ex)))
             return False
 
 
@@ -197,12 +197,12 @@ class DaemonStorage(daemon_base.DaemonBase):
                     self.fsio_rw_statedb[storage_device][field] = "0" if value is None else value
 
                     if value is None: 
-                        self.log_warning("{}:{} value = None in StateDB".format(storage_device, field))
+                        self.log.log_warning("{}:{} value = None in StateDB".format(storage_device, field))
                         return
             
             self.statedb_storage_info_loaded = True
         except Exception as e:
-            self.log_error("Reading STATE_DB failed with: {}".format(str(e)))
+            self.log.log_error("Reading STATE_DB failed with: {}".format(str(e)))
 
 
     def _determine_sot(self):
@@ -281,7 +281,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             try:
                 # Unlikely scenario
                 if storage_object is None:
-                    self.log_info("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
+                    self.log.log_info("{} does not have an instantiated object. Static Information cannot be gathered.".format(storage_device))
                     continue
 
                 static_kvp_dict = {}
@@ -289,13 +289,13 @@ class DaemonStorage(daemon_base.DaemonBase):
                 static_kvp_dict["device_model"] = storage_object.get_model()
                 static_kvp_dict["serial"] = storage_object.get_serial()
 
-                self.log_info("Storage Device: {}, Device Model: {}, Serial: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"]))
+                self.log.log_info("Storage Device: {}, Device Model: {}, Serial: {}".format(storage_device, static_kvp_dict["device_model"], static_kvp_dict["serial"]))
 
                 # update Storage Device Status to DB
                 self.update_storage_info_status_db(storage_device, static_kvp_dict)
 
             except Exception as ex:
-                self.log_error("get_static_fields_update_state_db() failed with: {}".format(str(ex)))
+                self.log.log_error("get_static_fields_update_state_db() failed with: {}".format(str(ex)))
 
     # Get Dynamic attributes and update the State DB
     def get_dynamic_fields_update_state_db(self):
@@ -304,7 +304,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         for storage_device, storage_object in self.storage.devices.items():
             try:
                 if storage_object is None:
-                    self.log_info("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
+                    self.log.log_info("Storage device '{}' does not have an instantiated object. Dynamic Information cannot be gathered.".format(storage_device))
                     continue
 
                 # Fetch the latest dynamic info
@@ -329,15 +329,15 @@ class DaemonStorage(daemon_base.DaemonBase):
                 self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
 
                 # Log to syslog
-                self.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
+                self.log.log_info("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
                 storage_device, dynamic_kvp_dict["firmware"], dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["total_fsio_reads"],dynamic_kvp_dict["total_fsio_writes"]))
-                self.log_info("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(dynamic_kvp_dict["latest_fsio_reads"], dynamic_kvp_dict["latest_fsio_writes"]))
-                self.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
+                self.log.log_info("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(dynamic_kvp_dict["latest_fsio_reads"], dynamic_kvp_dict["latest_fsio_writes"]))
+                self.log.log_info("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
                 dynamic_kvp_dict["reserved_blocks"]))
-                self.log_info("Last successful sync time to STATE_DB: {}".format(dynamic_kvp_dict["last_sync_time"]))
+                self.log.log_info("Last successful sync time to STATE_DB: {}".format(dynamic_kvp_dict["last_sync_time"]))
 
             except Exception as ex:
-                self.log_info("get_dynamic_fields_update_state_db() failed with: {}".format(str(ex)))
+                self.log.log_info("get_dynamic_fields_update_state_db() failed with: {}".format(str(ex)))
 
     
    # Override signal handler from DaemonBase
@@ -348,22 +348,22 @@ class DaemonStorage(daemon_base.DaemonBase):
         global exit_code
 
         if sig in FATAL_SIGNALS:
-            self.log_info("Caught signal '{}'".format(signal.Signals(sig).name))
+            self.log.log_info("Caught signal '{}'".format(signal.Signals(sig).name))
 
             if self.sync_fsio_rw_json():
                 self.write_sync_time_statedb()
             else:
-                self.log_warning("Unable to sync latest and total procfs RW to disk")
+                self.log.log_warning("Unable to sync latest and total procfs RW to disk")
 
-            self.log_info("Exiting with {}".format(signal.Signals(sig).name))
+            self.log.log_info("Exiting with {}".format(signal.Signals(sig).name))
 
             # Make sure we exit with a non-zero code so that supervisor will try to restart us
             exit_code = 128 + sig  
             self.stop_event.set()
         elif sig in NONFATAL_SIGNALS:
-            self.log_info("Caught signal '{}' - ignoring...".format(signal.Signals(sig).name))
+            self.log.log_info("Caught signal '{}' - ignoring...".format(signal.Signals(sig).name))
         else:
-            self.log_warning("Caught unhandled signal '{}' - ignoring...".format(signal.Signals(sig).name))
+            self.log.log_warning("Caught unhandled signal '{}' - ignoring...".format(signal.Signals(sig).name))
 
     # Main daemon logic
     def run(self):
@@ -389,7 +389,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             if self.sync_fsio_rw_json():
                 self.write_sync_time_statedb()
             else:
-                self.log_warning("Unable to sync latest and total procfs RW to disk")
+                self.log.log_warning("Unable to sync latest and total procfs RW to disk")
 
         return True
 #
@@ -406,7 +406,7 @@ def main():
     while stormon.run():
         pass
 
-    stormon.log_info("Shutting down Storage Monitoring Daemon")
+    stormon.log.log_info("Shutting down Storage Monitoring Daemon")
 
     return exit_code
 
