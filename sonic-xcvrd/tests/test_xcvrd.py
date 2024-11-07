@@ -261,9 +261,6 @@ class TestXcvrdThreadException(object):
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
                                             {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
 
-        task.port_mapping.logical_to_physical['Ethernet0'] = 1
-        task.port_mapping.logical_to_asic['Ethernet0'] = 0
-
         # Case 1: get_xcvr_api() raises an exception
         task.on_port_update_event(port_change_event)
         mock_sfp.get_xcvr_api = MagicMock(side_effect=NotImplementedError)
@@ -1696,8 +1693,6 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_handle_port_change_event(self):
         port_mapping = PortMapping()
-        port_mapping.logical_port_list = ['Ethernet0']
-        port_mapping.logical_to_physical['Ethernet0'] = 1
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
 
@@ -2204,7 +2199,6 @@ class TestXcvrdScript(object):
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
                                             {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
-        task.port_mapping.logical_to_physical['Ethernet0'] = 1
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_INSERTED
@@ -2266,7 +2260,6 @@ class TestXcvrdScript(object):
         assert get_cmis_state_from_state_db('Ethernet1', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet1'))) == CMIS_STATE_UNKNOWN
 
         task.port_mapping.logical_port_list = MagicMock()
-        task.port_mapping.logical_to_physical['Ethernet1'] = 2
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
         assert task.isPortConfigDone
@@ -2410,7 +2403,6 @@ class TestXcvrdScript(object):
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
                                             {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
-        task.port_mapping.logical_to_physical['Ethernet0'] = 1
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_INSERTED
@@ -2540,7 +2532,6 @@ class TestXcvrdScript(object):
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_UNKNOWN
 
         task.port_mapping.logical_port_list = MagicMock()
-        task.port_mapping.logical_to_physical['Ethernet0'] = 1
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
         assert task.isPortConfigDone
