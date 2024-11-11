@@ -694,7 +694,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             return 'down'
 
     def module_db_update(self):
-        notOnlineModules = []
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
             if module_info_dict is not None:
@@ -706,8 +705,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     continue
 
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_SLOT_FIELD,
-                                                   module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
 
@@ -778,7 +775,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # Prepare the updated data
             updates = {
                 "dpu_midplane_link_state": state,
-                "dpu_midplane_link_reason": "unknown",
+                "dpu_midplane_link_reason": "",
                 "dpu_midplane_link_time": datetime.now().strftime("%Y%m%d %H:%M:%S"),
             }
             current_data.update(updates)
@@ -975,7 +972,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
             elif midplane_access is True and current_midplane_state == 'False':
                 self.log_notice("Module {} midplane connectivity is up".format(module_key))
-                reboot_cause = try_get(self.chassis.get_module(index).get_reboot_cause)
 
                 # Update midplane state UP in the chassisStateDB DPU_STATE table
                 key = "DPU_STATE|" + module_key
@@ -984,16 +980,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
                     self.log_warning("Unexpected: Module {} midplane connectivity is not restored in {} seconds".format(module_key, self.linecard_reboot_timeout))
-
-            if self._is_first_boot(module_key):
-                if midplane_access is False:
-                    # Update midplane state DOWN in the chassisStateDB DPU_STATE table
-                    key = "DPU_STATE|" + module_key
-                    self.update_dpu_state(key, "DOWN")
-                else:
-                    # Update midplane state UP in the chassisStateDB DPU_STATE table
-                    key = "DPU_STATE|" + module_key
-                    self.update_dpu_state(key, "UP")
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -1012,7 +998,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 keys = self.chassis_state_db.keys(pattern)
                 if keys:
                     for key in keys:
-                        self.chassis_state_db.delete(key)
+                        if not "DPU_STATE" in key and not "REBOOT_CAUSE" in key:
+                            self.chassis_state_db.delete(key)
         return
 
 
@@ -1273,6 +1260,10 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                         # shutdown DPU
                         op = MODULE_ADMIN_DOWN
 
+                    # Initialize DPU_STATE DB table on bootup
+                    dpu_state_key = "DPU_STATE|" + module_name
+                    self.module_updater.update_dpu_state(dpu_state_key, admin_state.upper())
+
                     if op is not None:
                         # Create and start a thread for the DPU logic
                         thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op)) 
@@ -1291,6 +1282,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
     def run(self):
         self.log_info("Starting up...")
 
+        # Check for valid slot numbers
+        my_slot = try_get(self.platform_chassis.get_my_slot,
+                                              default=INVALID_SLOT)
+        supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot,
+                                                      default=INVALID_SLOT)
+
         # Check if module list is populated
         self.smartswitch = self.platform_chassis.is_smartswitch()
         self.log_info("smartswitch: {}".format(self.smartswitch))
@@ -1298,11 +1295,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         if self.smartswitch:
             self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis)
         else:
-            # Check for valid slot numbers
-            my_slot = try_get(self.platform_chassis.get_my_slot,
-                                                default=INVALID_SLOT)
-            supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot,
-                                                        default=INVALID_SLOT)
             self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
