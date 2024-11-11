@@ -1282,12 +1282,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
     def run(self):
         self.log_info("Starting up...")
 
-        # Check for valid slot numbers
-        my_slot = try_get(self.platform_chassis.get_my_slot,
-                                              default=INVALID_SLOT)
-        supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot,
-                                                      default=INVALID_SLOT)
-
         # Check if module list is populated
         self.smartswitch = self.platform_chassis.is_smartswitch()
         self.log_info("smartswitch: {}".format(self.smartswitch))
@@ -1295,6 +1289,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         if self.smartswitch:
             self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis)
         else:
+            my_slot = try_get(self.platform_chassis.get_my_slot, default=INVALID_SLOT)
+            supervisor_slot = try_get(self.platform_chassis.get_supervisor_slot, default=INVALID_SLOT)
             self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, self.platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
