@@ -433,10 +433,10 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-@patch("builtins.open", new_callable=mock_open, read_data="First boot")
+@patch("builtins.open", new_callable=dpu_mock_open, read_data="First boot")
 @patch("os.path.isfile", return_value=True)
 @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
-def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, mock_open):
+def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, dpu_mock_open):
     chassis = MockSmartSwitchChassis()
     module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
     module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
@@ -447,13 +447,13 @@ def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, mock_open
 
     mock_is_first_boot.assert_called_once_with("DPU0")
     file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause.txt")
-    mock_open.assert_called_once_with(file_path, 'r')
+    dpu_mock_open.assert_called_once_with(file_path, 'r')
 
 
-@patch("builtins.open", new_callable=mock_open, read_data='{"dpu_reboot_timeout": 240}')
+@patch("builtins.open", new_callable=dpu_mock_open, read_data='{"dpu_reboot_timeout": 240}')
 @patch("os.path.isfile", return_value=True)
 @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
-def test_dpu_reboot_cause(self, mock_is_first_boot, mock_isfile, mock_open):
+def test_dpu_reboot_cause(self, mock_is_first_boot, mock_isfile, dpu_mock_open):
     chassis = MockSmartSwitchChassis()
     module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
     module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
@@ -466,8 +466,8 @@ def test_dpu_reboot_cause(self, mock_is_first_boot, mock_isfile, mock_open):
 
 
 @patch("os.makedirs")
-@patch("builtins.open", new_callable=mock_open)
-def test_midplane_presence_dpu_modules(self, mock_open, mock_makedirs):
+@patch("builtins.open", new_callable=dpu_mock_open)
+def test_midplane_presence_dpu_modules(self, dpu_mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         path = os.path.join(temp_dir, 'subdir')
         mock_makedirs.side_effect = lambda x, **kwargs: None
@@ -483,32 +483,32 @@ def test_midplane_presence_dpu_modules(self, mock_open, mock_makedirs):
         assert module_updater.midplane_table.size() == 1
 
 
-@patch("builtins.open", new_callable=mock_open)
-def test_persist_dpu_reboot_cause(self, mock_open):
+@patch("builtins.open", new_callable=dpu_mock_open)
+def test_persist_dpu_reboot_cause(self, dpu_mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater.persist_dpu_reboot_cause("Unexpected reboot", "DPU0")
 
     file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause.txt")
-    mock_open.assert_called_once_with(file_path, 'w')
-    mock_open().write.assert_called_once_with("Unexpected reboot")
+    dpu_mock_open.assert_called_once_with(file_path, 'w')
+    dpu_mock_open().write.assert_called_once_with("Unexpected reboot")
 
 
-@patch("builtins.open", new_callable=mock_open)
-def test_persist_dpu_reboot_time(self, mock_open):
+@patch("builtins.open", new_callable=dpu_mock_open)
+def test_persist_dpu_reboot_time(self, dpu_mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater.persist_dpu_reboot_time("DPU0")
 
     file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-time.txt")
-    mock_open.assert_called_once_with(file_path, 'w')
+    dpu_mock_open.assert_called_once_with(file_path, 'w')
 
 
-@patch("builtins.open", new_callable=mock_open, read_data="2024_10_30_02_44_50")
-def test_retrieve_dpu_reboot_time(self, mock_open):
+@patch("builtins.open", new_callable=dpu_mock_open, read_data="2024_10_30_02_44_50")
+def test_retrieve_dpu_reboot_time(self, dpu_mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     result = module_updater.retrieve_dpu_reboot_time("DPU0")
 
     file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-time.txt")
-    mock_open.assert_called_once_with(file_path, 'r')
+    dpu_mock_open.assert_called_once_with(file_path, 'r')
     assert result == "2024_10_30_02_44_50"
 
 
@@ -522,13 +522,13 @@ def test_is_first_boot(self, mock_isfile):
     assert result is True
 
 
-@patch("builtins.open", new_callable=mock_open)
-def test_rotate_files(self, mock_open):
+@patch("builtins.open", new_callable=dpu_mock_open)
+def test_rotate_files(self, dpu_mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater._rotate_files("DPU0")
 
     history_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause-history.txt")
-    mock_open.assert_called_once_with(history_path, 'a')
+    dpu_mock_open.assert_called_once_with(history_path, 'a')
 
 
 @patch("swsscommon.FieldValuePairs")
@@ -540,10 +540,10 @@ def test_update_dpu_reboot_cause_to_db(self, mock_table, mock_fvpairs):
     mock_table.set.assert_called_once_with("DPU_STATE|DPU0", mock_fvpairs())
 
 
-@patch("builtins.open", new_callable=mock_open, read_data="First boot")
+@patch("builtins.open", new_callable=dpu_mock_open, read_data="First boot")
 @patch("os.path.isfile", return_value=True)
 @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
-def test_dpu_is_first_boot_true_a(self, mock_is_first_boot, mock_isfile, mock_open):
+def test_dpu_is_first_boot_true_a(self, mock_is_first_boot, mock_isfile, dpu_mock_open):
     # Initialize mock chassis and module
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -576,7 +576,7 @@ def test_dpu_is_first_boot_true_a(self, mock_is_first_boot, mock_isfile, mock_op
 
     # Optionally, check that the file operations were attempted as expected
     file_path = os.path.join(REBOOT_CAUSE_DIR, name.lower(), "reboot-cause.txt")
-    mock_open.assert_called_once_with(file_path, 'r')
+    dpu_mock_open.assert_called_once_with(file_path, 'r')
 
 
 def test_dpu_is_first_boot():
