@@ -2105,6 +2105,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
             for trans_port in ports_in_transceiver_only:
                 transceiver_info_table._del(trans_port)
+                helper_logger.log_info("Port {} was removed from TRANSCEIVER_INFO table as it doesn't exist in Config DB".format(trans_port))
 
     """
     Initialize NPU_SI_SETTINGS_SYNC_STATUS_KEY field in STATE_DB PORT_TABLE|<lport>
