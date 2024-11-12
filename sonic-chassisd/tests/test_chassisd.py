@@ -741,8 +741,8 @@ def test_midplane_presence_modules():
 
 
 @patch('os.makedirs')
-@patch('builtins.open', new_callable=dpu_mock_open)
-def test_midplane_presence_uninitialized_dpu_modules(dpu_mock_open, mock_makedirs):
+@patch('builtins.open', new_callable=lambda: dpu_mock_open())
+def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
         path = os.path.join(temp_dir, 'subdir')
