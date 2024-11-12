@@ -433,7 +433,7 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open(read_data="First boot"))
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open(read_data="First boot"))
 @patch("os.path.isfile", return_value=True)
 @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
 def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, mock_open):
@@ -450,7 +450,7 @@ def test_dpu_is_first_boot_true(self, mock_is_first_boot, mock_isfile, mock_open
     mock_open.assert_called_once_with(file_path, 'r')
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open(read_data='{"dpu_reboot_timeout": 240}'))
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open(read_data='{"dpu_reboot_timeout": 240}'))
 @patch("os.path.isfile", return_value=True)
 @patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
 def test_dpu_reboot_cause(self, mock_is_first_boot, mock_isfile, mock_open):
@@ -466,7 +466,7 @@ def test_dpu_reboot_cause(self, mock_is_first_boot, mock_isfile, mock_open):
 
 
 @patch("os.makedirs")
-@patch("builtins.open", new_callable=lambda: dpu_mock_open())
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open())
 def test_midplane_presence_dpu_modules(self, mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         path = os.path.join(temp_dir, 'subdir')
@@ -483,7 +483,7 @@ def test_midplane_presence_dpu_modules(self, mock_open, mock_makedirs):
         assert module_updater.midplane_table.size() == 1
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open())
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open())
 def test_persist_dpu_reboot_cause(self, mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater.persist_dpu_reboot_cause("Unexpected reboot", "DPU0")
@@ -493,7 +493,7 @@ def test_persist_dpu_reboot_cause(self, mock_open):
     mock_open().write.assert_called_once_with("Unexpected reboot")
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open())
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open())
 def test_persist_dpu_reboot_time(self, mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater.persist_dpu_reboot_time("DPU0")
@@ -502,7 +502,7 @@ def test_persist_dpu_reboot_time(self, mock_open):
     mock_open.assert_called_once_with(file_path, 'w')
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open(read_data="2024_10_30_02_44_50"))
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open(read_data="2024_10_30_02_44_50"))
 def test_retrieve_dpu_reboot_time(self, mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     result = module_updater.retrieve_dpu_reboot_time("DPU0")
@@ -522,7 +522,7 @@ def test_is_first_boot(self, mock_isfile):
     assert result is True
 
 
-@patch("builtins.open", new_callable=lambda: dpu_mock_open())
+@patch("builtins.open", new_callable=mock_open: dpu_mock_open())
 def test_rotate_files(self, mock_open):
     module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", MockSmartSwitchChassis())
     module_updater._rotate_files("DPU0")
@@ -741,7 +741,7 @@ def test_midplane_presence_modules():
 
 
 @patch('os.makedirs')
-@patch('builtins.open', new_callable=lambda: dpu_mock_open())
+@patch('builtins.open', new_callable=mock_open: dpu_mock_open())
 def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
