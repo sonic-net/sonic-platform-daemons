@@ -2096,6 +2096,16 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
 
+    # remove ports from TRANSCEIVER_INFO table, if they don't exist in CONFIG DB
+    def remove_ports_from_transceiver_table(self, logical_port_list):
+        for namespace in self.namespaces:
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            transceiver_info_table = self.xcvr_table_helper.get_intf_tbl(asic_id)
+            ports_in_transceiver_only = list(set(transceiver_info_table.getKeys()) - set(logical_ports_list))
+
+            for trans_port in ports_in_transceiver_only:
+                transceiver_info_table._del(trans_port)
+
     """
     Initialize NPU_SI_SETTINGS_SYNC_STATUS_KEY field in STATE_DB PORT_TABLE|<lport>
     if not already present for a port.
@@ -2174,15 +2184,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         self.log_notice("XCVRD INIT: After port config is done")
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
-        # remove ports from TRANSCEIVER_INFO table, if they don't exist in CONFIG DB
-        logical_ports_list = port_mapping_data.logical_port_list
-        for namespace in self.namespaces:
-            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            transceiver_info_table = self.xcvr_table_helper.get_intf_tbl(asic_id)
-            ports_in_transceiver_only = list(set(transceiver_info_table.getKeys()) - set(logical_ports_list))
-
-            for trans_port in ports_in_transceiver_only:
-                transceiver_info_table._del(trans_port)
+        self.remove_ports_from_transceiver_table(port_mapping_data.logical_port_list)
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
 
