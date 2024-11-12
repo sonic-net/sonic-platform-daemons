@@ -2167,20 +2167,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Load new platform api class
         try:
             import sonic_platform.platform
-            import sonic_platform_base.sonic_sfp.sfputilhelper
             platform_chassis = sonic_platform.platform.Platform().get_chassis()
             self.log_info("chassis loaded {}".format(platform_chassis))
-            # we have to make use of sfputil for some features
-            # even though when new platform api is used for all vendors.
-            # in this sense, we treat it as a part of new platform api.
-            # we have already moved sfputil to sonic_platform_base
-            # which is the root of new platform api.
-            platform_sfputil = sonic_platform_base.sonic_sfp.sfputilhelper.SfpUtilHelper()
         except Exception as e:
             self.log_warning("Failed to load chassis due to {}".format(repr(e)))
 
         # Load platform specific sfputil class
-        if platform_chassis is None or platform_sfputil is None:
+        if platform_chassis is None:
             try:
                 platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
