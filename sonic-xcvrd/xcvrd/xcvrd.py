@@ -2222,13 +2222,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data = self.init()
 
         # Start the SFF manager
-        sff_manager = None
-        if self.enable_sff_mgr:
-            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis, helper_logger)
-            sff_manager.start()
-            self.threads.append(sff_manager)
-        else:
-            self.log_notice("Skipping SFF Task Manager")
+        sff_manager = SffManagerTask(self.enable_sff_mgr, self.namespaces, self.stop_event, platform_chassis, helper_logger)
+        sff_manager.start()
+        self.threads.append(sff_manager)
 
         # Start the CMIS manager
         cmis_manager = None
