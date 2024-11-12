@@ -198,7 +198,7 @@ class DaemonPcied(daemon_base.DaemonBase):
                 pcie_dev = "0000:{int(result['bus'], 16):02x}:{int(result['dev'], 16):02x}.{int(result['fn'], 16)}"
 
                 # Check if the device is in detaching mode
-                if self.is_dpu_in_detaching_mode(pcie_dev):
+                if device_info.is_smartswitch() and self.is_dpu_in_detaching_mode(pcie_dev):
                     self.log_debug("PCIe Device: {} is in detaching mode, skipping warning.".format(pcie_dev))
                     continue
 
