@@ -433,30 +433,23 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-# Define the mock_open function with the safety check
-def safe_mock_open(*args, **kwargs):
-    if args and args[0] == PLATFORM_ENV_CONF_FILE:
-        return mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
-    # Fallback to the real open for any other file
-    return builtin_open(*args, **kwargs)
+    @mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
+    def test_is_first_boot_file_found_first_boot(self, mock_join):
+        chassis = MockSmartSwitchChassis()
+        module = "DPU0"
 
+        with mock.patch("builtins.open", mock.mock_open(read_data="First boot")):
+            result = chassis._is_first_boot(module)
+            self.assertTrue(result)
 
-def test_dpu_is_first_boot_true():
-    """Test when _is_first_boot returns True and should be called once with 'DPU0'."""
+    def test_is_first_boot_file_not_found(self):
+        chassis = MockSmartSwitchChassis()
+        module = "DPU0"
 
-    # Mock the SmartSwitchChassis and Module objects
-    chassis = MockSmartSwitchChassis()
-    module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
-    module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
-    chassis.module_list.append(module)
-
-    # Patch the open function within the context of this test
-    with mock.patch("builtins.open", new=safe_mock_open):
-        # Code to invoke _is_first_boot and test its behavior
-        is_first_boot = chassis._is_first_boot("DPU0")
-
-        # Check that _is_first_boot returned True as expected
-        assert is_first_boot is True, "Expected _is_first_boot to return True for 'DPU0'"
+        with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+            mock_file.side_effect = FileNotFoundError
+            result = chassis._is_first_boot(module)
+            self.assertFalse(result)
 
 
 def test_platform_json_file_exists_and_valid():

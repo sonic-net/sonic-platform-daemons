@@ -177,6 +177,16 @@ class MockSmartSwitchChassis:
     def get_controlplane_state(self):
         raise NotImplementedError
 
+    def _is_first_boot(self, module):
+        """Checks if the reboot-cause file indicates a first boot."""
+        file_path = os.path.join("path_to_reboot_cause_dir", module.lower(), "reboot-cause.txt")
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read().strip()
+                return content == "First boot"
+        except FileNotFoundError:
+            return False
+
 class MockDpuChassis:
 
     def get_dpu_id(self):
