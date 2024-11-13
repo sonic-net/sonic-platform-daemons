@@ -433,23 +433,113 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-    @mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
-    def test_is_first_boot_file_found_first_boot(self, mock_join):
-        chassis = MockSmartSwitchChassis()
-        module = "DPU0"
+@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
+def test_is_first_boot_file_found_first_boot(self, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
 
-        with mock.patch("builtins.open", mock.mock_open(read_data="First boot")):
-            result = chassis._is_first_boot(module)
-            self.assertTrue(result)
+    with mock.patch("builtins.open", mock.mock_open(read_data="First boot")):
+        result = chassis._is_first_boot(module)
+        self.assertTrue(result)
 
-    def test_is_first_boot_file_not_found(self):
-        chassis = MockSmartSwitchChassis()
-        module = "DPU0"
+def test_is_first_boot_file_not_found(self):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
 
-        with mock.patch("builtins.open", mock.mock_open()) as mock_file:
-            mock_file.side_effect = FileNotFoundError
-            result = chassis._is_first_boot(module)
-            self.assertFalse(result)
+    with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+        mock_file.side_effect = FileNotFoundError
+        result = chassis._is_first_boot(module)
+        self.assertFalse(result)
+
+
+@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
+def test_persist_dpu_reboot_cause(self, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+    reboot_cause = "Power failure"
+
+    with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+        chassis.persist_dpu_reboot_cause(reboot_cause, module)
+        mock_file.assert_called_once_with("/mocked/path/to/reboot-cause.txt", 'w')
+        mock_file().write.assert_called_once_with("Power failure")
+
+
+@mock.patch("os.remove")
+@mock.patch("os.rename")
+def test_rotate_files(self, mock_rename, mock_remove):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+
+    chassis._rotate_files(module)
+
+    mock_rename.assert_called_once_with("DPU0_reboot-cause.txt", "DPU0_reboot-cause.old.txt")
+    mock_remove.assert_called_once_with("DPU0_reboot-cause.older.txt")
+
+
+@mock.patch("MockSmartSwitchChassis.update_dpu_reboot_cause_to_db")
+def test_update_dpu_reboot_cause_to_db(self, mock_db_update):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+
+    chassis.update_dpu_reboot_cause_to_db(module)
+
+    mock_db_update.assert_called_once_with(module)
+
+
+@mock.patch("datetime.datetime")
+def test_get_current_time_str(self, mock_datetime):
+    chassis = MockSmartSwitchChassis()
+
+    mock_datetime.now.return_value = datetime(2023, 11, 10, 10, 0, 0)
+    mock_datetime.strftime = datetime.strftime
+
+    result = chassis._get_current_time_str()
+    assert result == "2023-11-10 10:00:00"
+
+
+@mock.patch("os.path.join", return_value="/mocked/path/to/history/file.txt")
+def test_get_history_path(self, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+    file_name = "history-log.txt"
+
+    result = chassis._get_history_path(module, file_name)
+
+    mock_join.assert_called_once_with("path_to_history_dir", module.lower(), file_name)
+    assert result == "/mocked/path/to/history/file.txt"
+
+
+@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-time.txt")
+@mock.patch("MockSmartSwitchChassis._get_current_time_str", return_value="2023-11-10 10:00:00")
+def test_persist_dpu_reboot_time(self, mock_time, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+
+    with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+        chassis.persist_dpu_reboot_time(module)
+        mock_file.assert_called_once_with("/mocked/path/to/reboot-time.txt", 'w')
+        mock_file().write.assert_called_once_with("2023-11-10 10:00:00")
+
+
+@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-time.txt")
+def test_retrieve_dpu_reboot_time_file_found(self, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+
+    with mock.patch("builtins.open", mock.mock_open(read_data="2023-11-10 10:00:00")):
+        result = chassis.retrieve_dpu_reboot_time(module)
+        assert result == "2023-11-10 10:00:00"
+
+
+@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-time.txt")
+def test_retrieve_dpu_reboot_time_file_not_found(self, mock_join):
+    chassis = MockSmartSwitchChassis()
+    module = "DPU0"
+
+    with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+        mock_file.side_effect = FileNotFoundError
+        result = chassis.retrieve_dpu_reboot_time(module)
+        assert result is None
 
 
 def test_platform_json_file_exists_and_valid():

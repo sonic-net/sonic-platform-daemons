@@ -187,6 +187,44 @@ class MockSmartSwitchChassis:
         except FileNotFoundError:
             return False
 
+    def persist_dpu_reboot_cause(self, reboot_cause, module):
+        """Mock implementation to persist reboot cause."""
+        file_path = os.path.join("path_to_reboot_cause_dir", module.lower(), "reboot-cause.txt")
+        with open(file_path, 'w') as f:
+            f.write(reboot_cause)
+
+    def _rotate_files(self, module):
+        """Mock implementation to simulate file rotation."""
+        os.rename(f"{module}_reboot-cause.txt", f"{module}_reboot-cause.old.txt")
+        os.remove(f"{module}_reboot-cause.older.txt")
+
+    def update_dpu_reboot_cause_to_db(self, module):
+        """Mock implementation to update reboot cause in a database."""
+        pass
+
+    def _get_current_time_str(self):
+        """Mock implementation to get the current time string."""
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _get_history_path(self, module, file_name):
+        """Mock implementation to get the history file path."""
+        return os.path.join("path_to_history_dir", module.lower(), file_name)
+
+    def persist_dpu_reboot_time(self, module):
+        """Mock implementation to persist the current reboot time."""
+        file_path = os.path.join("path_to_reboot_time_dir", module.lower(), "reboot-time.txt")
+        with open(file_path, 'w') as f:
+            f.write(self._get_current_time_str())
+
+    def retrieve_dpu_reboot_time(self, module):
+        """Mock implementation to retrieve the persisted reboot time."""
+        file_path = os.path.join("path_to_reboot_time_dir", module.lower(), "reboot-time.txt")
+        try:
+            with open(file_path, 'r') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+
 class MockDpuChassis:
 
     def get_dpu_id(self):
