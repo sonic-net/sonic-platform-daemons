@@ -1,8 +1,7 @@
 import datetime
 import os
 import sys
-from imp import load_source
-from unittest.mock import MagicMock  # Replace with importlib once we no longer need to support Python 2
+from imp import load_source  # Replace with importlib once we no longer need to support Python 2
 
 import pytest
 
