@@ -1393,6 +1393,23 @@ class TestXcvrdScript(object):
         xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
 
+    def test_DaemonXcvrd_remove_ports_from_transceiver_table(self):
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+
+        mock_transceiver_info_table = MagicMock()
+        mock_transceiver_info_table.getKeys.return_value = ['EthernetXXX']
+        mock_transceiver_info_table._del = MagicMock()
+
+        xcvr_table_helper.get_intf_tbl = MagicMock(return_value=mock_transceiver_info_table)
+
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.xcvr_table_helper = xcvr_table_helper
+
+        logical_ports_list = ['Ethernet0', 'Ethernet1']
+        xcvrd.remove_ports_from_transceiver_table(logical_ports_list)
+
+        mock_transceiver_info_table._del.assert_called_once_with('EthernetXXX')
+
     def test_DaemonXcvrd_initialize_port_init_control_fields_in_port_table(self):
         port_mapping = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
