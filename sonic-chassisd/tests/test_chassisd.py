@@ -3,7 +3,7 @@ import sys
 import mock
 import tempfile
 from imp import load_source
-from datetime import datetime
+# from datetime import datetime
 
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
@@ -510,13 +510,13 @@ def test_smartswitch_module_db_update():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
 
-    expected_path = "/host/reboot-cause/module/reboot_cause|dpu0|2024_11_12_02_03_08/history/2024_11_13_15_06_40_reboot_cause.txt"
+    expected_path = "/host/reboot-cause/module/reboot_cause/dpu0/history/2024_11_13_15_06_40_reboot_cause.txt"
 
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
-         patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")), \
-         patch("datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
+         patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")):
+         # patch("datetime") as mock_datetime:
+        # mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
