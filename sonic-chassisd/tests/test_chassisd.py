@@ -433,33 +433,55 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
-@mock.patch("builtins.open", new_callable=mock.mock_open, read_data="First boot")
-def test_is_first_boot_file_found_first_boot(mock_open, mock_join):
+def test_is_first_boot_file_found_first_boot():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
-    # Call the method to check if it detects first boot
-    result = chassis._is_first_boot(module)
+    with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
+         patch("builtins.open", new_callable=mock_open, read_data="First boot") as mock_file:
 
-    # Assert that the result is True because the file content is "First boot"
-    assert result
+        # Call the method to check if it detects first boot
+        result = chassis._is_first_boot(module)
+
+        # Assert that the result is True because the file content is "First boot"
+        assert result
 
 
-@mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
-@mock.patch("builtins.open", new_callable=mock.mock_open)
-def test_is_first_boot_file_not_found(mock_open, mock_join):
+def test_is_first_boot_file_not_found():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
-    # Simulate a file not being found by raising FileNotFoundError
-    mock_open.side_effect = FileNotFoundError
+    with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
+         patch("builtins.open", new_callable=mock_open) as mock_file:
 
-    # Call the method to check if it handles file not found correctly
-    result = chassis._is_first_boot(module)
+        # Simulate a file not being found by raising FileNotFoundError
+        mock_file.side_effect = FileNotFoundError
 
-    # Assert that the result is False because the file was not found
-    assert not result
+        # Call the method to check if it handles file not found correctly
+        result = chassis._is_first_boot(module)
+
+        # Assert that the result is False because the file was not found
+        assert not result
+
+
+def test_smartswitch_module_db_update():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
 
 
 def test_platform_json_file_exists_and_valid():
