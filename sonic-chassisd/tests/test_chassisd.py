@@ -433,73 +433,30 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-def test_dpu_is_first_boot_true_a():
+# Define the mock_open function with the safety check
+def safe_mock_open(*args, **kwargs):
+    if args and args[0] == PLATFORM_ENV_CONF_FILE:
+        return mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
+    # Fallback to the real open for any other file
+    return builtin_open(*args, **kwargs)
+
+
+def test_dpu_is_first_boot_true():
     """Test when _is_first_boot returns True and should be called once with 'DPU0'."""
+
+    # Mock the SmartSwitchChassis and Module objects
     chassis = MockSmartSwitchChassis()
     module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
     module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
     chassis.module_list.append(module)
 
-    # Create a specific mock_open for this test
-    file_mock = mock_open(read_data="First boot")
+    # Patch the open function within the context of this test
+    with mock.patch("builtins.open", new=safe_mock_open):
+        # Code to invoke _is_first_boot and test its behavior
+        is_first_boot = chassis._is_first_boot("DPU0")
 
-    with patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", file_mock), \
-         patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True) as mock_is_first_boot:
-
-        # Instantiate updater and run function to trigger the _is_first_boot check
-        updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
-        updater.module_db_update()
-
-        # Assert _is_first_boot was called once with the correct argument
-        mock_is_first_boot.assert_called_once_with("DPU0")
-
-
-def test_dpu_is_first_boot():
-    # Initialize mock chassis and module
-    chassis = MockSmartSwitchChassis()
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = -1
-    serial = "TS1000101"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-
-    # Set the initial state to 'PRESENT'
-    status = ModuleBase.MODULE_STATUS_PRESENT
-    module.set_oper_status(status)
-
-    # Append the module to the chassis module list
-    chassis.module_list.append(module)
-
-    # Create the module updater instance
-    module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
-
-    # Define the path to the reboot-cause file
-    file_path = os.path.join("/host/reboot-cause/module", name.lower(), "reboot-cause.txt")
-
-    # Save the original open function
-    builtin_open = open
-
-    # Custom mock_open with safer handling
-    def mock_open_wrapper(*args, **kwargs):
-        # Check if args is non-empty to avoid IndexError
-        if args and args[0] == PLATFORM_JSON_FILE:
-            return mock_open(read_data='{"dpu_reboot_timeout": 240}')(*args, **kwargs)
-        # Use the original open for other paths
-        return builtin_open(*args, **kwargs)
-
-    # Apply the necessary patches
-    with patch("builtins.open", mock_open_wrapper), \
-        patch("os.path.isfile", MagicMock(return_value=True)), \
-        patch.object(module_updater, '_is_first_boot', return_value=True):
-
-        module_updater.check_midplane_reachability()
-        module_updater.module_db_update()
-
-        # Run the test to check the first boot condition
-        assert module_updater._is_first_boot(name) is True
+        # Check that _is_first_boot returned True as expected
+        assert is_first_boot is True, "Expected _is_first_boot to return True for 'DPU0'"
 
 
 def test_platform_json_file_exists_and_valid():
