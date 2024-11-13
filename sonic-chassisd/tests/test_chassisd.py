@@ -437,7 +437,7 @@ def test_is_first_boot_file_found_first_boot():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
-    with mock.patch("sonic_chassisd.tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
+    with mock.patch("tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
         with mock.patch("builtins.open", mock.mock_open(read_data="First boot")):
             result = chassis._is_first_boot(module)
             assert result  # Using simple assert as requested
@@ -447,7 +447,7 @@ def test_is_first_boot_file_not_found():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
-    with mock.patch("sonic_chassisd.tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
+    with mock.patch("tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
         with mock.patch("builtins.open", mock.mock_open()) as mock_file:
             mock_file.side_effect = FileNotFoundError
             result = chassis._is_first_boot(module)
