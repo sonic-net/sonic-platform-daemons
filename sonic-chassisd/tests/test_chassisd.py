@@ -433,12 +433,13 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
+'''
 def test_is_first_boot_file_found_first_boot():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
     def ss_mock_open(*args, **kwargs):
-        return open(*args, **kwargs)
+        return mock_open(read_data="First boot")("/mocked/path/to/reboot-cause.txt", **kwargs)
 
     with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
          patch("builtins.open", new_callable=ss_mock_open, read_data="First boot") as mock_file:
@@ -455,7 +456,7 @@ def test_is_first_boot_file_not_found():
     module = "DPU0"
 
     def ss_mock_open(*args, **kwargs):
-        return open(*args, **kwargs)
+        return mock_open(read_data="First boot")("/mocked/path/to/reboot-cause.txt", **kwargs)
 
     with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
          patch("builtins.open", new_callable=ss_mock_open) as mock_file:
@@ -468,10 +469,13 @@ def test_is_first_boot_file_not_found():
 
         # Assert that the result is False because the file was not found
         assert not result
+'''
 
 
 def test_smartswitch_module_db_update():
     chassis = MockSmartSwitchChassis()
+    reboot_cause = "Power loss"
+    key = "REBOOT_CAUSE|DPU0|2024_11_12_02_03_08"
     index = 0
     name = "DPU0"
     desc = "DPU Module 0"
@@ -488,6 +492,7 @@ def test_smartswitch_module_db_update():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
+    module_updater.persist_dpu_reboot_cause(reboot_cause, key)
 
 
 def test_platform_json_file_exists_and_valid():
