@@ -534,7 +534,7 @@ def test_platform_json_file_exists_and_valid():
 
     # Define the custom mock_open function to handle specific file paths
     def custom_mock_open(*args, **kwargs):
-        if args[0] == PLATFORM_JSON_FILE:
+        if args and args[0] == PLATFORM_JSON_FILE:
             return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
         return open(*args, **kwargs)  # Call the real open for other files
 
@@ -554,7 +554,7 @@ def test_platform_json_file_exists_fail_init():
 
     # Define the custom mock_open function to handle specific file paths
     def custom_mock_open(*args, **kwargs):
-        if args[0] == PLATFORM_JSON_FILE:
+        if args and args[0] == PLATFORM_JSON_FILE:
             return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
         return open(*args, **kwargs)  # Call the real open for other files
 
@@ -718,13 +718,13 @@ def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
         assert 1 != midplane_table.size()
 
 builtin_open = open  # save the unpatched version
-def mock_open(*args, **kwargs):
-    if args[0] == PLATFORM_ENV_CONF_FILE:
+def lc_mock_open(*args, **kwargs):
+    if args and args[0] == PLATFORM_ENV_CONF_FILE:
         return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
     # unpatched version for every other path
     return builtin_open(*args, **kwargs)
 
-@patch("builtins.open", mock_open)
+@patch("builtins.open", lc_mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
 def test_midplane_presence_modules_linecard_reboot():
     chassis = MockChassis()
