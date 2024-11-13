@@ -471,6 +471,23 @@ def test_is_first_boot_file_not_found():
         assert not result
 '''
 
+def ss_mock_open(expected_path, read_data=None):
+    """
+    Custom mock_open function for SmartSwitchModuleUpdater tests.
+    Only allows specific file paths and content expectations.
+    """
+    mock_file = mock_open(read_data=read_data)
+    mock_open_instance = mock_file()
+
+    # Set up mock to match only specific paths
+    def custom_open(file, mode='r', *args, **kwargs):
+        if file == expected_path:
+            return mock_open_instance
+        else:
+            raise FileNotFoundError(f"No such file or directory: '{file}'")
+
+    return MagicMock(side_effect=custom_open)
+
 
 def test_smartswitch_module_db_update():
     chassis = MockSmartSwitchChassis()
@@ -487,12 +504,27 @@ def test_smartswitch_module_db_update():
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
-
     chassis.module_list.append(module)
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.module_db_update()
-    module_updater.persist_dpu_reboot_cause(reboot_cause, key)
+
+    expected_path = "/host/reboot-cause/module/reboot_cause|dpu0|2024_11_12_02_03_08/history/2024_11_13_15_06_40_reboot_cause.txt"
+
+    with patch("os.path.exists", return_value=True), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")), \
+         patch("datetime.datetime") as mock_datetime:
+
+        # Set up datetime to return a fixed time for consistency in tests
+        mock_datetime.now.return_value = datetime.datetime(2024, 11, 13, 15, 6, 40)
+        mock_datetime.strptime.side_effect = lambda s, fmt: datetime.datetime.strptime(s, fmt)
+
+        # Call the function to test
+        module_updater.persist_dpu_reboot_cause(reboot_cause, key)
+
+        # Verify that the custom open was called with the expected file path
+        mock_file_instance = open(expected_path)
+        mock_file_instance.write.assert_any_call("cause: Power loss\n")
 
 
 def test_platform_json_file_exists_and_valid():
