@@ -3,6 +3,7 @@ import sys
 import mock
 import tempfile
 from imp import load_source
+from datetime import datetime
 
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
