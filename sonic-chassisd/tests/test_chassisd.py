@@ -437,8 +437,11 @@ def test_is_first_boot_file_found_first_boot():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
+    def ss_mock_open(*args, **kwargs):
+        return open(*args, **kwargs)
+
     with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
-         patch("builtins.open", new_callable=mock_open, read_data="First boot") as mock_file:
+         patch("builtins.open", new_callable=ss_mock_open, read_data="First boot") as mock_file:
 
         # Call the method to check if it detects first boot
         result = chassis._is_first_boot(module)
@@ -451,8 +454,11 @@ def test_is_first_boot_file_not_found():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
+    def ss_mock_open(*args, **kwargs):
+        return open(*args, **kwargs)
+
     with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
-         patch("builtins.open", new_callable=mock_open) as mock_file:
+         patch("builtins.open", new_callable=ss_mock_open) as mock_file:
 
         # Simulate a file not being found by raising FileNotFoundError
         mock_file.side_effect = FileNotFoundError
