@@ -472,21 +472,22 @@ def test_is_first_boot_file_not_found():
 '''
 
 def ss_mock_open(expected_path, read_data=None):
-    """
-    Custom mock_open function for SmartSwitchModuleUpdater tests.
-    Only allows specific file paths and content expectations.
-    """
-    mock_file = mock_open(read_data=read_data)
-    mock_open_instance = mock_file()
+    # Create a mock open instance with the specified read data
+    mock_open_instance = mock_open(read_data=read_data)
 
-    # Set up mock to match only specific paths
+    # Define a custom side effect that only opens the specified path
     def custom_open(file, mode='r', *args, **kwargs):
-        if file == expected_path:
+        # Check if args has at least one item to avoid IndexError
+        if args and args[0] == PLATFORM_ENV_CONF_FILE:
+            # Handle PLATFORM_ENV_CONF_FILE case if needed
+            return mock_open_instance
+        elif file == expected_path:
             return mock_open_instance
         else:
             raise FileNotFoundError(f"No such file or directory: '{file}'")
 
-    return MagicMock(side_effect=custom_open)
+    # Patch builtins.open to use the custom side effect
+    return patch("builtins.open", new=custom_open)
 
 
 def test_smartswitch_module_db_update():
