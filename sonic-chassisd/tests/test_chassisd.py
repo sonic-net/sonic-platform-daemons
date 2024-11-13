@@ -433,25 +433,33 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-def test_is_first_boot_file_found_first_boot():
-    chassis = MockSmartSwitchChassis()
-    module = "DPU0"
+    @mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="First boot")
+    def test_is_first_boot_file_found_first_boot(mock_open, mock_join):
+        chassis = MockSmartSwitchChassis()
+        module = "DPU0"
 
-    with mock.patch("tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
-        with mock.patch("builtins.open", mock.mock_open(read_data="First boot")):
-            result = chassis._is_first_boot(module)
-            assert result  # Using simple assert as requested
+        # Call the method to check if it detects first boot
+        result = chassis._is_first_boot(module)
+
+        # Assert that the result is True because the file content is "First boot"
+        assert result
 
 
-def test_is_first_boot_file_not_found():
-    chassis = MockSmartSwitchChassis()
-    module = "DPU0"
+    @mock.patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt")
+    @mock.patch("builtins.open", new_callable=mock.mock_open)
+    def test_is_first_boot_file_not_found(mock_open, mock_join):
+        chassis = MockSmartSwitchChassis()
+        module = "DPU0"
 
-    with mock.patch("tests.mock_platform.os.path.join", return_value="/mocked/path/to/reboot-cause.txt"):
-        with mock.patch("builtins.open", mock.mock_open()) as mock_file:
-            mock_file.side_effect = FileNotFoundError
-            result = chassis._is_first_boot(module)
-            assert not result
+        # Simulate a file not being found by raising FileNotFoundError
+        mock_open.side_effect = FileNotFoundError
+
+        # Call the method to check if it handles file not found correctly
+        result = chassis._is_first_boot(module)
+
+        # Assert that the result is False because the file was not found
+        assert not result
 
 
 '''
