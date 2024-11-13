@@ -493,7 +493,7 @@ def ss_mock_open(expected_path, read_data=None):
 def test_smartswitch_module_db_update():
     chassis = MockSmartSwitchChassis()
     reboot_cause = "Power loss"
-    key = "REBOOT_CAUSE|DPU0|2024_11_12_02_03_08"
+    key = "REBOOT_CAUSE|DPU0|2024_11_12_15_06_40"
     index = 0
     name = "DPU0"
     desc = "DPU Module 0"
@@ -514,11 +514,10 @@ def test_smartswitch_module_db_update():
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
          patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")), \
-         patch("datetime.datetime") as mock_datetime:
+         patch("datetime.datetime.now") as mock_now:
 
         # Set up datetime to return a fixed time for consistency in tests
-        mock_datetime.now.return_value = datetime.datetime(2024, 11, 13, 15, 6, 40)
-        mock_datetime.strptime.side_effect = lambda s, fmt: datetime.datetime.strptime(s, fmt)
+        mock_now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
