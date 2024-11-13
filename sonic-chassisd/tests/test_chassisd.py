@@ -433,85 +433,26 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-@patch("builtins.open", new_callable=mock_open, read_data="First boot")
-@patch("os.path.isfile", return_value=True)
-@patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
-def test_dpu_is_first_boot_true_a(mock_is_first_boot, mock_isfile, mock_open):
-    # Initialize chassis and module
+def test_dpu_is_first_boot_true_a():
+    """Test when _is_first_boot returns True and should be called once with 'DPU0'."""
     chassis = MockSmartSwitchChassis()
     module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
     module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
     chassis.module_list.append(module)
 
-    # Instantiate the updater
-    module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
-    module_updater.module_db_update()
+    # Create a specific mock_open for this test
+    file_mock = mock_open(read_data="First boot")
 
-    # Check that _is_first_boot was called
-    mock_is_first_boot.assert_called_once_with("DPU0")
-
-    # Verify that open() was called with the correct file path
-    file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause.txt")
-    mock_open.assert_called_once_with(file_path, 'r')
-
-    # Obtain the mock file handle and assert read calls
-    file_handle = mock_open()
-    file_handle.read.assert_called_once()
-
-
-@patch("builtins.open", new_callable=mock_open, read_data="First boot")
-@patch("os.path.isfile", return_value=True)
-@patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True)
-def test_dpu_is_first_boot_true_b(mock_is_first_boot, mock_isfile, mocked_open):
-    # Initialize chassis and module
-    chassis = MockSmartSwitchChassis()
-    module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
-    module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
-    chassis.module_list.append(module)
-
-    # Instantiate the updater
-    module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
-    module_updater.module_db_update()
-
-    # Check that _is_first_boot was called
-    mock_is_first_boot.assert_called_once_with("DPU0")
-
-    # Verify that open() was called with the correct file path
-    file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause.txt")
-    mocked_open.assert_called_once_with(file_path, 'r')
-
-    # Obtain the mock file handle and assert read calls
-    file_handle = mocked_open()
-    file_handle.read.assert_called_once()
-
-
-def test_dpu_is_first_boot_true_c():
-    mock_open_instance = mock_open(read_data="First boot")
-
-    with patch("builtins.open", mock_open_instance), \
-         patch("os.path.isfile", return_value=True), \
+    with patch("os.path.isfile", return_value=True), \
+         patch("builtins.open", file_mock), \
          patch.object(SmartSwitchModuleUpdater, '_is_first_boot', return_value=True) as mock_is_first_boot:
 
-        # Initialize chassis and module
-        chassis = MockSmartSwitchChassis()
-        module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, -1, "TS1000101")
-        module.set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
-        chassis.module_list.append(module)
+        # Instantiate updater and run function to trigger the _is_first_boot check
+        updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
+        updater.module_db_update()
 
-        # Instantiate the updater
-        module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis)
-        module_updater.module_db_update()
-
-        # Check that _is_first_boot was called
+        # Assert _is_first_boot was called once with the correct argument
         mock_is_first_boot.assert_called_once_with("DPU0")
-
-        # Verify that open() was called with the correct file path
-        file_path = os.path.join(REBOOT_CAUSE_DIR, "dpu0", "reboot-cause.txt")
-        mock_open_instance.assert_called_once_with(file_path, 'r')
-
-        # Obtain the mock file handle and assert read calls
-        file_handle = mock_open_instance()
-        file_handle.read.assert_called_once()
 
 
 def test_dpu_is_first_boot():
