@@ -433,7 +433,7 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-def test_is_first_boot_file_found_first_boot(self):
+def test_is_first_boot_file_found_first_boot():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
@@ -443,7 +443,7 @@ def test_is_first_boot_file_found_first_boot(self):
             assert result  # Using simple assert as requested
 
 
-def test_is_first_boot_file_not_found(self):
+def test_is_first_boot_file_not_found():
     chassis = MockSmartSwitchChassis()
     module = "DPU0"
 
