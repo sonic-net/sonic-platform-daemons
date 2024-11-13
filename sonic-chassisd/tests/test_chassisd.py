@@ -515,10 +515,8 @@ def test_smartswitch_module_db_update():
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
          patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")), \
-         patch("datetime.datetime") as mock_datetime:
-
-        # Set up datetime to return a fixed time for consistency in tests
-        mock_datetime.now.return_value = datetime.datetime(2024, 11, 12, 15, 6, 40)
+         patch("datetime") as mock_datetime:
+        mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
