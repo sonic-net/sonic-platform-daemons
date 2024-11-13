@@ -2097,7 +2097,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 break
 
     # remove ports from TRANSCEIVER_INFO table, if they don't exist in CONFIG DB
-    def remove_ports_from_transceiver_table(self, logical_port_list):
+    def remove_ports_from_transceiver_table(self, logical_ports_list):
         for namespace in self.namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             transceiver_info_table = self.xcvr_table_helper.get_intf_tbl(asic_id)
