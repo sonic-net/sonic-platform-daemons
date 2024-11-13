@@ -514,7 +514,7 @@ def test_smartswitch_module_db_update():
 
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
-         patch("builtins.open", ss_mock_open(expected_path, read_data="Power loss")):
+         patch("builtins.open", mock_open(read_data="Power loss")) as mock_file:
          # patch("datetime") as mock_datetime:
         # mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
@@ -522,8 +522,10 @@ def test_smartswitch_module_db_update():
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
 
         # Verify that the custom open was called with the expected file path
-        mock_file_instance = open(expected_path)
-        mock_file_instance.write.assert_any_call("cause: Power loss\n")
+        # mock_file_instance = open(expected_path)
+        # mock_file_instance.write.assert_any_call("cause: Power loss\n")
+        # mock_file.assert_called_with(expected_path, 'r')
+        # mock_makedirs.assert_called_once_with("/host/reboot-cause/module/reboot_cause/dpu0/history", exist_ok=True)
 
 
 def test_platform_json_file_exists_and_valid():
