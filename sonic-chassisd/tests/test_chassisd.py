@@ -554,7 +554,7 @@ def test_module_db_update_offline_transition():
          patch.object(module_updater, "log_notice") as mock_log_notice:
 
         # Call the function with parameters that should trigger the 'offline' transition
-        module_updater.module_db_update(module_index, key, prev_status, module_info_dict)
+        module_updater.module_db_update(index, key, prev_status, module_info_dict)
 
 
 def test_platform_json_file_exists_and_valid():
