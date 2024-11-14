@@ -720,6 +720,39 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         #Check only one entry in database
         assert 1 == midplane_table.size()
 
+        #Check fields in database
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        #Set access of DPU0 to Up (midplane connectivity is down initially)
+        module.set_midplane_reachable(True)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        #Set access of DPU0 to Down (to mock midplane connectivity state change)
+        module.set_midplane_reachable(False)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        #Deinit
+        module_updater.deinit()
+        fvs = midplane_table.get(name)
+        assert fvs == None
+
 
 @patch('os.makedirs')
 @patch('builtins.open', new_callable=mock_open)
