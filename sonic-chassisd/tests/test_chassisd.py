@@ -686,6 +686,43 @@ def test_midplane_presence_modules():
 
 @patch('os.makedirs')
 @patch('builtins.open', new_callable=mock_open)
+def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Assume your method uses a path variable that you can set for testing
+        path = os.path.join(temp_dir, 'subdir')
+
+        # Set up your mock or variable to use temp_dir
+        mock_makedirs.side_effect = lambda x, **kwargs: None  # Prevent actual call
+
+        chassis = MockSmartSwitchChassis()
+
+        #DPU0
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = 0
+        sup_slot = 0
+        serial = "DPU0-0000"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+        module.set_midplane_ip()
+        module.prev_reboot_time = "2024_10_30_02_44_50"
+        chassis.module_list.append(module)
+
+        #Run on supervisor
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+        module_updater.midplane_initialized = True
+        module_updater.modules_num_update()
+        module_updater.module_db_update()
+        module_updater.check_midplane_reachability()
+
+        midplane_table = module_updater.midplane_table
+        #Check only one entry in database
+        assert 1 == midplane_table.size()
+
+
+@patch('os.makedirs')
+@patch('builtins.open', new_callable=mock_open)
 def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
     with tempfile.TemporaryDirectory() as temp_dir:
         # Assume your method uses a path variable that you can set for testing
