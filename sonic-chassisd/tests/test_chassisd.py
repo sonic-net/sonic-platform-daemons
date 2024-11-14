@@ -1208,7 +1208,7 @@ def test_set_initial_dpu_admin_state_down():
 
     # Set access of DPU0 Down
     midplane_table = module_updater.midplane_table
-    module.set_midplane_reachable(False)
+    module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
     assert fvs != None
@@ -1297,7 +1297,7 @@ def test_set_initial_dpu_admin_state_up():
 
     # Set access of DPU0 up
     midplane_table = module_updater.midplane_table
-    module.set_midplane_reachable(True)
+    module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
     assert fvs != None
