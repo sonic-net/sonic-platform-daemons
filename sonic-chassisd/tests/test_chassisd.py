@@ -514,7 +514,8 @@ def test_smartswitch_module_db_update():
 
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
-         patch("builtins.open", mock_open(read_data="Power loss")) as mock_file:
+         patch("builtins.open", mock_open(read_data="Power loss")) as mock_file, \
+         patch("os.remove") as mock_remove:
          # patch("datetime") as mock_datetime:
         # mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
