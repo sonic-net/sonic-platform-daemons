@@ -525,6 +525,7 @@ def test_smartswitch_module_db_update():
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
         module_updater._is_first_boot(name)
         module_updater.persist_dpu_reboot_time(name)
+        module_updater.update_dpu_reboot_cause_to_db(name)
         # Verify that the custom open was called with the expected file path
         # mock_file_instance = open(expected_path)
         # mock_file_instance.write.assert_any_call("cause: Power loss\n")
@@ -748,6 +749,9 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
             fvs = dict(fvs[-1])
         assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
         assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        # Run chassis db clean up
+        module_updater.module_down_chassis_db_cleanup()
 
         #Deinit
         module_updater.deinit()
