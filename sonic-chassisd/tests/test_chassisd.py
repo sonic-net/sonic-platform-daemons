@@ -1207,6 +1207,7 @@ def test_set_initial_dpu_admin_state_down():
     mock_module_updater.get_module_admin_status.return_value = 'down'
 
     # Set access of DPU0 Down
+    midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
@@ -1295,6 +1296,7 @@ def test_set_initial_dpu_admin_state_up():
     mock_module_updater.get_module_admin_status.return_value = 'up'
 
     # Set access of DPU0 up
+    midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
     fvs = midplane_table.get(name)
