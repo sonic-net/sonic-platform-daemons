@@ -755,8 +755,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         return module_info_dict
 
-    def _is_supervisor(self):
-        return False
 
     def update_dpu_state(self, key, state):
         """
