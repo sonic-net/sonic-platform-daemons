@@ -494,7 +494,7 @@ def ss_mock_open(expected_path, read_data=None):
 def test_smartswitch_module_db_update():
     chassis = MockSmartSwitchChassis()
     reboot_cause = "Power loss"
-    key = "REBOOT_CAUSE|DPU0|2024_11_12_15_06_40"
+    key = "DPU0"
     index = 0
     name = "DPU0"
     desc = "DPU Module 0"
@@ -509,13 +509,15 @@ def test_smartswitch_module_db_update():
     chassis.module_list.append(module)
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-
     expected_path = "/host/reboot-cause/module/reboot_cause/dpu0/history/2024_11_13_15_06_40_reboot_cause.txt"
+    symlink_path = "/host/reboot-cause/module/dpu0/previous-reboot-cause.json"
 
     with patch("os.path.exists", return_value=True), \
          patch("os.makedirs") as mock_makedirs, \
          patch("builtins.open", mock_open(read_data="Power loss")) as mock_file, \
-         patch("os.remove") as mock_remove:
+         patch("os.remove") as mock_remove, \
+         patch("os.symlink") as mock_symlink:
+
          # patch("datetime") as mock_datetime:
         # mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
