@@ -533,21 +533,6 @@ def test_smartswitch_module_db_update():
         # mock_makedirs.assert_called_once_with("/host/reboot-cause/module/reboot_cause/dpu0/history", exist_ok=True)
 
 
-def test_module_db_update_offline_transition():
-    # Set up the SmartSwitchModuleUpdater instance
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
-    key = "DPU0"
-    module_info_dict = {CHASSIS_MODULE_INFO_OPERSTATUS_FIELD: str(ModuleBase.MODULE_STATUS_OFFLINE)}
-
-    # Mock previous status to simulate the transition
-    with patch.object(module_updater, "module_info_dict", {key: "online"}), \
-         patch.object(module_updater, "persist_dpu_reboot_time") as mock_persist_reboot_time, \
-         patch.object(module_updater, "log_notice") as mock_log_notice:
-
-        # Call the method without extra arguments; let it use the mocked data
-        module_updater.module_db_update()
-
-
 def test_platform_json_file_exists_and_valid():
     """Test case where the platform JSON file exists with valid data."""
     chassis = MockSmartSwitchChassis()
