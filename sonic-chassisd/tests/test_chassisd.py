@@ -3,11 +3,9 @@ import sys
 import mock
 import tempfile
 from imp import load_source
-# from datetime import datetime
 
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
-# from mock import mock_open as dpu_mock_open
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
@@ -434,61 +432,23 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-'''
-def test_is_first_boot_file_found_first_boot():
-    chassis = MockSmartSwitchChassis()
-    module = "DPU0"
+    @patch("glob.glob")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch.object(SmartSwitchModuleUpdater, "log_warning")
+    def test_update_dpu_reboot_cause_to_db(self, mock_log_warning, mock_open, mock_glob):
+        # Initialize the updater and mock database connection
+        module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis=MagicMock())
+        module = "DPU0"
 
-    def ss_mock_open(*args, **kwargs):
-        return mock_open(read_data="First boot")("/mocked/path/to/reboot-cause.txt", **kwargs)
+        # Mock database connection and keys
+        module_updater.chassis_state_db = MagicMock()
+        module_updater.chassis_state_db.keys.return_value = ["REBOOT_CAUSE|DPU0|2024_11_12"]
 
-    with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
-         patch("builtins.open", new_callable=ss_mock_open, read_data="First boot") as mock_file:
-
-        # Call the method to check if it detects first boot
-        result = chassis._is_first_boot(module)
-
-        # Assert that the result is True because the file content is "First boot"
-        assert result
-
-
-def test_is_first_boot_file_not_found():
-    chassis = MockSmartSwitchChassis()
-    module = "DPU0"
-
-    def ss_mock_open(*args, **kwargs):
-        return mock_open(read_data="First boot")("/mocked/path/to/reboot-cause.txt", **kwargs)
-
-    with patch("os.path.join", return_value="/mocked/path/to/reboot-cause.txt"), \
-         patch("builtins.open", new_callable=ss_mock_open) as mock_file:
-
-        # Simulate a file not being found by raising FileNotFoundError
-        mock_file.side_effect = FileNotFoundError
-
-        # Call the method to check if it handles file not found correctly
-        result = chassis._is_first_boot(module)
-
-        # Assert that the result is False because the file was not found
-        assert not result
-'''
-
-def ss_mock_open(expected_path, read_data=None):
-    # Create a mock open instance with the specified read data
-    mock_open_instance = mock_open(read_data=read_data)
-
-    # Define a custom side effect that only opens the specified path
-    def custom_open(file, mode='r', *args, **kwargs):
-        # Check if args has at least one item to avoid IndexError
-        if args and args[0] == PLATFORM_ENV_CONF_FILE:
-            # Handle PLATFORM_ENV_CONF_FILE case if needed
-            return mock_open_instance
-        elif file == expected_path:
-            return mock_open_instance
-        else:
-            raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-    # Patch builtins.open to use the custom side effect
-    return patch("builtins.open", new=custom_open)
+        # Case 1: Verify deletion of existing keys
+        mock_glob.return_value = []  # No reboot cause files
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        module_updater.chassis_state_db.delete.assert_called_once_with("REBOOT_CAUSE|DPU0|2024_11_12")
+        mock_log_warning.assert_called_with("No reboot cause history files found for module: DPU0")
 
 
 def test_smartswitch_module_db_update():
@@ -517,9 +477,6 @@ def test_smartswitch_module_db_update():
          patch("builtins.open", mock_open(read_data="Power loss")) as mock_file, \
          patch("os.remove") as mock_remove, \
          patch("os.symlink") as mock_symlink:
-
-         # patch("datetime") as mock_datetime:
-        # mock_datetime.now.return_value = datetime(2024, 11, 12, 15, 6, 40)
 
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
