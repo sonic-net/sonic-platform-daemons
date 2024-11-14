@@ -534,27 +534,18 @@ def test_smartswitch_module_db_update():
 
 
 def test_module_db_update_offline_transition():
-    chassis = MockSmartSwitchChassis()
-    reboot_cause = "Power loss"
+    # Set up the SmartSwitchModuleUpdater instance
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
     key = "DPU0"
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-    prev_status = "online"  # Anything other than "offline"
-    current_status = str(ModuleBase.MODULE_STATUS_OFFLINE)  # Transitioning to offline
-    module_info_dict = {CHASSIS_MODULE_INFO_OPERSTATUS_FIELD: current_status}
+    module_info_dict = {CHASSIS_MODULE_INFO_OPERSTATUS_FIELD: str(ModuleBase.MODULE_STATUS_OFFLINE)}
 
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-
-    with patch.object(module_updater, "persist_dpu_reboot_time") as mock_persist_reboot_time, \
+    # Mock previous status to simulate the transition
+    with patch.object(module_updater, "module_info_dict", {key: "online"}), \
+         patch.object(module_updater, "persist_dpu_reboot_time") as mock_persist_reboot_time, \
          patch.object(module_updater, "log_notice") as mock_log_notice:
 
-        # Call the function with parameters that should trigger the 'offline' transition
-        module_updater.module_db_update(index, key, prev_status, module_info_dict)
+        # Call the method without extra arguments; let it use the mocked data
+        module_updater.module_db_update()
 
 
 def test_platform_json_file_exists_and_valid():
