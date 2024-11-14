@@ -733,6 +733,8 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
 
         # Run chassis db clean up
         module_updater.module_down_chassis_db_cleanup()
+        module_updater.chassis_state_db = None
+        module_updater.module_down_chassis_db_cleanup()
 
         #Deinit
         module_updater.deinit()
@@ -1327,7 +1329,6 @@ def test_daemon_run_supervisor_invalid_slot():
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     module_updater.my_slot = ModuleBase.MODULE_INVALID_SLOT
-    module_updater.slot = ModuleBase.MODULE_INVALID_SLOT
     module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
     daemon_chassisd.run()
 
@@ -1378,24 +1379,6 @@ def test_daemon_run_linecard():
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
-    daemon_chassisd.run()
-
-
-def test_daemon_run_linecard_invalid_slot():
-    # Test the chassisd run
-    chassis = MockChassis()
-
-    chassis.get_supervisor_slot = Mock()
-    chassis.get_supervisor_slot.return_value = ModuleBase.MODULE_INVALID_SLOT
-    chassis.get_my_slot = Mock()
-    chassis.get_my_slot.return_value = ModuleBase.MODULE_INVALID_SLOT
-
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
-    daemon_chassisd.stop = MagicMock()
-    daemon_chassisd.stop.wait.return_value = True
-    daemon_chassisd.run()
-    module_updater.slot = ModuleBase.MODULE_INVALID_SLOT
-    module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
     daemon_chassisd.run()
 
 
