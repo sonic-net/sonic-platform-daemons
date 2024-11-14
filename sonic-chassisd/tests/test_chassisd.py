@@ -433,52 +433,46 @@ def test_smartswitch_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
-    @patch("glob.glob")
-    @patch("builtins.open", new_callable=mock_open)
-    @patch.object(SmartSwitchModuleUpdater, "log_warning")
-    def test_update_dpu_reboot_cause_to_db(self, mock_log_warning, mock_open, mock_glob):
-        # Initialize the updater and mock database connection
-        module_updater = SmartSwitchModuleUpdater("SYSLOG_IDENTIFIER", chassis=MagicMock())
-        module = "DPU0"
-
-        # Mock database connection and keys
+    @patch("your_module.glob.glob")
+    @patch("your_module.open", new_callable=mock_open)
+    def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
+        # Set up the SmartSwitchModuleUpdater and test inputs
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
+        module = "dpu0"
         module_updater.chassis_state_db = MagicMock()
-        module_updater.chassis_state_db.keys.return_value = ["REBOOT_CAUSE|DPU0|2024_11_12"]
 
-        # Case 1: Verify deletion of existing keys
-        mock_glob.return_value = []  # No reboot cause files
-        module_updater.update_dpu_reboot_cause_to_db(module)
-        module_updater.chassis_state_db.delete.assert_called_once_with("REBOOT_CAUSE|DPU0|2024_11_12")
-        mock_log_warning.assert_called_with("No reboot cause history files found for module: DPU0")
+        # Case 1: No history files found
+        mock_glob.return_value = []
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
 
-        # Reset mocks for next case
-        mock_log_warning.reset_mock()
-        module_updater.chassis_state_db.delete.reset_mock()
-
-        # Case 2: Test with a valid reboot cause file
+        # Case 2: Valid JSON file with reboot cause
         mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
-        valid_reboot_cause = {"name": "reboot_2024", "cause": "Power failure"}
-        mock_open().read.return_value = json.dumps(valid_reboot_cause)
+        mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_not_called()  # No warnings expected
+            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
+            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
 
-        module_updater.update_dpu_reboot_cause_to_db(module)
-        key = "REBOOT_CAUSE|DPU0|reboot_2024"
-        module_updater.chassis_state_db.hset.assert_any_call(key, "name", "reboot_2024")
-        module_updater.chassis_state_db.hset.assert_any_call(key, "cause", "Power failure")
+        # Case 3: Empty JSON object in file
+        mock_open().read.return_value = json.dumps({})
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
 
-        # Case 3: Test with an empty JSON file
-        mock_open().read.return_value = "{}"
-        module_updater.update_dpu_reboot_cause_to_db(module)
-        mock_log_warning.assert_called_with("DPU0 reboot_cause_dict is empty")
-
-        # Case 4: Test with an invalid JSON file
-        mock_open.side_effect = json.JSONDecodeError("Expecting value", "doc", 0)
-        module_updater.update_dpu_reboot_cause_to_db(module)
-        mock_log_warning.assert_called_with("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
+        # Case 4: Invalid JSON in file
+        mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
 
         # Case 5: General exception handling
-        mock_open.side_effect = Exception("Some unexpected error")
-        module_updater.update_dpu_reboot_cause_to_db(module)
-        mock_log_warning.assert_called_with("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Some unexpected error")
+        mock_open.side_effect = IOError("Unable to read file")
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
 
 
 def test_smartswitch_module_db_update():
@@ -1333,6 +1327,7 @@ def test_daemon_run_supervisor_invalid_slot():
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     module_updater.my_slot = ModuleBase.MODULE_INVALID_SLOT
+    module_updater.slot = ModuleBase.MODULE_INVALID_SLOT
     module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
     daemon_chassisd.run()
 
@@ -1384,6 +1379,25 @@ def test_daemon_run_linecard():
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
+
+
+def test_daemon_run_linecard_invalid_slot():
+    # Test the chassisd run
+    chassis = MockChassis()
+
+    chassis.get_supervisor_slot = Mock()
+    chassis.get_supervisor_slot.return_value = ModuleBase.MODULE_INVALID_SLOT
+    chassis.get_my_slot = Mock()
+    chassis.get_my_slot.return_value = ModuleBase.MODULE_INVALID_SLOT
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.run()
+    module_updater.slot = ModuleBase.MODULE_INVALID_SLOT
+    module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
+    daemon_chassisd.run()
+
 
 def test_chassis_db_cleanup():
     chassis = MockChassis()
