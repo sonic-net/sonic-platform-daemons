@@ -2,6 +2,7 @@ import os
 import sys
 import mock
 import tempfile
+import json
 from imp import load_source
 
 from mock import Mock, MagicMock, patch, mock_open
@@ -449,6 +450,35 @@ def test_smartswitch_configupdater_check_admin_state():
         module_updater.update_dpu_reboot_cause_to_db(module)
         module_updater.chassis_state_db.delete.assert_called_once_with("REBOOT_CAUSE|DPU0|2024_11_12")
         mock_log_warning.assert_called_with("No reboot cause history files found for module: DPU0")
+
+        # Reset mocks for next case
+        mock_log_warning.reset_mock()
+        module_updater.chassis_state_db.delete.reset_mock()
+
+        # Case 2: Test with a valid reboot cause file
+        mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
+        valid_reboot_cause = {"name": "reboot_2024", "cause": "Power failure"}
+        mock_open().read.return_value = json.dumps(valid_reboot_cause)
+
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        key = "REBOOT_CAUSE|DPU0|reboot_2024"
+        module_updater.chassis_state_db.hset.assert_any_call(key, "name", "reboot_2024")
+        module_updater.chassis_state_db.hset.assert_any_call(key, "cause", "Power failure")
+
+        # Case 3: Test with an empty JSON file
+        mock_open().read.return_value = "{}"
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_called_with("DPU0 reboot_cause_dict is empty")
+
+        # Case 4: Test with an invalid JSON file
+        mock_open.side_effect = json.JSONDecodeError("Expecting value", "doc", 0)
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_called_with("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
+
+        # Case 5: General exception handling
+        mock_open.side_effect = Exception("Some unexpected error")
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_called_with("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Some unexpected error")
 
 
 def test_smartswitch_module_db_update():
