@@ -523,7 +523,8 @@ def test_smartswitch_module_db_update():
 
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
-
+        module_updater._is_first_boot(name)
+        module_updater.persist_dpu_reboot_time(name)
         # Verify that the custom open was called with the expected file path
         # mock_file_instance = open(expected_path)
         # mock_file_instance.write.assert_any_call("cause: Power loss\n")
