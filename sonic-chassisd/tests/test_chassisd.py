@@ -533,6 +533,30 @@ def test_smartswitch_module_db_update():
         # mock_makedirs.assert_called_once_with("/host/reboot-cause/module/reboot_cause/dpu0/history", exist_ok=True)
 
 
+def test_module_db_update_offline_transition():
+    chassis = MockSmartSwitchChassis()
+    reboot_cause = "Power loss"
+    key = "DPU0"
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    prev_status = "online"  # Anything other than "offline"
+    current_status = str(ModuleBase.MODULE_STATUS_OFFLINE)  # Transitioning to offline
+    module_info_dict = {CHASSIS_MODULE_INFO_OPERSTATUS_FIELD: current_status}
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    with patch.object(module_updater, "persist_dpu_reboot_time") as mock_persist_reboot_time, \
+         patch.object(module_updater, "log_notice") as mock_log_notice:
+
+        # Call the function with parameters that should trigger the 'offline' transition
+        module_updater.module_db_update(module_index, key, prev_status, module_info_dict)
+
+
 def test_platform_json_file_exists_and_valid():
     """Test case where the platform JSON file exists with valid data."""
     chassis = MockSmartSwitchChassis()
