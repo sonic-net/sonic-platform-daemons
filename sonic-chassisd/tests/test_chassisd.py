@@ -1225,7 +1225,7 @@ def test_set_initial_dpu_admin_state_down():
         mock_is_smartswitch.return_value = True
 
         # Patch num_modules for the updater
-        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1):
+        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1), \
              patch.object(daemon_chassisd.module_updater, 'get_module_admin_status', return_value='down'):
             # Now run the function that sets the initial admin state
             daemon_chassisd.set_initial_dpu_admin_state()
