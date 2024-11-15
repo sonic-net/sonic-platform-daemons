@@ -116,6 +116,52 @@ def test_dpu_state_update(dpu_id, dp_state, cp_state, expected_state):
                  'dpu_control_plane_state': 'down', 'dpu_control_plane_time': '2000-01-01 00:00:00'}}
 
 
+@pytest.mark.parametrize('dpu_id, dp_state, cp_state, expected_state', [
+    (0, False, False, {'DPU0':
+        {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': '2000-01-01 00:00:00',
+         'dpu_control_plane_state': 'down', 'dpu_control_plane_time': '2000-01-01 00:00:00'}}),
+    (0, False, True, {'DPU0':
+        {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': '2000-01-01 00:00:00',
+         'dpu_control_plane_state': 'up', 'dpu_control_plane_time': '2000-01-01 00:00:00'}}),
+    (0, True, True, {'DPU0':
+        {'dpu_data_plane_state': 'up', 'dpu_data_plane_time': '2000-01-01 00:00:00',
+         'dpu_control_plane_state': 'up', 'dpu_control_plane_time': '2000-01-01 00:00:00'}}),
+])
+def test_dpu_state_manager(dpu_id, dp_state, cp_state, expected_state):
+    chassis = MockDpuChassis()
+
+    chassis.get_dpu_id = MagicMock(return_value=dpu_id)
+    chassis.get_dataplane_state = MagicMock(return_value=dp_state)
+    chassis.get_controlplane_state = MagicMock(return_value=cp_state)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        print(key, field, value)
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+
+        chassis_state_db[key][field] = value
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.Select, 'select', side_effect=((swsscommon.Select.OBJECT, None), (swsscommon.Select.OBJECT, None), KeyboardInterrupt)):
+            dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+            dpu_updater._time_now = MagicMock(return_value='2000-01-01 00:00:00')
+
+            dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+
+            dpu_state_mng.task_worker()
+
+            assert chassis_state_db == expected_state
+
+            dpu_updater.deinit()
+
+            # After the deinit we assume that the DPU state is down.
+            assert chassis_state_db == {'DPU0':
+                {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': '2000-01-01 00:00:00',
+                 'dpu_control_plane_state': 'down', 'dpu_control_plane_time': '2000-01-01 00:00:00'}}
+
+
 def test_dpu_chassis_daemon():
     # Test the chassisd run
     chassis = MockDpuChassis()
