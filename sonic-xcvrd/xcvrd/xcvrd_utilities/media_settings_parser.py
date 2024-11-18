@@ -365,7 +365,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             fvs[index] = (str(media_key), str(val_str))
             index += 1
 
-        xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
+        xcvr_table_helper.get_app_set_port_tbl(asic_index).set(port_name, fvs)
         xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
         helper_logger.log_notice("Notify media setting: Published ASIC-side SI setting "
                                  "for lport {} in APP_DB".format(logical_port_name))

@@ -25,6 +25,7 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
+        self.app_set_port_tbl = {}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -39,6 +40,7 @@ class XcvrTableHelper:
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
+            self.app_set_port_tbl[asic_id] = swsscommon.Table(appl_db, swsscommon.APP_PORT_TABLE_NAME)
 
     def get_intf_tbl(self, asic_id):
         return self.int_tbl[asic_id]
@@ -60,6 +62,9 @@ class XcvrTableHelper:
 
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
+
+    def get_app_set_port_tbl(self, asic_id):
+        return self.app_set_port_tbl[asic_id]
 
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
