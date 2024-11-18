@@ -177,6 +177,10 @@ class MockSmartSwitchChassis:
     def get_controlplane_state(self):
         raise NotImplementedError
 
+    def update_dpu_reboot_cause_to_db(self, module):
+        """Mock implementation to update reboot cause in a database."""
+        pass
+
 class MockDpuChassis:
 
     def get_dpu_id(self):
