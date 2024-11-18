@@ -1094,9 +1094,14 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
             (key, op, fvp) = sst.pop()
 
             if op == 'SET':
-                admin_state = MODULE_ADMIN_DOWN
+                fvs = dict(fvp)
+                admin_status = fvs.get('admin_status')
+                if admin_status == 'up':
+                    admin_state = MODULE_ADMIN_UP
+                else:
+                    admin_state = MODULE_ADMIN_DOWN
             elif op == 'DEL':
-                admin_state = MODULE_ADMIN_UP
+                admin_state = MODULE_ADMIN_DOWN
             else:
                 continue
 

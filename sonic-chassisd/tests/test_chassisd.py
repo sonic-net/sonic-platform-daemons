@@ -507,11 +507,6 @@ def test_smartswitch_module_db_update():
         module_updater._is_first_boot(name)
         module_updater.persist_dpu_reboot_time(name)
         module_updater.update_dpu_reboot_cause_to_db(name)
-        # Verify that the custom open was called with the expected file path
-        # mock_file_instance = open(expected_path)
-        # mock_file_instance.write.assert_any_call("cause: Power loss\n")
-        # mock_file.assert_called_with(expected_path, 'r')
-        # mock_makedirs.assert_called_once_with("/host/reboot-cause/module/reboot_cause/dpu0/history", exist_ok=True)
 
 
 def test_platform_json_file_exists_and_valid():
