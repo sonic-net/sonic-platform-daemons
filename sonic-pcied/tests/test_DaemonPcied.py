@@ -143,6 +143,7 @@ class TestDaemonPcied(object):
         daemon_pcied.run()
         assert daemon_pcied.check_pcie_devices.call_count == 1
 
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=True))
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_is_dpu_in_detaching_mode(self):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
@@ -177,6 +178,7 @@ class TestDaemonPcied(object):
         daemon_pcied.detach_info.get.side_effect = Exception("Test exception")
         assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.1') == False
 
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=False))
     @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=False))
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_check_pcie_devices(self):
@@ -189,6 +191,7 @@ class TestDaemonPcied(object):
         assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
         assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 0
 
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=True))
     @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=True))
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_check_pcie_devices_detaching(self):
