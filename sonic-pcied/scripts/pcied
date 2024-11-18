@@ -162,26 +162,23 @@ class DaemonPcied(daemon_base.DaemonBase):
 
     # Check if any interface is in detaching mode by querying the state_db
     def is_dpu_in_detaching_mode(self, pcie_dev):
-        try:
-            # Ensure detach_info is not None
-            if self.detach_info is None:
-                self.log_debug("detach_info is None")
-                return False
+        # Ensure detach_info is not None
+        if self.detach_info is None:
+            self.log_debug("detach_info is None")
+            return False
 
-            # Query the state_db for the device detaching status
-            detach_info_keys = list(self.detach_info.getKeys())
-            if not detach_info_keys:
-                return False
+        # Query the state_db for the device detaching status
+        detach_info_keys = list(self.detach_info.getKeys())
+        if not detach_info_keys:
+            return False
 
-            for key in detach_info_keys:
-                dpu_info = self.detach_info.get(key)
-                if dpu_info:
-                    bus_info = dpu_info.get(PCIE_DETACH_BUS_INFO_FIELD)
-                    dpu_state = dpu_info.get(PCIE_DETACH_DPU_STATE_FIELD)
-                    if bus_info == pcie_dev and dpu_state == "detaching":
-                        return True
-        except Exception as e:
-            self.log_error(f"Error retrieving bus_info and dpu_state for {pcie_dev}: {e}")
+        for key in detach_info_keys:
+            dpu_info = self.detach_info.get(key)
+            if dpu_info:
+                bus_info = dpu_info.get(PCIE_DETACH_BUS_INFO_FIELD)
+                dpu_state = dpu_info.get(PCIE_DETACH_DPU_STATE_FIELD)
+                if bus_info == pcie_dev and dpu_state == "detaching":
+                    return True
 
         return False
 
