@@ -362,13 +362,14 @@ class ModuleUpdater(logger.Logger):
            self.hostname_table.set(hostname_key, hostname_fvs)
 
         # Asics that are on the "not online" modules need to be cleaned up
-        asics = list(self.asic_table.getKeys())
-        for asic in asics:
-            fvs = self.asic_table.get(asic)
-            if isinstance(fvs, list):
-                fvs = dict(fvs[-1])
-            if fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
-                self.asic_table._del(asic)
+        if notOnlineModules:
+            asics = list(self.asic_table.getKeys())
+            for asic in asics:
+                fvs = self.asic_table.get(asic)
+                if isinstance(fvs, list):
+                    fvs = dict(fvs[-1])
+                if CHASSIS_MODULE_INFO_NAME_FIELD in fvs.keys() and fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
+                    self.asic_table._del(asic)
 
     def _get_module_info(self, module_index):
         """
