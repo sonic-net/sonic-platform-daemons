@@ -237,56 +237,56 @@ class TestDaemonStorage(object):
         stormon_daemon.sync_fsio_rw_json = MagicMock()
 
         stormon_daemon.stop_event.set = MagicMock()
-        stormon_daemon.log_info = MagicMock()
-        stormon_daemon.log_warning = MagicMock()
+        stormon_daemon.log.log_notice = MagicMock()
+        stormon_daemon.log.log_warning = MagicMock()
 
         # Test SIGHUP
         stormon_daemon.signal_handler(stormond.signal.SIGHUP, None)
-        assert stormon_daemon.log_info.call_count == 1
-        stormon_daemon.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 1
+        stormon_daemon.log.log_notice.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 0
         assert stormond.exit_code == 0
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
 
         # Test SIGINT
         test_signal = stormond.signal.SIGINT
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 2
-        stormon_daemon.log_info.assert_called_with("Exiting with SIGINT")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 2
+        stormon_daemon.log.log_notice.assert_called_with("Exiting with SIGINT")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
         assert stormond.exit_code == (128 + test_signal)
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
 
         # Test SIGTERM
         test_signal = stormond.signal.SIGTERM
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 2
-        stormon_daemon.log_info.assert_called_with("Exiting with SIGTERM")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 2
+        stormon_daemon.log.log_notice.assert_called_with("Exiting with SIGTERM")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
         assert stormond.exit_code == (128 + test_signal)
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
         stormond.exit_code = 0
 
         # Test an unhandled signal
         stormon_daemon.signal_handler(stormond.signal.SIGUSR1, None)
-        assert stormon_daemon.log_warning.call_count == 1
-        stormon_daemon.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
-        assert stormon_daemon.log_info.call_count == 0
+        assert stormon_daemon.log.log_warning.call_count == 1
+        stormon_daemon.log.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
+        assert stormon_daemon.log.log_notice.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 0
         assert stormond.exit_code == 0
 
