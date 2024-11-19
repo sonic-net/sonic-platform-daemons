@@ -925,7 +925,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 self.chassis_state_db.delete(key)
 
         # Fetch the list of reboot cause history files
-        history_path = f"/host/reboot-cause/module/{module.lower()}/history/*.txt"
+        history_path = f"/host/reboot-cause/module/{module.lower()}/history/*_reboot_cause.txt"
         reboot_cause_files = glob.glob(history_path)
 
         if not reboot_cause_files:
