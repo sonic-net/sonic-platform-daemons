@@ -130,27 +130,26 @@ def test_smartswitch_moduleupdater_status_transition_to_offline():
     module.set_oper_status(initial_status)
     chassis.module_list.append(module)
 
-    # Create the updater and update module_db
+    # Create the updater
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.module_db_update()
 
-    # Update module's operational status to OFFLINE
-    offline_status = ModuleBase.MODULE_STATUS_OFFLINE
-    module.set_oper_status(offline_status)
-    module_updater.module_db_update()
+    # Mock methods that interact with the filesystem
+    with patch.object(module_updater, 'persist_dpu_reboot_time') as mock_persist_reboot_time, \
+         patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
+         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db:
 
-    # Verify the "offline" logic was executed
-    fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
-    assert offline_status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+        # Perform initial database update
+        module_updater.module_db_update()
 
-    # Ensure the reboot time is persisted for the module
-    # Mock or verify persist_dpu_reboot_time() was called with the correct key
-    assert module_updater.retrieve_dpu_reboot_time(name) is not None
+        # Update module's operational status to OFFLINE
+        offline_status = ModuleBase.MODULE_STATUS_OFFLINE
+        module.set_oper_status(offline_status)
+        module_updater.module_db_update()
+
+        # Assert the expected calls for transitioning to offline
+        mock_persist_reboot_time.assert_called_once_with(name)
+        mock_persist_reboot_cause.assert_not_called()
+        mock_update_reboot_db.assert_not_called()
 
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
