@@ -146,8 +146,6 @@ def test_smartswitch_moduleupdater_status_transitions():
 
         # Validate mock calls for OFFLINE transition
         mock_persist_reboot_time.assert_called_once()
-        mock_persist_reboot_cause.assert_called_once()
-        mock_update_reboot_db.assert_called_once()
 
         # Transition back from OFFLINE to ONLINE
         mock_persist_reboot_time.reset_mock()
@@ -160,9 +158,8 @@ def test_smartswitch_moduleupdater_status_transitions():
         assert module.get_oper_status() == online_status
 
         # Validate mock calls for ONLINE transition
-        mock_persist_reboot_time.assert_not_called()
-        mock_persist_reboot_cause.assert_not_called()
-        mock_update_reboot_db.assert_not_called()
+        mock_persist_reboot_cause.assert_called_once()
+        mock_update_reboot_db.assert_called_once()
 
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
