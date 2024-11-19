@@ -133,8 +133,10 @@ def test_smartswitch_moduleupdater_status_transitions():
     # Create the updater
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
 
-    # Mock methods that interact with the filesystem
-    with patch.object(module_updater, 'persist_dpu_reboot_time') as mock_persist_reboot_time, \
+    # Mock dependent methods
+    with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2024-11-19T00:00:00") \
+             as mock_retrieve_reboot_time, \
+         patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
          patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
          patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db:
 
