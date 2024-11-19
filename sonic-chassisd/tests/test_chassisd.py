@@ -138,7 +138,8 @@ def test_smartswitch_moduleupdater_status_transitions():
              as mock_retrieve_reboot_time, \
          patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
          patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
-         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db:
+         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
+         patch("os.makedirs") as mock_makedirs:
 
         # Transition from ONLINE to OFFLINE
         offline_status = ModuleBase.MODULE_STATUS_OFFLINE
