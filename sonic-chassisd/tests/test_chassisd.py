@@ -114,7 +114,7 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
-def test_smartswitch_moduleupdater_status_transition_to_offline():
+def test_smartswitch_moduleupdater_status_transitions():
     # Mock the chassis and module
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -125,9 +125,9 @@ def test_smartswitch_moduleupdater_status_transition_to_offline():
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
 
-    # Set initial state to ONLINE
-    initial_status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_oper_status(initial_status)
+    # Add module to chassis and initialize with ONLINE status
+    initial_status_online = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(initial_status_online)
     chassis.module_list.append(module)
 
     # Create the updater
@@ -138,16 +138,29 @@ def test_smartswitch_moduleupdater_status_transition_to_offline():
          patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
          patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db:
 
-        # Perform initial database update
-        module_updater.module_db_update()
-
-        # Update module's operational status to OFFLINE
+        # Transition from ONLINE to OFFLINE
         offline_status = ModuleBase.MODULE_STATUS_OFFLINE
         module.set_oper_status(offline_status)
         module_updater.module_db_update()
+        assert module.get_oper_status() == offline_status
 
-        # Assert the expected calls for transitioning to offline
-        mock_persist_reboot_time.assert_called_once_with(name)
+        # Validate mock calls for OFFLINE transition
+        mock_persist_reboot_time.assert_called_once()
+        mock_persist_reboot_cause.assert_called_once()
+        mock_update_reboot_db.assert_called_once()
+
+        # Transition back from OFFLINE to ONLINE
+        mock_persist_reboot_time.reset_mock()
+        mock_persist_reboot_cause.reset_mock()
+        mock_update_reboot_db.reset_mock()
+
+        online_status = ModuleBase.MODULE_STATUS_ONLINE
+        module.set_oper_status(online_status)
+        module_updater.module_db_update()
+        assert module.get_oper_status() == online_status
+
+        # Validate mock calls for ONLINE transition
+        mock_persist_reboot_time.assert_not_called()
         mock_persist_reboot_cause.assert_not_called()
         mock_update_reboot_db.assert_not_called()
 
