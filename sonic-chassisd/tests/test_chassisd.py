@@ -135,11 +135,14 @@ def test_smartswitch_moduleupdater_status_transitions():
 
     # Mock dependent methods
     with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2024-11-19T00:00:00") \
-             as mock_retrieve_reboot_time, \
+            as mock_retrieve_reboot_time, \
          patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
          patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
          patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
-         patch("os.makedirs") as mock_makedirs:
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as mock_file, \
+         patch.object(module_updater, '_get_history_path',
+                      return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
 
         # Transition from ONLINE to OFFLINE
         offline_status = ModuleBase.MODULE_STATUS_OFFLINE
@@ -150,11 +153,13 @@ def test_smartswitch_moduleupdater_status_transitions():
         # Validate mock calls for OFFLINE transition
         mock_persist_reboot_time.assert_called_once()
 
-        # Transition back from OFFLINE to ONLINE
-        mock_persist_reboot_time.reset_mock()
+        # Reset mocks for next transition
+        mock_file.reset_mock()
+        mock_makedirs.reset_mock()
         mock_persist_reboot_cause.reset_mock()
         mock_update_reboot_db.reset_mock()
 
+        # Ensure ONLINE transition is handled correctly
         online_status = ModuleBase.MODULE_STATUS_ONLINE
         module.set_oper_status(online_status)
         module_updater.module_db_update()
