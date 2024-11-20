@@ -791,20 +791,73 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.log_info("Shutting down...")
 
 
+class DpuStateManagerTask(ProcessTaskBase):
+
+    def __init__(self, log_identifier, dpu_state_updater):
+        super(DpuStateManagerTask, self).__init__()
+
+        self.logger = logger.Logger(log_identifier)
+        self.dpu_state_updater = dpu_state_updater
+        self.state_db = daemon_base.db_connect('STATE_DB')
+        self.app_db = daemon_base.db_connect('APPL_DB')
+
+    def task_worker(self):
+        sel = swsscommon.Select()
+        selectable = [
+            swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
+            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY')
+        ]
+
+        for s in selectable:
+            sel.addSelectable(s)
+
+        try:
+            while True:
+                (state, c) = sel.select(SELECT_TIMEOUT)
+
+                if state == swsscommon.Select.TIMEOUT:
+                    continue
+
+                if state != swsscommon.Select.OBJECT:
+                    continue
+
+                for s in selectable:
+                    s.pops()
+
+                self.dpu_state_updater.update_state()
+
+        except KeyboardInterrupt:
+            pass
+
+
 class DpuChassisdDaemon(ChassisdDaemon):
 
     def run(self):
         self.log_info("Starting up...")
 
+        poll_dpu_state = True
+        if not try_get(self.platform_chassis.get_dataplane_state, default=None) and not \
+                try_get(self.platform_chassis.get_controlplane_state, default=None):
+            poll_dpu_state = False
+
         dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, self.platform_chassis)
+        dpu_state_mng = None
+
+        if not poll_dpu_state:
+            dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+            dpu_state_mng.task_run()
 
         # Start main loop
         self.log_info("Start daemon main loop")
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
-            dpu_updater.update_state()
+            if poll_dpu_state:
+                dpu_updater.update_state()
 
         self.log_info("Stop daemon main loop")
+
+        if dpu_state_mng:
+            dpu_state_mng.task_stop()
 
         dpu_updater.deinit()
 
