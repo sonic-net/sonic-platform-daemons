@@ -54,6 +54,7 @@ class FieldValuePairs:
         pass
 
 class Select:
+    OBJECT = 0
     TIMEOUT = 1
 
     def addSelectable(self, selectable):
@@ -66,7 +67,12 @@ class Select:
         return self.TIMEOUT, None
 
 class SubscriberStateTable(Table):
-    pass
+
+    def pop(self):
+        return None
+
+    def pops(self):
+        return None
 
 class RedisPipeline:
     def __init__(self, db):
