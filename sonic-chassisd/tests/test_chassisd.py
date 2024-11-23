@@ -150,9 +150,6 @@ def test_smartswitch_moduleupdater_status_transitions():
         module_updater.module_db_update()
         assert module.get_oper_status() == offline_status
 
-        # Validate mock calls for OFFLINE transition
-        # mock_persist_reboot_time.assert_called_once()
-
         # Reset mocks for next transition
         mock_file.reset_mock()
         mock_makedirs.reset_mock()

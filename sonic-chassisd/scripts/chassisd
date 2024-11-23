@@ -849,6 +849,18 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def persist_dpu_reboot_cause(self, reboot_cause, module):
         """Persist the reboot cause information and handle file rotation."""
+        # Extract cause and comment from the reboot_cause
+        if reboot_cause:
+            try:
+                cause, comment = (
+                    reboot_cause.split(",", 1) if isinstance(reboot_cause, str) else reboot_cause
+                )
+            except ValueError:
+                cause = reboot_cause if isinstance(reboot_cause, str) else "Unknown"
+                comment = "N/A"
+        else:
+            cause, comment = "Unknown", "N/A"
+
         prev_reboot_time = self.retrieve_dpu_reboot_time(module)
         if prev_reboot_time is None:
             prev_reboot_time = self._get_current_time_str()
@@ -868,8 +880,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         formatted_time = dt_obj.strftime("%a %b %d %I:%M:%S %p UTC %Y")
 
         reboot_cause_dict = {
-            "cause": reboot_cause,
-            "comment": "N/A",
+            "cause": cause,
+            "comment": comment,
             "device": module,
             "time": formatted_time,
             "name": prev_reboot_time,
@@ -984,10 +996,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # Update midplane state in the chassisStateDB DPU_STATE table
             key = "DPU_STATE|" + module_key
             dpu_mp_state = self.get_dpu_midplane_state(key)
-            if midplane_access and dpu_mp_state != 'UP':
-                self.update_dpu_state(key, "UP")
-            elif not midplane_access and dpu_mp_state != 'DOWN':
-                self.update_dpu_state(key, "DOWN")
+            if midplane_access and dpu_mp_state != 'up':
+                self.update_dpu_state(key, 'up')
+            elif not midplane_access and dpu_mp_state != 'down':
+                self.update_dpu_state(key, "down")
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -1267,9 +1279,9 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 # Initialize DPU_STATE DB table on bootup
                 dpu_state_key = "DPU_STATE|" + module_name
                 if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
-                    op_state = 'UP'
+                    op_state = 'up'
                 else:
-                    op_state = 'DOWN'
+                    op_state = 'down'
                 self.module_updater.update_dpu_state(dpu_state_key, op_state)
 
                 if op is not None:

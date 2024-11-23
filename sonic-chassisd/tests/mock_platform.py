@@ -78,15 +78,7 @@ class MockModule(MockDevice):
         return self.asic_list
 
     def get_reboot_cause(self):
-        reboot_cause = {
-            'name': '2024_10_19_01_17_18',
-            'cause': 'reboot',
-            'comment': 'N/A',
-            'time': 'N/A',
-            'device': 'DPU0',
-            'user': 'bla'
-        }
-        return reboot_cause
+        return 'reboot', 'N/A'
 
     def get_serial(self):
         return self.module_serial
