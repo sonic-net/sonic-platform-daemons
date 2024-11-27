@@ -335,7 +335,10 @@ class MockChassis(chassis_base.ChassisBase):
         self._replaceable = False
 
         self._is_chassis_system = False
+        self._is_dpu = False
+        self._is_smartswitch = False
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
+        self._dpu_id = None
         self._thermal_manager = MockThermalManager()
 
     def make_absent_fan(self):
@@ -445,6 +448,26 @@ class MockChassis(chassis_base.ChassisBase):
     def is_replaceable(self):
         return self._replaceable
 
+    def is_dpu(self):
+        return self._is_dpu
+
+    def is_smartswitch(self):
+        return self._is_smartswitch
+
+    def set_smartswitch(self, is_true):
+        self._is_smartswitch = is_true
+
+    def set_dpu(self, is_true):
+        self._is_dpu = is_true
+
+    def set_dpu_id(self, dpu_id):
+        self._dpu_id = dpu_id
+
+    def get_dpu_id(self):
+        # The default behaviour is Not implemented Error
+        if not self._dpu_id:
+            raise NotImplementedError
+        return self._dpu_id
 
 class MockModule(module_base.ModuleBase):
     def __init__(self):
