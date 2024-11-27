@@ -1,7 +1,10 @@
 import datetime
 import os
 import sys
-from imp import load_source
+import runpy
+
+from imp import load_source, reload
+from sonic_py_common import syslogger
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
@@ -29,8 +32,6 @@ import pytest
 
 log_identifier = 'storage_daemon_test'
 
-
-#daemon_base.db_connect = MagicMock()
 
 config_intvls = '''
 daemon_polling_interval,
@@ -72,6 +73,7 @@ class TestDaemonStorage(object):
 
             assert(list(stormon_daemon.storage.devices.keys()) == ['sda'])
 
+
     @patch('os.path.exists', MagicMock(return_value=True))
     @patch('json.load', MagicMock(return_value=bad_fsio_json_dict))
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
@@ -81,7 +83,8 @@ class TestDaemonStorage(object):
             stormon_daemon = stormond.DaemonStorage(log_identifier)
 
             assert stormon_daemon.fsio_json_file_loaded == False
-    
+
+
     @patch('os.path.exists', MagicMock(return_value=True))
     @patch('json.load', MagicMock(return_value=fsio_json_dict))
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
@@ -113,16 +116,67 @@ class TestDaemonStorage(object):
 
         assert mock_daemon_base.call_count == 0
 
-            
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_load_fsio_rw_statedb(self):
+
+        keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
+
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.storage.devices = {'sda' : MagicMock()}
+        stormon_daemon.state_db.keys = MagicMock(return_value=keys_list)
+        stormon_daemon.state_db.hget = MagicMock()
+
+        stormon_daemon._load_fsio_rw_statedb()
+
+        assert stormon_daemon.statedb_storage_info_loaded == True
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_load_fsio_rw_statedb_exception(self):
+
+        keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
+
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.storage.devices = {'sda' : MagicMock()}
+        stormon_daemon.state_db.keys = MagicMock(return_value=keys_list)
+        stormon_daemon.state_db.hget = MagicMock(side_effect=Exception)
+        stormon_daemon.log.log_error = MagicMock()
+
+        stormon_daemon._load_fsio_rw_statedb()
+
+        assert stormon_daemon.statedb_storage_info_loaded == False
+        assert stormon_daemon.log.log_error.call_count == 1
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_load_fsio_rw_statedb_value_none(self):
+
+        keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
+
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.storage.devices = {'sda' : MagicMock()}
+        stormon_daemon.state_db.keys = MagicMock(return_value=keys_list)
+        stormon_daemon.state_db.hget = MagicMock(return_value=None)
+
+        stormon_daemon._load_fsio_rw_statedb()
+
+        assert stormon_daemon.statedb_storage_info_loaded == False
+
+
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     @patch('json.dump', MagicMock())
     def test_sync_fsio_rw_json_exception(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
+            stormon_daemon.log.log_error = MagicMock()
+            stormon_daemon.get_formatted_time = MagicMock(side_effect=Exception)
             stormon_daemon.sync_fsio_rw_json()
 
             assert stormon_daemon.state_db.call_count == 0
+            assert stormon_daemon.log.log_error.call_count == 1
+
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     @patch('json.dump', MagicMock())
@@ -145,6 +199,17 @@ class TestDaemonStorage(object):
 
         assert reads == '1000'
         assert writes == '2000'
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_determine_sot(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.statedb_storage_info_loaded = True
+
+        stormon_daemon._determine_sot()
+
+        assert stormon_daemon.use_statedb_baseline == True
+        assert stormon_daemon.use_fsio_json_baseline == False
 
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
@@ -185,7 +250,19 @@ class TestDaemonStorage(object):
     
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
-    def test_get_static_fields(self):
+    def test_get_static_fields_no_storage_device_object(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.log.log_notice = MagicMock()
+
+        stormon_daemon.storage.devices = {'sda' : None}
+
+        stormon_daemon.get_static_fields_update_state_db()
+
+        assert stormon_daemon.log.log_notice.call_count == 1
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_static_fields_happy(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
         mock_storage_device_object = MagicMock()
@@ -197,6 +274,35 @@ class TestDaemonStorage(object):
 
         assert stormon_daemon.device_table.getKeys() == ['sda']
         assert stormon_daemon.device_table.get('sda') == {'device_model': 'Skynet', 'serial': 'T1000'}
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_static_fields_exception(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+
+        mock_storage_device_object = MagicMock()
+        mock_storage_device_object.get_model.return_value = "Skynet"
+        mock_storage_device_object.get_serial.return_value = "T1000"
+
+        stormon_daemon.storage.devices = {'sda' : mock_storage_device_object}
+        stormon_daemon.log.log_error = MagicMock()
+        stormon_daemon.update_storage_info_status_db = MagicMock(side_effect=Exception)
+        
+        stormon_daemon.get_static_fields_update_state_db()
+
+        assert stormon_daemon.log.log_error.call_count == 1
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_dynamic_fields_no_storage_device_object(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.log.log_notice = MagicMock()
+
+        stormon_daemon.storage.devices = {'sda' : None}
+
+        stormon_daemon.get_dynamic_fields_update_state_db()
+
+        assert stormon_daemon.log.log_notice.call_count == 1
 
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
@@ -219,7 +325,22 @@ class TestDaemonStorage(object):
         assert stormon_daemon.device_table.getKeys() == ['sda']
         for field, value in dynamic_dict.items():
             assert stormon_daemon.device_table.get('sda')[field] == value
-    
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_dynamic_fields_exception(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.log.log_notice = MagicMock()
+
+        mock_storage_device_object = MagicMock()
+        mock_storage_device_object.fetch_parse_info = MagicMock(side_effect=Exception)
+
+        stormon_daemon.storage.devices = {'sda' : mock_storage_device_object}
+        stormon_daemon.get_dynamic_fields_update_state_db()
+
+        assert stormon_daemon.log.log_notice.call_count == 1
+
+
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     @patch('json.dump', MagicMock())
     @patch('time.time', MagicMock(return_value=1000))
@@ -237,72 +358,141 @@ class TestDaemonStorage(object):
         stormon_daemon.sync_fsio_rw_json = MagicMock()
 
         stormon_daemon.stop_event.set = MagicMock()
-        stormon_daemon.log_info = MagicMock()
-        stormon_daemon.log_warning = MagicMock()
+        stormon_daemon.log.log_notice = MagicMock()
+        stormon_daemon.log.log_warning = MagicMock()
 
         # Test SIGHUP
         stormon_daemon.signal_handler(stormond.signal.SIGHUP, None)
-        assert stormon_daemon.log_info.call_count == 1
-        stormon_daemon.log_info.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 1
+        stormon_daemon.log.log_notice.assert_called_with("Caught signal 'SIGHUP' - ignoring...")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 0
         assert stormond.exit_code == 0
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
 
         # Test SIGINT
         test_signal = stormond.signal.SIGINT
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 2
-        stormon_daemon.log_info.assert_called_with("Exiting with SIGINT")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 2
+        stormon_daemon.log.log_notice.assert_called_with("Exiting with SIGINT")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
         assert stormond.exit_code == (128 + test_signal)
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
 
         # Test SIGTERM
         test_signal = stormond.signal.SIGTERM
         stormon_daemon.signal_handler(test_signal, None)
-        assert stormon_daemon.log_info.call_count == 2
-        stormon_daemon.log_info.assert_called_with("Exiting with SIGTERM")
-        assert stormon_daemon.log_warning.call_count == 0
+        assert stormon_daemon.log.log_notice.call_count == 2
+        stormon_daemon.log.log_notice.assert_called_with("Exiting with SIGTERM")
+        assert stormon_daemon.log.log_warning.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 1
         assert stormond.exit_code == (128 + test_signal)
 
         # Reset
-        stormon_daemon.log_info.reset_mock()
-        stormon_daemon.log_warning.reset_mock()
+        stormon_daemon.log.log_notice.reset_mock()
+        stormon_daemon.log.log_warning.reset_mock()
         stormon_daemon.stop_event.set.reset_mock()
         stormond.exit_code = 0
 
         # Test an unhandled signal
         stormon_daemon.signal_handler(stormond.signal.SIGUSR1, None)
-        assert stormon_daemon.log_warning.call_count == 1
-        stormon_daemon.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
-        assert stormon_daemon.log_info.call_count == 0
+        assert stormon_daemon.log.log_warning.call_count == 1
+        stormon_daemon.log.log_warning.assert_called_with("Caught unhandled signal 'SIGUSR1' - ignoring...")
+        assert stormon_daemon.log.log_notice.call_count == 0
         assert stormon_daemon.stop_event.set.call_count == 0
         assert stormond.exit_code == 0
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_signal_handler_sync_fsio_json_failed(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.sync_fsio_rw_json = MagicMock(return_value=False)
+
+        stormon_daemon.stop_event.set = MagicMock()
+        stormon_daemon.log.log_notice = MagicMock()
+        stormon_daemon.log.log_warning = MagicMock()
+
+        test_signal = stormond.signal.SIGTERM
+        stormon_daemon.signal_handler(test_signal, None)
+        assert stormon_daemon.log.log_notice.call_count == 2
+        assert stormon_daemon.log.log_warning.call_count == 1
+        assert stormon_daemon.stop_event.set.call_count == 1
+        assert stormond.exit_code == (128 + test_signal)
 
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_run(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
+        stormon_daemon.sync_fsio_rw_json = MagicMock(return_value=True)
+        stormon_daemon.write_sync_time_statedb = MagicMock(return_value=True)
 
         def mock_intervals():
-            stormon_daemon.timeout = 10
-            stormon_daemon.fsstats_sync_interval = 30
+            stormon_daemon.timeout = 5
+            stormon_daemon.fsstats_sync_interval = 15
+
+            stormon_daemon.fsio_sync_time = 0
 
         with patch.object(stormon_daemon, 'get_configdb_intervals', new=mock_intervals):
-            stormon_daemon.run()
+            rc = stormon_daemon.run()
 
             assert stormon_daemon.get_dynamic_fields_update_state_db.call_count == 1
+            assert stormon_daemon.sync_fsio_rw_json.call_count == 1
+            assert stormon_daemon.write_sync_time_statedb.call_count == 1
+            assert rc == True
 
 
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_run_stop_event(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
+        stormon_daemon.stop_event.wait = MagicMock(return_value=True)
+
+        def mock_intervals():
+            stormon_daemon.timeout = 5
+            stormon_daemon.fsstats_sync_interval = 15
+
+        with patch.object(stormon_daemon, 'get_configdb_intervals', new=mock_intervals):
+            rc = stormon_daemon.run()
+
+            assert stormon_daemon.get_dynamic_fields_update_state_db.call_count == 1
+            assert rc == False
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_run_sync_fsio_rw_json_failed(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
+        stormon_daemon.sync_fsio_rw_json = MagicMock(return_value=False)
+        stormon_daemon.log.log_warning = MagicMock()
+
+        def mock_intervals():
+            stormon_daemon.timeout = 5
+            stormon_daemon.fsstats_sync_interval = 15
+
+            stormon_daemon.fsio_sync_time = 0
+
+        with patch.object(stormon_daemon, 'get_configdb_intervals', new=mock_intervals):
+            rc = stormon_daemon.run()
+
+            assert stormon_daemon.get_dynamic_fields_update_state_db.call_count == 1
+            assert stormon_daemon.sync_fsio_rw_json.call_count == 1
+            assert stormon_daemon.log.log_warning.call_count == 1
+            assert rc == True
+
+class TestStormon():
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('sonic_py_common.syslogger.SysLogger', MagicMock())
+    def test_main(self):
+
+        stormond.DaemonStorage.run = MagicMock(return_value=False)
+        assert stormond.main()
