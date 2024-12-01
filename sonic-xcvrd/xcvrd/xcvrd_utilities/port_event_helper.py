@@ -102,7 +102,7 @@ class PortChangeObserver:
                 port_tbl.filter = d['FILTER'] if 'FILTER' in d else None
                 asic_context[port_tbl] = asic_id
                 sel.addSelectable(port_tbl)
-                self.logger.log_warning("subscribing to port_tbl {} - {} DB of namespace {} ".format(
+                self.logger.log_notice("subscribing to port_tbl {} - {} DB of namespace {} ".format(
                                             port_tbl, list(d.values())[0], namespace))
         self.sel, self.asic_context = sel, asic_context
 
@@ -144,8 +144,8 @@ class PortChangeObserver:
                     if not multi_asic.is_front_panel_port(port_name, role):
                         continue
 
-                    self.logger.log_debug("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
-                                                            port_name, op, port_tbl.db_name, port_tbl.table_name, fvp))
+                    self.logger.log_notice("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
+                                           port_name, op, port_tbl.db_name, port_tbl.table_name, fvp))
                     if 'index' not in fvp:
                        fvp['index'] = '-1'
                     fvp['port_name'] = port_name
@@ -193,7 +193,7 @@ class PortChangeObserver:
                                                             db_name,
                                                             table_name)
                 # This is the final event considered for processing
-                self.logger.log_warning("*** {} handle_port_update_event() fvp {}".format(
+                self.logger.log_notice("*** {} handle_port_update_event() fvp {}".format(
                     key, fvp))
                 if port_change_event is not None:
                     has_event = True
