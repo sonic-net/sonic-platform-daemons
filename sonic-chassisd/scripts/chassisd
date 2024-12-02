@@ -96,7 +96,7 @@ INVALID_IP = '0.0.0.0'
 CHASSIS_MODULE_ADMIN_STATUS = 'admin_status'
 MODULE_ADMIN_DOWN = 0
 MODULE_ADMIN_UP = 1
-REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
+MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
 # This daemon should return non-zero exit code so that supervisord will
@@ -815,11 +815,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def _get_history_path(self, module, file_name):
         """Generates the full path for history files."""
-        return os.path.join(REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
+        return os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
 
     def _is_first_boot(self, module):
         """Checks if the reboot-cause file indicates a first boot."""
-        file_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
+        file_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
 
         try:
             with open(file_path, 'r') as f:
@@ -891,13 +891,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             json.dump(reboot_cause_dict, f)
 
         # Write the reboot_cause content to the reboot-cause.txt file, overwriting it
-        reboot_cause_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
+        reboot_cause_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
         os.makedirs(os.path.dirname(reboot_cause_path), exist_ok=True)
         with open(reboot_cause_path, 'w') as cause_file:
             cause_file.write(json.dumps(reboot_cause) + '\n')
 
         # Update symlink to the latest reboot cause file
-        symlink_path = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
+        symlink_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
         if os.path.exists(symlink_path):
             os.remove(symlink_path)
         if os.path.exists(file_path):
@@ -908,7 +908,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def _rotate_files(self, module):
         """Rotate history files if they exceed the maximum limit."""
-        history_dir = os.path.join(REBOOT_CAUSE_DIR, module.lower(), "history")
+        history_dir = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history")
         os.makedirs(history_dir, exist_ok=True)
         try:
             files = sorted(os.listdir(history_dir))
