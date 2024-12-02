@@ -775,7 +775,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             updates = {
                 "dpu_midplane_link_state": state,
                 "dpu_midplane_link_reason": "",
-                "dpu_midplane_link_time": datetime.now().strftime("%Y%m%d %H:%M:%S"),
+                "dpu_midplane_link_time": datetime.now().strftime("%a %b %d %I:%M:%S %p UTC %Y"),
             }
             current_data.update(updates)
 
