@@ -272,9 +272,13 @@ class ModuleUpdater(logger.Logger):
 
     def module_db_update(self):
         notOnlineModules = []
+        my_index = None
 
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
+            if self.my_slot == int(module_info_dict['slot']):
+                my_index = module_index
+
             if module_info_dict is not None:
                 key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
 
@@ -346,6 +350,7 @@ class ModuleUpdater(logger.Logger):
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
         # The hostname is used as key to access chassis app db entries 
+        module_info_dict = self._get_module_info(my_index)
         if not self._is_supervisor():
            hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
            hostname = try_get(device_info.get_hostname, default="None")
