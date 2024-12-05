@@ -1016,6 +1016,21 @@ def test_midplane_presence_supervisor():
     fvs = midplane_table.get(name)
     assert fvs == None
 
+def verify_asic(asic_name, asic_pci_address, module_name, asic_id_in_module, asic_table):
+    fvs = asic_table.get(asic_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
+    assert fvs[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
+    assert fvs[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
+
+def verify_asic_in_module_table(lc, slot, num_asics, chassis_module_table):
+    fvs = chassis_module_table.get(lc)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs['slot'] == str(slot)
+    assert fvs['num_asics'] == str(num_asics)
+
 def test_asic_presence():
     chassis = MockChassis()
 
@@ -1066,16 +1081,8 @@ def test_asic_presence():
     fabric_asic_table = module_updater.asic_table
     assert len(fabric_asic_table.getKeys()) == 2
 
-    def verify_fabric_asic(asic_name, asic_pci_address, module_name, asic_id_in_module):
-        fvs = fabric_asic_table.get(asic_name)
-        if isinstance(fvs, list):
-            fvs = dict(fvs[-1])
-        assert fvs[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
-        assert fvs[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
-        assert fvs[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
-
-    verify_fabric_asic("asic4", "0000:04:00.0", name, "0")
-    verify_fabric_asic("asic5", "0000:05:00.0", name, "1")
+    verify_asic("asic4", "0000:04:00.0", name, "0", fabric_asic_table)
+    verify_asic("asic5", "0000:05:00.0", name, "1", fabric_asic_table)
 
     #Card goes down and asics should be gone
     fabric.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
@@ -1089,8 +1096,65 @@ def test_asic_presence():
     midplane_table = module_updater.midplane_table
     fvs = midplane_table.get(name)
     assert fvs == None
-    verify_fabric_asic("asic4", "0000:04:00.0", name, "0")
-    verify_fabric_asic("asic5", "0000:05:00.0", name, "1")
+    verify_asic("asic4", "0000:04:00.0", name, "0", fabric_asic_table)
+    verify_asic("asic5", "0000:05:00.0", name, "1", fabric_asic_table)
+
+def test_forwarding_asic_presence():
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    slot = 16
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard
+    index = 1
+    name = "LINE-CARD0"
+    desc = "36 port 400G card with 2 ASICs"
+    slot = 1
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    asic_list = [("4", "0000:04:00.0"), ("5", "0000:05:00.0")]
+    module = MockModule(index, name, desc, module_type, slot, serial, asic_list)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Run on linecard
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis,
+                                   slot,
+                                   module.supervisor_slot)
+
+    module_updater.modules_num_update()
+    module_updater.check_midplane_reachability()
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    module_updater.module_db_update()
+    asic_table = module_updater.asic_table
+    assert len(asic_table.getKeys()) == 2
+
+    # Check CHASSIS_ASIC_TABLE
+    verify_asic("LINE-CARD0|asic4", "0000:04:00.0", name, "0", asic_table)
+    verify_asic("LINE-CARD0|asic5", "0000:05:00.0", name, "1", asic_table)
+
+    # Card goes down and asics should be gone
+    module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
+    module_updater.module_db_update()
+    assert len(asic_table.getKeys()) == 0
+
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    module_updater.module_db_update()
+    assert len(asic_table.getKeys()) == 2
+
+    verify_asic("LINE-CARD0|asic4", "0000:04:00.0", name, "0", asic_table)
+    verify_asic("LINE-CARD0|asic5", "0000:05:00.0", name, "1", asic_table)
+
+    # Check CHASSIS_MODULE_TABLE
+    verify_asic_in_module_table(name, slot, len(asic_list), module_updater.hostname_table)
 
 def test_signal_handler():
     exit_code = 0

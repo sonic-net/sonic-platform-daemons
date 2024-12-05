@@ -3347,6 +3347,13 @@ class TestXcvrdScript(object):
 
             status_tbl.hdel.assert_called()
 
+    def test_DaemonXcvrd_signal_handler(self):
+        xcvrd.platform_chassis = MagicMock()
+        xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrdaemon.update_log_level = MagicMock()
+        xcvrdaemon.signal_handler(signal.SIGHUP, None)
+        xcvrdaemon.update_log_level.assert_called()
+
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=(test_path, '/invalid/path')))
     def test_load_optical_si_file_from_platform_folder(self):
         assert optics_si_parser.load_optics_si_settings() != {}

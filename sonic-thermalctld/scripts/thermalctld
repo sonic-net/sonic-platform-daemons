@@ -26,7 +26,7 @@ SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
 CHASSIS_INFO_KEY = 'chassis 1'
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
-INVALID_SLOT = -1
+INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
 
@@ -523,9 +523,11 @@ class TemperatureUpdater(logger.Logger):
         self.all_thermals = set()
 
         self.is_chassis_system = chassis.is_modular_chassis()
-        if self.is_chassis_system:
-            my_slot = try_get(chassis.get_my_slot, INVALID_SLOT)
-            if my_slot != INVALID_SLOT:
+        self.is_smartswitch_dpu = chassis.is_smartswitch() and chassis.is_dpu()
+        self.is_chassis_upd_required = self.is_chassis_system or self.is_smartswitch_dpu
+        if self.is_chassis_upd_required:
+            my_slot = try_get(chassis.get_my_slot if self.is_chassis_system else chassis.get_dpu_id, INVALID_SLOT_OR_DPU)
+            if my_slot != INVALID_SLOT_OR_DPU:
                 try:
                     # Modular chassis does not have to have table CHASSIS_STATE_DB.
                     # So catch the exception here and ignore it.
@@ -540,7 +542,7 @@ class TemperatureUpdater(logger.Logger):
             table_keys = self.table.getKeys()
             for tk in table_keys:
                 self.table._del(tk)
-                if self.is_chassis_system and self.chassis_table is not None:
+                if self.is_chassis_upd_required and self.chassis_table is not None:
                     self.chassis_table._del(tk)
         if self.phy_entity_table:
             phy_entity_keys = self.phy_entity_table.getKeys()
@@ -593,6 +595,7 @@ class TemperatureUpdater(logger.Logger):
                 available_thermals.add((thermal, parent_name, thermal_index))
                 self._refresh_temperature_status(parent_name, thermal, thermal_index)
 
+        # As there are no modules present in DPU, this IF condition is not updated to consider DPU chassis
         if self.is_chassis_system:
             for module_index, module in enumerate(self.chassis.get_all_modules()):
                 module_name = try_get(module.get_name, 'Module {}'.format(module_index + 1))
@@ -702,7 +705,7 @@ class TemperatureUpdater(logger.Logger):
                 ])
 
             self.table.set(name, fvs)
-            if self.is_chassis_system and self.chassis_table is not None:
+            if self.is_chassis_upd_required and self.chassis_table is not None:
                 self.chassis_table.set(name, fvs)
         except Exception as e:
             self.log_warning('Failed to update thermal status for {} - {}'.format(name, repr(e)))

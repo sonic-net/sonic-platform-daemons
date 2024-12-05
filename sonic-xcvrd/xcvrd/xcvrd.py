@@ -22,7 +22,7 @@ try:
     import ctypes
 
     from natsort import natsorted
-    from sonic_py_common import daemon_base, device_info, logger
+    from sonic_py_common import daemon_base, syslogger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 
@@ -116,7 +116,7 @@ platform_chassis = None
 # Global logger instance for helper functions and classes
 # TODO: Refactor so that we only need the logger inherited
 # by DaemonXcvrd
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
 #
 # Helper functions =============================================================
@@ -2053,7 +2053,7 @@ class SfpStateUpdateTask(threading.Thread):
 
 class DaemonXcvrd(daemon_base.DaemonBase):
     def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False):
-        super(DaemonXcvrd, self).__init__(log_identifier)
+        super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
@@ -2064,7 +2064,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     # Signal handler
     def signal_handler(self, sig, frame):
         if sig == signal.SIGHUP:
-            self.log_info("Caught SIGHUP - ignoring...")
+            self.log_notice("Caught SIGHUP...")
+            self.update_log_level()
         elif sig == signal.SIGINT:
             self.log_info("Caught SIGINT - exiting...")
             self.stop_event.set()

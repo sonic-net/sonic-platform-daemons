@@ -331,9 +331,13 @@ class ModuleUpdater(logger.Logger):
 
     def module_db_update(self):
         notOnlineModules = []
+        my_index = None
 
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
+            if self.my_slot == int(module_info_dict['slot']):
+                my_index = module_index
+
             if module_info_dict is not None:
                 key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
 
@@ -414,13 +418,14 @@ class ModuleUpdater(logger.Logger):
            self.hostname_table.set(hostname_key, hostname_fvs)
 
         # Asics that are on the "not online" modules need to be cleaned up
-        asics = list(self.asic_table.getKeys())
-        for asic in asics:
-            fvs = self.asic_table.get(asic)
-            if isinstance(fvs, list):
-                fvs = dict(fvs[-1])
-            if fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
-                self.asic_table._del(asic)
+        if notOnlineModules:
+            asics = list(self.asic_table.getKeys())
+            for asic in asics:
+                fvs = self.asic_table.get(asic)
+                if isinstance(fvs, list):
+                    fvs = dict(fvs[-1])
+                if CHASSIS_MODULE_INFO_NAME_FIELD in fvs.keys() and fvs[CHASSIS_MODULE_INFO_NAME_FIELD] in notOnlineModules:
+                    self.asic_table._del(asic)
 
     def _get_module_info(self, module_index):
         """
@@ -566,6 +571,7 @@ class ModuleUpdater(logger.Logger):
                 local lagid = redis.call('HGET', 'SYSTEM_LAG_ID_TABLE', lagname)\n\
                 redis.call('SREM', 'SYSTEM_LAG_ID_SET', lagid)\n\
                 redis.call('HDEL', 'SYSTEM_LAG_ID_TABLE', lagname)\n\
+                redis.call('rpush', 'SYSTEM_LAG_IDS_FREE_LIST', lagid)\n\
             end\n\
         end\n\
         return"
@@ -1353,20 +1359,73 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.log_info("Shutting down...")
 
 
+class DpuStateManagerTask(ProcessTaskBase):
+
+    def __init__(self, log_identifier, dpu_state_updater):
+        super(DpuStateManagerTask, self).__init__()
+
+        self.logger = logger.Logger(log_identifier)
+        self.dpu_state_updater = dpu_state_updater
+        self.state_db = daemon_base.db_connect('STATE_DB')
+        self.app_db = daemon_base.db_connect('APPL_DB')
+
+    def task_worker(self):
+        sel = swsscommon.Select()
+        selectable = [
+            swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
+            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY')
+        ]
+
+        for s in selectable:
+            sel.addSelectable(s)
+
+        try:
+            while True:
+                (state, c) = sel.select(SELECT_TIMEOUT)
+
+                if state == swsscommon.Select.TIMEOUT:
+                    continue
+
+                if state != swsscommon.Select.OBJECT:
+                    continue
+
+                for s in selectable:
+                    s.pops()
+
+                self.dpu_state_updater.update_state()
+
+        except KeyboardInterrupt:
+            pass
+
+
 class DpuChassisdDaemon(ChassisdDaemon):
 
     def run(self):
         self.log_info("Starting up...")
 
+        poll_dpu_state = True
+        if not try_get(self.platform_chassis.get_dataplane_state, default=None) and not \
+                try_get(self.platform_chassis.get_controlplane_state, default=None):
+            poll_dpu_state = False
+
         dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, self.platform_chassis)
+        dpu_state_mng = None
+
+        if not poll_dpu_state:
+            dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+            dpu_state_mng.task_run()
 
         # Start main loop
         self.log_info("Start daemon main loop")
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
-            dpu_updater.update_state()
+            if poll_dpu_state:
+                dpu_updater.update_state()
 
         self.log_info("Stop daemon main loop")
+
+        if dpu_state_mng:
+            dpu_state_mng.task_stop()
 
         dpu_updater.deinit()
 
