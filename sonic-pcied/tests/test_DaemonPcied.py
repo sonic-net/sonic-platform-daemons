@@ -144,16 +144,85 @@ class TestDaemonPcied(object):
         assert daemon_pcied.check_pcie_devices.call_count == 1
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_is_dpu_in_detaching_mode(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.detach_info = mock.MagicMock()
+        daemon_pcied.detach_info.getKeys = mock.MagicMock(return_value=['DPU_0', 'DPU_1'])
+        daemon_pcied.detach_info.get = mock.MagicMock(
+            side_effect=lambda key: {
+                'DPU_0': {'bus_info': '0000:03:00.1', 'dpu_state': 'detaching'},
+                'DPU_1': {'bus_info': '0000:03:00.2', 'dpu_state': 'attached'}
+            }.get(key, None)
+        )
+
+        # Test when the device is in detaching mode
+        assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.1') == True
+
+        # Test when the device is not in detaching mode
+        assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.2') == False
+
+        # Test when the device does not exist in detach_info
+        assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.3') == False
+
+        # Test when detach_info is None
+        daemon_pcied.detach_info = None
+        assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.1') == False
+
+        # Test when detach_info has no keys
+        daemon_pcied.detach_info = mock.MagicMock()
+        daemon_pcied.detach_info.getKeys.return_value = []
+        assert daemon_pcied.is_dpu_in_detaching_mode('0000:03:00.1') == False
+
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=False))
+    @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=False))
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_check_pcie_devices(self):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
         daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
-        pcied.platform_pcieutil.get_pcie_check = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_check = mock.MagicMock(
+            return_value=[
+                {"result": "Failed", "bus": "03", "dev": "00", "fn": "1", "name": "PCIe Device 1"},
+            ]
+        )
 
         daemon_pcied.check_pcie_devices()
         assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
         assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 0
 
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=False))
+    @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=False))
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_check_pcie_devices_update_aer(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
+        daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_check = mock.MagicMock(
+            return_value=[
+                {"result": "Passed", "bus": "03", "dev": "00", "fn": "1", "name": "PCIe Device 1"},
+            ]
+        )
+
+        daemon_pcied.check_pcie_devices()
+        assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
+        assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 1
+
+    @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=True))
+    @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=True))
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_check_pcie_devices_detaching(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
+        daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_check = mock.MagicMock(
+            return_value=[
+                {"result": "Failed", "bus": "03", "dev": "00", "fn": "1", "name": "PCIe Device 1"},
+            ]
+        )
+
+        daemon_pcied.check_pcie_devices()
+        assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
+        assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 0
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_update_pcie_devices_status_db(self):
@@ -210,5 +279,5 @@ class TestDaemonPcied(object):
              ])
         """
 
-        daemon_pcied.update_aer_to_statedb() 
+        daemon_pcied.update_aer_to_statedb()
         assert daemon_pcied.log_debug.call_count == 0
