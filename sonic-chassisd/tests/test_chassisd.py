@@ -1313,7 +1313,6 @@ def test_daemon_run_linecard():
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
 
-
 def test_chassis_db_cleanup():
     chassis = MockChassis()
 
@@ -1467,4 +1466,3 @@ def test_chassis_db_bootup_with_empty_slot():
         fvs = dict(fvs[-1])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert down_module_lc1_key in sup_module_updater.down_modules.keys()
-    
