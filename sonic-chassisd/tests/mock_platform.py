@@ -179,4 +179,3 @@ class MockDpuChassis:
 
     def get_controlplane_state(self):
         raise NotImplementedError
-
