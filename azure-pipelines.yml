@@ -22,8 +22,8 @@ pool: sonic-common
 
 resources:
   containers:
-  - container: sonic-slave-bullseye
-    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
+  - container: sonic-slave-bookworm
+    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:latest
 
 parameters:
 - name: project_list
@@ -65,7 +65,7 @@ parameters:
 
 jobs:
   - job: build_test
-    container: sonic-slave-bullseye
+    container: sonic-slave-bookworm
     variables:
       sourceBranch: "$(Build.SourceBranch)"
     steps:
@@ -99,7 +99,7 @@ jobs:
         sudo dpkg -i libyang_1.0.73_amd64.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Pipeline.Workspace)/target/debs/bullseye/
+      workingDirectory: $(Pipeline.Workspace)/target/debs/bookworm/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -110,23 +110,25 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/bullseye/
+      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/bookworm/
       displayName: 'Install Python dependencies'
 
     - script: |
         set -ex
         # Install .NET CORE
         curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-        sudo apt-add-repository https://packages.microsoft.com/debian/11/prod
+        sudo apt-add-repository https://packages.microsoft.com/debian/12/prod
         sudo apt-get update
-        sudo apt-get install -y dotnet-sdk-7.0
+        sudo apt-get install -y dotnet-sdk-8.0
       displayName: "Install .NET CORE"
 
     - ${{ each project in parameters.project_list }}:
       # Python 3
       - ${{ if eq(project.python3, true) }}:
         - script: |
-            python3 setup.py test
+            pip3 install ".[testing]"
+            pip3 uninstall --yes sonic-platform-daemons
+            pytest
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
 
@@ -139,8 +141,7 @@ jobs:
           displayName: '${{ project.name }}(Py3) Publish test results'
 
         - script: |
-            set -e
-            python3 setup.py bdist_wheel
+            python3 -m build -n
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Build'
 
