@@ -1673,6 +1673,44 @@ class TestXcvrdScript(object):
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         mock_sfp.get_presence = MagicMock(return_value=True)
 
+        # high power enabling failure case and enable_sff_mgr_controlled_tx is False
+        mock_xcvr_api.tx_disable_channel.call_count = 0
+        mock_xcvr_api.set_high_power_class.call_count = 0
+        task.enable_sff_mgr_controlled_tx = False
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_admin_status = MagicMock(return_value='up')
+        mock_xcvr_api.set_high_power_class = MagicMock(return_value=False)
+        port_change_event = PortChangeEvent('Ethernet4', 2, 0, PortChangeEvent.PORT_SET, {
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': '1,2,3,4',
+        })
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 2
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
+        task.task_worker()
+        assert mock_xcvr_api.tx_disable_channel.call_count == 0
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # high power enabling exception case
+        mock_xcvr_api.tx_disable_channel.call_count = 0
+        mock_xcvr_api.set_high_power_class.call_count = 0
+        task.enable_sff_mgr_controlled_tx = False
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_admin_status = MagicMock(return_value='up')
+        mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
+        port_change_event = PortChangeEvent('Ethernet8', 3, 0, PortChangeEvent.PORT_SET, {
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': '1,2,3,4',
+        })
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 3
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
+        task.task_worker()
+        assert mock_xcvr_api.tx_disable_channel.call_count == 0
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
     def test_CmisManagerTask_update_port_transceiver_status_table_sw_cmis_state(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()

@@ -441,8 +441,8 @@ class SffManagerTask(threading.Thread):
 
                 if xcvr_inserted:
                     try:
-                        if api.handle_high_power_class():
-                            self.log_notice("{}: done handling high power class".format(lport))
+                        if api.set_high_power_class(True):
+                            self.log_notice("{}: done enabling high power class".format(lport))
                         else:
                             self.log_error("{}: failed to enable high power class".format(lport))
                     except (AttributeError, NotImplementedError):
