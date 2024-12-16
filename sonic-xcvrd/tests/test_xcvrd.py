@@ -90,6 +90,8 @@ asic_serdes_si_settings_example4_expected_value_in_db_4_lanes = \
 asic_serdes_si_settings_example5_expected_value_in_db = \
     {attr: ','.join(value_dict.values()) for attr, value_dict in asic_serdes_si_settings_example5.items()}
 
+expected_media_settings_output_100G = {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}
+
 # Creating instances of media_settings.json for testing purposes
 # Each instance represents a different possible structure for media_settings.json.
 media_settings_global_range_media_key_lane_speed_si = copy.deepcopy(media_settings_extended_format_dict)
@@ -169,6 +171,71 @@ media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'][
     'speed:400GAUI-8': asic_serdes_si_settings_example2,
 }
 
+# Create a media_settings.json with gearbox format
+media_settings_gearbox_dict = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_values = media_settings_gearbox_dict['GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+media_settings_gearbox_dict['GEARBOX_GLOBAL_MEDIA_SETTINGS'] =\
+{
+    '0-31': {
+        'line': media_settings_values,
+        'system': copy.deepcopy(media_settings_values)
+    }
+}
+del media_settings_gearbox_dict['GLOBAL_MEDIA_SETTINGS']
+
+# Create instances of media_settings.json to test gearbox keys and lookups
+media_settings_gb_global_range_media_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+
+media_settings_gb_global_range_media_key_si = copy.deepcopy(media_settings_gearbox_dict)
+media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['QSFP-DD-sm_media_interface'] = media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['QSFP-DD-sm_media_interface'].pop('speed:400GAUI-8')
+media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['QSFP-DD-active_cable_media_interface'] = media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['QSFP-DD-active_cable_media_interface'].pop('speed:100GAUI-2')
+media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['system']['QSFP-DD-sm_media_interface'] = media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['system']['QSFP-DD-sm_media_interface'].pop('speed:400GAUI-8')
+media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['system']['QSFP-DD-active_cable_media_interface'] = media_settings_gb_global_range_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['system']['QSFP-DD-active_cable_media_interface'].pop('speed:100GAUI-2')
+
+media_settings_gb_global_range_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+media_settings_gb_global_range_generic_vendor_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['AMPHANOL-1234'] = media_settings_gb_global_range_generic_vendor_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line'].pop('QSFP-DD-sm_media_interface')
+media_settings_gb_global_range_generic_vendor_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line']['GENERIC_VENDOR'] = media_settings_gb_global_range_generic_vendor_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-31']['line'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_gb_global_list_media_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+new_key = str(','.join([str(i) for i in range(32)]))
+media_settings_gb_global_list_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'][new_key] = media_settings_gb_global_list_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_gb_global_list_media_key_si = copy.deepcopy(media_settings_gb_global_range_media_key_si)
+media_settings_gb_global_list_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'][new_key] = media_settings_gb_global_list_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_gb_global_list_of_ranges_media_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+media_settings_gb_global_list_of_ranges_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-15,16-31'] = media_settings_gb_global_list_of_ranges_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_gb_global_list_of_ranges_media_key_si = copy.deepcopy(media_settings_gb_global_range_media_key_si)
+media_settings_gb_global_list_of_ranges_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']['0-15,16-31'] = media_settings_gb_global_list_of_ranges_media_key_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')
+
+media_settings_gb_port_media_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+media_settings_gb_port_media_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS'] = {'7': media_settings_gb_port_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')}
+del media_settings_gb_port_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS']
+
+media_settings_gb_port_vendor_key_lane_speed_si = copy.deepcopy(media_settings_gb_port_media_key_lane_speed_si)
+media_settings_gb_port_vendor_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS']['7']['line']['AMPHANOL-1234'] = media_settings_gb_port_vendor_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS']['7']['line'].pop('QSFP-DD-sm_media_interface')
+media_settings_gb_port_vendor_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS']['7']['line']['AMPHANOL-5678'] = media_settings_gb_port_vendor_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS']['7']['line'].pop('QSFP-DD-active_cable_media_interface')
+
+media_settings_gb_global_default_port_media_key_lane_speed_si = copy.deepcopy(media_settings_gearbox_dict)
+port_media_settings_data = {'7': {'line': media_settings_gb_global_default_port_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'].pop('0-31')}}
+media_settings_gb_global_default_port_media_key_lane_speed_si['GEARBOX_GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'line': {'Default': asic_serdes_si_settings_example}}}
+media_settings_gb_global_default_port_media_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS'] = port_media_settings_data
+
+media_settings_gb_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_gb_port_media_key_lane_speed_si)
+media_settings_gb_port_default_media_key_lane_speed_si['GEARBOX_PORT_MEDIA_SETTINGS']['7']['line']['Default'] = {
+    LANE_SPEED_DEFAULT_KEY: asic_serdes_si_settings_example,
+    'speed:400GAUI-8': asic_serdes_si_settings_example2,
+}
+
+media_settings_gb_global_missing = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_gb_global_missing['GEARBOX_GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'system': {}}}
+media_settings_gb_port_missing = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_gb_port_missing['GEARBOX_PORT_MEDIA_SETTINGS'] = {'7': {'system': {}}}
+
+media_settings_gb_global_default = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_gb_global_default['GEARBOX_GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'line': {'Default': asic_serdes_si_settings_example}}}
+
 media_settings_optic_copper_si = {
     'GLOBAL_MEDIA_SETTINGS': {
         '0-31': {
@@ -191,6 +258,33 @@ media_settings_optic_copper_si = {
         },
     }
 }
+
+media_settings_gb_default = {
+    'GEARBOX_GLOBAL_MEDIA_SETTINGS': {
+        '1-32': {
+            'line': {
+                'Default': {
+                    'main': asic_serdes_si_value_dict4,
+                    'idriver': asic_serdes_si_value_dict3
+                } 
+            },
+            'system': {
+                'Default': {
+                    'main': asic_serdes_si_value_dict5,
+                    'idriver': asic_serdes_si_value_dict3
+                }
+            }
+        }
+    }
+}
+
+gb_serdes_si_settings_example = {'line_tx_fir_main': asic_serdes_si_value_dict4, 'system_tx_fir_main': asic_serdes_si_value_dict5}
+gb_serdes_si_settings_example_expected_value_in_db = \
+    {attr: ','.join(list(value_dict.values())) for attr, value_dict in gb_serdes_si_settings_example.items()}
+
+media_settings_gb_default_val_str_preset = copy.deepcopy(media_settings_gb_default)
+media_settings_gb_default_val_str_preset['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-32']['line']['Default']['main'] = gb_serdes_si_settings_example_expected_value_in_db['line_tx_fir_main']
+media_settings_gb_default_val_str_preset['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-32']['system']['Default']['main'] = gb_serdes_si_settings_example_expected_value_in_db['system_tx_fir_main']
 
 media_settings_empty = {}
 
@@ -929,42 +1023,60 @@ class TestXcvrdScript(object):
         result = is_si_per_speed_supported(media_dict)
         assert result == False
 
-    @pytest.mark.parametrize("media_settings_dict, port, key, expected", [
-    (media_settings_global_range_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_range_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_global_range_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_global_range_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_global_list_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_list_of_ranges_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_list_of_ranges_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_global_default_port_media_key_lane_speed_si, 6, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, asic_serdes_si_settings_example),
-    (media_settings_port_vendor_key_lane_speed_si, -1, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {}),
-    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_port_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, {}),
-    (media_settings_port_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
-    (media_settings_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, asic_serdes_si_settings_example),
-    (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, asic_serdes_si_settings_example),
-    (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, asic_serdes_si_settings_example),
-    (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {}),
-    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
-    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-2M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x18420A', 'lane1': '0x18420A', 'lane2': '0x18420A', 'lane3': '0x18420A'}}),
-    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}})
+    @pytest.mark.parametrize("media_settings_dict, port, key, gearbox_side, expected", [
+    (media_settings_global_range_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_global_range_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_global_range_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_global_range_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_global_range_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_global_list_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_global_list_of_ranges_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_global_list_of_ranges_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_global_default_port_media_key_lane_speed_si, 6, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, asic_serdes_si_settings_example),
+    (media_settings_port_vendor_key_lane_speed_si, -1, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, {}),
+    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_port_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_port_vendor_key_lane_speed_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, None, expected_media_settings_output_100G),
+    (media_settings_port_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, None, {}),
+    (media_settings_port_vendor_key_si, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_port_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN'}, None, expected_media_settings_output_100G),
+    (media_settings_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, None, asic_serdes_si_settings_example),
+    (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, None, asic_serdes_si_settings_example),
+    (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, None, asic_serdes_si_settings_example),
+    (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, None, {}),
+    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN'}, None, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
+    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-2M', 'lane_speed_key': 'UNKOWN'}, None, {'preemphasis': {'lane0': '0x18420A', 'lane1': '0x18420A', 'lane2': '0x18420A', 'lane3': '0x18420A'}}),
+    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, None, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}}),
+    (media_settings_gb_global_range_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_global_range_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'system', expected_media_settings_output_100G),
+    (media_settings_gb_global_range_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_global_range_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, 'system', expected_media_settings_output_100G),
+    (media_settings_gb_global_range_generic_vendor_key_lane_speed_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'MISSING'}, 'line', {}),
+    (media_settings_gb_global_list_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'MISSING'}, 'line', {}),
+    (media_settings_gb_global_list_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_global_list_of_ranges_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_global_list_of_ranges_media_key_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'UNKOWN'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_global_default_port_media_key_lane_speed_si, 6, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', asic_serdes_si_settings_example),
+    (media_settings_gb_port_vendor_key_lane_speed_si, -1, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', {}),
+    (media_settings_gb_port_media_key_lane_speed_si, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', expected_media_settings_output_100G),
+    (media_settings_gb_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, 'line', asic_serdes_si_settings_example),
+    (media_settings_gb_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, 'line', asic_serdes_si_settings_example),
+    (media_settings_gb_global_missing, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', {}),
+    (media_settings_gb_port_missing, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, 'line', {}),
+    (media_settings_gb_global_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING'}, 'line', asic_serdes_si_settings_example),
     ])
-    def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
+
+    def test_get_media_settings_value(self, media_settings_dict, port, key, gearbox_side, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
-            result = media_settings_parser.get_media_settings_value(port, key)
+            result = media_settings_parser.get_media_settings_value(port, key, gearbox_side)
             assert result == expected
 
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -1014,6 +1126,14 @@ class TestXcvrdScript(object):
         # Test with sfp not present
         with patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=False)):
             self._check_notify_media_setting(1)
+
+        # Test setting gearbox tunings and attribute filter
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_gb_default):
+            self._check_notify_media_setting(1, True, gb_serdes_si_settings_example_expected_value_in_db)
+
+        # Test gearbox tunings with preset value string in media settings
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_gb_default_val_str_preset):
+            self._check_notify_media_setting(1, True, gb_serdes_si_settings_example_expected_value_in_db)
 
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
