@@ -2002,6 +2002,32 @@ class TestXcvrdScript(object):
                                                         'host_lane_count': '2',
                                                         'media_lane_count': '1'}
 
+        # case: partial lanes update (reset to 'N/A')
+        lport = "Ethernet16"
+        host_lanes_mask = 0xc
+        ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask, reset_apsel=True)
+        assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8", "Ethernet16"]
+        assert dict(int_tbl.mock_dict["Ethernet16"]) == {'active_apsel_hostlane3': 'N/A',
+                                                        'active_apsel_hostlane4': 'N/A',
+                                                        'host_lane_count': 'N/A',
+                                                        'media_lane_count': 'N/A'}
+
+        # case: full lanes update (reset to 'N/A')
+        lport = "Ethernet32"
+        host_lanes_mask = 0xff
+        task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask, reset_apsel=True)
+        assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8", "Ethernet16", "Ethernet32"]
+        assert dict(int_tbl.mock_dict["Ethernet32"]) == {'active_apsel_hostlane1': 'N/A',
+                                                        'active_apsel_hostlane2': 'N/A',
+                                                        'active_apsel_hostlane3': 'N/A',
+                                                        'active_apsel_hostlane4': 'N/A',
+                                                        'active_apsel_hostlane5': 'N/A',
+                                                        'active_apsel_hostlane6': 'N/A',
+                                                        'active_apsel_hostlane7': 'N/A',
+                                                        'active_apsel_hostlane8': 'N/A',
+                                                        'host_lane_count': 'N/A',
+                                                        'media_lane_count': 'N/A'}
+
         # case: NotImplementedError
         int_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)     # a new empty table
         lport = "Ethernet0"
@@ -2413,10 +2439,13 @@ class TestXcvrdScript(object):
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
+        task.post_port_active_apsel_to_db = MagicMock()
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
 
+        assert mock_xcvr_api.tx_disable_channel.call_count == 1
+        assert task.post_port_active_apsel_to_db.call_count == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
 
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_tbl')
@@ -2548,10 +2577,12 @@ class TestXcvrdScript(object):
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
+        task.post_port_active_apsel_to_db = MagicMock()
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
 
+        assert task.post_port_active_apsel_to_db.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
 
