@@ -280,6 +280,54 @@ def test_configupdater_check_num_modules():
     fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     assert fvs == None
 
+def test_moduleupdater_check_string_slot():
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    slot = "A"
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard
+    index = 1
+    name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    slot = "1"
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Fabric-card
+    index = 1
+    name = "FABRIC-CARD0"
+    desc = "Switch fabric card"
+    slot = "17"
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
+    chassis.module_list.append(fabric)
+
+    #Run on supervisor
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.supervisor_slot = supervisor.get_slot()
+    module_updater.my_slot = supervisor.get_slot()
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    module_updater.check_midplane_reachability()
+
+    midplane_table = module_updater.midplane_table
+    #Check only one entry in database
+    assert 1 == midplane_table.size()
+    
 def test_midplane_presence_modules():
     chassis = MockChassis()
 
