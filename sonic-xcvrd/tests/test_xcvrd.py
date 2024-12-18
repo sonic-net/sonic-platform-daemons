@@ -1043,6 +1043,7 @@ class TestXcvrdScript(object):
         } if xcvr_info_dict is None else xcvr_info_dict
         app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
         xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        xcvr_table_helper.get_app_set_port_tbl = MagicMock(return_value=app_port_tbl)
         xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
