@@ -276,7 +276,7 @@ class ModuleUpdater(logger.Logger):
 
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
-            if self.my_slot == int(module_info_dict['slot']):
+            if self.my_slot == module_info_dict['slot']:
                 my_index = module_index
 
             if module_info_dict is not None:
@@ -293,7 +293,7 @@ class ModuleUpdater(logger.Logger):
 
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SLOT_FIELD,
-                                                   module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
+                                                   str(module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD])),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
                                                   (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS]))),
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
@@ -350,8 +350,8 @@ class ModuleUpdater(logger.Logger):
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
         # The hostname is used as key to access chassis app db entries 
-        module_info_dict = self._get_module_info(my_index)
         if not self._is_supervisor():
+           module_info_dict = self._get_module_info(my_index)
            hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
            hostname = try_get(device_info.get_hostname, default="None")
            hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)), 
@@ -386,7 +386,7 @@ class ModuleUpdater(logger.Logger):
 
         module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = name
         module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(desc)
-        module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = str(slot)
+        module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = slot
         module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(status)
         module_info_dict[CHASSIS_MODULE_INFO_ASICS] = asics
         module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD] = str(serial)
