@@ -127,7 +127,7 @@ jobs:
       - ${{ if eq(project.python3, true) }}:
         - script: |
             pip3 install ".[testing]"
-            pip3 uninstall --yes sonic-platform-daemons
+            pip3 uninstall --yes ${{ project.name }}
             pytest
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
