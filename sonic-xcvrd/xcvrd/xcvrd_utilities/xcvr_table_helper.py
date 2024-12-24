@@ -13,11 +13,22 @@ TRANSCEIVER_FIRMWARE_INFO_TABLE = 'TRANSCEIVER_FIRMWARE_INFO'
 TRANSCEIVER_DOM_SENSOR_TABLE = 'TRANSCEIVER_DOM_SENSOR'
 TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
+TRANSCEIVER_VDM_REAL_VALUE_TABLE = 'TRANSCEIVER_VDM_REAL_VALUE'
+TRANSCEIVER_VDM_HALARM_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_HALARM_THRESHOLD'
+TRANSCEIVER_VDM_LALARM_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_LALARM_THRESHOLD'
+TRANSCEIVER_VDM_HWARN_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_HWARN_THRESHOLD'
+TRANSCEIVER_VDM_LWARN_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_LWARN_THRESHOLD'
+TRANSCEIVER_VDM_HALARM_FLAG = 'TRANSCEIVER_VDM_HALARM_FLAG'
+TRANSCEIVER_VDM_LALARM_FLAG = 'TRANSCEIVER_VDM_LALARM_FLAG'
+TRANSCEIVER_VDM_HWARN_FLAG = 'TRANSCEIVER_VDM_HWARN_FLAG'
+TRANSCEIVER_VDM_LWARN_FLAG = 'TRANSCEIVER_VDM_LWARN_FLAG'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
 NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
 NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
 NPU_SI_SETTINGS_NOTIFIED_VALUE = 'NPU_SI_SETTINGS_NOTIFIED'
+
+VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
 
 class XcvrTableHelper:
     def __init__(self, namespaces):
@@ -25,6 +36,10 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
+        self.vdm_real_value_tbl = {}
+        VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
+        self.vdm_threshold_tbl = {f'vdm_{t}_threshold_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self.vdm_flag_tbl = {f'vdm_{t}_flag_tbl': {} for t in VDM_THRESHOLD_TYPES}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -39,6 +54,10 @@ class XcvrTableHelper:
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
+            self.vdm_real_value_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_VDM_REAL_VALUE_TABLE)
+            for t in VDM_THRESHOLD_TYPES:
+                self.vdm_threshold_tbl[f'vdm_{t}_threshold_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_THRESHOLD')
+                self.vdm_flag_tbl[f'vdm_{t}_flag_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_FLAG')
 
     def get_intf_tbl(self, asic_id):
         return self.int_tbl[asic_id]
@@ -51,6 +70,15 @@ class XcvrTableHelper:
 
     def get_status_tbl(self, asic_id):
         return self.status_tbl[asic_id]
+
+    def get_vdm_threshold_tbl(self, asic_id, threshold_type):
+        return self.vdm_threshold_tbl[f'vdm_{threshold_type}_threshold_tbl'][asic_id]
+
+    def get_vdm_real_value_tbl(self, asic_id):
+        return self.vdm_real_value_tbl[asic_id]
+
+    def get_vdm_flag_tbl(self, asic_id, threshold_type):
+        return self.vdm_flag_tbl[f'vdm_{threshold_type}_flag_tbl'][asic_id]
 
     def get_pm_tbl(self, asic_id):
         return self.pm_tbl[asic_id]
