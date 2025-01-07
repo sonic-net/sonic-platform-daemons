@@ -4,6 +4,9 @@ Updates various transceiver diagnostic information in the DB periodically, runni
 as a child thread of xcvrd main thread.
 """
 
+from contextlib import contextmanager
+
+
 try:
     import threading
     import copy
@@ -281,6 +284,18 @@ class DomInfoUpdateTask(threading.Thread):
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
+    @contextmanager
+    def vdm_freeze_context(self, physical_port):
+        try:
+            if not xcvrd._wrapper_freeze_vdm_stats_and_confirm(physical_port):
+                self.log_error("Failed to freeze VDM stats in contextmanager for port {}".format(physical_port))
+                yield False
+            else:
+                yield True
+        finally:
+            if not xcvrd._wrapper_unfreeze_vdm_stats_and_confirm(physical_port):
+                self.log_error("Failed to unfreeze VDM stats in contextmanager for port {}".format(physical_port))
+
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self.log_notice("Start DOM monitoring loop")
@@ -315,7 +330,16 @@ class DomInfoUpdateTask(threading.Thread):
                     self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
+                physical_port_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+                if not physical_port_list:
+                    self.log_warning("Got unknown physical port list {} for lport {}".format(physical_port_list, logical_port_name))
+                    continue
+                physical_port = physical_port_list[0]
+
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index)):
+                    if not xcvrd._wrapper_get_presence(physical_port):
+                        continue
+
                     try:
                         self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event, firmware_info_cache=firmware_info_cache)
                     except (KeyError, TypeError) as e:
@@ -338,29 +362,34 @@ class DomInfoUpdateTask(threading.Thread):
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    try:
-                        self.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                        xcvrd._wrapper_get_vdm_real_values, self.task_stopping_event,
-                                                        db_cache=vdm_real_value_cache)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping,
-                                                                 self.xcvr_table_helper.get_vdm_flag_tbl,
-                                                                xcvrd._wrapper_get_vdm_flags, self.task_stopping_event,
-                                                                 db_cache=vdm_flag_cache)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
+                    if xcvrd._wrapper_is_transceiver_vdm_supported(physical_port):
+                        with self.vdm_freeze_context(physical_port) as vdm_frozen:
+                            if not vdm_frozen:
+                                self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
+                                continue
+                            try:
+                                self.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                                                xcvrd._wrapper_get_vdm_real_values, self.task_stopping_event,
+                                                                db_cache=vdm_real_value_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
+                            try:
+                                xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping,
+                                                                        self.xcvr_table_helper.get_vdm_flag_tbl,
+                                                                        xcvrd._wrapper_get_vdm_flags, self.task_stopping_event,
+                                                                        db_cache=vdm_flag_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
+                            try:
+                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
 
         self.log_info("Stop DOM monitoring loop")
 

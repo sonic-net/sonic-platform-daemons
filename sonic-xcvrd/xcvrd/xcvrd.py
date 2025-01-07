@@ -77,6 +77,10 @@ SFP_INSERT_EVENT_POLL_PERIOD_MSECS = 1000
 STATE_MACHINE_UPDATE_PERIOD_MSECS = 60000
 TIME_FOR_SFP_READY_SECS = 1
 
+MAX_tVDMF_TIME_MSECS = 10
+MAX_VDM_FREEZE_UNFREEZE_TIME_MSECS = 500
+FREEZE_UNFREEZE_DONE_POLLING_INTERVAL_MSECS = 1
+
 EVENT_ON_ALL_SFP = '-1'
 # events definition
 SYSTEM_NOT_READY = 'system_not_ready'
@@ -269,6 +273,79 @@ def _wrapper_get_transceiver_info(physical_port):
         except NotImplementedError:
             pass
     return platform_sfputil.get_transceiver_info_dict(physical_port)
+
+def _wrapper_is_transceiver_vdm_supported(physical_port):
+    if platform_chassis is not None:
+        try:
+            return platform_chassis.get_sfp(physical_port).is_transceiver_vdm_supported()
+        except NotImplementedError:
+            pass
+    return False
+
+def _vdm_action_and_confirm(physical_port, action, status_check, action_name):
+    """
+    Helper function to perform VDM action (freeze/unfreeze) and confirm the status.
+    Args:
+        physical_port: The physical port index.
+        action: The action to perform (freeze/unfreeze).
+        status_check: The function to check the status.
+        action_name: The name of the action for logging purposes.
+    Returns:
+        True if the action is successful, False otherwise.
+    """
+    if platform_chassis is not None:
+        try:
+            status = action()
+            if not status:
+                helper_logger.log_error(f"Failed to {action_name} VDM stats for port {physical_port}")
+                return False
+
+            # Wait for MAX_tVDMF_TIME_MSECS to allow the module to clear the done bit
+            time.sleep(MAX_tVDMF_TIME_MSECS / 1000)
+
+            # Poll for the done bit to be set
+            start_time = time.time()
+            while time.time() - start_time < MAX_VDM_FREEZE_UNFREEZE_TIME_MSECS / 1000:
+                if status_check():
+                    return True
+                time.sleep(FREEZE_UNFREEZE_DONE_POLLING_INTERVAL_MSECS / 1000)
+
+            helper_logger.log_error(f"Failed to confirm VDM {action_name} status for port {physical_port}")
+        except NotImplementedError:
+            pass
+    return False
+
+def _wrapper_freeze_vdm_stats_and_confirm(physical_port):
+    """
+    Freezes and confirms the VDM freeze status of the transceiver.
+    Args:
+        physical_port: The physical port index.
+    Returns:
+        True if the VDM stats are frozen successfully, False otherwise.
+    """
+    sfp = platform_chassis.get_sfp(physical_port)
+    return _vdm_action_and_confirm(
+        physical_port,
+        sfp.freeze_vdm_stats,
+        sfp.get_vdm_freeze_status,
+        "freeze"
+    )
+
+def _wrapper_unfreeze_vdm_stats_and_confirm(physical_port):
+    """
+    Unfreezes and confirms the VDM unfreeze status of the transceiver.
+    Args:
+        physical_port: The physical port index.
+    Returns:
+        True if the VDM stats are unfrozen successfully, False otherwise.
+    """
+    sfp = platform_chassis.get_sfp(physical_port)
+    return _vdm_action_and_confirm(
+        physical_port,
+        sfp.unfreeze_vdm_stats,
+        sfp.get_vdm_unfreeze_status,
+        "unfreeze"
+    )
 
 def _wrapper_get_transceiver_vdm_thresholds(physical_port):
     if platform_chassis is not None:
