@@ -22,6 +22,18 @@ TRANSCEIVER_VDM_HALARM_FLAG = 'TRANSCEIVER_VDM_HALARM_FLAG'
 TRANSCEIVER_VDM_LALARM_FLAG = 'TRANSCEIVER_VDM_LALARM_FLAG'
 TRANSCEIVER_VDM_HWARN_FLAG = 'TRANSCEIVER_VDM_HWARN_FLAG'
 TRANSCEIVER_VDM_LWARN_FLAG = 'TRANSCEIVER_VDM_LWARN_FLAG'
+TRANSCEIVER_VDM_HALARM_FLAG_CHANGE_COUNT = 'TRANSCEIVER_VDM_HALARM_FLAG_CHANGE_COUNT'
+TRANSCEIVER_VDM_LALARM_FLAG_CHANGE_COUNT = 'TRANSCEIVER_VDM_LALARM_FLAG_CHANGE_COUNT'
+TRANSCEIVER_VDM_HWARN_FLAG_CHANGE_COUNT = 'TRANSCEIVER_VDM_HWARN_FLAG_CHANGE_COUNT'
+TRANSCEIVER_VDM_LWARN_FLAG_CHANGE_COUNT = 'TRANSCEIVER_VDM_LWARN_FLAG_CHANGE_COUNT'
+TRANSCEIVER_VDM_HALARM_FLAG_SET_TIME = 'TRANSCEIVER_VDM_HALARM_FLAG_SET_TIME'
+TRANSCEIVER_VDM_LALARM_FLAG_SET_TIME = 'TRANSCEIVER_VDM_LALARM_FLAG_SET_TIME'
+TRANSCEIVER_VDM_HWARN_FLAG_SET_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_SET_TIME'
+TRANSCEIVER_VDM_LWARN_FLAG_SET_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_SET_TIME'
+TRANSCEIVER_VDM_HALARM_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HALARM_FLAG_CLEAR_TIME'
+TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME'
+TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
+TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
 NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
@@ -40,6 +52,9 @@ class XcvrTableHelper:
         VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
         self.vdm_threshold_tbl = {f'vdm_{t}_threshold_tbl': {} for t in VDM_THRESHOLD_TYPES}
         self.vdm_flag_tbl = {f'vdm_{t}_flag_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self.vdm_flag_change_count_tbl = {f'vdm_{t}_flag_change_count_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self.vdm_flag_set_time_tbl = {f'vdm_{t}_flag_set_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self.vdm_flag_clear_time_tbl = {f'vdm_{t}_flag_clear_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -58,6 +73,9 @@ class XcvrTableHelper:
             for t in VDM_THRESHOLD_TYPES:
                 self.vdm_threshold_tbl[f'vdm_{t}_threshold_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_THRESHOLD')
                 self.vdm_flag_tbl[f'vdm_{t}_flag_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_FLAG')
+                self.vdm_flag_change_count_tbl[f'vdm_{t}_flag_change_count_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_FLAG_CHANGE_COUNT')
+                self.vdm_flag_set_time_tbl[f'vdm_{t}_flag_set_time_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_FLAG_SET_TIME')
+                self.vdm_flag_clear_time_tbl[f'vdm_{t}_flag_clear_time_tbl'][asic_id] = swsscommon.Table(self.state_db[asic_id], f'TRANSCEIVER_VDM_{t.upper()}_FLAG_CLEAR_TIME')
 
     def get_intf_tbl(self, asic_id):
         return self.int_tbl[asic_id]
@@ -79,6 +97,15 @@ class XcvrTableHelper:
 
     def get_vdm_flag_tbl(self, asic_id, threshold_type):
         return self.vdm_flag_tbl[f'vdm_{threshold_type}_flag_tbl'][asic_id]
+
+    def get_vdm_flag_change_count_tbl(self, asic_id, threshold_type):
+        return self.vdm_flag_change_count_tbl[f'vdm_{threshold_type}_flag_change_count_tbl'][asic_id]
+
+    def get_vdm_flag_set_time_tbl(self, asic_id, threshold_type):
+        return self.vdm_flag_set_time_tbl[f'vdm_{threshold_type}_flag_set_time_tbl'][asic_id]
+
+    def get_vdm_flag_clear_time_tbl(self, asic_id, threshold_type):
+        return self.vdm_flag_clear_time_tbl[f'vdm_{threshold_type}_flag_clear_time_tbl'][asic_id]
 
     def get_pm_tbl(self, asic_id):
         return self.pm_tbl[asic_id]

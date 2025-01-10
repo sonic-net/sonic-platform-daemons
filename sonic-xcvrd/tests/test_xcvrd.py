@@ -490,6 +490,83 @@ class TestXcvrdScript(object):
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
 
+    @pytest.mark.parametrize("flag_value_table, flag_value_table_found, current_value, expected_change_count, expected_set_time, expected_clear_time", [
+        (None, False, 'N/A', None, None, None),
+        (MagicMock(), False, 'N/A', '0', 'never', 'never'),
+        (MagicMock(), False, True, '1', 'Thu Jan 09 21:50:24 2025', 'never'),
+        (MagicMock(), False, False, '1', 'never', 'Thu Jan 09 21:50:24 2025'),
+        (MagicMock(), True, 'N/A', 0, 'never', 'never'),
+        (MagicMock(), True, True, '2', 'Thu Jan 09 21:50:24 2025', None),
+        (MagicMock(), True, False, '2', None, 'Thu Jan 09 21:50:24 2025')
+    ])
+    @patch('xcvrd.xcvrd.helper_logger')
+    def test_update_flag_metadata_tables(self, mock_logger, flag_value_table, flag_value_table_found, current_value, expected_change_count, expected_set_time, expected_clear_time):
+        def field_value_pairs_to_dict(fvp):
+            return {k: v for k, v in fvp}
+
+        logical_port_name = "Ethernet0"
+        physical_port_name = 1
+        field_name = "test_field"
+        flag_values_dict_update_time = "Thu Jan 09 21:50:24 2025"
+        table_name_for_logging = "test_table"
+
+        # Mock the tables
+        flag_change_count_table = MagicMock()
+        flag_last_set_time_table = MagicMock()
+        flag_last_clear_time_table = MagicMock()
+
+        if flag_value_table is not None:
+            # Mock the return values for get
+            flag_value_table.get.return_value = (flag_value_table_found, {field_name: '0'} if flag_value_table_found else {})
+        flag_change_count_table.get.return_value = (True, {field_name: '1'})
+
+        # Call the function
+        update_flag_metadata_tables(logical_port_name, physical_port_name, field_name, current_value,
+                                    flag_values_dict_update_time,
+                                    flag_value_table,
+                                    flag_change_count_table, flag_last_set_time_table, flag_last_clear_time_table,
+                                    table_name_for_logging)
+
+        if flag_value_table is None:
+            mock_logger.log_error.assert_called_once_with(f"flag_value_table {table_name_for_logging} is None for port {logical_port_name}")
+        elif not flag_value_table_found:
+            if current_value == 'N/A':
+                flag_change_count_table.set.assert_called_once()
+                flag_last_set_time_table.set.assert_called_once()
+                flag_last_clear_time_table.set.assert_called_once()
+                assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '0'}
+                assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: 'never'}
+                assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: 'never'}
+            else:
+                flag_change_count_table.set.assert_called_once()
+                if current_value:
+                    flag_last_set_time_table.set.assert_called_once()
+                    flag_last_clear_time_table.set.assert_called_once()
+                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '1'}
+                    assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: expected_set_time}
+                    assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: 'never'}
+                else:
+                    flag_last_set_time_table.set.assert_called_once()
+                    flag_last_clear_time_table.set.assert_called_once()
+                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '1'}
+                    assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: 'never'}
+                    assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: expected_clear_time}
+        else:
+            if current_value == 'N/A':
+                flag_change_count_table.set.assert_not_called()
+                flag_last_set_time_table.set.assert_not_called()
+                flag_last_clear_time_table.set.assert_not_called()
+            else:
+                flag_change_count_table.set.assert_called_once()
+                if current_value:
+                    flag_last_set_time_table.set.assert_called_once()
+                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: expected_change_count}
+                    assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: expected_set_time}
+                else:
+                    flag_last_clear_time_table.set.assert_called_once()
+                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: expected_change_count}
+                    assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: expected_clear_time}
+
     def test_post_port_dom_threshold_info_to_db(self, mock_get_sfp_type):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
@@ -521,6 +598,7 @@ class TestXcvrdScript(object):
 
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         stop_event = threading.Event()
         mock_get_presence.return_value = False
         for t in VDM_THRESHOLD_TYPES:
@@ -528,38 +606,45 @@ class TestXcvrdScript(object):
 
         # Ensure table is empty if stop_event is set
         stop_event.set()
-        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, mock_get_vdm_non_real_values_table_func,
-                                            mock_get_vdm_non_real_values_func, stop_event)
+        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
+                                            mock_get_vdm_non_real_values_table_func,
+                                            mock_get_vdm_non_real_values_func, stop_event=stop_event)
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
 
         stop_event.clear()
 
         # Ensure table is empty if transceiver is not present
-        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, mock_get_vdm_non_real_values_table_func,
-                                            mock_get_vdm_non_real_values_func, stop_event)
+        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
+                                            mock_get_vdm_non_real_values_table_func,
+                                            mock_get_vdm_non_real_values_func, stop_event=stop_event)
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
 
         mock_get_presence.return_value = True
 
         # Ensure table is empty if get_vdm_non_real_values returns None
-        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, mock_get_vdm_non_real_values_table_func,
-                                            MagicMock(return_value=None), stop_event)
+        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
+                                            mock_get_vdm_non_real_values_table_func,
+                                            MagicMock(return_value=None), stop_event=stop_event)
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
 
         # Ensure table is populated if get_vdm_non_real_values returns valid values
         db_cache = {}
-        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, mock_get_vdm_non_real_values_table_func,
-                                            mock_get_vdm_non_real_values_func, stop_event, db_cache=db_cache)
+        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
+                                            mock_get_vdm_non_real_values_table_func,
+                                            mock_get_vdm_non_real_values_func,
+                                            stop_event=stop_event, db_cache=db_cache)
         for t in VDM_THRESHOLD_TYPES:
            assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size_for_key(logical_port_name) == 8
 
         # Ensure db_cache is populated correctly
         assert db_cache.get(0) is not None
-        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, mock_get_vdm_non_real_values_table_func,
-                                            mock_get_vdm_non_real_values_func, stop_event, db_cache)
+        post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
+                                            mock_get_vdm_non_real_values_table_func,
+                                            mock_get_vdm_non_real_values_func,
+                                            stop_event, db_cache=db_cache)
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size_for_key(logical_port_name) == 8
 
@@ -3609,6 +3694,9 @@ class TestXcvrdScript(object):
             xcvrd.xcvr_table_helper.get_vdm_threshold_tbl = MagicMock(return_value=MagicMock)
             xcvrd.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=MagicMock)
             xcvrd.xcvr_table_helper.get_vdm_flag_tbl = MagicMock()
+            xcvrd.xcvr_table_helper.get_vdm_flag_change_count_tbl = MagicMock()
+            xcvrd.xcvr_table_helper.get_vdm_flag_set_time_tbl = MagicMock()
+            xcvrd.xcvr_table_helper.get_vdm_flag_clear_time_tbl = MagicMock()
             xcvrd.xcvr_table_helper.get_pm_tbl = MagicMock(return_value=MagicMock)
             xcvrd.xcvr_table_helper.get_firmware_info_tbl = MagicMock(return_value=MagicMock)
 
@@ -3639,6 +3727,9 @@ class TestXcvrdScript(object):
             xcvrdaemon.xcvr_table_helper.get_vdm_threshold_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_vdm_flag_tbl = MagicMock()
+            xcvrdaemon.xcvr_table_helper.get_vdm_flag_change_count_tbl = MagicMock()
+            xcvrdaemon.xcvr_table_helper.get_vdm_flag_set_time_tbl = MagicMock()
+            xcvrdaemon.xcvr_table_helper.get_vdm_flag_clear_time_tbl = MagicMock()
             xcvrdaemon.xcvr_table_helper.get_pm_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_firmware_info_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=MagicMock)

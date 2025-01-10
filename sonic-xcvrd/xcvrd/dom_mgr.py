@@ -376,10 +376,10 @@ class DomInfoUpdateTask(threading.Thread):
                                 self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
                             try:
-                                xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping,
+                                xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper,
                                                                         self.xcvr_table_helper.get_vdm_flag_tbl,
-                                                                        xcvrd._wrapper_get_vdm_flags, self.task_stopping_event,
-                                                                        db_cache=vdm_flag_cache)
+                                                                        xcvrd._wrapper_get_vdm_flags, stop_event=self.task_stopping_event,
+                                                                        flag_data=True, db_cache=vdm_flag_cache)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
@@ -429,6 +429,9 @@ class DomInfoUpdateTask(threading.Thread):
                                       [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_vdm_real_value_tbl(port_change_event.asic_id),
                                       *[self.xcvr_table_helper.get_vdm_flag_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
