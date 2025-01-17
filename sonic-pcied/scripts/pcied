@@ -160,7 +160,7 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         self.status_table.set("status", fvs)
 
-    # Check if any interface is in detaching mode by querying the state_db
+    # Check if any PCI interface is in detaching mode by querying the state_db
     def is_dpu_in_detaching_mode(self, pcie_dev):
         # Ensure detach_info is not None
         if self.detach_info is None:
