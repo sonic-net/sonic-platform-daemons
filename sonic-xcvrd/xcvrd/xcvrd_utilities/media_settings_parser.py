@@ -19,6 +19,7 @@ LANE_SPEED_KEY_PREFIX = "speed:"
 VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
+MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
@@ -139,11 +140,14 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
+    medium = "COPPER" if get_is_copper(physical_port) else "OPTICAL"
+    medium_lane_speed_key = medium + str(int(int(port_speed) / lane_count))
     # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
-        LANE_SPEED_KEY: lane_speed_key
+        LANE_SPEED_KEY: lane_speed_key,
+        MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key
     }
 
 
@@ -223,6 +227,8 @@ def get_media_settings_value(physical_port, key):
                 re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
                 or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
                 return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
+            elif key[MEDIUM_LANE_SPEED_KEY] in media_dict:
++               return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
         return None
 
     # Keys under global media settings can be a list or range or list of ranges
