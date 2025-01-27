@@ -5,6 +5,7 @@ import pytest
 import signal
 import threading
 from imp import load_source
+import re
 
 from mock import MagicMock
 from sonic_py_common import daemon_base
@@ -206,3 +207,29 @@ def test_dpu_chassis_daemon():
                 assert chassis_state_db == {'DPU1':
                     {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
                     'dpu_control_plane_state': 'down', 'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'}}
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        daemon_chassisd = DpuChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+        daemon_chassisd.CHASSIS_INFO_UPDATE_PERIOD_SECS = MagicMock(return_value=1)
+
+        daemon_chassisd.stop = MagicMock()
+        daemon_chassisd.stop.wait.return_value = False
+
+        thread = threading.Thread(target=daemon_chassisd.run)
+        thread.start()
+        # Wait for thread to start and update DB
+        time.sleep(3)
+        date_format = "%a %b %d %I:%M:%S %p UTC %Y"
+
+        def is_valid_date(date_str):
+            try:
+                datetime.strptime(date_str, date_format)
+            except ValueError:
+                # Parsing failed and we are unable to obtain the time
+                return False
+            return True
+        assert is_valid_date(chassis_state_db['DPU1']['dpu_data_plane_time'])
+        assert is_valid_date(chassis_state_db['DPU1']['dpu_control_plane_time'])
+        daemon_chassisd.signal_handler(signal.SIGINT, None)
+        daemon_chassisd.stop.wait.return_value = True
+
+        thread.join()
