@@ -1270,8 +1270,13 @@ class CmisManagerTask(threading.Thread):
                     if state == CMIS_STATE_INSERTED:
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] is None:
-                            self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
-                                            "host_speed {}".format(lport, appl, host_lane_count, host_speed))
+			    if api.get_module_media_type() == 'passive_copper_media_interface' or \
+                               api.get_module_media_type() == 'active_cable_media_interface':
+                                self.log_notice("{}: no suitable app for the port appl {} host_lane_count {} host_speed {} skipping CMIS FSM "
+                                                "for media_type {}".format(lport, appl, host_lane_count, host_speed, api.get_module_media_type()))
+                            else:
+                                self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
+                                                "host_speed {}".format(lport, appl, host_lane_count, host_speed))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                             continue
                         appl = self.port_dict[lport]['appl']
