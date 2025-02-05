@@ -14,6 +14,7 @@ try:
 
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
+    from sonic_platform_base.sonic_xcvr.api.public.sff8472 import Sff8472Api
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -434,6 +435,18 @@ class SffManagerTask(threading.Thread):
                 except (AttributeError, NotImplementedError):
                     # Skip if these essential routines are not available
                     continue
+                
+                if xcvr_inserted:
+                    set_lp_success = (
+                        sfp.set_lpmode(False) 
+                        if isinstance(api, Sff8472Api) 
+                        else api.set_lpmode(False)
+                    )
+                    if not set_lp_success:
+                        self.log_error(
+                            "{}: Failed to take module out of low power mode.".format(
+                                lport)
+                        )
 
                 if active_lanes is None:
                     active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,

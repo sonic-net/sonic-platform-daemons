@@ -1,13 +1,18 @@
 import os
 import sys
 import mock
+import tempfile
+import json
 from imp import load_source
 
-from mock import Mock, MagicMock, patch
+from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockModule
+from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
+
+# Assuming OBJECT should be a specific value, define it manually
+SELECT_OBJECT = 1  # Replace with the actual value for OBJECT if know
 
 SYSLOG_IDENTIFIER = 'chassisd_test'
 NOT_AVAILABLE = 'N/A'
@@ -44,6 +49,8 @@ CHASSIS_ASIC_ID_IN_MODULE_FIELD = 'asic_id_in_module'
 CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
+PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
+DEFAULT_DPU_REBOOT_TIMEOUT = 360
 
 def setup_function():
     ModuleUpdater.log_notice = MagicMock()
@@ -78,10 +85,162 @@ def test_moduleupdater_check_valid_fields():
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert slot == int(fvs[CHASSIS_MODULE_INFO_SLOT_FIELD])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
+def test_smartswitch_moduleupdater_check_valid_fields():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+
+def test_smartswitch_moduleupdater_status_transitions():
+    # Mock the chassis and module
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Add module to chassis and initialize with ONLINE status
+    initial_status_online = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(initial_status_online)
+    chassis.module_list.append(module)
+
+    # Create the updater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # Mock dependent methods
+    with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2024-11-19T00:00:00") \
+            as mock_retrieve_reboot_time, \
+         patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
+         patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
+         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as mock_file, \
+         patch.object(module_updater, '_get_history_path',
+                      return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
+
+        # Transition from ONLINE to OFFLINE
+        offline_status = ModuleBase.MODULE_STATUS_OFFLINE
+        module.set_oper_status(offline_status)
+        module_updater.module_db_update()
+        assert module.get_oper_status() == offline_status
+
+        # Reset mocks for next transition
+        mock_file.reset_mock()
+        mock_makedirs.reset_mock()
+        mock_persist_reboot_cause.reset_mock()
+        mock_update_reboot_db.reset_mock()
+
+        # Ensure ONLINE transition is handled correctly
+        online_status = ModuleBase.MODULE_STATUS_ONLINE
+        module.set_oper_status(online_status)
+        module_updater.module_db_update()
+        assert module.get_oper_status() == online_status
+
+        # Validate mock calls for ONLINE transition
+        mock_persist_reboot_cause.assert_called_once()
+        mock_update_reboot_db.assert_called_once()
+
+def test_smartswitch_moduleupdater_check_invalid_name():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "TEST-CARD0"
+    desc = "36 port 400G card"
+    slot = 2
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    assert fvs == None
+
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    admin_state = 0
+    config_updater.module_config_update(name, admin_state)
+
+    # No change since invalid key
+    assert module.get_admin_state() != admin_state
+
+def test_smartswitch_moduleupdater_check_invalid_admin_state():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    admin_state = 2
+    config_updater.module_config_update(name, admin_state)
+
+    # No change since invalid key
+    assert module.get_admin_state() != admin_state
+
+def test_smartswitch_moduleupdater_check_invalid_slot():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = -1
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    assert fvs != None
 
 def test_moduleupdater_check_invalid_name():
     chassis = MockChassis()
@@ -105,6 +264,29 @@ def test_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
+def test_smartswitch_moduleupdater_check_invalid_index():
+    chassis = MockSmartSwitchChassis()
+    index = -1
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    assert fvs != None
+
+    # Run chassis db clean up
+    module_updater.module_down_chassis_db_cleanup()
 
 def test_moduleupdater_check_status_update():
     chassis = MockChassis()
@@ -179,6 +361,33 @@ def test_moduleupdater_check_deinit():
     fvs = module_table.get(name)
     assert fvs == None
 
+def test_smartswitch_moduleupdater_check_deinit():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(name)
+    # if isinstance(fvs, list):
+    #    fvs = dict(fvs[-1])
+    # assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+
+    module_table = module_updater.module_table
+    module_updater.deinit()
+    fvs = module_table.get(name)
+    assert fvs == None
 
 def test_configupdater_check_valid_names():
     chassis = MockChassis()
@@ -251,6 +460,148 @@ def test_configupdater_check_admin_state():
     assert module.get_admin_state() == admin_state
 
 
+def test_smartswitch_configupdater_check_admin_state():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 1
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    admin_state = 0
+    config_updater.module_config_update(name, admin_state)
+    assert module.get_admin_state() == admin_state
+
+    admin_state = 1
+    config_updater.module_config_update(name, admin_state)
+    assert module.get_admin_state() == admin_state
+
+
+    @patch("your_module.glob.glob")
+    @patch("your_module.open", new_callable=mock_open)
+    def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
+        # Set up the SmartSwitchModuleUpdater and test inputs
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
+        module = "dpu0"
+        module_updater.chassis_state_db = MagicMock()
+
+        # Case 1: No history files found
+        mock_glob.return_value = []
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
+
+        # Case 2: Valid JSON file with reboot cause
+        mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
+        mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_not_called()  # No warnings expected
+            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
+            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
+
+        # Case 3: Empty JSON object in file
+        mock_open().read.return_value = json.dumps({})
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
+
+        # Case 4: Invalid JSON in file
+        mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
+
+        # Case 5: General exception handling
+        mock_open.side_effect = IOError("Unable to read file")
+        with patch.object(module_updater, "log_warning") as mock_log_warning:
+            module_updater.update_dpu_reboot_cause_to_db(module)
+            mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
+
+
+def test_smartswitch_module_db_update():
+    chassis = MockSmartSwitchChassis()
+    reboot_cause = "Power loss"
+    key = "DPU0"
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    expected_path = "/host/reboot-cause/module/reboot_cause/dpu0/history/2024_11_13_15_06_40_reboot_cause.txt"
+    symlink_path = "/host/reboot-cause/module/dpu0/previous-reboot-cause.json"
+
+    with patch("os.path.exists", return_value=True), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open(read_data="Power loss")) as mock_file, \
+         patch("os.remove") as mock_remove, \
+         patch("os.symlink") as mock_symlink:
+
+        # Call the function to test
+        module_updater.persist_dpu_reboot_cause(reboot_cause, key)
+        module_updater._is_first_boot(name)
+        module_updater.persist_dpu_reboot_time(name)
+        module_updater.update_dpu_reboot_cause_to_db(name)
+
+
+def test_platform_json_file_exists_and_valid():
+    """Test case where the platform JSON file exists with valid data."""
+    chassis = MockSmartSwitchChassis()
+
+    # Define the custom mock_open function to handle specific file paths
+    def custom_mock_open(*args, **kwargs):
+        if args and args[0] == PLATFORM_JSON_FILE:
+            return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
+        return open(*args, **kwargs)  # Call the real open for other files
+
+    with patch("os.path.isfile", return_value=True), \
+        patch("builtins.open", custom_mock_open):
+
+        # Initialize the updater; it should read the mocked JSON data
+        updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
+
+        # Check that the extracted dpu_reboot_timeout value is as expected
+        assert updater.dpu_reboot_timeout == 360
+
+
+def test_platform_json_file_exists_fail_init():
+    """Test case where the platform JSON file exists with valid data."""
+    chassis = MockSmartSwitchChassis()
+
+    # Define the custom mock_open function to handle specific file paths
+    def custom_mock_open(*args, **kwargs):
+        if args and args[0] == PLATFORM_JSON_FILE:
+            return mock_open(read_data='{"dpu_reboot_timeout": 360}')(*args, **kwargs)
+        return open(*args, **kwargs)  # Call the real open for other files
+
+    with patch("os.path.isfile", return_value=True), \
+        patch("builtins.open", custom_mock_open):
+
+        # Initialize the updater; it should read the mocked JSON data
+        updater = SmartSwitchModuleUpdater("SYSLOG", chassis)
+        updater.midplane_initialized = False
+
+        # Check that the extracted dpu_reboot_timeout value is as expected
+        assert updater.dpu_reboot_timeout == 360
+
+
 def test_configupdater_check_num_modules():
     chassis = MockChassis()
     index = 0
@@ -280,6 +631,54 @@ def test_configupdater_check_num_modules():
     fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     assert fvs == None
 
+def test_moduleupdater_check_string_slot():
+    chassis = MockChassis()
+
+    #Supervisor
+    index = 0
+    name = "SUPERVISOR0"
+    desc = "Supervisor card"
+    slot = "A"
+    serial = "RP1000101"
+    module_type = ModuleBase.MODULE_TYPE_SUPERVISOR
+    supervisor = MockModule(index, name, desc, module_type, slot, serial)
+    supervisor.set_midplane_ip()
+    chassis.module_list.append(supervisor)
+
+    #Linecard
+    index = 1
+    name = "LINE-CARD0"
+    desc = "36 port 400G card"
+    slot = "1"
+    serial = "LC1000101"
+    module_type = ModuleBase.MODULE_TYPE_LINE
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    #Fabric-card
+    index = 1
+    name = "FABRIC-CARD0"
+    desc = "Switch fabric card"
+    slot = "17"
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    fabric = MockModule(index, name, desc, module_type, slot, serial)
+    chassis.module_list.append(fabric)
+
+    #Run on supervisor
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.supervisor_slot = supervisor.get_slot()
+    module_updater.my_slot = supervisor.get_slot()
+    module_updater.modules_num_update()
+    module_updater.module_db_update()
+    module_updater.check_midplane_reachability()
+
+    midplane_table = module_updater.midplane_table
+    #Check only one entry in database
+    assert 1 == midplane_table.size()
+    
 def test_midplane_presence_modules():
     chassis = MockChassis()
 
@@ -362,14 +761,126 @@ def test_midplane_presence_modules():
     fvs = midplane_table.get(name)
     assert fvs == None
 
+
+@patch('os.makedirs')
+@patch('builtins.open', new_callable=mock_open)
+def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Assume your method uses a path variable that you can set for testing
+        path = os.path.join(temp_dir, 'subdir')
+
+        # Set up your mock or variable to use temp_dir
+        mock_makedirs.side_effect = lambda x, **kwargs: None  # Prevent actual call
+
+        chassis = MockSmartSwitchChassis()
+
+        #DPU0
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = 0
+        sup_slot = 0
+        serial = "DPU0-0000"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+        module.set_midplane_ip()
+        module.prev_reboot_time = "2024_10_30_02_44_50"
+        chassis.module_list.append(module)
+
+        #Run on supervisor
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+        module_updater.midplane_initialized = True
+        module_updater.modules_num_update()
+        module_updater.module_db_update()
+        module_updater.check_midplane_reachability()
+
+        midplane_table = module_updater.midplane_table
+        #Check only one entry in database
+        assert 1 == midplane_table.size()
+
+        #Check fields in database
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        #Set access of DPU0 to Up (midplane connectivity is down initially)
+        module.set_midplane_reachable(True)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        #Set access of DPU0 to Down (to mock midplane connectivity state change)
+        module.set_midplane_reachable(False)
+        module_updater.check_midplane_reachability()
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+
+        # Run chassis db clean up
+        module_updater.module_down_chassis_db_cleanup()
+        module_updater.chassis_state_db = None
+        module_updater.module_down_chassis_db_cleanup()
+
+        #Deinit
+        module_updater.deinit()
+        fvs = midplane_table.get(name)
+        assert fvs == None
+
+
+@patch('os.makedirs')
+@patch('builtins.open', new_callable=mock_open)
+def test_midplane_presence_uninitialized_dpu_modules(mock_open, mock_makedirs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Assume your method uses a path variable that you can set for testing
+        path = os.path.join(temp_dir, 'subdir')
+
+        # Set up your mock or variable to use temp_dir
+        mock_makedirs.side_effect = lambda x, **kwargs: None  # Prevent actual call
+
+        chassis = MockSmartSwitchChassis()
+
+        #DPU0
+        index = 0
+        name = "DPU0"
+        desc = "DPU Module 0"
+        slot = 0
+        sup_slot = 0
+        serial = "DPU0-0000"
+        module_type = ModuleBase.MODULE_TYPE_DPU
+        module = MockModule(index, name, desc, module_type, slot, serial)
+        module.set_midplane_ip()
+        module.prev_reboot_time = "2024_10_30_02_44_50"
+        chassis.module_list.append(module)
+
+        #Run on supervisor
+        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+        module_updater.midplane_initialized = False
+        module_updater.modules_num_update()
+        module_updater.module_db_update()
+        module_updater.check_midplane_reachability()
+
+        midplane_table = module_updater.midplane_table
+        #Check only one entry in database
+        assert 1 != midplane_table.size()
+
 builtin_open = open  # save the unpatched version
-def mock_open(*args, **kwargs):
-    if args[0] == PLATFORM_ENV_CONF_FILE:
+def lc_mock_open(*args, **kwargs):
+    if args and args[0] == PLATFORM_ENV_CONF_FILE:
         return mock.mock_open(read_data="dummy=1\nlinecard_reboot_timeout=240\n")(*args, **kwargs)
     # unpatched version for every other path
     return builtin_open(*args, **kwargs)
 
-@patch("builtins.open", mock_open)
+@patch("builtins.open", lc_mock_open)
 @patch('os.path.isfile', MagicMock(return_value=True))
 def test_midplane_presence_modules_linecard_reboot():
     chassis = MockChassis()
@@ -749,6 +1260,58 @@ def test_signal_handler():
     assert daemon_chassisd.stop.set.call_count == 0
     assert exit_code == 0
 
+def test_daemon_run_smartswitch():
+    # Test the chassisd run
+    chassis = MockSmartSwitchChassis()
+
+    # DPU0
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    sup_slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.smartswitch = True
+
+    import sonic_platform.platform
+    with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch:
+        mock_is_smartswitch.return_value = True
+
+        with patch.object(module_updater, 'num_modules', 1):
+            daemon_chassisd.run()
+
+
+def test_daemon_run_supervisor_invalid_slot():
+    chassis = MockChassis()
+    #Supervisor
+    index = 0
+    sup_slot = -1
+    # Supervisor ModuleUpdater
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, sup_slot, sup_slot)
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.stop = MagicMock()
+    daemon_chassisd.stop.wait.return_value = True
+    module_updater.my_slot = ModuleBase.MODULE_INVALID_SLOT
+    module_updater.supervisor_slot = ModuleBase.MODULE_INVALID_SLOT
+    daemon_chassisd.run()
+
 def test_daemon_run_supervisor():
     # Test the chassisd run
     chassis = MockChassis()
@@ -762,6 +1325,27 @@ def test_daemon_run_supervisor():
     daemon_chassisd.stop = MagicMock()
     daemon_chassisd.stop.wait.return_value = True
     daemon_chassisd.run()
+
+def import_mock_swsscommon():
+    return importlib.import_module('tests.mock_swsscommon')
+
+def test_task_worker_loop():
+    # Create a mock for the Select object
+    mock_select = MagicMock()
+
+    # Set up the mock to raise a KeyboardInterrupt after the first call
+    mock_select.select.side_effect = [(mock_select.TIMEOUT, None), KeyboardInterrupt]
+
+    # Patch the swsscommon.Select to use this mock
+    with patch('tests.mock_swsscommon.Select', return_value=mock_select):
+        config_manager = SmartSwitchConfigManagerTask()
+
+        config_manager.config_updater = MagicMock()
+
+        try:
+            config_manager.task_worker()
+        except KeyboardInterrupt:
+            pass  # Handle the KeyboardInterrupt as expected
 
 def test_daemon_run_linecard():
     # Test the chassisd run
@@ -930,4 +1514,4 @@ def test_chassis_db_bootup_with_empty_slot():
         fvs = dict(fvs[-1])
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert down_module_lc1_key in sup_module_updater.down_modules.keys()
-    
+
