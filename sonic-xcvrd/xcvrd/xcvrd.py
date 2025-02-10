@@ -680,30 +680,26 @@ def update_flag_metadata_tables(logical_port_name, physical_port_name, field_nam
         return
 
     found, db_flags_value_dict = flag_value_table.get(logical_port_name)
+    # Table is empty, this is the first update to the metadata tables (this also means that the transceiver was detected for the first time)
+    # Unless the flag (current_value) is set, initialize the change count to 0 and last set and clear times to 'never'
     if not found:
-        # Table is empty, this is the first update to the metadata tables (this also means that the transceiver was detected for the first time)
-        if str(current_value) == 'N/A':
+        if str(current_value).strip() == 'N/A' or not current_value:
             flag_change_count_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, '0')]))
             flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
             flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
-            return
         else:
             flag_change_count_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, '1')]))
-            if current_value:
-                flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, flag_values_dict_update_time)]))
-                flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
-            else:
-                flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
-                flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, flag_values_dict_update_time)]))
-            return
+            flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, flag_values_dict_update_time)]))
+            flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
+        return
     else:
         db_flags_value_dict = dict(db_flags_value_dict)
 
     # No metadata update required if the value is 'N/A'
-    if str(current_value) == 'N/A':
+    if str(current_value).strip() == 'N/A':
         return
 
-    # Handle the case wherein the key is already in the db and the value of flag has changed from the previous value
+    # Update metadata if the value of flag has changed from the previous value
     if field_name in db_flags_value_dict and db_flags_value_dict[field_name] != str(current_value):
         found, db_change_count_dict = flag_change_count_table.get(physical_port_name)
         if not found:
@@ -1793,6 +1789,7 @@ class SfpStateUpdateTask(threading.Thread):
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
                 post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_dom_threshold_tbl(asic_index), stop_event)
+                # Read the VDM thresholds and post them to the DB
                 post_port_vdm_non_real_values_to_db(logical_port_name, port_mapping, xcvr_table_helper,
                                                      xcvr_table_helper.get_vdm_threshold_tbl,
                                                     _wrapper_get_transceiver_vdm_thresholds, stop_event=stop_event)

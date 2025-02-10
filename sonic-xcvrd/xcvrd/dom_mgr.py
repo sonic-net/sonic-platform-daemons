@@ -363,11 +363,13 @@ class DomInfoUpdateTask(threading.Thread):
                         self.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     if xcvrd._wrapper_is_transceiver_vdm_supported(physical_port):
+                        # Freeze VDM stats before reading VDM values
                         with self.vdm_freeze_context(physical_port) as vdm_frozen:
                             if not vdm_frozen:
                                 self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
                                 continue
                             try:
+                                # Read and post VDM real values to DB
                                 self.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
                                                                 xcvrd._wrapper_get_vdm_real_values, self.task_stopping_event,
                                                                 db_cache=vdm_real_value_cache)
@@ -376,6 +378,7 @@ class DomInfoUpdateTask(threading.Thread):
                                 self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
                             try:
+                                # Read and post VDM flags and metadata to DB
                                 xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper,
                                                                         self.xcvr_table_helper.get_vdm_flag_tbl,
                                                                         xcvrd._wrapper_get_vdm_flags, stop_event=self.task_stopping_event,
