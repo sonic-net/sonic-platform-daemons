@@ -1343,7 +1343,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.log_info("Start daemon main loop")
 
         # Set the initial DPU admin state for SmartSwitch
-        if self.smartswitch and self.platform_chassis.is_dpu():
+        if self.smartswitch:
             self.set_initial_dpu_admin_state()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
