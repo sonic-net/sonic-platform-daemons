@@ -681,16 +681,11 @@ def update_flag_metadata_tables(logical_port_name, physical_port_name, field_nam
 
     found, db_flags_value_dict = flag_value_table.get(logical_port_name)
     # Table is empty, this is the first update to the metadata tables (this also means that the transceiver was detected for the first time)
-    # Unless the flag (current_value) is set, initialize the change count to 0 and last set and clear times to 'never'
+    # Initialize the change count to 0 and last set and clear times to 'never'
     if not found:
-        if str(current_value).strip() == 'N/A' or not current_value:
-            flag_change_count_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, '0')]))
-            flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
-            flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
-        else:
-            flag_change_count_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, '1')]))
-            flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, flag_values_dict_update_time)]))
-            flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
+        flag_change_count_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, '0')]))
+        flag_last_set_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
+        flag_last_clear_time_table.set(physical_port_name, swsscommon.FieldValuePairs([(field_name, 'never')]))
         return
     else:
         db_flags_value_dict = dict(db_flags_value_dict)
