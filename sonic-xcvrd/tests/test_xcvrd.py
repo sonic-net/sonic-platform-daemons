@@ -2046,6 +2046,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
+        mock_xcvr_api.get_module_pwr_down_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
         mock_xcvr_api.get_supported_freq_config = MagicMock(return_value=(0xA0,0,0,191300,196100))
@@ -2077,7 +2078,6 @@ class TestXcvrdScript(object):
                 'media_lane_assignment_options': 15
             }
         })
-        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
         mock_xcvr_api.get_config_datapath_hostlane_status = MagicMock(return_value={
             'ConfigStatusLane1': 'ConfigSuccess',
             'ConfigStatusLane2': 'ConfigSuccess',
@@ -2228,17 +2228,21 @@ class TestXcvrdScript(object):
         # Case 1: Module Inserted --> DP_DEINIT
         task.is_appl_reconfigure_required = MagicMock(return_value=True)
         mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=True)
+        task.need_lp_mode_for_dpdeinit = MagicMock(return_value=True)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_DP_DEINIT
+        assert mock_xcvr_api.set_lpmode.call_count == 1
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleLowPwr')
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert mock_xcvr_api.set_datapath_deinit.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
-        assert mock_xcvr_api.set_lpmode.call_count == 1
+        assert mock_xcvr_api.set_lpmode.call_count == 2
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_AP_CONF
 
         # Case 2: DP_DEINIT --> AP Configured
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert mock_xcvr_api.set_application.call_count == 1
