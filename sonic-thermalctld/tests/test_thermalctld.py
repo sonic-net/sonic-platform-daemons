@@ -416,12 +416,37 @@ class TestTemperatureUpdater(object):
         temp_updater.chassis_table = Table("STATE_DB", "ctable")
         temp_updater.chassis_table._del = mock.MagicMock()
         temp_updater.is_chassis_system = True
+        temp_updater.is_chassis_upd_required = True
 
         temp_updater.__del__()
         assert temp_updater.table.getKeys.call_count == 1
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        assert temp_updater.chassis_table._del.call_count == 2
+
+    def test_deinit_exception(self):
+        chassis = MockChassis()
+        temp_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+        temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
+        temp_updater.table = Table("STATE_DB", "xtable")
+        temp_updater.table._del = mock.MagicMock()
+        temp_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
+        temp_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        temp_updater.phy_entity_table._del = mock.MagicMock()
+        temp_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
+        temp_updater.chassis_table = Table("STATE_DB", "ctable")
+        temp_updater.chassis_table._del = mock.Mock()
+        temp_updater.chassis_table._del.side_effect = Exception('test')
+        temp_updater.is_chassis_system = True
+        temp_updater.is_chassis_upd_required = True
+
+        temp_updater.__del__()
+        assert temp_updater.table.getKeys.call_count == 1
+        assert temp_updater.table._del.call_count == 2
+        expected_calls = [mock.call('key1'), mock.call('key2')]
+        temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        assert temp_updater.chassis_table is None
 
     def test_over_temper(self):
         chassis = MockChassis()

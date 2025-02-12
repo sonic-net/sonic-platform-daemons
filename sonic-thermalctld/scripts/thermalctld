@@ -559,8 +559,14 @@ class TemperatureUpdater(logger.Logger):
             table_keys = self.table.getKeys()
             for tk in table_keys:
                 self.table._del(tk)
-                if self.is_chassis_upd_required and self.chassis_table is not None:
-                    self.chassis_table._del(tk)
+                try:
+                    if self.is_chassis_upd_required and self.chassis_table is not None:
+                        self.chassis_table._del(tk)
+                except Exception as e:
+                    # On a chassis system it is possible we may lose connection
+                    # to the supervisor and chassisdb. If this happens then we
+                    # should simply remove our handle to chassisdb.
+                    self.chassis_table = None
         if self.phy_entity_table:
             phy_entity_keys = self.phy_entity_table.getKeys()
             for pek in phy_entity_keys:
