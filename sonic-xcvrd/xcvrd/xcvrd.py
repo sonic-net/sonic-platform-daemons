@@ -34,7 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
-    
+
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
@@ -422,58 +422,8 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                 transceiver_dict[physical_port] = port_info_dict
                 # if cmis is supported by the module
                 if 'cmis_rev' in port_info_dict:
-                    fvs = swsscommon.FieldValuePairs(
-                        [('type', port_info_dict['type']),
-                        ('vendor_rev', port_info_dict['vendor_rev']),
-                        ('serial', port_info_dict['serial']),
-                        ('manufacturer', port_info_dict['manufacturer']),
-                        ('model', port_info_dict['model']),
-                        ('vendor_oui', port_info_dict['vendor_oui']),
-                        ('vendor_date', port_info_dict['vendor_date']),
-                        ('connector', port_info_dict['connector']),
-                        ('encoding', port_info_dict['encoding']),
-                        ('ext_identifier', port_info_dict['ext_identifier']),
-                        ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
-                        ('cable_type', port_info_dict['cable_type']),
-                        ('cable_length', str(port_info_dict['cable_length'])),
-                        ('specification_compliance', port_info_dict['specification_compliance']),
-                        ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
-                        ('application_advertisement', port_info_dict['application_advertisement']
-                        if 'application_advertisement' in port_info_dict else 'N/A'),
-                        ('is_replaceable', str(is_replaceable)),
-                        ('dom_capability', port_info_dict['dom_capability']
-                        if 'dom_capability' in port_info_dict else 'N/A'),
-                        ('cmis_rev', port_info_dict['cmis_rev'] if 'cmis_rev' in port_info_dict else 'N/A'),
-                        ('hardware_rev', port_info_dict['hardware_rev']
-                        if 'hardware_rev' in port_info_dict else 'N/A'),
-                        ('media_interface_code', port_info_dict['media_interface_code']
-                        if 'media_interface_code' in port_info_dict else 'N/A'),
-                        ('host_electrical_interface', port_info_dict['host_electrical_interface']
-                        if 'host_electrical_interface' in port_info_dict else 'N/A'),
-                        ('host_lane_count', 'N/A'),
-                        ('media_lane_count', 'N/A'),
-                        ('host_lane_assignment_option', str(port_info_dict['host_lane_assignment_option'])
-                        if 'host_lane_assignment_option' in port_info_dict else 'N/A'),
-                        ('media_lane_assignment_option', str(port_info_dict['media_lane_assignment_option'])
-                        if 'media_lane_assignment_option' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane1', 'N/A'),
-                        ('active_apsel_hostlane2', 'N/A'),
-                        ('active_apsel_hostlane3', 'N/A'),
-                        ('active_apsel_hostlane4', 'N/A'),
-                        ('active_apsel_hostlane5', 'N/A'),
-                        ('active_apsel_hostlane6', 'N/A'),
-                        ('active_apsel_hostlane7', 'N/A'),
-                        ('active_apsel_hostlane8', 'N/A'),
-                        ('media_interface_technology', port_info_dict['media_interface_technology']
-                        if 'media_interface_technology' in port_info_dict else 'N/A'),
-                        ('supported_max_tx_power', str(port_info_dict['supported_max_tx_power'])
-                        if 'supported_max_tx_power' in port_info_dict else 'N/A'),
-                        ('supported_min_tx_power', str(port_info_dict['supported_min_tx_power'])
-                        if 'supported_min_tx_power' in port_info_dict else 'N/A'),
-                        ('supported_max_laser_freq', str(port_info_dict['supported_max_laser_freq'])
-                        if 'supported_max_laser_freq' in port_info_dict else 'N/A'),
-                        ('supported_min_laser_freq', str(port_info_dict['supported_min_laser_freq'])
-                        if 'supported_min_laser_freq' in port_info_dict else 'N/A')
+                    fvs = swsscommon.FieldValuePairs([
+                        (field, str(value)) for field, value in port_info_dict.items()
                     ])
                 # else cmis is not supported by the module
                 else:
@@ -819,7 +769,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-	
+
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -833,7 +783,7 @@ class CmisManagerTask(threading.Thread):
 
     def is_appl_reconfigure_required(self, api, app_new):
         """
-	   Reset app code if non default app code needs to configured 
+	   Reset app code if non default app code needs to configured
         """
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
@@ -1294,7 +1244,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-			
+
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -1386,8 +1336,8 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == CMIS_STATE_AP_CONF:
-                        # Explicit control bit to apply custom Host SI settings. 
-                        # It will be set to 1 and applied via set_application if 
+                        # Explicit control bit to apply custom Host SI settings.
+                        # It will be set to 1 and applied via set_application if
                         # custom SI settings is applicable
                         ec = 0
 
@@ -1419,13 +1369,13 @@ class CmisManagerTask(threading.Thread):
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-                            
+
                             self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                             for key, sub_dict in optics_si_dict.items():
                                 self.log_debug("{}".format(key))
                                 for sub_key, value in sub_dict.items():
                                     self.log_debug("{}: {}".format(sub_key, str(value)))
-                            
+
                             if optics_si_dict:
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                  format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
