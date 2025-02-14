@@ -144,7 +144,7 @@ class PortChangeObserver:
                     if not multi_asic.is_front_panel_port(port_name, role):
                         continue
 
-                    self.logger.log_warning("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
+                    self.logger.log_debug("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
                                                             port_name, op, port_tbl.db_name, port_tbl.table_name, fvp))
                     if 'index' not in fvp:
                        fvp['index'] = '-1'
