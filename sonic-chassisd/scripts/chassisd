@@ -708,7 +708,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_ADMIN_STATUS]
         else:
-            return 'down'
+            return 'empty'
 
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
@@ -1277,11 +1277,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             try:
                 # Get admin state of DPU
                 admin_state = self.module_updater.get_module_admin_status(module_name)
-                if admin_state == 'up' and operational_state != ModuleBase.MODULE_STATUS_ONLINE:
-                    # startup DPU
-                    op = MODULE_ADMIN_UP
-
-                elif admin_state == 'down' and  operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
+                if admin_state == 'empty' and operational_state != ModuleBase.MODULE_STATUS_ONLINE:
                     # shutdown DPU
                     op = MODULE_ADMIN_DOWN
 
