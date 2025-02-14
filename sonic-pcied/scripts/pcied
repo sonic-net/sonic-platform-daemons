@@ -27,6 +27,10 @@ SYSLOG_IDENTIFIER = "pcied"
 PCIE_RESULT_REGEX = "PCIe Device Checking All Test"
 PCIE_DEVICE_TABLE_NAME = "PCIE_DEVICE"
 PCIE_STATUS_TABLE_NAME = "PCIE_DEVICES"
+PCIE_DETACH_INFO_TABLE = "PCIE_DETACH_INFO"
+
+PCIE_DETACH_BUS_INFO_FIELD = "bus_info"
+PCIE_DETACH_DPU_STATE_FIELD = "dpu_state"
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
 
@@ -92,6 +96,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.device_table = swsscommon.Table(self.state_db, PCIE_DEVICE_TABLE_NAME)
         self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
+        self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
 
     def __del__(self):
         if self.device_table:
@@ -102,6 +107,10 @@ class DaemonPcied(daemon_base.DaemonBase):
             stable_keys = self.status_table.getKeys()
             for stk in stable_keys:
                 self.status_table._del(stk)
+        if self.detach_info:
+            detach_info_keys = self.detach_info.getKeys()
+            for dk in detach_info_keys:
+                self.detach_info._del(dk)
 
     # load aer-fields into statedb
     def update_aer_to_statedb(self):
@@ -151,6 +160,28 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         self.status_table.set("status", fvs)
 
+    # Check if any PCI interface is in detaching mode by querying the state_db
+    def is_dpu_in_detaching_mode(self, pcie_dev):
+        # Ensure detach_info is not None
+        if self.detach_info is None:
+            self.log_debug("detach_info is None")
+            return False
+
+        # Query the state_db for the device detaching status
+        detach_info_keys = list(self.detach_info.getKeys())
+        if not detach_info_keys:
+            return False
+
+        for key in detach_info_keys:
+            dpu_info = self.detach_info.get(key)
+            if dpu_info:
+                bus_info = dpu_info.get(PCIE_DETACH_BUS_INFO_FIELD)
+                dpu_state = dpu_info.get(PCIE_DETACH_DPU_STATE_FIELD)
+                if bus_info == pcie_dev and dpu_state == "detaching":
+                    return True
+
+        return False
+
     # Check the PCIe devices
     def check_pcie_devices(self):
         self.resultInfo = platform_pcieutil.get_pcie_check()
@@ -160,6 +191,14 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         for result in self.resultInfo:
             if result["result"] == "Failed":
+                # Convert bus, device, and function to a bus_info format like "0000:03:00.0"
+                pcie_dev = "0000:{int(result['bus'], 16):02x}:{int(result['dev'], 16):02x}.{int(result['fn'], 16)}"
+
+                # Check if the device is in detaching mode
+                if device_info.is_smartswitch() and self.is_dpu_in_detaching_mode(pcie_dev):
+                    self.log_debug("PCIe Device: {} is in detaching mode, skipping warning.".format(pcie_dev))
+                    continue
+
                 self.log_warning("PCIe Device: " + result["name"] + " Not Found")
                 err += 1
             else:

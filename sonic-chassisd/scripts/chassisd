@@ -17,7 +17,7 @@ try:
     import time
     import json
     import glob
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from sonic_py_common import daemon_base, logger, device_info
     from sonic_py_common.task_base import ProcessTaskBase
@@ -135,6 +135,16 @@ def get_chassis():
     except Exception as e:
         self.log_error("Failed to load chassis due to {}".format(repr(e)))
         sys.exit(CHASSIS_LOAD_ERROR)
+
+def get_formatted_time(datetimeobj=None, op_format=None):
+    """
+    Get the current time in specified format
+    :param datetimeobj: Optional - A datetime object already initialized with a specific time
+    :param op_format: Optional - Output Format for the time to be displayed
+    :returns time in string format
+    """
+    date_obj = datetimeobj if datetimeobj else datetime.now(timezone.utc)
+    return date_obj.strftime(op_format if op_format else "%a %b %d %I:%M:%S %p UTC %Y")
 
 #
 # Module Config Updater ========================================================
@@ -765,28 +775,22 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def update_dpu_state(self, key, state):
         """
-        Update DPU state in chassisStateDB using the given key.
+        Update specific DPU state fields in chassisStateDB using the given key.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
             if not self.chassis_state_db:
                 self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
 
-            # Fetch the current data for the given key and convert it to a dict
-            current_data = self._convert_to_dict(self.chassis_state_db.hgetall(key))
-
-            if current_data:
-                self.chassis_state_db.delete(key)
-
-            # Prepare the updated data
+            # Prepare the fields to update
             updates = {
                 "dpu_midplane_link_state": state,
                 "dpu_midplane_link_reason": "",
-                "dpu_midplane_link_time": datetime.now().strftime("%a %b %d %I:%M:%S %p UTC %Y"),
+                "dpu_midplane_link_time": get_formatted_time(),
             }
-            current_data.update(updates)
 
-            for field, value in current_data.items():
+            # Update each field directly
+            for field, value in updates.items():
                 self.chassis_state_db.hset(key, field, value)
 
         except Exception as e:
@@ -818,7 +822,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def _get_current_time_str(self):
         """Returns the current time as a string in 'YYYY_MM_DD_HH_MM_SS' format."""
-        return datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        return get_formatted_time(op_format="%Y_%m_%d_%H_%M_%S")
 
     def _get_history_path(self, module, file_name):
         """Generates the full path for history files."""
@@ -880,11 +884,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         file_path = self._get_history_path(module, file_name)
         try:
-            dt_obj = datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S")
+            formatted_time = get_formatted_time(datetimeobj=datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S"))
         except ValueError:
-            dt_obj = datetime.now()
-
-        formatted_time = dt_obj.strftime("%a %b %d %I:%M:%S %p UTC %Y")
+            formatted_time = get_formatted_time()
 
         reboot_cause_dict = {
             "cause": cause,
@@ -1188,7 +1190,7 @@ class DpuStateUpdater(logger.Logger):
         return True
 
     def _time_now(self):
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return get_formatted_time()
 
     def _update_dp_dpu_state(self, state):
         self.dpu_state_table.hset(self.name, self.DP_STATE, state)

@@ -1515,3 +1515,27 @@ def test_chassis_db_bootup_with_empty_slot():
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert down_module_lc1_key in sup_module_updater.down_modules.keys()
 
+
+def test_smartswitch_time_format():
+    chassis = MockSmartSwitchChassis()
+    chassis_state_db = MagicMock()
+    mod_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    mod_updater.chassis_state_db = chassis_state_db
+    mod_updater.chassis_state_db.hgetall = MagicMock(return_value={})
+    mod_updater.chassis_state_db.hset = MagicMock()
+    date_format = "%a %b %d %I:%M:%S %p UTC %Y"
+    def is_valid_date(date_str):
+            try:
+                datetime.strptime(date_str, date_format)
+            except ValueError:
+                # Parsing failed and we are unable to obtain the time
+                return False
+            return True
+    mod_updater.update_dpu_state("DPU1", 'up')
+    date_value = None
+    for args in (mod_updater.chassis_state_db.hset.call_args_list):
+        if args[0][0] == "DPU1" and args[0][1] == "dpu_midplane_link_time":
+            date_value = args[0][2]
+    if not date_value:
+        AssertionError("Date is not set!")
+    assert is_valid_date(date_value)
