@@ -3,6 +3,7 @@ from xcvrd.xcvrd_utilities.port_event_helper import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd_utilities.media_settings_parser import *
 from xcvrd.xcvrd_utilities.optics_si_parser import *
+from xcvrd.dom.dom_mgr import *
 from xcvrd.xcvrd import *
 from xcvrd.sff_mgr import *
 from xcvrd.xcvrd_utilities.xcvr_table_helper import *
@@ -315,7 +316,7 @@ class TestXcvrdThreadException(object):
         assert not dom_info_update.is_alive()
         assert(type(exception_received) == NotImplementedError)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
-        assert("sonic-xcvrd/xcvrd/dom_mgr.py" in str(trace))
+        assert("sonic-xcvrd/xcvrd/dom/dom_mgr.py" in str(trace))
         assert("subscribe_port_config_change" in str(trace))
 
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
@@ -2893,15 +2894,15 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_freeze_vdm_stats_and_confirm', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_unfreeze_vdm_stats_and_confirm', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_dom_info_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_dom_info_to_db')
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.update_port_transceiver_status_table_hw')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_diagnostic_values_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.update_port_transceiver_status_table_hw')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_diagnostic_values_to_db')
     @patch('xcvrd.xcvrd.post_port_vdm_non_real_values_to_db')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
     def test_DomInfoUpdateTask_task_worker(self, mock_post_pm_info, mock_post_flag_status, mock_post_diagnostic_value, mock_update_status_hw,
                                            mock_select, mock_sub_table,
                                            mock_post_dom_info, mock_post_firmware_info, mock_detect_error):
@@ -2945,18 +2946,18 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_dom_info_to_db', MagicMock(return_value=True))
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.update_port_transceiver_status_table_hw', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_dom_info_to_db', MagicMock(return_value=True))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.update_port_transceiver_status_table_hw', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_is_transceiver_vdm_supported', MagicMock(return_value=True))
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
     @patch('xcvrd.xcvrd._wrapper_freeze_vdm_stats_and_confirm')
     @patch('xcvrd.xcvrd._wrapper_unfreeze_vdm_stats_and_confirm')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_diagnostic_values_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_diagnostic_values_to_db')
     @patch('xcvrd.xcvrd.post_port_vdm_non_real_values_to_db')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
     def test_DomInfoUpdateTask_task_worker_vdm_failure(self, mock_post_pm_info, mock_post_flag_status, mock_post_diagnostic_value,
                                                         mock_unfreeze_vdm_stats_and_confirm, mock_freeze_vdm_stats_and_confirm,
                                                         mock_select, mock_sub_table):
@@ -3151,7 +3152,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
     @patch('xcvrd.xcvrd.del_port_sfp_dom_info_from_db')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
-    @patch('xcvrd.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
     @patch('xcvrd.xcvrd.post_port_dom_threshold_info_to_db')
     @patch('xcvrd.xcvrd.post_port_vdm_non_real_values_to_db')
     @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')

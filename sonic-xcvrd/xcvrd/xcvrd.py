@@ -28,7 +28,7 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom_mgr import DomInfoUpdateTask
+    from .dom.dom_mgr import DomInfoUpdateTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
