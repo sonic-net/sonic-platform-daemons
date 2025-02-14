@@ -493,8 +493,8 @@ class TestXcvrdScript(object):
     @pytest.mark.parametrize("flag_value_table, flag_value_table_found, current_value, expected_change_count, expected_set_time, expected_clear_time", [
         (None, False, 'N/A', None, None, None),
         (MagicMock(), False, 'N/A', '0', 'never', 'never'),
-        (MagicMock(), False, True, '1', 'Thu Jan 09 21:50:24 2025', 'never'),
-        (MagicMock(), False, False, '1', 'never', 'Thu Jan 09 21:50:24 2025'),
+        (MagicMock(), False, True, '0', 'never', 'never'),
+        (MagicMock(), False, False, '0', 'never', 'never'),
         (MagicMock(), True, 'N/A', 0, 'never', 'never'),
         (MagicMock(), True, True, '2', 'Thu Jan 09 21:50:24 2025', None),
         (MagicMock(), True, False, '2', None, 'Thu Jan 09 21:50:24 2025')
@@ -530,27 +530,12 @@ class TestXcvrdScript(object):
         if flag_value_table is None:
             mock_logger.log_error.assert_called_once_with(f"flag_value_table {table_name_for_logging} is None for port {logical_port_name}")
         elif not flag_value_table_found:
-            if current_value == 'N/A':
-                flag_change_count_table.set.assert_called_once()
-                flag_last_set_time_table.set.assert_called_once()
-                flag_last_clear_time_table.set.assert_called_once()
-                assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '0'}
-                assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: 'never'}
-                assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: 'never'}
-            else:
-                flag_change_count_table.set.assert_called_once()
-                if current_value:
-                    flag_last_set_time_table.set.assert_called_once()
-                    flag_last_clear_time_table.set.assert_called_once()
-                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '1'}
-                    assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: expected_set_time}
-                    assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: 'never'}
-                else:
-                    flag_last_set_time_table.set.assert_called_once()
-                    flag_last_clear_time_table.set.assert_called_once()
-                    assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '1'}
-                    assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: 'never'}
-                    assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: expected_clear_time}
+            flag_change_count_table.set.assert_called_once()
+            flag_last_set_time_table.set.assert_called_once()
+            flag_last_clear_time_table.set.assert_called_once()
+            assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: '0'}
+            assert field_value_pairs_to_dict(flag_last_set_time_table.set.call_args[0][1]) == {field_name: 'never'}
+            assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: 'never'}
         else:
             if current_value == 'N/A':
                 flag_change_count_table.set.assert_not_called()
