@@ -37,7 +37,6 @@ LEDUTIL_RUNTIME_ERROR = 2
 
 
 class DaemonLedd(daemon_base.DaemonBase):
-
     def __init__(self):
         daemon_base.DaemonBase.__init__(self, SYSLOG_IDENTIFIER)
 
@@ -82,9 +81,11 @@ class DaemonLedd(daemon_base.DaemonBase):
         # Get the corresponding namespace from redisselect db connector object
         return selectObj.getDbConnector().getNamespace()
     
+    def getSelectObj(self, timeout=SELECT_TIMEOUT):
+        return self.sel.select(timeout)
+    
     def processPortTableEvent(self, selectableObj):
         ''' Process (if any) event from the PORT table in the Application DB '''
-
         # Get the redisselect object from selectable object
         redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(selectableObj)
         namespace = self.getEventNamespace(redisSelectObj)
@@ -101,13 +102,11 @@ class DaemonLedd(daemon_base.DaemonBase):
             if op == "SET" and "oper_status" in fvp_dict and self.isFrontPanelPort(key):
                 self.updatePortLedColor(key, fvp_dict["oper_status"])
 
-
-
     # Run daemon
     def run(self):
         # Use timeout to prevent ignoring the signals we want to handle
         # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-        (state, selectableObj) = self.sel.select(SELECT_TIMEOUT)
+        (state, selectableObj) = self.getSelectObj()
 
         if state == swsscommon.Select.TIMEOUT:
             # NOOP - Nothing to process here

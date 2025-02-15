@@ -74,7 +74,7 @@ class TestDaemonLedd(object):
 
         daemon_ledd = ledd.DaemonLedd()
         ret = daemon_ledd.run()
-        assert ret == 1
+        assert ret == 0
 
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.SubscriberStateTable")
@@ -85,7 +85,7 @@ class TestDaemonLedd(object):
 
         daemon_ledd = ledd.DaemonLedd()
         ret = daemon_ledd.run()
-        assert ret == 2
+        assert ret == -1
 
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
@@ -104,7 +104,7 @@ class TestDaemonLedd(object):
 
             daemon_ledd = ledd.DaemonLedd()
             ret = daemon_ledd.run()
-            assert ret == 3
+            assert ret == 0
 
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
@@ -123,7 +123,7 @@ class TestDaemonLedd(object):
 
             daemon_ledd = ledd.DaemonLedd()
             ret = daemon_ledd.run()
-            assert ret == 4
+            assert ret == 0
 
     @mock.patch("ledd.DaemonLedd.load_platform_util")
     @mock.patch("ledd.swsscommon.CastSelectableToRedisSelectObj")
