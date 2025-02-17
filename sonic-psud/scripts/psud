@@ -276,6 +276,8 @@ class PsuChassisInfo(logger.Logger):
                                   'PSU supplied power warning: {}W supplied-power less than {}W consumed-power'.format(
                                       self.total_supplied_power, self.total_consumed_power)
                                   )
+        if self.first_run:
+            self.first_run = False
 
         return set_led
 
@@ -441,7 +443,13 @@ class DaemonPsud(daemon_base.DaemonBase):
             # We received a fatal signal
             return False
 
+        # Update predefined position_in_parent and parent_name for PSU
+        # it was in the __init__ function which means will be run only once
+        # But there's chance that the keys(PHYSICAL_ENTITY_INFO|*) got removed by other processes,
+        # like the exit function during the restart of thermalctld,
+        # hence move it to the iteration run, so the key will be filled again after removed.
         self._update_psu_entity_info()
+
         self.update_psu_data()
         self._update_led_color()
 

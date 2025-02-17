@@ -24,6 +24,24 @@ class Table:
             return rv
         return None
 
+    def hget(self, key, field):
+        if key not in self.mock_dict or field not in self.mock_dict[key]:
+            return [False, None]
+
+        return [True, self.mock_dict[key][field]]
+
+    def hset(self, key, field, value):
+        if key not in self.mock_dict:
+            self.mock_dict[key] = {}
+
+        self.mock_dict[key][field] = value
+
+    def hdel(self, key, field):
+        if key not in self.mock_dict or field not in self.mock_dict:
+            return
+
+        del self.mock_dict[key][field]
+
     def getKeys(self):
         return list(self.mock_dict)
 
@@ -36,6 +54,7 @@ class FieldValuePairs:
         pass
 
 class Select:
+    OBJECT = 0
     TIMEOUT = 1
 
     def addSelectable(self, selectable):
@@ -48,7 +67,12 @@ class Select:
         return self.TIMEOUT, None
 
 class SubscriberStateTable(Table):
-    pass
+
+    def pop(self):
+        return None
+
+    def pops(self):
+        return None
 
 class RedisPipeline:
     def __init__(self, db):
@@ -58,3 +82,11 @@ class RedisPipeline:
         self.script = script
         self.script_mock_sha = 'd79033d1cab85249929e8c069f6784474d71cc43'
         return self.script_mock_sha
+
+class ConfigDBConnector:
+
+    def connect(*args, **kwargs):
+        pass
+
+    def get_table(*args, **kwargs):
+        pass

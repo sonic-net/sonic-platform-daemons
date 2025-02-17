@@ -1,13 +1,13 @@
 import json
 import os
 
-from sonic_py_common import device_info, logger
+from sonic_py_common import device_info, syslogger
 from xcvrd import xcvrd
 
 g_optics_si_dict = {}
 
 SYSLOG_IDENTIFIER = "xcvrd"
-helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
+helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
 def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
@@ -113,17 +113,24 @@ def fetch_optics_si_setting(physical_port, lane_speed, sfp):
         return optics_si
     vendor_key, vendor_name = get_module_vendor_key(physical_port, sfp)
     if vendor_key is None or vendor_name is None:
-        helper_logger.log_error("Error: No Vendor Key found for port '{}'".format(logical_port_name))
+        helper_logger.log_error("Error: No Vendor Key found for Module {}".format(physical_port))
         return optics_si
     optics_si = get_optics_si_settings_value(physical_port, lane_speed, vendor_key, vendor_name)
     return optics_si
 
 def load_optics_si_settings():
     global g_optics_si_dict
-    (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+    (platform_path, hwsku_path) = device_info.get_paths_to_platform_and_hwsku_dirs()
 
-    optics_si_settings_file_path = os.path.join(platform_path, "optics_si_settings.json")
-    if not os.path.isfile(optics_si_settings_file_path):
+    # Support to fetch optics_si_settings.json both from platform folder and HWSKU folder
+    optics_si_settings_file_path_platform = os.path.join(platform_path, "optics_si_settings.json")
+    optics_si_settings_file_path_hwsku = os.path.join(hwsku_path, "optics_si_settings.json")
+
+    if os.path.isfile(optics_si_settings_file_path_hwsku):
+        optics_si_settings_file_path = optics_si_settings_file_path_hwsku
+    elif os.path.isfile(optics_si_settings_file_path_platform):
+        optics_si_settings_file_path = optics_si_settings_file_path_platform
+    else:
         helper_logger.log_info("No optics SI file exists")
         return {}
 
