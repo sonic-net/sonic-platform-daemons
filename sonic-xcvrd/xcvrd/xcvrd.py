@@ -34,7 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
-
+    
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
@@ -769,7 +769,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-
+        
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -783,7 +783,7 @@ class CmisManagerTask(threading.Thread):
 
     def is_appl_reconfigure_required(self, api, app_new):
         """
-	   Reset app code if non default app code needs to configured
+	   Reset app code if non default app code needs to configured 
         """
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
@@ -1244,7 +1244,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-
+                        
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
@@ -1336,8 +1336,8 @@ class CmisManagerTask(threading.Thread):
                         self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == CMIS_STATE_AP_CONF:
-                        # Explicit control bit to apply custom Host SI settings.
-                        # It will be set to 1 and applied via set_application if
+                        # Explicit control bit to apply custom Host SI settings. 
+                        # It will be set to 1 and applied via set_application if 
                         # custom SI settings is applicable
                         ec = 0
 
@@ -1369,13 +1369,13 @@ class CmisManagerTask(threading.Thread):
                             # Apply module SI settings if applicable
                             lane_speed = int(speed/1000)//host_lane_count
                             optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-
+                            
                             self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                             for key, sub_dict in optics_si_dict.items():
                                 self.log_debug("{}".format(key))
                                 for sub_key, value in sub_dict.items():
                                     self.log_debug("{}: {}".format(sub_key, str(value)))
-
+                            
                             if optics_si_dict:
                                 self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                  format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
