@@ -705,7 +705,7 @@ class CmisManagerTask(threading.Thread):
             return
 
         # Skip if it's not a physical port
-        if not lport.startswith('Ethernet'):
+        if not re.match('^Ethernet[0-9]*$', lport):
             return
 
         # Skip if the physical index is not available
