@@ -79,9 +79,10 @@ class SffManagerTask(threading.Thread):
 
     SFF_LOGGER_PREFIX = "SFF-MAIN: "
 
-    def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
+    def __init__(self, enable_sff_mgr_controlled_tx, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
+        self.enable_sff_mgr_controlled_tx = enable_sff_mgr_controlled_tx
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
@@ -96,6 +97,9 @@ class SffManagerTask(threading.Thread):
         self.port_dict_prev = {}
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.namespaces = namespaces
+
+        if not self.enable_sff_mgr_controlled_tx:
+            self.log_notice("enable_sff_mgr_controlled_tx is False, skipping controlling module TX based on host_tx_ready")
 
     def log_notice(self, message):
         self.helper_logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
@@ -447,6 +451,18 @@ class SffManagerTask(threading.Thread):
                             "{}: Failed to take module out of low power mode.".format(
                                 lport)
                         )
+
+                if xcvr_inserted:
+                    try:
+                        if api.set_high_power_class(True):
+                            self.log_notice("{}: done enabling high power class".format(lport))
+                        else:
+                            self.log_error("{}: failed to enable high power class".format(lport))
+                    except (AttributeError, NotImplementedError):
+                        pass
+
+                if not self.enable_sff_mgr_controlled_tx:
+                    continue
 
                 if active_lanes is None:
                     active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
