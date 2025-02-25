@@ -53,6 +53,13 @@ def media_settings_present():
         return True
     return False
 
+def get_is_copper(physical_port):
+    if xcvrd.platform_chassis:
+        try:
+            return xcvrd.platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+        except (NotImplementedError, AttributeError):
+            helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
+    return True
 
 def get_lane_speed_key(physical_port, port_speed, lane_count):
     """
