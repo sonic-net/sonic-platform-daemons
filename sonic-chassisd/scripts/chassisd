@@ -1277,7 +1277,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             try:
                 # Get admin state of DPU
                 admin_state = self.module_updater.get_module_admin_status(module_name)
-                if admin_state == 'empty' and operational_state != ModuleBase.MODULE_STATUS_ONLINE:
+                if admin_state == 'empty' and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
                     # shutdown DPU
                     op = MODULE_ADMIN_DOWN
 
