@@ -235,7 +235,7 @@ def get_media_settings_value(physical_port, key):
                 or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
                 return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
             elif key[MEDIUM_LANE_SPEED_KEY] in media_dict:
-+               return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
+                return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
         return None
 
     # Keys under global media settings can be a list or range or list of ranges
