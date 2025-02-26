@@ -990,7 +990,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_optic_copper_si)
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
-           Magicmock(return_value={'vendor_key': 'innolight-x-ddddd-nnn', 'media_key': 'qsfp-dd-sm_media_interface', 'lane_speed_key': 'speed:400gaui-8', 'medium_lane_speed_key': 'unknown'}))
+           MagicMock(return_value={'vendor_key': 'innolight-x-ddddd-nnn', 'media_key': 'qsfp-dd-sm_media_interface', 'lane_speed_key': 'speed:400gaui-8', 'medium_lane_speed_key': 'unknown'}))
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(400000, 8, 0)))
     def test_notify_media_setting(self):
         # Test matching 400G optical transceiver (lane speed 50G)
