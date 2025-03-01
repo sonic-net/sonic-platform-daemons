@@ -436,7 +436,7 @@ class SffManagerTask(threading.Thread):
                     # Skip if these essential routines are not available
                     continue
                 
-                if xcvr_inserted:
+                if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
                     set_lp_success = (
                         sfp.set_lpmode(False) 
                         if isinstance(api, Sff8472Api) 
