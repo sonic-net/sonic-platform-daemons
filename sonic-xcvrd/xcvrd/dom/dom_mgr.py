@@ -20,6 +20,9 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
+    from xcvrd.dom.dom_utilities.common_db_utils import DBUtils
+    from xcvrd.dom.dom_utilities.vdm_utils import VDMUtils
+    from xcvrd.dom.dom_utilities.vdm_db_utils import VDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
@@ -27,7 +30,7 @@ class DomInfoUpdateTask(threading.Thread):
     DOM_LOGGER_PREFIX = "DOM-INFO-UPDATE: "
     DOM_INFO_UPDATE_PERIOD_SECS = 60
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr, helper_logger):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, helper_logger):
         threading.Thread.__init__(self)
         self.name = "DomInfoUpdateTask"
         self.exc = None
@@ -37,6 +40,11 @@ class DomInfoUpdateTask(threading.Thread):
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.sfp_obj_dict = sfp_obj_dict
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.db_utils = DBUtils(self.helper_logger)
+        self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
+        self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def log_debug(self, message):
         self.helper_logger.log_debug("{}{}".format(self.DOM_LOGGER_PREFIX, message))
@@ -217,42 +225,11 @@ class DomInfoUpdateTask(threading.Thread):
                 # Skip if empty (i.e. get_transceiver_status API is not applicable for this xcvr)
                 if not transceiver_status_dict:
                     continue
-                xcvrd.beautify_info_dict(transceiver_status_dict)
+                self.db_utils.beautify_info_dict(transceiver_status_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_status_dict.items()])
                 table.set(physical_port_name, fvs)
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
-
-    def post_port_diagnostic_values_to_db(self, logical_port_name, table,
-                                   get_values_func, stop_event=threading.Event(), db_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, self.port_mapping).items():
-            if stop_event.is_set():
-                break
-
-            if not xcvrd._wrapper_get_presence(physical_port):
-                continue
-
-            try:
-                if db_cache is not None and physical_port in db_cache:
-                    # If cache is enabled and diagnostic values are in cache, just read from cache, no need read from EEPROM
-                    diagnostic_values_dict = db_cache[physical_port]
-                else:
-                    diagnostic_values_dict = get_values_func(physical_port)
-                    if db_cache is not None:
-                        # If cache is enabled, put diagnostic values to cache
-                        db_cache[physical_port] = diagnostic_values_dict
-                if diagnostic_values_dict is not None:
-                    if not diagnostic_values_dict:
-                        continue
-                    xcvrd.beautify_info_dict(diagnostic_values_dict)
-                    fvs = swsscommon.FieldValuePairs([(k, v) for k, v in diagnostic_values_dict.items()])
-                    table.set(physical_port_name, fvs)
-                else:
-                    return
-
-            except NotImplementedError:
-                self.log_error("This functionality is currently not implemented for this platform")
-                sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
 
     # Update port pm info in db
     def post_port_pm_info_to_db(self, logical_port_name, port_mapping, table, stop_event=threading.Event(), pm_info_cache=None):
@@ -278,26 +255,13 @@ class DomInfoUpdateTask(threading.Thread):
                 # Skip if empty (i.e. get_transceiver_pm API is not applicable for this xcvr)
                 if not pm_info_dict:
                     continue
-                xcvrd.beautify_info_dict(pm_info_dict)
+                self.db_utils.beautify_info_dict(pm_info_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
                 table.set(physical_port_name, fvs)
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
-    @contextmanager
-    def vdm_freeze_context(self, physical_port):
-        try:
-            if not xcvrd._wrapper_freeze_vdm_stats_and_confirm(physical_port):
-                self.log_error("Failed to freeze VDM stats in contextmanager for port {}".format(physical_port))
-                yield False
-            else:
-                yield True
-        finally:
-            if not xcvrd._wrapper_unfreeze_vdm_stats_and_confirm(physical_port):
-                self.log_error("Failed to unfreeze VDM stats in contextmanager for port {}".format(physical_port))
-
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self.log_notice("Start DOM monitoring loop")
         firmware_info_cache = {}
         dom_info_cache = {}
@@ -323,6 +287,10 @@ class DomInfoUpdateTask(threading.Thread):
             for logical_port_name in logical_port_list:
                 if self.is_port_dom_monitoring_disabled(logical_port_name):
                     continue
+
+                if self.task_stopping_event.is_set():
+                    self.log_notice("DomInfoUpdateTask stop event generated during DOM monitoring loop")
+                    break
 
                 # Get the asic to which this port belongs
                 asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
@@ -362,27 +330,23 @@ class DomInfoUpdateTask(threading.Thread):
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    if xcvrd._wrapper_is_transceiver_vdm_supported(physical_port):
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
                         # Freeze VDM stats before reading VDM values
-                        with self.vdm_freeze_context(physical_port) as vdm_frozen:
+                        with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
                             if not vdm_frozen:
                                 self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
                                 continue
                             try:
                                 # Read and post VDM real values to DB
-                                self.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                                xcvrd._wrapper_get_vdm_real_values, self.task_stopping_event,
-                                                                db_cache=vdm_real_value_cache)
+                                self.vdm_db_utils.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                                                self.vdm_utils.get_vdm_real_values, db_cache=vdm_real_value_cache)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
                             try:
                                 # Read and post VDM flags and metadata to DB
-                                xcvrd.post_port_vdm_non_real_values_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper,
-                                                                        self.xcvr_table_helper.get_vdm_flag_tbl,
-                                                                        xcvrd._wrapper_get_vdm_flags, stop_event=self.task_stopping_event,
-                                                                        flag_data=True, db_cache=vdm_flag_cache)
+                                self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name, db_cache=vdm_flag_cache)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
@@ -394,7 +358,7 @@ class DomInfoUpdateTask(threading.Thread):
                                 self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
 
-        self.log_info("Stop DOM monitoring loop")
+        self.log_notice("Stop DOM monitoring loop")
 
     def run(self):
         if self.task_stopping_event.is_set():
