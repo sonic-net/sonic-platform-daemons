@@ -423,58 +423,8 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                 transceiver_dict[physical_port] = port_info_dict
                 # if cmis is supported by the module
                 if 'cmis_rev' in port_info_dict:
-                    fvs = swsscommon.FieldValuePairs(
-                        [('type', port_info_dict['type']),
-                        ('vendor_rev', port_info_dict['vendor_rev']),
-                        ('serial', port_info_dict['serial']),
-                        ('manufacturer', port_info_dict['manufacturer']),
-                        ('model', port_info_dict['model']),
-                        ('vendor_oui', port_info_dict['vendor_oui']),
-                        ('vendor_date', port_info_dict['vendor_date']),
-                        ('connector', port_info_dict['connector']),
-                        ('encoding', port_info_dict['encoding']),
-                        ('ext_identifier', port_info_dict['ext_identifier']),
-                        ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
-                        ('cable_type', port_info_dict['cable_type']),
-                        ('cable_length', str(port_info_dict['cable_length'])),
-                        ('specification_compliance', port_info_dict['specification_compliance']),
-                        ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
-                        ('application_advertisement', port_info_dict['application_advertisement']
-                        if 'application_advertisement' in port_info_dict else 'N/A'),
-                        ('is_replaceable', str(is_replaceable)),
-                        ('dom_capability', port_info_dict['dom_capability']
-                        if 'dom_capability' in port_info_dict else 'N/A'),
-                        ('cmis_rev', port_info_dict['cmis_rev'] if 'cmis_rev' in port_info_dict else 'N/A'),
-                        ('hardware_rev', port_info_dict['hardware_rev']
-                        if 'hardware_rev' in port_info_dict else 'N/A'),
-                        ('media_interface_code', port_info_dict['media_interface_code']
-                        if 'media_interface_code' in port_info_dict else 'N/A'),
-                        ('host_electrical_interface', port_info_dict['host_electrical_interface']
-                        if 'host_electrical_interface' in port_info_dict else 'N/A'),
-                        ('host_lane_count', 'N/A'),
-                        ('media_lane_count', 'N/A'),
-                        ('host_lane_assignment_option', str(port_info_dict['host_lane_assignment_option'])
-                        if 'host_lane_assignment_option' in port_info_dict else 'N/A'),
-                        ('media_lane_assignment_option', str(port_info_dict['media_lane_assignment_option'])
-                        if 'media_lane_assignment_option' in port_info_dict else 'N/A'),
-                        ('active_apsel_hostlane1', 'N/A'),
-                        ('active_apsel_hostlane2', 'N/A'),
-                        ('active_apsel_hostlane3', 'N/A'),
-                        ('active_apsel_hostlane4', 'N/A'),
-                        ('active_apsel_hostlane5', 'N/A'),
-                        ('active_apsel_hostlane6', 'N/A'),
-                        ('active_apsel_hostlane7', 'N/A'),
-                        ('active_apsel_hostlane8', 'N/A'),
-                        ('media_interface_technology', port_info_dict['media_interface_technology']
-                        if 'media_interface_technology' in port_info_dict else 'N/A'),
-                        ('supported_max_tx_power', str(port_info_dict['supported_max_tx_power'])
-                        if 'supported_max_tx_power' in port_info_dict else 'N/A'),
-                        ('supported_min_tx_power', str(port_info_dict['supported_min_tx_power'])
-                        if 'supported_min_tx_power' in port_info_dict else 'N/A'),
-                        ('supported_max_laser_freq', str(port_info_dict['supported_max_laser_freq'])
-                        if 'supported_max_laser_freq' in port_info_dict else 'N/A'),
-                        ('supported_min_laser_freq', str(port_info_dict['supported_min_laser_freq'])
-                        if 'supported_min_laser_freq' in port_info_dict else 'N/A')
+                    fvs = swsscommon.FieldValuePairs([
+                        (field, str(value)) for field, value in port_info_dict.items()
                     ])
                 # else cmis is not supported by the module
                 else:
@@ -810,7 +760,7 @@ class CmisManagerTask(threading.Thread):
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
                             "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
             return media_lanes_mask
-	
+
         media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
@@ -1285,7 +1235,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
                         self.log_notice("{}: Setting host_lanemask=0x{:x}".format(lport, host_lanes_mask))
-			
+
                         self.port_dict[lport]['media_lane_count'] = int(api.get_media_lane_count(appl))
                         self.port_dict[lport]['media_lane_assignment_options'] = int(api.get_media_lane_assignment_option(appl))
                         media_lane_count = self.port_dict[lport]['media_lane_count']
