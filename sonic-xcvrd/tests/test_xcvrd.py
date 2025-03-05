@@ -7,7 +7,7 @@ from xcvrd.dom.dom_mgr import *
 from xcvrd.xcvrd import *
 from xcvrd.sff_mgr import *
 from xcvrd.xcvrd_utilities.xcvr_table_helper import *
-from xcvrd.dom.dom_utilities.common_db_utils import DBUtils
+from xcvrd.dom.dom_utilities.db_utilities.common_db_utils import DBUtils
 import pytest
 import copy
 import os
@@ -2889,7 +2889,6 @@ class TestXcvrdScript(object):
             'eSNR' : '1.1',
         }
 
-        from xcvrd.dom.dom_utilities.common_db_utils import DBUtils
         db_utils = DBUtils(helper_logger)
         db_utils.beautify_info_dict(dom_info_dict)
         assert dom_info_dict == expected_dom_info_dict

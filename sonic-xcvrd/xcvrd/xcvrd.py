@@ -34,7 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
-    from xcvrd.dom.dom_utilities.vdm_db_utils import VDMDBUtils
+    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_db_utils import VDMDBUtils
     
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 

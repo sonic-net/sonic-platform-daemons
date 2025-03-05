@@ -1,25 +1,23 @@
 import datetime
-
 from xcvrd.xcvrd_utilities.xcvrd_utils import XCVRDUtils
 from xcvrd.xcvrd_utilities.xcvr_table_helper import VDM_THRESHOLD_TYPES
-from xcvrd.dom.dom_utilities.common_db_utils import DBUtils
-from xcvrd.dom.dom_utilities.vdm_utils import VDMUtils
-
+from xcvrd.dom.dom_utilities.db_utilities.common_db_utils import DBUtils
+from xcvrd.dom.dom_utilities.vdm_utilities.vdm_utils import VDMUtils
 from swsscommon import swsscommon
 
-class VDMDBUtils:
+class VDMDBUtils(DBUtils):
     """
     This class provides utility functions for managing
     DB operations related to VDM on transceivers.
     """
     def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, helper_logger):
+        super().__init__(helper_logger)
         self.sfp_obj_dict = sfp_obj_dict
         self.port_mapping = port_mapping
         self.task_stopping_event = task_stopping_event
         self.xcvr_table_helper = xcvr_table_helper
         self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, helper_logger)
         self.vdm_utils = VDMUtils(sfp_obj_dict, helper_logger)
-        self.db_utils = DBUtils(helper_logger)
         self.helper_logger = helper_logger
 
     def post_port_diagnostic_values_to_db(self, logical_port_name, table, get_values_func, db_cache=None):
@@ -29,13 +27,13 @@ class VDMDBUtils:
         pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
         if not pport_list:
             self.helper_logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                           "as no physical port found")
+                                         "as no physical port found")
             return
         physical_port = pport_list[0]
 
         if physical_port not in self.sfp_obj_dict:
             self.helper_logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                           "as no sfp object found")
+                                         "as no sfp object found")
             return
 
         if not self.xcvrd_utils.get_transceiver_presence(physical_port):
@@ -53,7 +51,7 @@ class VDMDBUtils:
             if diagnostic_values_dict is not None:
                 if not diagnostic_values_dict:
                     return
-                self.db_utils.beautify_info_dict(diagnostic_values_dict)
+                self.beautify_info_dict(diagnostic_values_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in diagnostic_values_dict.items()])
                 table.set(logical_port_name, fvs)
             else:
@@ -120,13 +118,13 @@ class VDMDBUtils:
                             # for the flags
                             if flag_data:
                                 asic_id = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
-                                self.db_utils.update_flag_metadata_tables(logical_port_name, new_key, value,
-                                                                    vdm_values_dict_update_time,
-                                                                    self.xcvr_table_helper.get_vdm_flag_tbl(asic_id, threshold_type),
-                                                                    self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_id, threshold_type),
-                                                                    self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_id, threshold_type),
-                                                                    self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_id, threshold_type),
-                                                                    f"VDM {threshold_type}")
+                                self.update_flag_metadata_tables(logical_port_name, new_key, value,
+                                                                 vdm_values_dict_update_time,
+                                                                 self.xcvr_table_helper.get_vdm_flag_tbl(asic_id, threshold_type),
+                                                                 self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_id, threshold_type),
+                                                                 self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_id, threshold_type),
+                                                                 self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_id, threshold_type),
+                                                                 f"VDM {threshold_type}")
 
                 if db_cache is not None:
                     # If cache is enabled, put vdm values to cache
@@ -136,7 +134,7 @@ class VDMDBUtils:
 
             for threshold_type, threshold_value_dict in vdm_threshold_type_value_dict.items():
                 if threshold_value_dict:
-                    self.db_utils.beautify_info_dict(threshold_value_dict)
+                    self.beautify_info_dict(threshold_value_dict)
                     fvs = swsscommon.FieldValuePairs([(k, v) for k, v in threshold_value_dict.items()])
                     table = get_vdm_table_func(self.port_mapping.get_asic_id_for_logical_port(logical_port_name), threshold_type)
                     table.set(logical_port_name, fvs)

@@ -20,9 +20,9 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
-    from xcvrd.dom.dom_utilities.common_db_utils import DBUtils
-    from xcvrd.dom.dom_utilities.vdm_utils import VDMUtils
-    from xcvrd.dom.dom_utilities.vdm_db_utils import VDMDBUtils
+    from xcvrd.dom.dom_utilities.db_utilities.common_db_utils import DBUtils
+    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_utils import VDMUtils
+    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_db_utils import VDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
