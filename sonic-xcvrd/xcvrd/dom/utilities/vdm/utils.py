@@ -10,9 +10,9 @@ class VDMUtils:
     This class provides utility functions for managing VDM operations on transceivers
     and call the corresponding methods in the SFP object.
     """
-    def __init__(self, sfp_obj_dict, helper_logger):
+    def __init__(self, sfp_obj_dict, logger):
         self.sfp_obj_dict = sfp_obj_dict
-        self.helper_logger = helper_logger
+        self.logger = logger
 
     def is_transceiver_vdm_supported(self, physical_port):
         try:
@@ -24,34 +24,34 @@ class VDMUtils:
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value()
         except (KeyError, NotImplementedError):
-            self.helper_logger.log_error(f"Failed to get VDM real values for port {physical_port}")
+            self.logger.log_error(f"Failed to get VDM real values for port {physical_port}")
             return {}
 
     def get_vdm_flags(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_flags()
         except (KeyError, NotImplementedError):
-            self.helper_logger.log_error(f"Failed to get VDM flags for port {physical_port}")
+            self.logger.log_error(f"Failed to get VDM flags for port {physical_port}")
             return {}
 
     def get_vdm_thresholds(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_thresholds()
         except (KeyError, NotImplementedError):
-            self.helper_logger.log_error(f"Failed to get VDM thresholds for port {physical_port}")
+            self.logger.log_error(f"Failed to get VDM thresholds for port {physical_port}")
             return {}
 
     @contextmanager
     def vdm_freeze_context(self, physical_port):
         try:
             if not self._freeze_vdm_stats_and_confirm(physical_port):
-                self.helper_logger.log_error(f"Failed to freeze VDM stats in contextmanager for port {physical_port}")
+                self.logger.log_error(f"Failed to freeze VDM stats in contextmanager for port {physical_port}")
                 yield False
             else:
                 yield True
         finally:
             if not self._unfreeze_vdm_stats_and_confirm(physical_port):
-                self.helper_logger.log_error(f"Failed to unfreeze VDM stats in contextmanager for port {physical_port}")
+                self.logger.log_error(f"Failed to unfreeze VDM stats in contextmanager for port {physical_port}")
 
     def _vdm_action_and_confirm(self, physical_port, action, status_check, action_name):
         """
@@ -67,7 +67,7 @@ class VDMUtils:
         try:
             status = action()
             if not status:
-                self.helper_logger.log_error(f"Failed to {action_name} VDM stats for port {physical_port}")
+                self.logger.log_error(f"Failed to {action_name} VDM stats for port {physical_port}")
                 return False
 
             # Wait for MAX_tVDMF_TIME_MSECS to allow the module to clear the done bit
@@ -80,10 +80,10 @@ class VDMUtils:
                     return True
                 time.sleep(FREEZE_UNFREEZE_DONE_POLLING_INTERVAL_MSECS / 1000)
 
-            self.helper_logger.log_error(f"Failed to confirm VDM {action_name} status for port {physical_port}")
+            self.logger.log_error(f"Failed to confirm VDM {action_name} status for port {physical_port}")
         except (KeyError, NotImplementedError) as e:
             # Handle the case where the SFP object does not exist or the method is not implemented
-            self.helper_logger.log_error(f"VDM {action_name} failed for port {physical_port} with exception {e}")
+            self.logger.log_error(f"VDM {action_name} failed for port {physical_port} with exception {e}")
             return False
 
         return False
@@ -98,7 +98,7 @@ class VDMUtils:
         """
         sfp = self.sfp_obj_dict.get(physical_port)
         if not sfp:
-            self.helper_logger.log_error(f"Freeze VDM stats failed: {physical_port} not found in sfp_obj_dict")
+            self.logger.log_error(f"Freeze VDM stats failed: {physical_port} not found in sfp_obj_dict")
             return False
 
         return self._vdm_action_and_confirm(physical_port, sfp.freeze_vdm_stats,
@@ -114,7 +114,7 @@ class VDMUtils:
         """
         sfp = self.sfp_obj_dict.get(physical_port)
         if not sfp:
-            self.helper_logger.log_error(f"Unfreeze VDM stats failed: {physical_port} not found in sfp_obj_dict")
+            self.logger.log_error(f"Unfreeze VDM stats failed: {physical_port} not found in sfp_obj_dict")
             return False
 
         return self._vdm_action_and_confirm(physical_port, sfp.unfreeze_vdm_stats,

@@ -1,8 +1,8 @@
 import datetime
-from xcvrd.xcvrd_utilities.xcvrd_utils import XCVRDUtils
+from xcvrd.xcvrd_utilities.utils import XCVRDUtils
 from xcvrd.xcvrd_utilities.xcvr_table_helper import VDM_THRESHOLD_TYPES
-from xcvrd.dom.dom_utilities.db_utilities.common_db_utils import DBUtils
-from xcvrd.dom.dom_utilities.vdm_utilities.vdm_utils import VDMUtils
+from xcvrd.dom.utilities.db.utils import DBUtils
+from xcvrd.dom.utilities.vdm.utils import VDMUtils
 from swsscommon import swsscommon
 
 class VDMDBUtils(DBUtils):
@@ -10,29 +10,29 @@ class VDMDBUtils(DBUtils):
     This class provides utility functions for managing
     DB operations related to VDM on transceivers.
     """
-    def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, helper_logger):
-        super().__init__(helper_logger)
+    def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        super().__init__(logger)
         self.sfp_obj_dict = sfp_obj_dict
         self.port_mapping = port_mapping
         self.task_stopping_event = task_stopping_event
         self.xcvr_table_helper = xcvr_table_helper
-        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, helper_logger)
-        self.vdm_utils = VDMUtils(sfp_obj_dict, helper_logger)
-        self.helper_logger = helper_logger
+        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, logger)
+        self.vdm_utils = VDMUtils(sfp_obj_dict, logger)
+        self.logger = logger
 
-    def post_port_diagnostic_values_to_db(self, logical_port_name, table, get_values_func, db_cache=None):
+    def post_port_vdm_real_values_to_db(self, logical_port_name, table, get_values_func, db_cache=None):
         if self.task_stopping_event.is_set():
             return
 
         pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
         if not pport_list:
-            self.helper_logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
                                          "as no physical port found")
             return
         physical_port = pport_list[0]
 
         if physical_port not in self.sfp_obj_dict:
-            self.helper_logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
                                          "as no sfp object found")
             return
 
@@ -58,7 +58,7 @@ class VDMDBUtils(DBUtils):
                 return
 
         except NotImplementedError:
-            self.helper_logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
                                          "as functionality is not implemented")
             return
 
@@ -78,13 +78,13 @@ class VDMDBUtils(DBUtils):
 
         pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
         if not pport_list:
-            self.helper_logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
                                          "as no physical port found with flag_data {flag_data}")
             return
         physical_port = pport_list[0]
 
         if physical_port not in self.sfp_obj_dict:
-            self.helper_logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
                                          "as no sfp object found with flag_data {flag_data}")
             return
 
@@ -99,7 +99,7 @@ class VDMDBUtils(DBUtils):
                 # The vdm_values_dict contains the threshold type in the key for all the VDM observable types
                 vdm_values_dict = get_vdm_values_func(physical_port)
                 if vdm_values_dict is None:
-                    self.helper_logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
+                    self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
                                                  "as no vdm values found with flag_data {flag_data}")
                     return
                 vdm_values_dict_update_time = datetime.datetime.now().strftime('%a %b %d %H:%M:%S %Y')
@@ -141,6 +141,6 @@ class VDMDBUtils(DBUtils):
                 else:
                     return
         except NotImplementedError:
-            self.helper_logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
                                          "as functionality is not implemented with flag_data {flag_data}")
             return

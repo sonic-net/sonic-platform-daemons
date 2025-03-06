@@ -4,8 +4,8 @@ class DBUtils:
     """
     This class contains utility functions to interact with the redis database.
     """
-    def __init__(self, helper_logger):
-        self.helper_logger = helper_logger
+    def __init__(self, logger):
+        self.logger = logger
 
     """
     Updates the metadata tables for flag table
@@ -20,7 +20,7 @@ class DBUtils:
                                     flag_change_count_table, flag_last_set_time_table, flag_last_clear_time_table,
                                     table_name_for_logging):
         if flag_value_table is None:
-            self.helper_logger.log_error(f"flag_value_table {table_name_for_logging} is None for port {logical_port_name}")
+            self.logger.log_error(f"flag_value_table {table_name_for_logging} is None for port {logical_port_name}")
             return
 
         found, db_flags_value_dict = flag_value_table.get(logical_port_name)
@@ -42,7 +42,7 @@ class DBUtils:
         if field_name in db_flags_value_dict and db_flags_value_dict[field_name] != str(current_value):
             found, db_change_count_dict = flag_change_count_table.get(logical_port_name)
             if not found:
-                self.helper_logger.log_error(f"Failed to get the change count for table {table_name_for_logging} port {logical_port_name}")
+                self.logger.log_error(f"Failed to get the change count for table {table_name_for_logging} port {logical_port_name}")
                 return
             db_change_count_dict = dict(db_change_count_dict)
             db_change_count = int(db_change_count_dict[field_name])

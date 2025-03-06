@@ -34,7 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
-    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_db_utils import VDMDBUtils
+    from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
     
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
@@ -46,6 +46,7 @@ except ImportError as e:
 #
 
 SYSLOG_IDENTIFIER = "xcvrd"
+SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK = "SfpStateUpdateTask"
 
 PLATFORM_SPECIFIC_MODULE_NAME = "sfputil"
 PLATFORM_SPECIFIC_CLASS_NAME = "SfpUtil"
@@ -1475,7 +1476,7 @@ class CmisManagerTask(threading.Thread):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event, helper_logger):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event):
         threading.Thread.__init__(self)
         self.name = "SfpStateUpdateTask"
         self.exc = None
@@ -1493,9 +1494,9 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_insert_events = {}
         self.namespaces = namespaces
         self.sfp_obj_dict = sfp_obj_dict
-        self.helper_logger = helper_logger
+        self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -2256,7 +2257,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.threads.append(dom_info_update)
 
         # Start the sfp state info update thread
-        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event, helper_logger)
+        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
         sfp_state_update.start()
         self.threads.append(sfp_state_update)
 

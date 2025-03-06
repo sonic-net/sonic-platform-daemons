@@ -20,9 +20,9 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
-    from xcvrd.dom.dom_utilities.db_utilities.common_db_utils import DBUtils
-    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_utils import VDMUtils
-    from xcvrd.dom.dom_utilities.vdm_utilities.vdm_db_utils import VDMDBUtils
+    from xcvrd.dom.utilities.db.utils import DBUtils
+    from xcvrd.dom.utilities.vdm.utils import VDMUtils
+    from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
@@ -338,7 +338,7 @@ class DomInfoUpdateTask(threading.Thread):
                                 continue
                             try:
                                 # Read and post VDM real values to DB
-                                self.vdm_db_utils.post_port_diagnostic_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
                                                                 self.vdm_utils.get_vdm_real_values, db_cache=vdm_real_value_cache)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
