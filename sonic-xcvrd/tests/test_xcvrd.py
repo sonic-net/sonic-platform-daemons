@@ -202,7 +202,7 @@ class TestXcvrdThreadException(object):
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(side_effect=NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
         stop_event = threading.Event()
-        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        sff_mgr = SffManagerTask(True, DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
         exception_received = None
         trace = None
         try:
@@ -1654,7 +1654,7 @@ class TestXcvrdScript(object):
 
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
-        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        task = SffManagerTask(True, DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -1692,7 +1692,7 @@ class TestXcvrdScript(object):
         assert len(task.port_dict) == 0
 
     def test_SffManagerTask_get_active_lanes_for_lport(self):
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1746,7 +1746,7 @@ class TestXcvrdScript(object):
         assert result == expected_result
 
     def test_SffManagerTask_get_active_lanes_for_lport_with_invalid_input(self):
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1769,7 +1769,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
         mock_get_state_port_tbl.return_value.hget.return_value = (True, 'true')
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1783,7 +1783,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_admin_status(self, mock_get_cfg_port_tbl):
         mock_get_cfg_port_tbl.return_value.hget.return_value = (True, 'up')
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1809,7 +1809,7 @@ class TestXcvrdScript(object):
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        task = SffManagerTask(DEFAULT_NAMESPACE,
+        task = SffManagerTask(True, DEFAULT_NAMESPACE,
                               threading.Event(),
                               mock_chassis,
                               helper_logger)
@@ -1894,6 +1894,44 @@ class TestXcvrdScript(object):
         assert mock_sfp.get_presence.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         mock_sfp.get_presence = MagicMock(return_value=True)
+
+        # high power enabling failure case and enable_sff_mgr_controlled_tx is False
+        mock_xcvr_api.tx_disable_channel.call_count = 0
+        mock_xcvr_api.set_high_power_class.call_count = 0
+        task.enable_sff_mgr_controlled_tx = False
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_admin_status = MagicMock(return_value='up')
+        mock_xcvr_api.set_high_power_class = MagicMock(return_value=False)
+        port_change_event = PortChangeEvent('Ethernet4', 2, 0, PortChangeEvent.PORT_SET, {
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': '1,2,3,4',
+        })
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 2
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
+        task.task_worker()
+        assert mock_xcvr_api.tx_disable_channel.call_count == 0
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # high power enabling exception case
+        mock_xcvr_api.tx_disable_channel.call_count = 0
+        mock_xcvr_api.set_high_power_class.call_count = 0
+        task.enable_sff_mgr_controlled_tx = False
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_admin_status = MagicMock(return_value='up')
+        mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
+        port_change_event = PortChangeEvent('Ethernet8', 3, 0, PortChangeEvent.PORT_SET, {
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': '1,2,3,4',
+        })
+        task.on_port_update_event(port_change_event)
+        assert len(task.port_dict) == 3
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
+        task.task_worker()
+        assert mock_xcvr_api.tx_disable_channel.call_count == 0
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
 
     def test_CmisManagerTask_update_port_transceiver_status_table_sw_cmis_state(self):
         port_mapping = PortMapping()
