@@ -288,6 +288,32 @@ class SffManagerTask(threading.Thread):
             mask += (1 << i if flag else 0)
         return mask
 
+    def handle_high_power_class(self, xcvr_api, lport):
+        """
+        Enable high power class for the transceiver.
+
+        Args:
+            xcvr_api (XcvrApi): The XcvrApi instance for the transceiver.
+            lport (str): Logical port name.
+        """
+        try:
+            power_class = xcvr_api.get_power_class()
+            if power_class is None:
+                self.log_error("{}: failed to get power class".format(lport))
+                return
+
+            if power_class < 5:
+                # No action needed for power class < 5
+                return
+
+            if xcvr_api.set_high_power_class(power_class, True):
+                self.log_notice("{}: done enabling high power class".format(lport))
+            else:
+                self.log_error("{}: failed to enable high power class".format(lport))
+
+        except (AttributeError, NotImplementedError):
+            pass
+
     def task_worker(self):
         '''
         The main goal of sff_mgr is to make sure SFF compliant modules are
@@ -440,13 +466,7 @@ class SffManagerTask(threading.Thread):
                     continue
 
                 if xcvr_inserted:
-                    try:
-                        if api.set_high_power_class(True):
-                            self.log_notice("{}: done enabling high power class".format(lport))
-                        else:
-                            self.log_error("{}: failed to enable high power class".format(lport))
-                    except (AttributeError, NotImplementedError):
-                        pass
+                    self.handle_high_power_class(api, lport)
 
                 if not self.enable_sff_mgr_controlled_tx:
                     continue

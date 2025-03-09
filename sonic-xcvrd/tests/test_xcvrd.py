@@ -1571,6 +1571,48 @@ class TestXcvrdScript(object):
         mock_get_cfg_port_tbl.assert_called_once_with(0)
         mock_get_cfg_port_tbl.return_value.hget.assert_called_once_with(lport, 'admin_status')
 
+    def test_SffManagerTask_handle_high_power_class(self):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_power_class = MagicMock(return_value=5)
+        mock_xcvr_api.set_high_power_class = MagicMock(return_value=True)
+        lport = 'Ethernet0'
+
+        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+                                          threading.Event(),
+                                          MagicMock(),
+                                          helper_logger)
+
+        # Test with normal case
+        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 1
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test with get_power_class failed
+        mock_xcvr_api.get_power_class.return_value = None
+        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 2
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test for no need to set high power class
+        mock_xcvr_api.get_power_class.return_value = 4
+        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 3
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test for set_high_power_class failed
+        mock_xcvr_api.get_power_class.return_value = 5
+        mock_xcvr_api.set_high_power_class.return_value = False
+        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 4
+        assert mock_xcvr_api.set_high_power_class.call_count == 2
+
+        # Test for set_high_power_class not supported
+        mock_xcvr_api.get_power_class.return_value = 5
+        mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
+        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 5
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_SffManagerTask_task_worker(self, mock_chassis):
@@ -1579,6 +1621,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
         mock_xcvr_api.is_copper = MagicMock(return_value=False)
         mock_xcvr_api.get_tx_disable_support = MagicMock(return_value=True)
+        mock_xcvr_api.get_power_class = MagicMock(return_value=1)
 
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
@@ -1672,44 +1715,6 @@ class TestXcvrdScript(object):
         assert mock_sfp.get_presence.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         mock_sfp.get_presence = MagicMock(return_value=True)
-
-        # high power enabling failure case and enable_sff_mgr_controlled_tx is False
-        mock_xcvr_api.tx_disable_channel.call_count = 0
-        mock_xcvr_api.set_high_power_class.call_count = 0
-        task.enable_sff_mgr_controlled_tx = False
-        task.get_host_tx_status = MagicMock(return_value='true')
-        task.get_admin_status = MagicMock(return_value='up')
-        mock_xcvr_api.set_high_power_class = MagicMock(return_value=False)
-        port_change_event = PortChangeEvent('Ethernet4', 2, 0, PortChangeEvent.PORT_SET, {
-            'type': 'QSFP28',
-            'subport': '0',
-            'lanes': '1,2,3,4',
-        })
-        task.on_port_update_event(port_change_event)
-        assert len(task.port_dict) == 2
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
-        task.task_worker()
-        assert mock_xcvr_api.tx_disable_channel.call_count == 0
-        assert mock_xcvr_api.set_high_power_class.call_count == 1
-
-        # high power enabling exception case
-        mock_xcvr_api.tx_disable_channel.call_count = 0
-        mock_xcvr_api.set_high_power_class.call_count = 0
-        task.enable_sff_mgr_controlled_tx = False
-        task.get_host_tx_status = MagicMock(return_value='true')
-        task.get_admin_status = MagicMock(return_value='up')
-        mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
-        port_change_event = PortChangeEvent('Ethernet8', 3, 0, PortChangeEvent.PORT_SET, {
-            'type': 'QSFP28',
-            'subport': '0',
-            'lanes': '1,2,3,4',
-        })
-        task.on_port_update_event(port_change_event)
-        assert len(task.port_dict) == 3
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False] + [False] * len(task.port_dict) + [True])
-        task.task_worker()
-        assert mock_xcvr_api.tx_disable_channel.call_count == 0
-        assert mock_xcvr_api.set_high_power_class.call_count == 1
 
     def test_CmisManagerTask_update_port_transceiver_status_table_sw_cmis_state(self):
         port_mapping = PortMapping()
