@@ -4,6 +4,9 @@ Updates various transceiver diagnostic information in the DB periodically, runni
 as a child thread of xcvrd main thread.
 """
 
+from contextlib import contextmanager
+
+
 try:
     import threading
     import copy
@@ -13,10 +16,13 @@ try:
     from natsort import natsorted
     from swsscommon import swsscommon
 
-    from . import xcvrd
-    from .xcvrd_utilities import sfp_status_helper
-    from .xcvrd_utilities.xcvr_table_helper import *
-    from .xcvrd_utilities import port_event_helper
+    from xcvrd import xcvrd
+    from xcvrd.xcvrd_utilities import sfp_status_helper
+    from xcvrd.xcvrd_utilities.xcvr_table_helper import *
+    from xcvrd.xcvrd_utilities import port_event_helper
+    from xcvrd.dom.utilities.db.utils import DBUtils
+    from xcvrd.dom.utilities.vdm.utils import VDMUtils
+    from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
@@ -24,7 +30,7 @@ class DomInfoUpdateTask(threading.Thread):
     DOM_LOGGER_PREFIX = "DOM-INFO-UPDATE: "
     DOM_INFO_UPDATE_PERIOD_SECS = 60
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr, helper_logger):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, helper_logger):
         threading.Thread.__init__(self)
         self.name = "DomInfoUpdateTask"
         self.exc = None
@@ -34,6 +40,11 @@ class DomInfoUpdateTask(threading.Thread):
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.sfp_obj_dict = sfp_obj_dict
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.db_utils = DBUtils(self.helper_logger)
+        self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
+        self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def log_debug(self, message):
         self.helper_logger.log_debug("{}{}".format(self.DOM_LOGGER_PREFIX, message))
@@ -131,11 +142,6 @@ class DomInfoUpdateTask(threading.Thread):
                 # For all the other keys:
                 dom_info_dict[k] = str(v)
 
-    def beautify_info_dict(self, info_dict):
-        for k, v in info_dict.items():
-            if not isinstance(v, str):
-                info_dict[k] = str(v)
-
     # Update port sfp firmware info in db
     def post_port_sfp_firmware_info_to_db(self, logical_port_name, port_mapping, table,
                                 stop_event=threading.Event(), firmware_info_cache=None):
@@ -219,7 +225,7 @@ class DomInfoUpdateTask(threading.Thread):
                 # Skip if empty (i.e. get_transceiver_status API is not applicable for this xcvr)
                 if not transceiver_status_dict:
                     continue
-                self.beautify_info_dict(transceiver_status_dict)
+                self.db_utils.beautify_info_dict(transceiver_status_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_status_dict.items()])
                 table.set(physical_port_name, fvs)
             else:
@@ -249,18 +255,19 @@ class DomInfoUpdateTask(threading.Thread):
                 # Skip if empty (i.e. get_transceiver_pm API is not applicable for this xcvr)
                 if not pm_info_dict:
                     continue
-                self.beautify_info_dict(pm_info_dict)
+                self.db_utils.beautify_info_dict(pm_info_dict)
                 fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
                 table.set(physical_port_name, fvs)
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self.log_notice("Start DOM monitoring loop")
         firmware_info_cache = {}
         dom_info_cache = {}
         transceiver_status_cache = {}
+        vdm_real_value_cache = {}
+        vdm_flag_cache = {}
         pm_info_cache = {}
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
 
@@ -270,6 +277,8 @@ class DomInfoUpdateTask(threading.Thread):
             firmware_info_cache.clear()
             dom_info_cache.clear()
             transceiver_status_cache.clear()
+            vdm_real_value_cache.clear()
+            vdm_flag_cache.clear()
             pm_info_cache.clear()
 
             # Handle port change event from main thread
@@ -279,13 +288,26 @@ class DomInfoUpdateTask(threading.Thread):
                 if self.is_port_dom_monitoring_disabled(logical_port_name):
                     continue
 
+                if self.task_stopping_event.is_set():
+                    self.log_notice("DomInfoUpdateTask stop event generated during DOM monitoring loop")
+                    break
+
                 # Get the asic to which this port belongs
                 asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
                 if asic_index is None:
                     self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
+                physical_port_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+                if not physical_port_list:
+                    self.log_warning("Got unknown physical port list {} for lport {}".format(physical_port_list, logical_port_name))
+                    continue
+                physical_port = physical_port_list[0]
+
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index)):
+                    if not xcvrd._wrapper_get_presence(physical_port):
+                        continue
+
                     try:
                         self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event, firmware_info_cache=firmware_info_cache)
                     except (KeyError, TypeError) as e:
@@ -308,14 +330,35 @@ class DomInfoUpdateTask(threading.Thread):
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    try:
-                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                        # Freeze VDM stats before reading VDM values
+                        with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
+                            if not vdm_frozen:
+                                self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
+                                continue
+                            try:
+                                # Read and post VDM real values to DB
+                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                                                self.vdm_utils.get_vdm_real_values, db_cache=vdm_real_value_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
+                            try:
+                                # Read and post VDM flags and metadata to DB
+                                self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name, db_cache=vdm_flag_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
+                            try:
+                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
+                            except (KeyError, TypeError) as e:
+                                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                                self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
+                                continue
 
-        self.log_info("Stop DOM monitoring loop")
+        self.log_notice("Stop DOM monitoring loop")
 
     def run(self):
         if self.task_stopping_event.is_set():
@@ -347,14 +390,18 @@ class DomInfoUpdateTask(threading.Thread):
         """
         # To avoid race condition, remove the entry TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table.
         # This thread only updates TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table,
-        # so we don't have to remove entries from TRANSCEIVER_INFO and TRANSCEIVER_DOM_THRESHOLD
+        # so we don't have to remove entries from TRANSCEIVER_INFO, TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
         xcvrd.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping,
-                                      None,
-                                      self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
-                                      None,
+                                      [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_vdm_real_value_tbl(port_change_event.asic_id),
+                                      *[self.xcvr_table_helper.get_vdm_flag_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id))
+                                      self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
+                                      ])
         xcvrd.delete_port_from_status_table_hw(port_change_event.port_name,
                                       self.port_mapping,
                                       self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id))

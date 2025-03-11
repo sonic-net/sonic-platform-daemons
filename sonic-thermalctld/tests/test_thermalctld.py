@@ -24,7 +24,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockPsu, MockSfp, MockThermal
+from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
@@ -267,6 +267,26 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('Test message',)")
 
+    def test_update_module_fans(self):
+        chassis = MockChassis()
+        module = MockModule()
+        mock_fan = MockFan()
+        chassis.set_modular_chassis(True)
+        module._fan_list.append(mock_fan)
+        chassis._module_list.append(module)
+        fan_updater = thermalctld.FanUpdater(chassis, multiprocessing.Event())
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 0
+
+        fan_updater._refresh_fan_status = mock.MagicMock(side_effect=Exception("Test message"))
+        fan_updater.update()
+        assert fan_updater.log_warning.call_count == 1
+
+        # TODO: Clean this up once we no longer need to support Python 2
+        if sys.version_info.major == 3:
+            fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message')")
+        else:
+            fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
 class TestThermalMonitor(object):
     """
@@ -396,12 +416,37 @@ class TestTemperatureUpdater(object):
         temp_updater.chassis_table = Table("STATE_DB", "ctable")
         temp_updater.chassis_table._del = mock.MagicMock()
         temp_updater.is_chassis_system = True
+        temp_updater.is_chassis_upd_required = True
 
         temp_updater.__del__()
         assert temp_updater.table.getKeys.call_count == 1
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        assert temp_updater.chassis_table._del.call_count == 2
+
+    def test_deinit_exception(self):
+        chassis = MockChassis()
+        temp_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+        temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
+        temp_updater.table = Table("STATE_DB", "xtable")
+        temp_updater.table._del = mock.MagicMock()
+        temp_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
+        temp_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        temp_updater.phy_entity_table._del = mock.MagicMock()
+        temp_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
+        temp_updater.chassis_table = Table("STATE_DB", "ctable")
+        temp_updater.chassis_table._del = mock.Mock()
+        temp_updater.chassis_table._del.side_effect = Exception('test')
+        temp_updater.is_chassis_system = True
+        temp_updater.is_chassis_upd_required = True
+
+        temp_updater.__del__()
+        assert temp_updater.table.getKeys.call_count == 1
+        assert temp_updater.table._del.call_count == 2
+        expected_calls = [mock.call('key1'), mock.call('key2')]
+        temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+        assert temp_updater.chassis_table is None
 
     def test_over_temper(self):
         chassis = MockChassis()
@@ -506,6 +551,74 @@ class TestTemperatureUpdater(object):
         chassis._module_list = []
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0
+
+
+# DPU chassis-related tests
+def test_dpu_chassis_thermals():
+    chassis = MockChassis()
+    # Modular chassis (Not a dpu chassis) No Change in TemperatureUpdater Behaviour
+    chassis.set_modular_chassis(True)
+    chassis.set_my_slot(1)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    assert temperature_updater.chassis_table
+    # DPU chassis TemperatureUpdater without is_smartswitch False return - No update to CHASSIS_STATE_DB
+    chassis.set_modular_chassis(False)
+    chassis.set_dpu(True)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    assert not temperature_updater.chassis_table
+    # DPU chassis TemperatureUpdater without get_dpu_id implmenetation- No update to CHASSIS_STATE_DB
+    chassis.set_smartswitch(True)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    assert not temperature_updater.chassis_table
+    # DPU chassis TemperatureUpdater with get_dpu_id implemented - Update data to CHASSIS_STATE_DB
+    dpu_id = 1
+    chassis.set_dpu_id(dpu_id)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    assert temperature_updater.chassis_table
+    # Table name in chassis state db = TEMPERATURE_INFO_0 for dpu_id 0
+    assert temperature_updater.chassis_table.table_name == f"{TEMPER_INFO_TABLE_NAME}_{dpu_id}"
+    temperature_updater.table = Table("STATE_DB", "xtable")
+    temperature_updater.table._del = mock.MagicMock()
+
+
+def test_dpu_chassis_state_deinit():
+    # Confirm that the chassis_table entries for DPU Chassis are removed on deletion
+    chassis = MockChassis()
+    chassis.set_smartswitch(True)
+    chassis.set_modular_chassis(False)
+    chassis.set_dpu(True)
+    chassis.set_dpu_id(1)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    assert temperature_updater.chassis_table
+    temperature_updater.table = Table("STATE_DB", "xtable")
+    temperature_updater.phy_entity_table = None
+    temperature_updater.table.getKeys = mock.MagicMock(return_value=['key1', 'key2'])
+    temperature_updater.table._del = mock.MagicMock()
+    temperature_updater.chassis_table = Table("CHASSIS_STATE_DB", "ctable")
+    temperature_updater.chassis_table._del = mock.MagicMock()
+    temperature_updater.__del__()
+    assert temperature_updater.chassis_table._del.call_count == 2
+    expected_calls = [mock.call('key1'), mock.call('key2')]
+    temperature_updater.chassis_table._del.assert_has_calls(expected_calls, any_order=True)
+
+
+def test_updater_dpu_thermal_check_chassis_table():
+    chassis = MockChassis()
+
+    thermal1 = MockThermal()
+    chassis.get_all_thermals().append(thermal1)
+
+    chassis.set_dpu(True)
+    chassis.set_smartswitch(True)
+    chassis.set_dpu_id(1)
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, multiprocessing.Event())
+    temperature_updater.update()
+    assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
+
+    thermal2 = MockThermal()
+    chassis.get_all_thermals().append(thermal2)
+    temperature_updater.update()
+    assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
 
 
 # Modular chassis-related tests
