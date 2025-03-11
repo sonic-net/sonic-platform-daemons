@@ -465,8 +465,10 @@ class SffManagerTask(threading.Thread):
                 except (AttributeError, NotImplementedError):
                     # Skip if these essential routines are not available
                     continue
-                
+
                 if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
+                    self.handle_high_power_class(api, lport)
+
                     set_lp_success = (
                         sfp.set_lpmode(False) 
                         if isinstance(api, Sff8472Api) 
@@ -477,9 +479,6 @@ class SffManagerTask(threading.Thread):
                             "{}: Failed to take module out of low power mode.".format(
                                 lport)
                         )
-
-                if xcvr_inserted:
-                    self.handle_high_power_class(api, lport)
 
                 if not self.enable_sff_mgr_controlled_tx:
                     continue
