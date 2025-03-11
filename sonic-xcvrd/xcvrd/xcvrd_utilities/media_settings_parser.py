@@ -208,9 +208,13 @@ def get_media_settings_for_speed(settings_dict, lane_speed_key):
     return settings_dict.get(LANE_SPEED_DEFAULT_KEY, {})
 
 
-def get_media_settings_value(physical_port, key):
+def get_media_settings_value(physical_port, key, gearbox_side=None):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
+    GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY = 'GEARBOX_GLOBAL_MEDIA_SETTINGS'
+    GEARBOX_PORT_MEDIA_SETTINGS_KEY = 'GEARBOX_PORT_MEDIA_SETTINGS'
+    LINE_SIDE_KEY = 'line'
+    SYSTEM_SIDE_KEY = 'system'
     RANGE_SEPARATOR = '-'
     COMMA_SEPARATOR = ','
     media_dict = {}
@@ -231,60 +235,133 @@ def get_media_settings_value(physical_port, key):
     # 1,2,3,4,5
     # 1-4,9-12
 
-    if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
-        for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
-            if COMMA_SEPARATOR in keys:
-                port_list = keys.split(COMMA_SEPARATOR)
-                for port in port_list:
-                    if RANGE_SEPARATOR in port:
-                        if xcvrd.check_port_in_range(port, physical_port):
-                            media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+    if gearbox_side:
+        if GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
+            for keys in g_dict[GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY]:
+                if COMMA_SEPARATOR in keys:
+                    port_list = keys.split(COMMA_SEPARATOR)
+                    for port in port_list:
+                        if RANGE_SEPARATOR in port:
+                            if xcvrd.check_port_in_range(port, physical_port):
+                                media_dict = g_dict[GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                                break
+                        elif str(physical_port) == port:
+                            media_dict = g_dict[GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY][keys]
                             break
-                    elif str(physical_port) == port:
-                        media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
-                        break
 
-            elif RANGE_SEPARATOR in keys:
-                if xcvrd.check_port_in_range(keys, physical_port):
-                    media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                elif RANGE_SEPARATOR in keys:
+                    if xcvrd.check_port_in_range(keys, physical_port):
+                        media_dict = g_dict[GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY][keys]
 
-            # If there is a match in the global profile for a media type,
-            # fetch those values
+                # gearbox tuning values must be either line-side or system-side
+                if gearbox_side == LINE_SIDE_KEY and LINE_SIDE_KEY in media_dict:
+                    media_dict = media_dict[LINE_SIDE_KEY]
+                elif gearbox_side == SYSTEM_SIDE_KEY and SYSTEM_SIDE_KEY in media_dict:
+                    media_dict = media_dict[SYSTEM_SIDE_KEY]
+                else:
+                    return {}
+
+                # If there is a match in the global profile for a media type,
+                # fetch those values
+                media_settings = get_media_settings(key, media_dict)
+                if media_settings is not None:
+                    return media_settings
+                # Try to match 'default' key if it does not match any keys
+                elif DEFAULT_KEY in media_dict:
+                    default_dict = get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
+
+        media_dict = {}
+
+        if GEARBOX_PORT_MEDIA_SETTINGS_KEY in g_dict:
+            for keys in g_dict[GEARBOX_PORT_MEDIA_SETTINGS_KEY]:
+                if int(keys) == physical_port:
+                    media_dict = g_dict[GEARBOX_PORT_MEDIA_SETTINGS_KEY][keys]
+                    break
+
+            if len(media_dict) == 0:
+                if len(default_dict) != 0:
+                    return default_dict
+                else:
+                    helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
+                return {}
+
+            # gearbox tuning values must be either line-side or system-side
+            if gearbox_side == LINE_SIDE_KEY and LINE_SIDE_KEY in media_dict:
+                media_dict = media_dict[LINE_SIDE_KEY]
+            elif gearbox_side == SYSTEM_SIDE_KEY and SYSTEM_SIDE_KEY in media_dict:
+                media_dict = media_dict[SYSTEM_SIDE_KEY]
+            else:
+                return {}
+
             media_settings = get_media_settings(key, media_dict)
             if media_settings is not None:
                 return media_settings
             # Try to match 'default' key if it does not match any keys
             elif DEFAULT_KEY in media_dict:
-                default_dict = get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
-
-    media_dict = {}
-
-    if PORT_MEDIA_SETTINGS_KEY in g_dict:
-        for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
-            if int(keys) == physical_port:
-                media_dict = g_dict[PORT_MEDIA_SETTINGS_KEY][keys]
-                break
-
-        if len(media_dict) == 0:
+                return get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
+            elif len(default_dict) != 0:
+                return default_dict
+        else:
             if len(default_dict) != 0:
                 return default_dict
-            else:
-                helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
-            return {}
 
-        media_settings = get_media_settings(key, media_dict)
-        if media_settings is not None:
-            return media_settings
-        # Try to match 'default' key if it does not match any keys
-        elif DEFAULT_KEY in media_dict:
-            return get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
-        elif len(default_dict) != 0:
-            return default_dict
+        return {}
+
     else:
-        if len(default_dict) != 0:
-            return default_dict
+        if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
+            for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
+                if COMMA_SEPARATOR in keys:
+                    port_list = keys.split(COMMA_SEPARATOR)
+                    for port in port_list:
+                        if RANGE_SEPARATOR in port:
+                            if xcvrd.check_port_in_range(port, physical_port):
+                                media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                                break
+                        elif str(physical_port) == port:
+                            media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+                            break
 
-    return {}
+                elif RANGE_SEPARATOR in keys:
+                    if xcvrd.check_port_in_range(keys, physical_port):
+                        media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
+
+                # If there is a match in the global profile for a media type,
+                # fetch those values
+                media_settings = get_media_settings(key, media_dict)
+                if media_settings is not None:
+                    return media_settings
+                # Try to match 'default' key if it does not match any keys
+                elif DEFAULT_KEY in media_dict:
+                    default_dict = get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
+
+        media_dict = {}
+
+        if PORT_MEDIA_SETTINGS_KEY in g_dict:
+            for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
+                if int(keys) == physical_port:
+                    media_dict = g_dict[PORT_MEDIA_SETTINGS_KEY][keys]
+                    break
+
+            if len(media_dict) == 0:
+                if len(default_dict) != 0:
+                    return default_dict
+                else:
+                    helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
+                return {}
+
+            media_settings = get_media_settings(key, media_dict)
+            if media_settings is not None:
+                return media_settings
+            # Try to match 'default' key if it does not match any keys
+            elif DEFAULT_KEY in media_dict:
+                return get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
+            elif len(default_dict) != 0:
+                return default_dict
+        else:
+            if len(default_dict) != 0:
+                return default_dict
+
+        return {}
 
 
 def get_speed_lane_count_and_subport(port, cfg_port_tbl):
@@ -323,6 +400,19 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
     ganged_port = False
     ganged_member_num = 1
+    LINE_SIDE_KEY = 'line'
+    SYSTEM_SIDE_KEY = 'system'
+
+    # list of supported serdes attributes for tx_taps
+    tx_taps = [
+        'main',
+        'post1',
+        'post2',
+        'post3',
+        'pre1',
+        'pre2',
+        'pre3'
+    ]
 
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
@@ -346,16 +436,33 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_notice("Retrieving media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
+
+        # Acquire ASIC tuning values
         media_dict = get_media_settings_value(physical_port, key)
 
-        if len(media_dict) == 0:
+        # Acquire Line-Side gearbox tuning values
+        gb_line_media_dict = get_media_settings_value(physical_port, key, LINE_SIDE_KEY)
+        for media_key in list(gb_line_media_dict):
+            if media_key not in tx_taps:
+                gb_line_media_dict.pop(media_key)
+
+        # Acquire System-Side gearbox tuning values
+        gb_system_media_dict = get_media_settings_value(physical_port, key, SYSTEM_SIDE_KEY)
+        for media_key in list(gb_system_media_dict):
+            if media_key not in tx_taps:
+                gb_system_media_dict.pop(media_key)
+
+        media_dict_len = len(media_dict) + len(gb_line_media_dict) + len(gb_system_media_dict)
+
+        if media_dict_len == 0:
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
 
-        fvs = swsscommon.FieldValuePairs(len(media_dict))
+        fvs = swsscommon.FieldValuePairs(media_dict_len)
 
         index = 0
-        helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
+        if len(media_dict) != 0:
+            helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
                 val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
@@ -365,7 +472,29 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             fvs[index] = (str(media_key), str(val_str))
             index += 1
 
+        if len(gb_line_media_dict) != 0:
+            helper_logger.log_notice("Publishing line-side gearbox tunings for port {} in APP_DB:".format(logical_port_name))
+        for media_key in gb_line_media_dict:
+            if type(gb_line_media_dict[media_key]) is dict:
+                val_str = get_serdes_si_setting_val_str(gb_line_media_dict[media_key], lane_count, subport_num)
+            else:
+                val_str = gb_line_media_dict[media_key]
+            helper_logger.log_notice("{}:({},{}) ".format(index, "line_tx_fir_" + str(media_key), str(val_str)))
+            fvs[index] = ("line_tx_fir_" + str(media_key), str(val_str))
+            index += 1
+
+        if len(gb_system_media_dict) != 0:
+            helper_logger.log_notice("Publishing system-side gearbox tunings for port {} in APP_DB:".format(logical_port_name))
+        for media_key in gb_system_media_dict:
+            if type(gb_system_media_dict[media_key]) is dict:
+                val_str = get_serdes_si_setting_val_str(gb_system_media_dict[media_key], lane_count, subport_num)
+            else:
+                val_str = gb_system_media_dict[media_key]
+            helper_logger.log_notice("{}:({},{}) ".format(index, "system_tx_fir_" + str(media_key), str(val_str)))
+            fvs[index] = ("system_tx_fir_" + str(media_key), str(val_str))
+            index += 1
+
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
         xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
-        helper_logger.log_notice("Notify media setting: Published ASIC-side SI setting "
+        helper_logger.log_notice("Notify media setting: Published SI setting "
                                  "for lport {} in APP_DB".format(logical_port_name))
