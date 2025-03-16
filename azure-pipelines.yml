@@ -126,6 +126,17 @@ jobs:
       # Python 3
       - ${{ if eq(project.python3, true) }}:
         - script: |
+            set -xe
+            # Check for missing __init__.py files for sonic-xcvrd
+            if [ "${{ project.name }}" == "xcvrd" ]; then
+                XCVRD_WORK_DIR=$(System.DefaultWorkingDirectory)/${{ project.root_dir }}/xcvrd
+                missing_init_files=$(find $XCVRD_WORK_DIR -type d ! -exec test -e "{}/__init__.py" \; -print)
+                if [ -n "$missing_init_files" ]; then
+                  echo "Error: The following directories are missing __init__.py files:"
+                  echo "$missing_init_files"
+                  exit 1
+                fi
+            fi
             pip3 install ".[testing]"
             pip3 uninstall --yes sonic-platform-daemons
             pytest
