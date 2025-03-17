@@ -3889,34 +3889,6 @@ class TestXcvrdScript(object):
         mock_api.is_flat_memory = MagicMock(side_effect=NotImplementedError)
         assert xcvrd_util.is_transceiver_flat_memory(1)
 
-    def test_is_transceiver_copper_based(self):
-        from xcvrd.xcvrd_utilities.utils import XCVRDUtils
-        mock_sfp = MagicMock()
-        xcvrd_util = XCVRDUtils({1: mock_sfp}, MagicMock())
-
-        # Test case where get_xcvr_api returns None
-        mock_sfp.get_xcvr_api = MagicMock(return_value=None)
-        assert xcvrd_util.is_transceiver_copper_based(1)
-
-        # Test case where is_copper returns True
-        mock_api = MagicMock()
-        mock_api.is_copper = MagicMock(return_value=True)
-        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
-        assert xcvrd_util.is_transceiver_copper_based(1)
-
-        # Test case where is_copper returns False
-        mock_api.is_copper = MagicMock(return_value=False)
-        assert not xcvrd_util.is_transceiver_copper_based(1)
-
-        # Test case where get_xcvr_api raises KeyError
-        xcvrd_util.sfp_obj_dict = {}
-        assert xcvrd_util.is_transceiver_copper_based(1)
-
-        # Test case where is_copper raises NotImplementedError
-        xcvrd_util.sfp_obj_dict = {1: mock_sfp}
-        mock_api.is_copper = MagicMock(side_effect=NotImplementedError)
-        assert xcvrd_util.is_transceiver_copper_based(1)
-
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
     while wait_time <= total_wait_time:

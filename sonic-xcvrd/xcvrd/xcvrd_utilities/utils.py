@@ -23,13 +23,3 @@ class XCVRDUtils:
         except (KeyError, NotImplementedError):
             self.logger.log_error(f"Failed to check flat memory for port {physical_port}")
             return True
-
-    def is_transceiver_copper_based(self, physical_port):
-        try:
-            api = self.sfp_obj_dict[physical_port].get_xcvr_api()
-            if not api:
-                return True
-            return api.is_copper()
-        except (KeyError, NotImplementedError):
-            self.logger.log_error(f"Failed to check copper for port {physical_port}")
-            return True
