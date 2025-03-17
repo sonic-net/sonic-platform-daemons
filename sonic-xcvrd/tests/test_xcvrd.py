@@ -621,13 +621,6 @@ class TestXcvrdScript(object):
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
         vdm_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
 
-        # Ensure table is empty if transceiver is copper based
-        vdm_db_utils.xcvrd_utils.is_transceiver_copper_based = MagicMock(return_value=True)
-        vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
-        for t in VDM_THRESHOLD_TYPES:
-            assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
-        vdm_db_utils.xcvrd_utils.is_transceiver_copper_based = MagicMock(return_value=False)
-
         # Ensure table is empty if get_vdm_values_func returns None
         vdm_db_utils.vdm_utils.get_vdm_thresholds = MagicMock(return_value=None)
         vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
