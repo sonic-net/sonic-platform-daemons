@@ -91,10 +91,7 @@ class VDMDBUtils(DBUtils):
         if not self.xcvrd_utils.get_transceiver_presence(physical_port):
             return
 
-        if self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
-            return
-
-        if self.xcvrd_utils.is_transceiver_copper_based(physical_port):
+        if self.xcvrd_utils.is_transceiver_flat_memory(physical_port) or self.xcvrd_utils.is_transceiver_copper_based(physical_port):
             return
 
         try:
