@@ -1094,6 +1094,31 @@ class CmisManagerTask(threading.Thread):
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
 
+    def need_lp_mode_for_dpdeinit(self, api, appl):
+        """
+        Determine whether the cmis transceiver needs to enter
+        low power mode when the state is changed to DPDeinit.
+        """
+        host_assign = api.get_host_lane_assignment_option(appl)
+        vendor = api.get_manufacturer().strip()
+
+        if vendor == "Credo" and host_assign == 0x1:
+            """
+            Credo AEC 400G needs this operation to work correctly on
+            firmware v4.1. Only one application mode 400GAUI-8 is supported
+            on firmware v4.1. When 'host_assign' is 1, it means the
+            application mode 400GAUI-8 is adopted.
+            Firmware v5.1 supports more application modes like 200GAUI-4,
+            It is not required to set low power mode when entering
+            DPDeinit on v5.1, and it also works fine when set low power
+            mode is set. In conclusion, set low power mode is only
+            required on Credo AEC 400G when host_assign is 0x1 to
+            ensure it works correctly.
+            """
+            return True
+        else:
+            return False
+
     def task_worker(self):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
@@ -1308,7 +1333,19 @@ class CmisManagerTask(threading.Thread):
                             continue
                         self.log_notice("{}: force Datapath reinit".format(lport))
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
+                        if self.need_lp_mode_for_dpdeinit(api, appl):
+                            api.set_lpmode(True)
+                            now = datetime.datetime.now()
+                            modulePwrDownDuration = self.get_cmis_module_power_down_duration_secs(api)
+                            self.log_notice("{}: ModulePwrDown duration {} secs".format(lport, modulePwrDownDuration))
+                            self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=modulePwrDownDuration)
                     elif state == CMIS_STATE_DP_DEINIT:
+                        if self.need_lp_mode_for_dpdeinit(api, appl):
+                            if not self.check_module_state(api, ['ModuleLowPwr']):
+                                if (expired is not None) and (expired <= now):
+                                    self.log_notice("{}: timeout for 'ModuleLowPwr'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
                         # D.2.2 Software Deinitialization
                         api.set_datapath_deinit(host_lanes_mask)
 
