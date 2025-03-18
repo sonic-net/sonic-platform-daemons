@@ -91,6 +91,9 @@ class VDMDBUtils(DBUtils):
         if not self.xcvrd_utils.get_transceiver_presence(physical_port):
             return
 
+        if self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
+            return
+
         try:
             if db_cache is not None and physical_port in db_cache:
                 vdm_threshold_type_value_dict = db_cache[physical_port]
