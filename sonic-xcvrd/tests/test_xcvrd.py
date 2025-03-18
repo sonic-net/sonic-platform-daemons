@@ -614,6 +614,13 @@ class TestXcvrdScript(object):
 
         vdm_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=True)
 
+        # Ensure table is empty if transceiver is flat memory
+        vdm_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=True)
+        vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
+        for t in VDM_THRESHOLD_TYPES:
+            assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size() == 0
+        vdm_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
+
         # Ensure table is empty if get_vdm_values_func returns None
         vdm_db_utils.vdm_utils.get_vdm_thresholds = MagicMock(return_value=None)
         vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
@@ -3815,6 +3822,34 @@ class TestXcvrdScript(object):
 
         mock_sfp.get_presence = MagicMock(side_effect=NotImplementedError)
         assert not xcvrd_util.get_transceiver_presence(1)
+
+    def test_is_transceiver_flat_memory(self):
+        from xcvrd.xcvrd_utilities.utils import XCVRDUtils
+        mock_sfp = MagicMock()
+        xcvrd_util = XCVRDUtils({1: mock_sfp}, MagicMock())
+
+        # Test case where get_xcvr_api returns None
+        mock_sfp.get_xcvr_api = MagicMock(return_value=None)
+        assert xcvrd_util.is_transceiver_flat_memory(1)
+
+        # Test case where is_flat_memory returns True
+        mock_api = MagicMock()
+        mock_api.is_flat_memory = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
+        assert xcvrd_util.is_transceiver_flat_memory(1)
+
+        # Test case where is_flat_memory returns False
+        mock_api.is_flat_memory = MagicMock(return_value=False)
+        assert not xcvrd_util.is_transceiver_flat_memory(1)
+
+        # Test case where get_xcvr_api raises KeyError
+        xcvrd_util.sfp_obj_dict = {}
+        assert xcvrd_util.is_transceiver_flat_memory(1)
+
+        # Test case where is_flat_memory raises NotImplementedError
+        xcvrd_util.sfp_obj_dict = {1: mock_sfp}
+        mock_api.is_flat_memory = MagicMock(side_effect=NotImplementedError)
+        assert xcvrd_util.is_transceiver_flat_memory(1)
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
