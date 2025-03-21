@@ -41,9 +41,9 @@
                     "lane3":"0x1A400A"
                 }
             },
-            "QSFP28-40GBASE-CR4-7M":{
+            "QSFP28-40GBASE-CR4-7M":
                 "preemphasis": {
-                    "lane0":"0x1A400A",
+                    "lane0":"0x1A400A"。
                     "lane1":"0x1A400A",
                     "lane2":"0x1A400A",
                     "lane3":"0x1A400A"
