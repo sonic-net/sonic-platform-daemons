@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import yaml
+import argparse
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger, device_info
@@ -191,9 +192,10 @@ class VoltageUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self):
+    def update(self, stop_event_signal):
         '''
         Update all voltage information to database
+        :param stop_event_signal: Event object to check if set by signal handler
         :return:
         '''
         self.log_debug("Start voltage update")
@@ -201,6 +203,9 @@ class VoltageUpdater(SensorUpdater):
         sensor_list = self.fs_sensors + self.chassis.get_all_voltage_sensors()
 
         for index, voltage_sensor in enumerate(sensor_list):
+            if(stop_event_signal.is_set()):
+                self.log_info("Stop signal received while running voltage update")
+                return False
             self._refresh_voltage_status(CHASSIS_INFO_KEY, voltage_sensor, index)
 
         if self.is_chassis_system:
@@ -210,6 +215,9 @@ class VoltageUpdater(SensorUpdater):
                 
                 for voltage_sensor_index, voltage_sensor in enumerate(module.get_all_voltage_sensors()):
                     available_voltage_sensors.add((voltage_sensor, module_name, voltage_sensor_index))
+                    if(stop_event_signal.is_set()):
+                        self.log_info("Stop signal received while running voltage update")
+                        return False
                     self._refresh_voltage_status(module_name, voltage_sensor, voltage_sensor_index)
 
             voltage_sensors_to_remove = self.module_voltage_sensors - available_voltage_sensors
@@ -322,9 +330,10 @@ class CurrentUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self):
+    def update(self, stop_event_signal):
         '''
         Update all current information to database
+        :param stop_event_signal: Event object to check if set by signal handler
         :return:
         '''
         self.log_debug("Start current updating")
@@ -332,6 +341,9 @@ class CurrentUpdater(SensorUpdater):
         sensor_list = self.fs_sensors + self.chassis.get_all_current_sensors()
 
         for index, current_sensor in enumerate(sensor_list):
+            if(stop_event_signal.is_set()):
+                self.log_info("Stop signal received while running current update")
+                return False
             self._refresh_current_status(CHASSIS_INFO_KEY, current_sensor, index)
 
         if self.is_chassis_system:
@@ -341,6 +353,9 @@ class CurrentUpdater(SensorUpdater):
                 
                 for current_sensor_index, current_sensor in enumerate(module.get_all_current_sensors()):
                     available_current_sensors.add((current_sensor, module_name, current_sensor_index))
+                    if(stop_event_signal.is_set()):
+                        self.log_info("Stop signal received while running current update")
+                        return False
                     self._refresh_current_status(module_name, current_sensor, current_sensor_index)
 
             current_sensors_to_remove = self.module_current_sensors - available_current_sensors
@@ -442,10 +457,8 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
     INITIAL_INTERVAL = 5
     # Periodic Update interval 
     UPDATE_INTERVAL = 60
-    # Update time threshold. If update time exceeds this threshold, log warning msg.
-    UPDATE_ELAPSED_THRESHOLD = 30
 
-    def __init__(self):
+    def __init__(self, update_elapsed_threshold):
         '''
         Initializer of SensorMonitorDaemon
         '''
@@ -522,8 +535,9 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         begin = time.time()
 
-        self.voltage_updater.update()
-        self.current_updater.update()
+        if not (self.voltage_updater.update(self.stop_event) or self.current_updater.update(self.stop_event)):
+            # Fatal signal received in the process of reading voltage or current sensors
+            return False
 
         elapsed = time.time() - begin
         if elapsed <  self.interval:
@@ -541,7 +555,12 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 def main():
-    sensor_control = SensorMonitorDaemon()
+    parser = argparse.ArgumentParser()
+    # A threshold for monitoring being excessive can differ wildly per vendor and platform, as such allow it to be configured
+    parser.add_argument('-u', '--update_elapsed_threshold', type=int, default=30, help='configure a threshold in seconds for update to trigger a log warning, defaults to 30 seconds')
+    args = parser.parse_args()
+
+    sensor_control = SensorMonitorDaemon(args.update_elapsed_threshold)
 
     sensor_control.log_info("Starting up...")
 
