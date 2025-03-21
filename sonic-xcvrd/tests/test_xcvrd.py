@@ -982,18 +982,19 @@ class TestXcvrdScript(object):
                 'cable_type': 'Length Cable Assembly(m)',
                 'cable_length': '255',
                 'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
-                'type_abbrv_name': 'QSFP+'
+                'type_abbrv_name': 'QSFP+',
+                'media_type_key': 'copper'
             }
         }
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_type_key': 'fiber', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_type_key': 'fiber', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_type_key': 'fiber', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
         # TODO: Ensure that error message was logged
 
         xcvr_info_dict_for_qsfp28 = {
@@ -1025,6 +1026,7 @@ class TestXcvrdScript(object):
             'media_type_key': 'fiber',
             "media_key": "QSFP28-100GBASE-SR4 or 25GBASE-SR-50.0M",
             "lane_speed_key": "speed:25G",
+            'media_type_key': 'copper',
         }
 
         mock_is_cmis_api.return_value = True
@@ -1052,7 +1054,7 @@ class TestXcvrdScript(object):
 
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421','media_type_key': 'fiber', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421','media_type_key': 'fiber', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2'  ,'media_type_key': 'copper'}
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], (400000, 8, 0)),
