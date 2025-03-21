@@ -41,9 +41,9 @@
                     "lane3":"0x1A400A"
                 }
             },
-            "QSFP28-40GBASE-CR4-7M":
+            "QSFP28-40GBASE-CR4-7M":{
                 "preemphasis": {
-                    "lane0":"0x1A400A"。
+                    "lane0":"0x1A400A",
                     "lane1":"0x1A400A",
                     "lane2":"0x1A400A",
                     "lane3":"0x1A400A"
@@ -437,25 +437,25 @@
                 }
             }
         },
-		"33": {
+	"33": {
             "fiber": {
                 "speed:50G": {
                     "preemphasis": {
-						"lane0":"0x144808",
-						"lane1":"0x144808",
-						"lane2":"0x144808",
-						"lane3":"0x144808"
-					}
-                }
-            },
+			"lane0":"0x144808",
+			"lane1":"0x144808",
+			"lane2":"0x144808",
+			"lane3":"0x144808"
+		    }
+            	}
+	    },
             "copper": {
-                "speed:50G": {
+        	"speed:50G": {
                     "preemphasis": {
-						"lane0":"0x144808",
-						"lane1":"0x144808",
-						"lane2":"0x144808",
-						"lane3":"0x144808"
-					}
+			"lane0":"0x144808",
+			"lane1":"0x144808",
+			"lane2":"0x144808",
+			"lane3":"0x144808"
+		    }
                 }
             }
         }
