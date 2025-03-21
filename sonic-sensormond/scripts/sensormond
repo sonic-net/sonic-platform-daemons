@@ -226,6 +226,8 @@ class VoltageUpdater(SensorUpdater):
                 self._remove_voltage_sensor_from_db(voltage_sensor, parent_name, voltage_sensor_index)
                 
         self.log_debug("End Voltage updating")
+        #return true if no stop signal was received
+        return True
 
     def _refresh_voltage_status(self, parent_name, voltage_sensor, voltage_sensor_index):
         '''
@@ -364,6 +366,8 @@ class CurrentUpdater(SensorUpdater):
                 self._remove_current_sensor_from_db(current_sensor, parent_name, current_sensor_index)
                 
         self.log_debug("End Current updating")
+        #return true if no stop signal was received
+        return True
 
     def _refresh_current_status(self, parent_name, current_sensor, current_sensor_index):
         '''
