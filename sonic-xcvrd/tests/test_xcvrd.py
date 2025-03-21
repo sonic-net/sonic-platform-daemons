@@ -994,7 +994,7 @@ class TestXcvrdScript(object):
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_type_key': 'fiber', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
         # TODO: Ensure that error message was logged
 
         xcvr_info_dict_for_qsfp28 = {
