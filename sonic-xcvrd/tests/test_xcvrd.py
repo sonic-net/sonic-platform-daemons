@@ -983,16 +983,17 @@ class TestXcvrdScript(object):
                 'cable_length': '255',
                 'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
                 'type_abbrv_name': 'QSFP+',
-                'media_type_key': 'copper'
+                'media_type_key': 'fiber'
             }
         }
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'media_type_key': 'fiber'}
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
+        xcvr_info_dict[0]['media_type_key'] = 'copper'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
         assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'media_type_key': 'copper'}
         # TODO: Ensure that error message was logged
