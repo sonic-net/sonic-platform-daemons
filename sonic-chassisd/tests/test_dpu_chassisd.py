@@ -233,3 +233,100 @@ def test_dpu_chassis_daemon():
         daemon_chassisd.stop.wait.return_value = True
 
         thread.join()
+
+
+def test_dpu_state_manager_table_deletion():
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'DEL', None)):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify state was updated since this is a DEL operation
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'up',
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}
+
+
+def test_dpu_state_manager_specific_key_update():
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'SET', (('dpu_control_plane_state', 'up'),))):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify no state update occurred since this was our own state update
+                assert chassis_state_db == {}
+
+
+def test_dpu_state_manager_none_result():
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    def mock_pop():
+        return None
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', side_effect=mock_pop):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify state was updated even with None result
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'up',
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}

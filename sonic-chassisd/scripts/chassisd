@@ -776,11 +776,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def update_dpu_state(self, key, state):
         """
         Update specific DPU state fields in chassisStateDB using the given key.
+        If state is 'down', delete the table first before setting new values.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
             if not self.chassis_state_db:
                 self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
+            # If state is down, delete the table first
+            if state == "down":
+                self.chassis_state_db.delete(key)
 
             # Prepare the fields to update
             updates = {
@@ -1367,12 +1372,14 @@ class DpuStateManagerTask(ProcessTaskBase):
         self.dpu_state_updater = dpu_state_updater
         self.state_db = daemon_base.db_connect('STATE_DB')
         self.app_db = daemon_base.db_connect('APPL_DB')
+        self.chassis_state_db = daemon_base.db_connect('CHASSIS_STATE_DB')
 
     def task_worker(self):
         sel = swsscommon.Select()
         selectable = [
             swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
-            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY')
+            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY'),
+            swsscommon.SubscriberStateTable(self.chassis_state_db, 'DPU_STATE')
         ]
 
         for s in selectable:
@@ -1388,10 +1395,31 @@ class DpuStateManagerTask(ProcessTaskBase):
                 if state != swsscommon.Select.OBJECT:
                     continue
 
-                for s in selectable:
-                    s.pops()
+                update_required = False
 
-                self.dpu_state_updater.update_state()
+                for s in selectable:
+                    result = s.pop()
+                    update_required = True # If there is any selectable object, we need to update the state
+                    if result is None:
+                        print("Here with None for {}".format(type(s)))
+                        continue
+                    key, op, fvp = result  # Changed from _ to fvp to match what we use below
+                    # Check if this is the DPU_STATE table
+                    if s.getDbConnector().getDbName() == 'CHASSIS_STATE_DB':
+                        # Don't update if this is a change for another DPU
+                        if key != self.dpu_state_updater.name:
+                            update_required = False
+                            continue
+                        # Don't update if this is our own dataplane/control plane state update to avoid recursion
+                        if op == 'SET' and isinstance(fvp, tuple):
+                            fvs = dict(fvp)
+                            if 'dpu_data_plane_state' in fvs or 'dpu_control_plane_state' in fvs:
+                                update_required = False
+                                continue
+                        self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")
+
+                if update_required:
+                    self.dpu_state_updater.update_state()
 
         except KeyboardInterrupt:
             pass
