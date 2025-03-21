@@ -1016,6 +1016,7 @@ class TestXcvrdScript(object):
                 "vendor_date": "2020-11-11",
                 "vendor_oui": "00-77-7a",
                 "application_advertisement": "N/A",
+                "media_type_key": 'copper',
             }
         }
         result = media_settings_parser.get_media_settings_key(
@@ -1036,7 +1037,8 @@ class TestXcvrdScript(object):
                 'cable_type': 'Length Cable Assembly(m)',
                 'cable_length': '255',
                 'specification_compliance': "sm_media_interface",
-                'type_abbrv_name': 'QSFP-DD'
+                'type_abbrv_name': 'QSFP-DD',
+                "media_type_key": 'copper'
             }
         }
 
