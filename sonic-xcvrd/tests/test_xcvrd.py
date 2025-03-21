@@ -1023,7 +1023,6 @@ class TestXcvrdScript(object):
         )
         assert result == {
             "vendor_key": "AVAGO-XXX-YYY-ZZZ",
-            'media_type_key': 'fiber',
             "media_key": "QSFP28-100GBASE-SR4 or 25GBASE-SR-50.0M",
             "lane_speed_key": "speed:25G",
             'media_type_key': 'copper',
@@ -1054,7 +1053,7 @@ class TestXcvrdScript(object):
 
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421','media_type_key': 'fiber', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2'  ,'media_type_key': 'copper'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2'  ,'media_type_key': 'copper'}
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], (400000, 8, 0)),
