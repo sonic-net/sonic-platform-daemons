@@ -49,7 +49,7 @@ media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = gl
 
 port_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 port_media_settings = port_settings_with_comma_dict['PORT_MEDIA_SETTINGS'].pop('33')
-port_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['33'] = port_media_settings
+port_settings_with_comma_dict['PORT_MEDIA_SETTINGS']['33'] = port_media_settings
 
 media_settings_with_regular_expression_dict = copy.deepcopy(media_settings_dict)
 media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32'] = {}
