@@ -47,6 +47,10 @@ media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
+port_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
+port_media_settings = port_settings_with_comma_dict['PORT_MEDIA_SETTINGS'].pop('33')
+port_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['33'] = port_media_settings
+
 media_settings_with_regular_expression_dict = copy.deepcopy(media_settings_dict)
 media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32'] = {}
 # Generate regular expression patterns for QSFP28-40GBASE-CR4-xxM and QSFP+-40GBASE-CR4-xxM that have the same pre-emphasis value
@@ -1158,7 +1162,8 @@ class TestXcvrdScript(object):
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-2M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x18420A', 'lane1': '0x18420A', 'lane2': '0x18420A', 'lane3': '0x18420A'}}),
-    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}})
+    (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}}),
+    (port_settings_with_comma_dict, 33, {'vendor_key': 'UNKOWN', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:50G', 'media_type_key': 'fiber'}, {'preemphasis': {'lane0': '0x144808', 'lane1': '0x144808', 'lane2': '0x144808', 'lane3': '0x144808'}})   
     ])
     def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
