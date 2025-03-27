@@ -193,7 +193,7 @@ class PortChangeObserver:
                                                             db_name,
                                                             table_name)
                 # This is the final event considered for processing
-                self.logger.log_info("*** {} handle_port_update_event() fvp {}".format(
+                self.logger.log_notice("*** {} handle_port_update_event() fvp {}".format(
                     key, fvp))
                 if port_change_event is not None:
                     has_event = True
