@@ -55,6 +55,7 @@ TRANSCEIVER_STATUS_TABLE_SW_FIELDS = ["status", "error", "cmis_state"]
 
 CMIS_STATE_UNKNOWN   = 'UNKNOWN'
 CMIS_STATE_INSERTED  = 'INSERTED'
+CMIS_STATE_DP_PRE_INIT_CHECK = 'DP_PRE_INIT_CHECK'
 CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
 CMIS_STATE_AP_CONF   = 'AP_CONFIGURED'
 CMIS_STATE_DP_ACTIVATE = 'DP_ACTIVATION'
@@ -588,6 +589,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
+    CMIS_EXPIRATION_BUFFER_MS = 2
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -595,12 +597,12 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.port_dict = {}
-        self.port_mapping = copy.deepcopy(port_mapping)
+        self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
     def log_debug(self, message):
         helper_logger.log_debug("CMIS: {}".format(message))
@@ -611,9 +613,11 @@ class CmisManagerTask(threading.Thread):
     def log_error(self, message):
         helper_logger.log_error("CMIS: {}".format(message))
 
+    def get_asic_id(self, lport):
+        return self.port_dict.get(lport, {}).get("asic_id", -1)
+
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        status_table = self.xcvr_table_helper.get_status_tbl(asic_index)
+        status_table = self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport))
         if status_table is None:
             helper_logger.log_error("status_table is None while updating "
                                     "sw CMIS state for lport {}".format(lport))
@@ -645,15 +649,13 @@ class CmisManagerTask(threading.Thread):
         if pport is None:
             return
 
-        # Skip if the port/cage type is not a CMIS
-        # 'index' can be -1 if STATE_DB|PORT_TABLE
-        if lport not in self.port_dict:
-            self.port_dict[lport] = {}
-
         if port_change_event.port_dict is None:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
+            if lport not in self.port_dict:
+                self.port_dict[lport] = {"asic_id": port_change_event.asic_id,
+                                         "forced_tx_disabled": False}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
@@ -672,14 +674,54 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
             self.force_cmis_reinit(lport, 0)
-        else:
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+
+        elif port_change_event.event_type == port_change_event.PORT_DEL:
+            # In handling the DEL event, the following two scenarios must be considered:
+            # 1. PORT_DEL event due to transceiver plug-out
+            # 2. PORT_DEL event due to Dynamic Port Breakout (DPB)
+            #
+            # Scenario 1 is simple, as only a STATE_DB|TRANSCEIVER_INFO PORT_DEL event occurs,
+            # so we just need to set SW_CMIS_STATE to CMIS_STATE_REMOVED.
+            #
+            # Scenario 2 is a bit more complex. First, for the port(s) before DPB, a CONFIG_DB|PORT PORT_DEL
+            # and a STATE_DB|PORT_TABLE PORT_DEL event occur. Next, for the port(s) after DPB,
+            # a CONFIG_DB|PORT PORT_SET and a STATE_DB|PORT_TABLE PORT_SET event occur.
+            # After that (after a short delay), a STATE_DB|TRANSCEIVER_INFO PORT_DEL event
+            # occurs for the port(s) before DPB, and finally, a STATE_DB|TRANSCEIVER_INFO
+            # PORT_SET event occurs for the port(s) after DPB.
+            #
+            # Below is the event sequence when configuring Ethernet0 from "2x200G" to "1x400G"
+            # (based on actual logs).
+            #
+            # 1.  SET Ethernet0 CONFIG_DB|PORT
+            # 2.  DEL Ethernet2 CONFIG_DB|PORT
+            # 3.  DEL Ethernet0 CONFIG_DB|PORT
+            # 4.  DEL Ethernet0 STATE_DB|PORT_TABLE
+            # 5.  DEL Ethernet2 STATE_DB|PORT_TABLE
+            # 6.  SET Ethernet0 CONFIG_DB|PORT
+            # 7.  SET Ethernet0 STATE_DB|PORT_TABLE
+            # 8.  SET Ethernet0 STATE_DB|PORT_TABLE
+            # 9.  DEL Ethernet2 STATE_DB|TRANSCEIVER_INFO
+            # 10. DEL Ethernet0 STATE_DB|TRANSCEIVER_INFO
+            # 11. SET Ethernet0 STATE_DB|TRANSCEIVER_INFO
+            #
+            # To handle both scenarios, if the lport exists in port_dict for any DEL EVENT,
+            # set SW_CMIS_STATE to REMOVED. Additionally, for DEL EVENTS from CONFIG_DB due to DPB,
+            # remove the lport from port_dict.
+            if lport in self.port_dict:
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+
+            if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
+                self.port_dict.pop(lport)
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
 
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
+
+    def get_cmis_dp_tx_turnoff_duration_secs(self, api):
+        return api.get_datapath_tx_turnoff_duration()/1000
 
     def get_cmis_module_power_up_duration_secs(self, api):
         return api.get_module_pwr_up_duration()/1000
@@ -937,8 +979,7 @@ class CmisManagerTask(threading.Thread):
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
         freq = 0
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = port_tbl.get(lport)
         if found and 'laser_freq' in dict(port_info):
@@ -950,8 +991,7 @@ class CmisManagerTask(threading.Thread):
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
         power = 0
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = port_tbl.get(lport)
         if found and 'tx_power' in dict(port_info):
@@ -961,8 +1001,7 @@ class CmisManagerTask(threading.Thread):
     def get_host_tx_status(self, lport):
         host_tx_ready = 'false'
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
 
         found, port_info = state_port_tbl.get(lport)
         if found and 'host_tx_ready' in dict(port_info):
@@ -972,8 +1011,7 @@ class CmisManagerTask(threading.Thread):
     def get_port_admin_status(self, lport):
         admin_status = 'down'
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(asic_index)
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, port_info = cfg_port_tbl.get(lport)
         if found:
@@ -1051,8 +1089,7 @@ class CmisManagerTask(threading.Thread):
                 tuple_list.append(('host_lane_count', 'N/A'))
                 tuple_list.append(('media_lane_count', 'N/A'))
 
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(lport)
-        intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+        intf_tbl = self.xcvr_table_helper.get_intf_tbl(self.get_asic_id(lport))
         if not intf_tbl:
             helper_logger.log_warning("Active ApSel db update: TRANSCEIVER_INFO table not found for {}".format(lport))
             return
@@ -1085,17 +1122,38 @@ class CmisManagerTask(threading.Thread):
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
 
+    def update_cmis_state_expiration_time(self, lport, duration_seconds):
+        """
+        Set the CMIS expiration time for the given logical port
+        in the port dictionary.
+        Args:
+            lport: Logical port name
+            duration_seconds: Duration in seconds for the expiration
+        """
+        self.port_dict[lport]['cmis_expired'] = datetime.datetime.now() + \
+                                                datetime.timedelta(seconds=duration_seconds) + \
+                                                datetime.timedelta(milliseconds=self.CMIS_EXPIRATION_BUFFER_MS)
+
+    def is_timer_expired(self, expired_time, current_time=None):
+        """
+        Check if the given expiration time has passed.
+
+        Args:
+            expired_time (datetime): The expiration time to check.
+            current_time (datetime, optional): The current time. Defaults to now.
+
+        Returns:
+            bool: True if expired_time is not None and has passed, False otherwise.
+        """
+        if expired_time is None:
+            return False
+
+        if current_time is None:
+            current_time = datetime.datetime.now()
+
+        return expired_time <= current_time
+
     def task_worker(self):
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-
-        self.log_notice("Waiting for PortConfigDone...")
-        for namespace in self.namespaces:
-            self.wait_for_port_config_done(namespace)
-
-        logical_port_list = self.port_mapping.logical_port_list
-        for lport in logical_port_list:
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
-
         is_fast_reboot = is_fast_reboot_enabled()
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
@@ -1114,7 +1172,7 @@ class CmisManagerTask(threading.Thread):
                 if lport not in self.port_dict:
                     continue
 
-                state = get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_tbl(self.port_mapping.get_asic_id_for_logical_port(lport)))
+                state = get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport)))
                 if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
                     if state != CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
@@ -1187,7 +1245,6 @@ class CmisManagerTask(threading.Thread):
                 # A retry should always start over at INSETRTED state, while the
                 # expiration will reset the state to INSETRTED and advance the
                 # retry counter
-                now = datetime.datetime.now()
                 expired = self.port_dict[lport].get('cmis_expired')
                 retries = self.port_dict[lport].get('cmis_retries', 0)
                 host_lanes_mask = self.port_dict[lport].get('host_lanes_mask', 0)
@@ -1251,10 +1308,28 @@ class CmisManagerTask(threading.Thread):
                                self.log_notice("{} Forcing Tx laser OFF".format(lport))
                                # Force DataPath re-init
                                api.tx_disable_channel(media_lanes_mask, True)
+                               self.port_dict[lport]['forced_tx_disabled'] = True
+                               txoff_duration = self.get_cmis_dp_tx_turnoff_duration_secs(api)
+                               self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
+                               self.update_cmis_state_expiration_time(lport, txoff_duration)
                                self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
-                    # Configure the target output power if ZR module
+                        self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
+                    if state == CMIS_STATE_DP_PRE_INIT_CHECK:
+                        if self.port_dict[lport].get('forced_tx_disabled', False):
+                            # Ensure that Tx is OFF
+                            # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
+                            # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
+                            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
+                            self.port_dict[lport]['forced_tx_disabled'] = False
+                            self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
+
+                        # Configure the target output power if ZR module
                         if api.is_coherent_module():
                            tx_power = self.port_dict[lport]['tx_power']
                            # Prevent configuring same tx power multiple times
@@ -1316,7 +1391,7 @@ class CmisManagerTask(threading.Thread):
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
                         modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
                         self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
+                        self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == CMIS_STATE_AP_CONF:
                         # Explicit control bit to apply custom Host SI settings. 
@@ -1326,13 +1401,13 @@ class CmisManagerTask(threading.Thread):
 
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1380,7 +1455,7 @@ class CmisManagerTask(threading.Thread):
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
                     elif state == CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1406,11 +1481,11 @@ class CmisManagerTask(threading.Thread):
                         api.set_datapath_init(host_lanes_mask)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
                         self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
+                        self.update_cmis_state_expiration_time(lport, dpInitDuration)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_TXON)
                     elif state == CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1421,8 +1496,12 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_ACTIVATE)
                     elif state == CMIS_STATE_DP_ACTIVATE:
+                        # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
+                        # some modules rely on dpInitDuration to turn on the Tx signal.
+                        # This behavior deviates from the CMIS spec but is honored
+                        # to prevent old modules from breaking with new sonic
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1448,6 +1527,14 @@ class CmisManagerTask(threading.Thread):
             return
 
         try:
+
+            self.log_notice("Waiting for PortConfigDone...")
+            for namespace in self.namespaces:
+                self.wait_for_port_config_done(namespace)
+
+            for lport in self.port_dict.keys():
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+
             self.task_worker()
         except Exception as e:
             helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
@@ -2129,20 +2216,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Load new platform api class
         try:
             import sonic_platform.platform
-            import sonic_platform_base.sonic_sfp.sfputilhelper
             platform_chassis = sonic_platform.platform.Platform().get_chassis()
             self.log_info("chassis loaded {}".format(platform_chassis))
-            # we have to make use of sfputil for some features
-            # even though when new platform api is used for all vendors.
-            # in this sense, we treat it as a part of new platform api.
-            # we have already moved sfputil to sonic_platform_base
-            # which is the root of new platform api.
-            platform_sfputil = sonic_platform_base.sonic_sfp.sfputilhelper.SfpUtilHelper()
         except Exception as e:
             self.log_warning("Failed to load chassis due to {}".format(repr(e)))
 
         # Load platform specific sfputil class
-        if platform_chassis is None or platform_sfputil is None:
+        if platform_chassis is None:
             try:
                 platform_sfputil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
