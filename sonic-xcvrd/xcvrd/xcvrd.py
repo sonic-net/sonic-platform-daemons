@@ -55,6 +55,7 @@ TRANSCEIVER_STATUS_TABLE_SW_FIELDS = ["status", "error", "cmis_state"]
 
 CMIS_STATE_UNKNOWN   = 'UNKNOWN'
 CMIS_STATE_INSERTED  = 'INSERTED'
+CMIS_STATE_DP_PRE_INIT_CHECK = 'DP_PRE_INIT_CHECK'
 CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
 CMIS_STATE_AP_CONF   = 'AP_CONFIGURED'
 CMIS_STATE_DP_ACTIVATE = 'DP_ACTIVATION'
@@ -597,6 +598,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
+    CMIS_EXPIRATION_BUFFER_MS = 2
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -661,7 +663,8 @@ class CmisManagerTask(threading.Thread):
 
         if port_change_event.event_type == port_change_event.PORT_SET:
             if lport not in self.port_dict:
-                self.port_dict[lport] = {"asic_id": port_change_event.asic_id}
+                self.port_dict[lport] = {"asic_id": port_change_event.asic_id,
+                                         "forced_tx_disabled": False}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
@@ -725,6 +728,9 @@ class CmisManagerTask(threading.Thread):
 
     def get_cmis_dp_deinit_duration_secs(self, api):
         return api.get_datapath_deinit_duration()/1000
+
+    def get_cmis_dp_tx_turnoff_duration_secs(self, api):
+        return api.get_datapath_tx_turnoff_duration()/1000
 
     def get_cmis_module_power_up_duration_secs(self, api):
         return api.get_module_pwr_up_duration()/1000
@@ -1125,6 +1131,37 @@ class CmisManagerTask(threading.Thread):
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
 
+    def update_cmis_state_expiration_time(self, lport, duration_seconds):
+        """
+        Set the CMIS expiration time for the given logical port
+        in the port dictionary.
+        Args:
+            lport: Logical port name
+            duration_seconds: Duration in seconds for the expiration
+        """
+        self.port_dict[lport]['cmis_expired'] = datetime.datetime.now() + \
+                                                datetime.timedelta(seconds=duration_seconds) + \
+                                                datetime.timedelta(milliseconds=self.CMIS_EXPIRATION_BUFFER_MS)
+
+    def is_timer_expired(self, expired_time, current_time=None):
+        """
+        Check if the given expiration time has passed.
+
+        Args:
+            expired_time (datetime): The expiration time to check.
+            current_time (datetime, optional): The current time. Defaults to now.
+
+        Returns:
+            bool: True if expired_time is not None and has passed, False otherwise.
+        """
+        if expired_time is None:
+            return False
+
+        if current_time is None:
+            current_time = datetime.datetime.now()
+
+        return expired_time <= current_time
+
     def task_worker(self):
         is_fast_reboot = is_fast_reboot_enabled()
 
@@ -1217,7 +1254,6 @@ class CmisManagerTask(threading.Thread):
                 # A retry should always start over at INSETRTED state, while the
                 # expiration will reset the state to INSETRTED and advance the
                 # retry counter
-                now = datetime.datetime.now()
                 expired = self.port_dict[lport].get('cmis_expired')
                 retries = self.port_dict[lport].get('cmis_retries', 0)
                 host_lanes_mask = self.port_dict[lport].get('host_lanes_mask', 0)
@@ -1281,10 +1317,28 @@ class CmisManagerTask(threading.Thread):
                                self.log_notice("{} Forcing Tx laser OFF".format(lport))
                                # Force DataPath re-init
                                api.tx_disable_channel(media_lanes_mask, True)
+                               self.port_dict[lport]['forced_tx_disabled'] = True
+                               txoff_duration = self.get_cmis_dp_tx_turnoff_duration_secs(api)
+                               self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
+                               self.update_cmis_state_expiration_time(lport, txoff_duration)
                                self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
-                    # Configure the target output power if ZR module
+                        self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
+                    if state == CMIS_STATE_DP_PRE_INIT_CHECK:
+                        if self.port_dict[lport].get('forced_tx_disabled', False):
+                            # Ensure that Tx is OFF
+                            # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
+                            # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
+                            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
+                            self.port_dict[lport]['forced_tx_disabled'] = False
+                            self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
+
+                        # Configure the target output power if ZR module
                         if api.is_coherent_module():
                            tx_power = self.port_dict[lport]['tx_power']
                            # Prevent configuring same tx power multiple times
@@ -1346,7 +1400,7 @@ class CmisManagerTask(threading.Thread):
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
                         modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
                         self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds = max(modulePwrUpDuration, dpDeinitDuration))
+                        self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
 
                     elif state == CMIS_STATE_AP_CONF:
                         # Explicit control bit to apply custom Host SI settings. 
@@ -1356,13 +1410,13 @@ class CmisManagerTask(threading.Thread):
 
                         # TODO: Use fine grained time when the CMIS memory map is available
                         if not self.check_module_state(api, ['ModuleReady']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1410,7 +1464,7 @@ class CmisManagerTask(threading.Thread):
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
                     elif state == CMIS_STATE_DP_INIT:
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1436,11 +1490,11 @@ class CmisManagerTask(threading.Thread):
                         api.set_datapath_init(host_lanes_mask)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
                         self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
-                        self.port_dict[lport]['cmis_expired'] = now + datetime.timedelta(seconds=dpInitDuration)
+                        self.update_cmis_state_expiration_time(lport, dpInitDuration)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_TXON)
                     elif state == CMIS_STATE_DP_TXON:
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathInitialized']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathInitialized'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
@@ -1451,8 +1505,12 @@ class CmisManagerTask(threading.Thread):
                         self.log_notice("{}: Turning ON tx power".format(lport))
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_ACTIVATE)
                     elif state == CMIS_STATE_DP_ACTIVATE:
+                        # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
+                        # some modules rely on dpInitDuration to turn on the Tx signal.
+                        # This behavior deviates from the CMIS spec but is honored
+                        # to prevent old modules from breaking with new sonic
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
-                            if (expired is not None) and (expired <= now):
+                            if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
