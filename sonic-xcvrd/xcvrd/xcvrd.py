@@ -1486,8 +1486,8 @@ class CmisManagerTask(threading.Thread):
                     elif state == CMIS_STATE_DP_ACTIVATE:
                         # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
                         # some modules rely on dpInitDuration to turn on the Tx signal.
-                        # This behavior deviates from the CMIS spec but is honored since
-                        # such modules are already in production.
+                        # This behavior deviates from the CMIS spec but is honored
+                        # to prevent old modules from breaking with new sonic
                         if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                             if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
