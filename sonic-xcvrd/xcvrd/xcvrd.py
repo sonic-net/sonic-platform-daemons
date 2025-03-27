@@ -280,15 +280,6 @@ def _wrapper_get_transceiver_firmware_info(physical_port):
             pass
     return {}
 
-def _wrapper_get_transceiver_dom_info(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_bulk_status()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.get_transceiver_dom_info_dict(physical_port)
-
-
 def _wrapper_get_transceiver_dom_threshold_info(physical_port):
     if platform_chassis is not None:
         try:

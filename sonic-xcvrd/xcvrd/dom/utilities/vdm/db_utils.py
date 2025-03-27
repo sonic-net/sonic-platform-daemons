@@ -11,56 +11,24 @@ class VDMDBUtils(DBUtils):
     DB operations related to VDM on transceivers.
     """
     def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
-        super().__init__(logger)
-        self.sfp_obj_dict = sfp_obj_dict
+        super().__init__(sfp_obj_dict, logger)
         self.port_mapping = port_mapping
         self.task_stopping_event = task_stopping_event
         self.xcvr_table_helper = xcvr_table_helper
-        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, logger)
-        self.vdm_utils = VDMUtils(sfp_obj_dict, logger)
+        self.vdm_utils = VDMUtils(self.sfp_obj_dict, logger)
         self.logger = logger
 
-    def post_port_vdm_real_values_to_db(self, logical_port_name, table, get_values_func, db_cache=None):
-        if self.task_stopping_event.is_set():
+    def post_port_vdm_real_values_to_db(self, logical_port_name, db_cache=None):
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
+        if asic_index is None:
+            self.logger.log_error("Post port vdm real values to db failed for {logical_port_name} "
+                                    "as no asic index found")
             return
 
-        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
-        if not pport_list:
-            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                                         "as no physical port found")
-            return
-        physical_port = pport_list[0]
+        return self.post_diagnostic_values_to_db(logical_port_name,
+                                                 self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                                 self.vdm_utils.get_vdm_real_values, db_cache)
 
-        if physical_port not in self.sfp_obj_dict:
-            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                                         "as no sfp object found")
-            return
-
-        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
-            return
-
-        try:
-            if db_cache is not None and physical_port in db_cache:
-                # If cache is enabled and diagnostic values are in cache, just read from cache, no need read from EEPROM
-                diagnostic_values_dict = db_cache[physical_port]
-            else:
-                diagnostic_values_dict = get_values_func(physical_port)
-                if db_cache is not None:
-                    # If cache is enabled, put diagnostic values to cache
-                    db_cache[physical_port] = diagnostic_values_dict
-            if diagnostic_values_dict is not None:
-                if not diagnostic_values_dict:
-                    return
-                self.beautify_info_dict(diagnostic_values_dict)
-                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in diagnostic_values_dict.items()])
-                table.set(logical_port_name, fvs)
-            else:
-                return
-
-        except NotImplementedError:
-            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                                         "as functionality is not implemented")
-            return
 
     def post_port_vdm_flags_to_db(self, logical_port_name, db_cache=None):
         return self._post_port_vdm_thresholds_or_flags_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_flag_tbl,

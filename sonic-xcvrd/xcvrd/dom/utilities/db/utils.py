@@ -1,11 +1,59 @@
 from swsscommon import swsscommon
+from xcvrd.xcvrd_utilities.utils import XCVRDUtils
 
 class DBUtils:
     """
     This class contains utility functions to interact with the redis database.
     """
-    def __init__(self, logger):
+    def __init__(self, sfp_obj_dict, logger):
+        self.sfp_obj_dict = sfp_obj_dict
+        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, logger)
         self.logger = logger
+
+    def post_diagnostic_values_to_db(self, logical_port_name, table, get_values_func, db_cache=None):
+        """
+        Posts the diagnostic values to the database.
+        """
+        if self.task_stopping_event.is_set():
+            return
+
+        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+        if not pport_list:
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+                                   "as no physical port found")
+            return
+        physical_port = pport_list[0]
+
+        if physical_port not in self.sfp_obj_dict:
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+                                   "as no sfp object found")
+            return
+
+        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
+            return
+
+        try:
+            if db_cache is not None and physical_port in db_cache:
+                # If cache is enabled and diagnostic values are in cache, just read from cache, no need read from EEPROM
+                diagnostic_values_dict = db_cache[physical_port]
+            else:
+                diagnostic_values_dict = get_values_func(physical_port)
+                if db_cache is not None:
+                    # If cache is enabled, put diagnostic values to cache
+                    db_cache[physical_port] = diagnostic_values_dict
+            if diagnostic_values_dict is not None:
+                if not diagnostic_values_dict:
+                    return
+                self.beautify_info_dict(diagnostic_values_dict)
+                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in diagnostic_values_dict.items()])
+                table.set(logical_port_name, fvs)
+            else:
+                return
+
+        except NotImplementedError:
+            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
+                                         "as functionality is not implemented")
+            return
 
     """
     Updates the metadata tables for flag table

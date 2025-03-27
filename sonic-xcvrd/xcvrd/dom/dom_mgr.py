@@ -20,7 +20,7 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
-    from xcvrd.dom.utilities.db.utils import DBUtils
+    from xcvrd.dom.utilities.dom.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.utils import VDMUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
 except ImportError as e:
@@ -42,7 +42,8 @@ class DomInfoUpdateTask(threading.Thread):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.sfp_obj_dict = sfp_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.db_utils = DBUtils(self.helper_logger)
+        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.db_utils = self.dom_db_utils
         self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
         self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
@@ -171,38 +172,6 @@ class DomInfoUpdateTask(threading.Thread):
                 helper_logger.log_error("Transceiver firmware info functionality is currently not implemented for this platform")
                 sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
 
-    # Update port dom sensor info in db
-    def post_port_dom_info_to_db(self, logical_port_name, port_mapping, table, stop_event=threading.Event(), dom_info_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
-            if stop_event.is_set():
-                break
-
-            if not xcvrd._wrapper_get_presence(physical_port):
-                continue
-
-            if xcvrd._wrapper_is_flat_memory(physical_port) == True:
-                continue
-
-            try:
-                if dom_info_cache is not None and physical_port in dom_info_cache:
-                    # If cache is enabled and dom information is in cache, just read from cache, no need read from EEPROM
-                    dom_info_dict = dom_info_cache[physical_port]
-                else:
-                    dom_info_dict = xcvrd._wrapper_get_transceiver_dom_info(physical_port)
-                    if dom_info_cache is not None:
-                        # If cache is enabled, put dom information to cache
-                        dom_info_cache[physical_port] = dom_info_dict
-                if dom_info_dict is not None:
-                    self.beautify_dom_info_dict(dom_info_dict, physical_port)
-                    fvs = swsscommon.FieldValuePairs([(k, v) for k, v in dom_info_dict.items()])
-                    table.set(physical_port_name, fvs)
-                else:
-                    return xcvrd.SFP_EEPROM_NOT_READY
-
-            except NotImplementedError:
-                helper_logger.log_error("This functionality is currently not implemented for this platform")
-                sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
-
     # Update port SFP status table for HW fields
     def update_port_transceiver_status_table_hw(self, logical_port_name, port_mapping,
                                                 table, stop_event=threading.Event(), transceiver_status_cache=None):
@@ -315,7 +284,7 @@ class DomInfoUpdateTask(threading.Thread):
                         self.log_warning("Got exception {} while processing firmware info for port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     try:
-                        self.post_port_dom_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_dom_tbl(asic_index), self.task_stopping_event, dom_info_cache=dom_info_cache)
+                        self.dom_db_utils.post_port_dom_info_to_db(logical_port_name, dom_info_cache=dom_info_cache)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
@@ -338,8 +307,7 @@ class DomInfoUpdateTask(threading.Thread):
                                 continue
                             try:
                                 # Read and post VDM real values to DB
-                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                                self.vdm_utils.get_vdm_real_values, db_cache=vdm_real_value_cache)
+                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache=vdm_real_value_cache)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))

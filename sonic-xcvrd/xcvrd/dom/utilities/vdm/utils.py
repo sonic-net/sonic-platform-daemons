@@ -38,7 +38,6 @@ class VDMUtils:
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_thresholds()
         except (KeyError, NotImplementedError):
-            self.logger.log_error(f"Failed to get VDM thresholds for port {physical_port}")
             return {}
 
     @contextmanager
