@@ -2238,6 +2238,27 @@ class TestXcvrdScript(object):
         ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert int_tbl.getKeys() == []
 
+    @pytest.mark.parametrize(
+        "expired_time, current_time, expected_result",
+        [
+            (None, datetime.datetime(2025, 3, 26, 12, 0, 0), False),  # Case 1: expired_time is None
+            (datetime.datetime(2025, 3, 26, 12, 10, 0), datetime.datetime(2025, 3, 26, 12, 0, 0), False),  # Case 2: expired_time is in the future
+            (datetime.datetime(2025, 3, 26, 11, 50, 0), datetime.datetime(2025, 3, 26, 12, 0, 0), True),  # Case 3: expired_time is in the past
+            (datetime.datetime(2025, 3, 26, 12, 0, 0), datetime.datetime(2025, 3, 26, 12, 0, 0), True),  # Case 4: expired_time is exactly now
+            (datetime.datetime(2025, 2, 26, 12, 0, 0), None, True),  # Case 5: current_time is None
+        ],
+    )
+    def test_CmisManagerTask_test_is_timer_expired(self, expired_time, current_time, expected_result):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+
+        # Call the is_timer_expired function
+        result = task.is_timer_expired(expired_time, current_time)
+
+        # Assert the result matches the expected output
+        assert result == expected_result
+
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.is_fast_reboot_enabled', MagicMock(return_value=(False)))
@@ -2344,6 +2365,16 @@ class TestXcvrdScript(object):
                 'DP8State': 'DataPathDeactivated'
             },
             {
+                'DP1State': 'DataPathDeactivated',
+                'DP2State': 'DataPathDeactivated',
+                'DP3State': 'DataPathDeactivated',
+                'DP4State': 'DataPathDeactivated',
+                'DP5State': 'DataPathDeactivated',
+                'DP6State': 'DataPathDeactivated',
+                'DP7State': 'DataPathDeactivated',
+                'DP8State': 'DataPathDeactivated'
+            },
+            {
                 'DP1State': 'DataPathInitialized',
                 'DP2State': 'DataPathInitialized',
                 'DP3State': 'DataPathInitialized',
@@ -2436,10 +2467,14 @@ class TestXcvrdScript(object):
         task.get_port_admin_status = MagicMock(return_value='up')
         task.get_configured_tx_power_from_db = MagicMock(return_value=-13)
         task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_PRE_INIT_CHECK
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
 
-        # Case 1: Module Inserted --> DP_DEINIT
+        # Case 1: CMIS_STATE_DP_PRE_INIT_CHECK --> DP_DEINIT
         task.is_appl_reconfigure_required = MagicMock(return_value=True)
         mock_xcvr_api.decommission_all_datapaths = MagicMock(return_value=True)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
@@ -2533,6 +2568,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_tx_config_power = MagicMock(return_value=0)
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        mock_xcvr_api.get_datapath_tx_turnoff_duration = MagicMock(return_value=500.0)
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
@@ -2655,7 +2691,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
-    def test_CmisManagerTask_task_worker_host_tx_ready_false(self, mock_chassis, mock_get_status_tbl):
+    def test_CmisManagerTask_task_worker_host_tx_ready_false_to_true(self, mock_chassis, mock_get_status_tbl):
         mock_get_status_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
@@ -2668,6 +2704,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_tx_config_power = MagicMock(return_value=0)
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        mock_xcvr_api.get_datapath_tx_turnoff_duration = MagicMock(return_value=500.0)
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
@@ -2741,7 +2778,47 @@ class TestXcvrdScript(object):
                 'DP6State': 'DataPathActivated',
                 'DP7State': 'DataPathActivated',
                 'DP8State': 'DataPathActivated'
-            }
+            },
+            {
+                'DP1State': 'DataPathActivated',
+                'DP2State': 'DataPathActivated',
+                'DP3State': 'DataPathActivated',
+                'DP4State': 'DataPathActivated',
+                'DP5State': 'DataPathActivated',
+                'DP6State': 'DataPathActivated',
+                'DP7State': 'DataPathActivated',
+                'DP8State': 'DataPathActivated'
+            },
+            {
+                'DP1State': 'DataPathInitialized',
+                'DP2State': 'DataPathInitialized',
+                'DP3State': 'DataPathInitialized',
+                'DP4State': 'DataPathInitialized',
+                'DP5State': 'DataPathInitialized',
+                'DP6State': 'DataPathInitialized',
+                'DP7State': 'DataPathInitialized',
+                'DP8State': 'DataPathInitialized'
+            },
+            {
+                'DP1State': 'DataPathInitialized',
+                'DP2State': 'DataPathInitialized',
+                'DP3State': 'DataPathInitialized',
+                'DP4State': 'DataPathInitialized',
+                'DP5State': 'DataPathInitialized',
+                'DP6State': 'DataPathInitialized',
+                'DP7State': 'DataPathInitialized',
+                'DP8State': 'DataPathInitialized'
+            },
+            {
+                'DP1State': 'DataPathInitialized',
+                'DP2State': 'DataPathInitialized',
+                'DP3State': 'DataPathInitialized',
+                'DP4State': 'DataPathInitialized',
+                'DP5State': 'DataPathInitialized',
+                'DP6State': 'DataPathInitialized',
+                'DP7State': 'DataPathInitialized',
+                'DP8State': 'DataPathInitialized'
+            },
         ])
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
@@ -2782,7 +2859,34 @@ class TestXcvrdScript(object):
         task.task_worker()
 
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
-        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_READY
+        assert task.port_dict['Ethernet0']['forced_tx_disabled'] == True
+
+        task.port_dict['Ethernet0']['host_tx_ready'] = 'true'
+        task.force_cmis_reinit('Ethernet0', 0)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_DP_PRE_INIT_CHECK
+
+        # Failure scenario wherein DP state is still DataPathActivated in the first attempt post enabling host_tx_ready
+        # This doesn't allow the CMIS state to proceed to DP_DEINIT
+        task.is_timer_expired = MagicMock(return_value=(True))
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, True])
+        task.task_worker()
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 1
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_DP_PRE_INIT_CHECK
+
+        # Ensures that CMIS state is set to DP_DEINIT in the second attempt
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+        task.is_appl_reconfigure_required = MagicMock(return_value=False)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.port_mapping.get_asic_id_for_logical_port('Ethernet0'))) == CMIS_STATE_DP_DEINIT
+        assert task.port_dict['Ethernet0']['forced_tx_disabled'] == False
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 1
 
     @pytest.mark.parametrize("lport, expected_dom_polling", [
         ('Ethernet0', 'disabled'),
