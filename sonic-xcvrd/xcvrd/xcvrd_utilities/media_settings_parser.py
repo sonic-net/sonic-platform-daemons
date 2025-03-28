@@ -148,7 +148,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
     medium = "COPPER" if get_is_copper(physical_port) else "OPTICAL"
-    medium_lane_speed_key = medium + str(int(int(port_speed) / lane_count))
+    speed = int(int(int(port_speed) /lane_count)/1000)
+    medium_lane_speed_key = medium + str(speed)
     # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
