@@ -192,7 +192,7 @@ class VoltageUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self, stop_event_signal):
+    def update(self, stop_event_signal = threading.Event()):
         '''
         Update all voltage information to database
         :param stop_event_signal: Event object to check if set by signal handler
@@ -332,7 +332,7 @@ class CurrentUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self, stop_event_signal):
+    def update(self, stop_event_signal = threading.Event()):
         '''
         Update all current information to database
         :param stop_event_signal: Event object to check if set by signal handler
