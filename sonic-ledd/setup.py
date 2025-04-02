@@ -8,8 +8,8 @@ setup(
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Joe LeVeque',
-    maintainer_email='jolevequ@microsoft.com',
+    maintainer='Prince George',
+    maintainer_email='prgeor@microsoft.com',
     scripts=[
         'scripts/ledd',
     ],
