@@ -299,8 +299,19 @@ class TestPsuChassisInfo(object):
         assert psud.Psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
     def test_get_psu_key(self):
+        
+        #mock test for psu get_name() nonimplementation
+        psud.platform_chassis = None
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
         assert psud.get_psu_key(1) == psud.PSU_INFO_KEY_TEMPLATE.format(1)
+
+        #create psu objects to test getting name for
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
+        mock_psu2 = MockPsu("PSU 2", 1, True, True)
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis._psu_list = [mock_psu1, mock_psu2]
+        assert psud.get_psu_key(1) == psud.PSU_INFO_KEY_TEMPLATE.format(1)
+        assert psud.get_psu_key(2) == psud.PSU_INFO_KEY_TEMPLATE.format(2)
 
     def test_try_get(self):
         # Test a proper, working callback
