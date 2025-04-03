@@ -34,6 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
+    from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
     
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
@@ -104,11 +105,6 @@ RETRY_PERIOD_FOR_SYSTEM_READY_MSECS = 5000
 
 RETRY_TIMES_FOR_SYSTEM_FAIL = 24
 RETRY_PERIOD_FOR_SYSTEM_FAIL_MSECS = 5000
-
-TEMP_UNIT = 'C'
-VOLT_UNIT = 'Volts'
-POWER_UNIT = 'dBm'
-BIAS_UNIT = 'mA'
 
 g_dict = {}
 # Global platform specific sfputil class instance
@@ -233,20 +229,6 @@ def get_physical_port_name_dict(logical_port_name, port_mapping):
 
     return port_name_dict
 
-# Strip units and beautify
-
-
-def strip_unit_and_beautify(value, unit):
-    # Strip unit from raw data
-    if type(value) is str:
-        width = len(unit)
-        if value[-width:] == unit:
-            value = value[:-width]
-        return value
-    else:
-        return str(value)
-
-
 def _wrapper_get_presence(physical_port):
     if platform_chassis is not None:
         try:
@@ -280,24 +262,6 @@ def _wrapper_get_transceiver_firmware_info(physical_port):
         except NotImplementedError:
             pass
     return {}
-
-def _wrapper_get_transceiver_dom_threshold_info(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_threshold_info()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.get_transceiver_dom_threshold_info_dict(physical_port)
-
-
-def _wrapper_get_transceiver_status(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_status()
-        except NotImplementedError:
-            pass
-    return {}
-
 
 def _wrapper_get_transceiver_pm(physical_port):
     if platform_chassis is not None:
@@ -368,20 +332,6 @@ def _wrapper_get_sfp_error_description(physical_port):
             pass
     return None
 
-def beautify_dom_threshold_info_dict(dom_info_dict):
-    for k, v in dom_info_dict.items():
-        if re.search('temp', k) is not None:
-            dom_info_dict[k] = strip_unit_and_beautify(v, TEMP_UNIT)
-        elif re.search('vcc', k) is not None:
-            dom_info_dict[k] = strip_unit_and_beautify(v, VOLT_UNIT)
-        elif re.search('power', k) is not None:
-            dom_info_dict[k] = strip_unit_and_beautify(v, POWER_UNIT)
-        elif re.search('txbias', k) is not None:
-            dom_info_dict[k] = strip_unit_and_beautify(v, BIAS_UNIT)
-        elif type(v) is not str:
-            # For all the other keys:
-            dom_info_dict[k] = str(v)
-
 # Update port sfp info in db
 
 
@@ -416,9 +366,10 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                 transceiver_dict[physical_port] = port_info_dict
                 # if cmis is supported by the module
                 if 'cmis_rev' in port_info_dict:
-                    fvs = swsscommon.FieldValuePairs([
-                        (field, str(value)) for field, value in port_info_dict.items()
-                    ])
+                    fvs = swsscommon.FieldValuePairs(
+                        [(field, str(value)) for field, value in port_info_dict.items()] +
+                        [('is_replaceable', str(is_replaceable))]
+                    )
                 # else cmis is not supported by the module
                 else:
                     fvs = swsscommon.FieldValuePairs([
@@ -443,56 +394,6 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
                         ('dom_capability', port_info_dict['dom_capability']
                         if 'dom_capability' in port_info_dict else 'N/A')
                     ])
-                table.set(port_name, fvs)
-            else:
-                return SFP_EEPROM_NOT_READY
-
-        except NotImplementedError:
-            helper_logger.log_error("This functionality is currently not implemented for this platform")
-            sys.exit(NOT_IMPLEMENTED_ERROR)
-
-# Update port dom threshold info in db
-
-
-def post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, table,
-                                       stop=threading.Event(), dom_th_info_cache=None):
-    ganged_port = False
-    ganged_member_num = 1
-
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
-
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
-    for physical_port in physical_port_list:
-        if stop.is_set():
-            break
-
-        if not _wrapper_get_presence(physical_port):
-            continue
-
-        if _wrapper_is_flat_memory(physical_port) == True:
-            continue
-
-        port_name = get_physical_port_name(logical_port_name,
-                                           ganged_member_num, ganged_port)
-        ganged_member_num += 1
-
-        try:
-            if dom_th_info_cache is not None and physical_port in dom_th_info_cache:
-                # If cache is enabled and there is a cache, no need read from EEPROM, just read from cache
-                dom_info_dict = dom_th_info_cache[physical_port]
-            else:
-                dom_info_dict = _wrapper_get_transceiver_dom_threshold_info(physical_port)
-                if dom_th_info_cache is not None:
-                    # If cache is enabled, put dom threshold infomation to cache
-                    dom_th_info_cache[physical_port] = dom_info_dict
-            if dom_info_dict is not None:
-                beautify_dom_threshold_info_dict(dom_info_dict)
-                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in dom_info_dict.items()])
                 table.set(port_name, fvs)
             else:
                 return SFP_EEPROM_NOT_READY
@@ -1574,6 +1475,7 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_obj_dict = sfp_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.dom_db_utils = DOMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
         self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
 
     def _mapping_event_from_change_event(self, status, port_dict):
@@ -1620,7 +1522,7 @@ class SfpStateUpdateTask(threading.Thread):
                 continue
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
-                post_port_dom_threshold_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_dom_threshold_tbl(asic_index), stop_event)
+                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name)
                 # Read the VDM thresholds and post them to the DB
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
 
@@ -1846,7 +1748,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         self.retry_eeprom_set.add(logical_port)
 
                                 if rc != SFP_EEPROM_NOT_READY:
-                                    post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
+                                    self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
                                     media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
@@ -1861,6 +1763,10 @@ class SfpStateUpdateTask(threading.Thread):
                                 del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
                                                               *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                               self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
@@ -1868,6 +1774,10 @@ class SfpStateUpdateTask(threading.Thread):
                                                               *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                               *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                               *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+                                                              self.xcvr_table_helper.get_status_flag_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
                                                               self.xcvr_table_helper.get_pm_tbl(asic_index),
                                                               self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
                                                               ])
@@ -1896,6 +1806,10 @@ class SfpStateUpdateTask(threading.Thread):
                                         del_port_sfp_dom_info_from_db(logical_port,
                                                                       self.port_mapping, [
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
                                                                       *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                                       self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
@@ -1903,6 +1817,10 @@ class SfpStateUpdateTask(threading.Thread):
                                                                       *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                                       *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                                                       *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+                                                                      self.xcvr_table_helper.get_status_flag_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_pm_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
                                                                       ])
@@ -1997,6 +1915,10 @@ class SfpStateUpdateTask(threading.Thread):
                                       self.port_mapping, [
                                       self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_flag_clear_time_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_threshold_tbl(port_change_event.asic_id),
                                       *[self.xcvr_table_helper.get_vdm_threshold_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       self.xcvr_table_helper.get_vdm_real_value_tbl(port_change_event.asic_id),
@@ -2004,6 +1926,10 @@ class SfpStateUpdateTask(threading.Thread):
                                       *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      self.xcvr_table_helper.get_status_flag_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_status_flag_change_count_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_status_flag_set_time_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_status_flag_clear_time_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
@@ -2068,7 +1994,7 @@ class SfpStateUpdateTask(threading.Thread):
                 # Failed to read EEPROM, put it to retry set
                 self.retry_eeprom_set.add(port_change_event.port_name)
             else:
-                post_port_dom_threshold_info_to_db(port_change_event.port_name, self.port_mapping, dom_threshold_tbl)
+                self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
                 media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
@@ -2095,7 +2021,7 @@ class SfpStateUpdateTask(threading.Thread):
             asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
             rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
             if rc != SFP_EEPROM_NOT_READY:
-                post_port_dom_threshold_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index))
+                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
                 media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
@@ -2281,6 +2207,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
                                           intf_tbl,
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
                                           *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                           self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
@@ -2288,6 +2218,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                                           *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                           *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
                                           *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+                                          self.xcvr_table_helper.get_status_flag_tbl(asic_index),
+                                          self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
+                                          self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
+                                          self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
                                           self.xcvr_table_helper.get_pm_tbl(asic_index),
                                           self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
                                           ])
