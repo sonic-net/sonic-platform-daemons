@@ -40,7 +40,7 @@ class DOMDBUtils(DBUtils):
 
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
-            self.logger.log_error("Post port dom flags to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
                                   "as no asic index found")
             return
 
@@ -107,7 +107,7 @@ class DOMDBUtils(DBUtils):
     def post_port_dom_thresholds_to_db(self, logical_port_name, db_cache=None):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
-            self.logger.log_error("Post port dom thresholds to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port dom thresholds to db failed for {logical_port_name} "
                                   "as no asic index found")
             return
 
