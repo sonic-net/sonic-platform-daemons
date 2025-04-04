@@ -465,7 +465,7 @@ class TestXcvrdScript(object):
         assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
 
     def test_post_port_dom_sensor_info_to_db(self):
-        def mock_get_transceiver_dom_sensor_info(physical_port):
+        def mock_get_transceiver_dom_sensor_real_value(physical_port):
             return {
                 'temperature': '22.75',
                 'voltage': '0.5',
@@ -508,7 +508,7 @@ class TestXcvrdScript(object):
         dom_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
         dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         dom_db_utils.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=dom_tbl)
-        dom_db_utils.dom_utils.get_transceiver_dom_sensor_info = MagicMock(return_value=None)
+        dom_db_utils.dom_utils.get_transceiver_dom_sensor_real_value = MagicMock(return_value=None)
         assert dom_tbl.get_size() == 0
 
         # Ensure table is empty asic_index is None
@@ -537,13 +537,13 @@ class TestXcvrdScript(object):
 
         # Ensure table is populated if get_values_func returns valid values
         db_cache = {}
-        dom_db_utils.dom_utils.get_transceiver_dom_sensor_info = MagicMock(side_effect=mock_get_transceiver_dom_sensor_info)
+        dom_db_utils.dom_utils.get_transceiver_dom_sensor_real_value = MagicMock(side_effect=mock_get_transceiver_dom_sensor_real_value)
         dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name, db_cache=db_cache)
         assert dom_tbl.get_size_for_key(logical_port_name) == 27
 
         # Ensure db_cache is populated correctly
         assert db_cache.get(0) is not None
-        dom_db_utils.dom_utils.get_transceiver_dom_sensor_info = MagicMock(return_value=None)
+        dom_db_utils.dom_utils.get_transceiver_dom_sensor_real_value = MagicMock(return_value=None)
         dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name, db_cache=db_cache)
         assert dom_tbl.get_size_for_key(logical_port_name) == 27
 
@@ -3981,7 +3981,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.platform_sfputil')
     def test_wrapper_get_transceiver_firmware_info(self, mock_sfputil, mock_chassis):
         mock_object = MagicMock()
-        mock_object.get_transceiver_bulk_status = MagicMock(return_value=True)
+        mock_object.get_transceiver_dom_real_value = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
         from xcvrd.xcvrd import _wrapper_get_transceiver_firmware_info
         assert _wrapper_get_transceiver_firmware_info(1)
@@ -3992,18 +3992,18 @@ class TestXcvrdScript(object):
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         assert _wrapper_get_transceiver_firmware_info(1) == {}
 
-    def test_get_transceiver_dom_sensor_info(self):
+    def test_get_transceiver_dom_sensor_real_value(self):
         mock_sfp = MagicMock()
         dom_utils = DOMUtils({1 : mock_sfp}, helper_logger)
 
-        mock_sfp.get_transceiver_bulk_status.return_value = True
-        assert dom_utils.get_transceiver_dom_sensor_info(1)
+        mock_sfp.get_transceiver_dom_real_value.return_value = True
+        assert dom_utils.get_transceiver_dom_sensor_real_value(1)
 
-        mock_sfp.get_transceiver_bulk_status.return_value = {}
-        assert dom_utils.get_transceiver_dom_sensor_info(1) == {}
+        mock_sfp.get_transceiver_dom_real_value.return_value = {}
+        assert dom_utils.get_transceiver_dom_sensor_real_value(1) == {}
 
-        mock_sfp.get_transceiver_bulk_status.side_effect = NotImplementedError
-        assert dom_utils.get_transceiver_dom_sensor_info(1) == {}
+        mock_sfp.get_transceiver_dom_real_value.side_effect = NotImplementedError
+        assert dom_utils.get_transceiver_dom_sensor_real_value(1) == {}
 
     def test_get_transceiver_dom_flags(self):
         mock_sfp = MagicMock()

@@ -29,7 +29,7 @@ class DOMDBUtils(DBUtils):
 
         return self.post_diagnostic_values_to_db(logical_port_name,
                                                  self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                                 self.dom_utils.get_transceiver_dom_sensor_info,
+                                                 self.dom_utils.get_transceiver_dom_sensor_real_value,
                                                  db_cache=db_cache,
                                                  beautify_func=self._beautify_dom_info_dict,
                                                  enable_flat_memory_check=True)
