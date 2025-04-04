@@ -1899,6 +1899,50 @@ class TestXcvrdScript(object):
         assert sfp_obj_dict[1] == mock_sfp_obj_1
         assert sfp_obj_dict[2] == mock_sfp_obj_2
 
+    @pytest.mark.parametrize(
+        "logical_ports, transceiver_presence, expected_removed_ports",
+        [
+            # Test case 1: No transceivers are present
+            (["Ethernet0", "Ethernet1"], [False, False], ["Ethernet0", "Ethernet1"]),
+            # Test case 2: Some transceivers are present
+            (["Ethernet0", "Ethernet1"], [True, False], ["Ethernet1"]),
+            # Test case 3: All transceivers are present
+            (["Ethernet0", "Ethernet1"], [True, True], []),
+            # Test case 4: No logical ports
+            ([], [], []),
+        ],
+    )
+    @patch('xcvrd.xcvrd.del_port_sfp_dom_info_from_db')
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    def test_remove_stale_transceiver_info(self, mock_get_presence, mock_del_port_sfp_dom_info_from_db,
+                                           logical_ports, transceiver_presence, expected_removed_ports):
+        # Mock the DaemonXcvrd class and its dependencies
+        mock_xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        mock_port_mapping_data = MagicMock()
+        mock_xcvrd.xcvr_table_helper = MagicMock()
+        mock_xcvrd.xcvr_table_helper.get_intf_tbl.return_value = MagicMock()
+
+        # Mock logical ports and their mappings
+        mock_port_mapping_data.logical_port_list = logical_ports
+        mock_port_mapping_data.get_asic_id_for_logical_port.side_effect = lambda port: 0
+        mock_port_mapping_data.get_logical_to_physical.side_effect = lambda port: [logical_ports.index(port)]
+
+        mock_get_presence.side_effect = lambda physical_port: transceiver_presence[physical_port]
+
+        # Mock the interface table
+        mock_intf_tbl = mock_xcvrd.xcvr_table_helper.get_intf_tbl.return_value
+        mock_intf_tbl.get.side_effect = lambda port: (port in logical_ports, None)
+
+        # Call the function
+        mock_xcvrd.remove_stale_transceiver_info(mock_port_mapping_data)
+
+        # Verify that the correct ports were removed
+        for port in logical_ports:
+            if port in expected_removed_ports:
+                mock_del_port_sfp_dom_info_from_db.assert_any_call(port, mock_port_mapping_data, [mock_intf_tbl])
+            else:
+                assert (port, mock_port_mapping_data, [mock_intf_tbl]) not in mock_del_port_sfp_dom_info_from_db.call_args_list
+
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
     @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
@@ -4149,6 +4193,7 @@ class TestXcvrdScript(object):
         with patch("subprocess.check_output") as mock_run:
             mock_run.return_value = "true"
             xcvrd.initialize_port_init_control_fields_in_port_table = MagicMock()
+            xcvrd.remove_stale_transceiver_info = MagicMock()
 
             xcvrd.init()
 
@@ -4191,6 +4236,7 @@ class TestXcvrdScript(object):
         with patch("subprocess.check_output") as mock_run:
             mock_run.return_value = "false"
             xcvrdaemon.initialize_port_init_control_fields_in_port_table = MagicMock()
+            xcvrdaemon.remove_stale_transceiver_info = MagicMock()
 
             xcvrdaemon.init()
 

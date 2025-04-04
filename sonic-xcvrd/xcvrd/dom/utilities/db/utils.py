@@ -1,4 +1,4 @@
-import time
+from datetime import datetime
 from swsscommon import swsscommon
 from xcvrd.xcvrd_utilities.utils import XCVRDUtils
 
@@ -84,9 +84,13 @@ class DBUtils:
                                     flag_change_count_table, flag_last_set_time_table, flag_last_clear_time_table,
                                     table_name_for_logging):
         """
-        Updates the metadata tables for flag table.
-        Compares the current flag values with the database values and updates the metadata accordingly based on the changes
-        between the two.
+        Updates the metadata tables for a flag table.
+
+        This method compares the current flag values with the values stored in the database.
+        If there are changes, it updates the metadata tables accordingly, including:
+        - Change count
+        - Last set time
+        - Last clear time
 
         Args:
             logical_port_name (str): Logical port name.
@@ -128,11 +132,17 @@ class DBUtils:
             if not isinstance(v, str):
                 info_dict[k] = str(v)
 
-    def get_current_time(self):
-        """"
-        Returns the current time in the format "Day Mon DD HH:MM:SS YYYY" (local time)
+    def get_current_time(self, time_format="%a %b %d %H:%M:%S %Y"):
         """
-        return time.strftime("%a %b %d %H:%M:%S %Y", time.localtime())
+        Returns the current time in the specified format (UTC time).
+
+        Args:
+            time_format (str): The format in which to return the time. Defaults to "Day Mon DD HH:MM:SS YYYY".
+
+        Returns:
+            str: The current time in UTC.
+        """
+        return datetime.utcnow().strftime(time_format)
 
     def _initialize_metadata_tables(self, logical_port_name, curr_flag_dict,
                                     flag_change_count_table, flag_last_set_time_table,

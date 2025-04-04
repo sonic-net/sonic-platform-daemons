@@ -1101,7 +1101,7 @@ class CmisManagerTask(threading.Thread):
 
                 # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
-                if not sfp.get_presence():
+                if not _wrapper_get_presence(pport):
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
                     continue
 
@@ -2132,6 +2132,40 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         return sfp_obj_dict
 
+    def remove_stale_transceiver_info(self, port_mapping_data):
+        """
+        Remove stale entries from the TRANSCEIVER_INFO table for ports where the transceiver is no longer present.
+
+        This function iterates through all logical ports in the provided port mapping data. For each port:
+        - It checks if the TRANSCEIVER_INFO table entry exists.
+        - If the entry exists and the transceiver is absent, the entry is removed from the table.
+
+        Args:
+            port_mapping_data (PortMapping): The port mapping data containing logical-to-physical port mappings.
+
+        Returns:
+            None
+        """
+        logical_port_list = port_mapping_data.logical_port_list
+        for lport in logical_port_list:
+            asic_index = port_mapping_data.get_asic_id_for_logical_port(lport)
+            intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
+            if not intf_tbl:
+                continue
+
+            found, _ = intf_tbl.get(lport)
+            if found:
+                # If transceiver is absent, remove the entry from TRANSCEIVER_INFO table
+                pport_list = port_mapping_data.get_logical_to_physical(lport)
+                if not pport_list:
+                    self.log_error(f"Remove stale transceiver info: No physical port found for lport {lport}")
+                    continue
+                pport = pport_list[0]
+
+                if not _wrapper_get_presence(pport):
+                    self.log_notice(f"Remove stale transceiver info: Transceiver is absent for lport {lport}")
+                    del_port_sfp_dom_info_from_db(lport, port_mapping_data, [intf_tbl])
+
     # Initialize daemon
     def init(self):
         global platform_sfputil
@@ -2181,6 +2215,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
         self.sfp_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
+
+        # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
+        # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
+        # Performed in the init() method to ensure the table is cleared before starting child threads.
+        # Note: Other transceiver-related tables are cleared during xcvrd deinitialization.
+        self.remove_stale_transceiver_info(port_mapping_data)
 
         return port_mapping_data
 
