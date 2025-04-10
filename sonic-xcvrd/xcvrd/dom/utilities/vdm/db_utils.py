@@ -9,6 +9,12 @@ class VDMDBUtils(DBUtils):
     """
     This class provides utility functions for managing
     DB operations related to VDM on transceivers.
+    Handles data related to the following tables:
+        - TRANSCEIVER_VDM_REAL_VALUE
+        - TRANSCEIVER_VDM_XXXX_FLAG and its corresponding metadata tables (change count, set time, clear time)
+            - XXXX refers to HALARM, LALARM, HWARN or LWARN
+        - TRANSCEIVER_VDM_XXXX_THRESHOLD
+            - XXXX refers to HALARM, LALARM, HWARN or LWARN
     """
     def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
         super().__init__(sfp_obj_dict, port_mapping, task_stopping_event, logger)
@@ -40,25 +46,8 @@ class VDMDBUtils(DBUtils):
     # Update transceiver VDM threshold or flag info to db
     def _post_port_vdm_thresholds_or_flags_to_db(self, logical_port_name, get_vdm_table_func,
                                                  get_vdm_values_func, flag_data=False, db_cache=None):
-        if self.task_stopping_event.is_set():
-            return
-
-        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
-        if not pport_list:
-            self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
-                                         "as no physical port found with flag_data {flag_data}")
-            return
-        physical_port = pport_list[0]
-
-        if physical_port not in self.sfp_obj_dict:
-            self.logger.log_error(f"Post port vdm thresholds or flags to db failed for {logical_port_name} "
-                                         "as no sfp object found with flag_data {flag_data}")
-            return
-
-        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
-            return
-
-        if self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check=True)
+        if physical_port is None:
             return
 
         try:
@@ -89,7 +78,7 @@ class VDMDBUtils(DBUtils):
                     # for the flags
                     if flag_data and threshold_value_dict:
                             asic_id = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
-                            self.update_flag_metadata_tables(logical_port_name, threshold_value_dict,
+                            self._update_flag_metadata_tables(logical_port_name, threshold_value_dict,
                                                              vdm_values_dict_update_time,
                                                              self.xcvr_table_helper.get_vdm_flag_tbl(asic_id, threshold_type),
                                                              self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_id, threshold_type),

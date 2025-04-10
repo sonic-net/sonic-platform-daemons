@@ -1101,7 +1101,7 @@ class CmisManagerTask(threading.Thread):
 
                 # double-check the HW presence before moving forward
                 sfp = platform_chassis.get_sfp(pport)
-                if not _wrapper_get_presence(pport):
+                if not sfp.get_presence():
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
                     continue
 

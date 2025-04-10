@@ -29,25 +29,8 @@ class DBUtils:
             beautify_func (function, optional): Function to beautify the diagnostic values. Defaults to self.beautify_info_dict.
             enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
         """
-        if self.task_stopping_event.is_set():
-            return
-
-        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
-        if not pport_list:
-            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                                   "as no physical port found")
-            return
-        physical_port = pport_list[0]
-
-        if physical_port not in self.sfp_obj_dict:
-            self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
-                                   "as no sfp object found")
-            return
-
-        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
-            return
-
-        if enable_flat_memory_check and self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
+        if physical_port is None:
             return
 
         try:
@@ -78,7 +61,52 @@ class DBUtils:
                                          "as functionality is not implemented")
             return
 
-    def update_flag_metadata_tables(self, logical_port_name, curr_flag_dict,
+    def _validate_and_get_physical_port(self, logical_port_name, enable_flat_memory_check=False):
+        """
+        Validates the logical port and retrieves the corresponding physical port.
+
+        Validation Steps:
+        1. Ensures `task_stopping_event` is not set.
+        2. Checks if the logical port maps to a physical port.
+        3. Checks if the physical port has an associated SFP object.
+        4. Checks if the transceiver is present.
+        5. (Optional) Ensures the transceiver is not flat memory if `enable_flat_memory_check` is True.
+
+        If any of these checks fail, an error message is logged and `None` is returned.
+        If all checks pass, the physical port number is returned.
+
+        Args:
+            logical_port_name (str): Logical port name.
+            enable_flat_memory_check (bool): Flag to check for flat memory support.
+
+        Returns:
+            int: The physical port number if validation succeeds, or None if validation fails.
+        """
+        if self.task_stopping_event.is_set():
+            return None
+
+        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+        if not pport_list:
+            self.logger.log_error(f"Validate and get physical port failed for {logical_port_name} "
+                                   "as no physical port found")
+            return None
+
+        physical_port = pport_list[0]
+
+        if physical_port not in self.sfp_obj_dict:
+            self.logger.log_error(f"Validate and get physical port failed for {logical_port_name} "
+                                   "as no sfp object found")
+            return None
+
+        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
+            return None
+
+        if enable_flat_memory_check and self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
+            return None
+
+        return physical_port
+
+    def _update_flag_metadata_tables(self, logical_port_name, curr_flag_dict,
                                     flag_values_dict_update_time,
                                     flag_value_table,
                                     flag_change_count_table, flag_last_set_time_table, flag_last_clear_time_table,

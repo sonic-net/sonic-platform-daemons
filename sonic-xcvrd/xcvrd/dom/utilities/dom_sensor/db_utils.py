@@ -8,6 +8,10 @@ class DOMDBUtils(DBUtils):
     """
     This class provides utility functions for managing DB operations
     related to DOM on transceivers.
+    Handles data related to the following tables:
+        - TRANSCEIVER_DOM_SENSOR
+        - TRANSCEIVER_DOM_FLAG and its corresponding metadata tables (change count, set time, clear time)
+        - TRANSCEIVER_DOM_THRESHOLD
     """
     TEMP_UNIT = 'C'
     VOLT_UNIT = 'Volts'
@@ -35,31 +39,14 @@ class DOMDBUtils(DBUtils):
                                                  enable_flat_memory_check=True)
 
     def post_port_dom_flags_to_db(self, logical_port_name, db_cache=None):
-        if self.task_stopping_event.is_set():
-            return
-
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
             self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
                                   "as no asic index found")
             return
 
-        pport_list = self.port_mapping.get_logical_to_physical(logical_port_name)
-        if not pport_list:
-            self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
-                                    "as no physical port found")
-            return
-        physical_port = pport_list[0]
-
-        if physical_port not in self.sfp_obj_dict:
-            self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
-                                    "as no sfp object found")
-            return
-
-        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
-            return
-
-        if self.xcvrd_utils.is_transceiver_flat_memory(physical_port):
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check=True)
+        if physical_port is None:
             return
 
         try:
@@ -75,7 +62,7 @@ class DOMDBUtils(DBUtils):
                     return
                 if dom_flags_dict:
                     dom_flags_dict_update_time = self.get_current_time()
-                    self.update_flag_metadata_tables(logical_port_name, dom_flags_dict,
+                    self._update_flag_metadata_tables(logical_port_name, dom_flags_dict,
                                                      dom_flags_dict_update_time,
                                                      self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
@@ -126,6 +113,10 @@ class DOMDBUtils(DBUtils):
 
     # Remove unnecessary unit from the raw data
     def _beautify_dom_info_dict(self, dom_info_dict):
+        if dom_info_dict is None:
+            self.logger.log_warning("DOM info dict is None while beautifying")
+            return
+
         for k, v in dom_info_dict.items():
             if k == 'temperature':
                 dom_info_dict[k] = self._strip_unit(v, self.TEMP_UNIT)

@@ -586,7 +586,7 @@ class TestXcvrdScript(object):
         dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_FLAG_TABLE)
         dom_db_utils.xcvr_table_helper.get_dom_flag_tbl = MagicMock(return_value=dom_tbl)
         dom_db_utils.dom_utils.get_transceiver_dom_flags = MagicMock(return_value=None)
-        dom_db_utils.update_flag_metadata_tables = MagicMock()
+        dom_db_utils._update_flag_metadata_tables = MagicMock()
         assert dom_tbl.get_size() == 0
 
         # Ensure table is empty asic_index is None
@@ -618,17 +618,17 @@ class TestXcvrdScript(object):
         dom_db_utils.dom_utils.get_transceiver_dom_flags = MagicMock(side_effect=mock_get_transceiver_dom_flags)
         dom_db_utils.post_port_dom_flags_to_db(logical_port_name, db_cache=db_cache)
         assert dom_tbl.get_size_for_key(logical_port_name) == 21
-        assert dom_db_utils.update_flag_metadata_tables.call_count == 1
+        assert dom_db_utils._update_flag_metadata_tables.call_count == 1
 
         # Reset the mock to clear the call count
-        dom_db_utils.update_flag_metadata_tables.reset_mock()
+        dom_db_utils._update_flag_metadata_tables.reset_mock()
 
         # Ensure db_cache is populated correctly
         assert db_cache.get(0) is not None
         dom_db_utils.dom_utils.get_transceiver_dom_flags = MagicMock(return_value=None)
         dom_db_utils.post_port_dom_flags_to_db(logical_port_name, db_cache=db_cache)
         assert dom_tbl.get_size_for_key(logical_port_name) == 21
-        assert dom_db_utils.update_flag_metadata_tables.call_count == 0
+        assert dom_db_utils._update_flag_metadata_tables.call_count == 0
 
     @pytest.mark.parametrize("flag_value_table, flag_value_table_found, current_value, expected_change_count, expected_set_time, expected_clear_time", [
         (None, False, 'N/A', None, None, None),
@@ -665,7 +665,7 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         db_utils = DBUtils(mock_sfp_obj_dict, port_mapping, stop_event, mock_logger)
         # Call the function
-        db_utils.update_flag_metadata_tables(logical_port_name, mock_curr_flag_dict,
+        db_utils._update_flag_metadata_tables(logical_port_name, mock_curr_flag_dict,
                                             flag_values_dict_update_time, flag_value_table,
                                             flag_change_count_table, flag_last_set_time_table,
                                             flag_last_clear_time_table, table_name_for_logging)
@@ -966,7 +966,7 @@ class TestXcvrdScript(object):
         status_db_utils.post_port_transceiver_hw_status_to_db(logical_port_name, db_cache=db_cache)
         assert status_tbl.get_size_for_key(logical_port_name) == 12
 
-    def testpost_port_transceiver_hw_status_flags_to_db(self):
+    def test_post_port_transceiver_hw_status_flags_to_db(self):
         def mock_get_transceiver_status_flags(physical_port):
             return {
                 "datapath_firmware_fault": "False",
@@ -996,7 +996,7 @@ class TestXcvrdScript(object):
         status_flag_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_FLAG_TABLE)
         status_db_utils.xcvr_table_helper.get_status_flag_tbl = MagicMock(return_value=status_flag_tbl)
         status_db_utils.status_utils.get_transceiver_status_flags = MagicMock(return_value=None)
-        status_db_utils.update_flag_metadata_tables = MagicMock()
+        status_db_utils._update_flag_metadata_tables = MagicMock()
         assert status_flag_tbl.get_size() == 0
 
         # Ensure table is empty asic_index is None
@@ -1028,17 +1028,17 @@ class TestXcvrdScript(object):
         status_db_utils.status_utils.get_transceiver_status_flags = MagicMock(side_effect=mock_get_transceiver_status_flags)
         status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name, db_cache=db_cache)
         assert status_flag_tbl.get_size_for_key(logical_port_name) == 12
-        assert status_db_utils.update_flag_metadata_tables.call_count == 1
+        assert status_db_utils._update_flag_metadata_tables.call_count == 1
 
         # Reset the mock to clear the call count
-        status_db_utils.update_flag_metadata_tables.reset_mock()
+        status_db_utils._update_flag_metadata_tables.reset_mock()
 
         # Ensure db_cache is populated correctly
         assert db_cache.get(0) is not None
         status_db_utils.status_utils.get_transceiver_status_flags = MagicMock(return_value=None)
         status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name, db_cache=db_cache)
         assert status_flag_tbl.get_size_for_key(logical_port_name) == 12
-        assert status_db_utils.update_flag_metadata_tables.call_count == 0
+        assert status_db_utils._update_flag_metadata_tables.call_count == 0
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
@@ -3301,10 +3301,15 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         stop_event = threading.Event()
-        dom_db_utils = DOMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, helper_logger)
+        mock_logger = MagicMock()
+        dom_db_utils = DOMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, mock_logger)
 
         dom_db_utils._beautify_dom_info_dict(dom_info_dict)
         assert dom_info_dict == expected_dom_info_dict
+
+        # Ensure that the method handles None input gracefully and logs a warning
+        dom_db_utils._beautify_dom_info_dict(None)
+        mock_logger.log_warning.assert_called_once_with("DOM info dict is None while beautifying")
 
     def test_beautify_info_dict(self):
         dom_info_dict = {
