@@ -78,8 +78,8 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
                 lane_speed_key = LANE_SPEED_KEY_PREFIX + host_electrical_interface_id.split()[0]
-            if lane_speed_key is None or str(port_speed//1000) in lane_speed_key:
-                lane_speed_key = '{}{}G'.format(LANE_SPEED_KEY_PREFIX, port_speed // lane_count // 1000)
+        if lane_speed_key is None or str(port_speed//1000) in lane_speed_key:
+            lane_speed_key = '{}{}G'.format(LANE_SPEED_KEY_PREFIX, port_speed // lane_count // 1000)
     else:
         # Directly calculate lane speed and use it as key, this is especially useful for
         # non-CMIS transceivers which typically have no host_electrical_interface_id
