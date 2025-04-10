@@ -1413,7 +1413,7 @@ class DpuStateManagerTask(ProcessTaskBase):
                         # Don't update if this is our own dataplane/control plane state update to avoid recursion
                         if op == 'SET' and isinstance(fvp, tuple):
                             fvs = dict(fvp)
-                            if 'dpu_data_plane_state' in fvs or 'dpu_control_plane_state' in fvs:
+                            if 'dpu_data_plane_state' in fvs and 'dpu_control_plane_state' in fvs:
                                 update_required = False
                                 continue
                         self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")

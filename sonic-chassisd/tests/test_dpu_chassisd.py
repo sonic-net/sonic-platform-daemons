@@ -282,7 +282,7 @@ def test_dpu_state_manager_specific_key_update():
         chassis_state_db[key][field] = value
 
     with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
-        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'SET', (('dpu_control_plane_state', 'up'),))):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'SET', (('dpu_control_plane_state', 'up'), ('dpu_data_plane_state', 'up')))):
             with mock.patch.object(swsscommon.Select, 'select',
                 side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
 
