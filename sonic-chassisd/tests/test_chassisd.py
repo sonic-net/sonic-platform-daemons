@@ -358,7 +358,7 @@ def test_moduleupdater_check_deinit():
 
     module_table = module_updater.module_table
     module_updater.deinit()
-    fvs = module_table.get(name)
+    status, fvs = module_table.get(name)
     assert fvs == None
 
 def test_smartswitch_moduleupdater_check_deinit():
@@ -386,7 +386,7 @@ def test_smartswitch_moduleupdater_check_deinit():
 
     module_table = module_updater.module_table
     module_updater.deinit()
-    fvs = module_table.get(name)
+    status, fvs = module_table.get(name)
     assert fvs == None
 
 def test_configupdater_check_valid_names():
