@@ -651,6 +651,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         self.chassis = chassis
         self.num_modules = self.chassis.get_num_modules()
+        # Connect to CONFIG_DB
+        self.config_db = swsscommon.ConfigDBConnector()
+        self.config_db.connect()
         # Connect to STATE_DB and create chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
         self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
@@ -740,6 +743,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
 
+                    # Clear transition flag in CONFIG_DB
+                    entry = self.config_db.get_entry('CHASSIS_MODULE', key)
+                    entry['state_transition_in_progress'] = 'False'
+                    self.config_db.set_entry('CHASSIS_MODULE', key, entry)
+
                 elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to online".format(key))
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
@@ -749,6 +757,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         self.persist_dpu_reboot_cause(reboot_cause, key)
                         # publish reboot cause to db
                         self.update_dpu_reboot_cause_to_db(key)
+
+                    # Clear transition flag in CONFIG_DB
+                    entry = self.config_db.get_entry('CHASSIS_MODULE', key)
+                    entry['state_transition_in_progress'] = 'False'
+                    self.config_db.set_entry('CHASSIS_MODULE', key, entry)
 
     def _get_module_info(self, module_index):
         """
