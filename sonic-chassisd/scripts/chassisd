@@ -651,9 +651,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         self.chassis = chassis
         self.num_modules = self.chassis.get_num_modules()
-        # Connect to CONFIG_DB
-        self.config_db = swsscommon.ConfigDBConnector()
-        self.config_db.connect()
         # Connect to STATE_DB and create chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
         self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
@@ -713,6 +710,15 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             return 'empty'
 
+    def clear_transition_flag(self, key):
+        status, fvs = self.module_table.get(key)
+        if status:
+            fvs_dict = dict(fvs)
+            fvs_dict['state_transition_in_progress'] = 'False'
+            self.module_table.set(key, list(fvs_dict.items()))
+        else:
+            self.log_error("Could not clear module admin_status transition flag! {}".format(key))
+
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
@@ -743,10 +749,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
 
-                    # Clear transition flag in CONFIG_DB
-                    entry = self.config_db.get_entry('CHASSIS_MODULE', key)
-                    entry['state_transition_in_progress'] = 'False'
-                    self.config_db.set_entry('CHASSIS_MODULE', key, entry)
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
 
                 elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to online".format(key))
@@ -758,10 +762,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         # publish reboot cause to db
                         self.update_dpu_reboot_cause_to_db(key)
 
-                    # Clear transition flag in CONFIG_DB
-                    entry = self.config_db.get_entry('CHASSIS_MODULE', key)
-                    entry['state_transition_in_progress'] = 'False'
-                    self.config_db.set_entry('CHASSIS_MODULE', key, entry)
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
 
     def _get_module_info(self, module_index):
         """
