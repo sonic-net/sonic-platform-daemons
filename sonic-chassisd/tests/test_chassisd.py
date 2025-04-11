@@ -729,7 +729,7 @@ def test_midplane_presence_modules():
 
     #Check fields in database
     name = "LINE-CARD0"
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -739,7 +739,7 @@ def test_midplane_presence_modules():
     #Set access of line-card to Up (midplane connectivity is down initially)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -749,7 +749,7 @@ def test_midplane_presence_modules():
     #Set access of line-card to Down (to mock midplane connectivity state change)
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -758,7 +758,7 @@ def test_midplane_presence_modules():
 
     #Deinit
     module_updater.deinit()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs == None
 
 
@@ -799,7 +799,7 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         assert 1 == midplane_table.size()
 
         #Check fields in database
-        fvs = midplane_table.get(name)
+        status, fvs = midplane_table.get(name)
         assert fvs != None
         if isinstance(fvs, list):
             fvs = dict(fvs[-1])
@@ -809,7 +809,7 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         #Set access of DPU0 to Up (midplane connectivity is down initially)
         module.set_midplane_reachable(True)
         module_updater.check_midplane_reachability()
-        fvs = midplane_table.get(name)
+        status, fvs = midplane_table.get(name)
         assert fvs != None
         if isinstance(fvs, list):
             fvs = dict(fvs[-1])
@@ -819,7 +819,7 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         #Set access of DPU0 to Down (to mock midplane connectivity state change)
         module.set_midplane_reachable(False)
         module_updater.check_midplane_reachability()
-        fvs = midplane_table.get(name)
+        status, fvs = midplane_table.get(name)
         assert fvs != None
         if isinstance(fvs, list):
             fvs = dict(fvs[-1])
@@ -833,7 +833,7 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
 
         #Deinit
         module_updater.deinit()
-        fvs = midplane_table.get(name)
+        status, fvs = midplane_table.get(name)
         assert fvs == None
 
 
@@ -932,7 +932,7 @@ def test_midplane_presence_modules_linecard_reboot():
 
     #Check fields in database
     name = "LINE-CARD0"
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -942,7 +942,7 @@ def test_midplane_presence_modules_linecard_reboot():
     #Set access of line-card to Up (midplane connectivity is down initially)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -957,7 +957,7 @@ def test_midplane_presence_modules_linecard_reboot():
     linecard_fvs = swsscommon.FieldValuePairs([("reboot", "expected")])
     module_reboot_table.set(name,linecard_fvs)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -967,7 +967,7 @@ def test_midplane_presence_modules_linecard_reboot():
     #Set access of line-card to up on time (to mock midplane connectivity state change)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -984,7 +984,7 @@ def test_midplane_presence_modules_linecard_reboot():
     linecard_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD, str(time_now))])
     module_reboot_table.set(name,linecard_fvs)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -1042,7 +1042,7 @@ def test_midplane_presence_supervisor():
 
     #Check fields in database
     name = "SUPERVISOR0"
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -1052,7 +1052,7 @@ def test_midplane_presence_supervisor():
     #Set access of line-card to down
     supervisor.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -1061,7 +1061,7 @@ def test_midplane_presence_supervisor():
 
     #Deinit
     module_updater.deinit()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs == None
 
 def verify_asic(asic_name, asic_pci_address, module_name, asic_id_in_module, asic_table):
@@ -1142,7 +1142,7 @@ def test_asic_presence():
     module_updater.module_db_update()
     module_updater.deinit()
     midplane_table = module_updater.midplane_table
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs == None
     verify_asic("asic4", "0000:04:00.0", name, "0", fabric_asic_table)
     verify_asic("asic5", "0000:05:00.0", name, "1", fabric_asic_table)
@@ -1365,7 +1365,7 @@ def test_set_initial_dpu_admin_state_down():
     midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
@@ -1455,7 +1455,7 @@ def test_set_initial_dpu_admin_state_up():
     midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
+    status, fvs = midplane_table.get(name)
     assert fvs != None
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
