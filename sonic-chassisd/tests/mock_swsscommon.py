@@ -13,16 +13,18 @@ class Table:
         pass
 
     def set(self, key, fvs):
-        self.mock_dict[key] = fvs.fv_dict
-        pass
+        # Handle both FieldValuePairs objects and lists of tuples
+        if hasattr(fvs, 'fv_dict'):
+            self.mock_dict[key] = fvs.fv_dict
+        elif isinstance(fvs, list):
+            self.mock_dict[key] = dict(fvs)
+        else:
+            raise TypeError("Unsupported type for fvs")
 
     def get(self, key):
         if key in self.mock_dict:
-            rv = []
-            rv.append(True)
-            rv.append(tuple(self.mock_dict[key].items()))
-            return rv
-        return None
+            return True, list(self.mock_dict[key].items())
+        return False, []
 
     def hget(self, key, field):
         if key not in self.mock_dict or field not in self.mock_dict[key]:
