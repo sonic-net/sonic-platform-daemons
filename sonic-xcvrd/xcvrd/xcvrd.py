@@ -2297,7 +2297,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cmis_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, helper_logger)
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr)
         dom_info_update.start()
         self.threads.append(dom_info_update)
 

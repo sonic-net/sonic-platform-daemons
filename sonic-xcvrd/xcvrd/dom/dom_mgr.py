@@ -14,6 +14,7 @@ try:
     import re
 
     from natsort import natsorted
+    from sonic_py_common import syslogger
     from swsscommon import swsscommon
 
     from xcvrd import xcvrd
@@ -27,17 +28,18 @@ try:
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
+SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
+
 class DomInfoUpdateTask(threading.Thread):
-    DOM_LOGGER_PREFIX = "DOM-INFO-UPDATE: "
     DOM_INFO_UPDATE_PERIOD_SECS = 60
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, helper_logger):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr):
         threading.Thread.__init__(self)
         self.name = "DomInfoUpdateTask"
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.helper_logger = helper_logger
+        self.helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_DOMINFOUPDATETASK, enable_runtime_config=True)
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
         self.skip_cmis_mgr = skip_cmis_mgr
@@ -50,19 +52,19 @@ class DomInfoUpdateTask(threading.Thread):
         self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def log_debug(self, message):
-        self.helper_logger.log_debug("{}{}".format(self.DOM_LOGGER_PREFIX, message))
+        self.helper_logger.log_debug("{}".format(message))
 
     def log_info(self, message):
-        self.helper_logger.log_info("{}{}".format(self.DOM_LOGGER_PREFIX, message))
+        self.helper_logger.log_info("{}".format(message))
 
     def log_notice(self, message):
-        self.helper_logger.log_notice("{}{}".format(self.DOM_LOGGER_PREFIX, message))
+        self.helper_logger.log_notice("{}".format(message))
 
     def log_warning(self, message):
-        self.helper_logger.log_warning("{}{}".format(self.DOM_LOGGER_PREFIX, message))
+        self.helper_logger.log_warning("{}".format(message))
 
     def log_error(self, message):
-        self.helper_logger.log_error("{}{}".format(self.DOM_LOGGER_PREFIX, message))
+        self.helper_logger.log_error("{}".format(message))
 
     def get_dom_polling_from_config_db(self, lport):
         """
@@ -156,7 +158,7 @@ class DomInfoUpdateTask(threading.Thread):
                     return xcvrd.SFP_EEPROM_NOT_READY
 
             except NotImplementedError:
-                helper_logger.log_error("Transceiver firmware info functionality is currently not implemented for this platform")
+                self.log_error("Transceiver firmware info functionality is currently not implemented for this platform")
                 sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
 
     # Update port pm info in db
