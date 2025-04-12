@@ -81,14 +81,12 @@ def test_moduleupdater_check_valid_fields():
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
                                    module.supervisor_slot)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert desc == fvs_dict[CHASSIS_MODULE_INFO_DESC_FIELD]
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-        assert serial == fvs_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]
-    else:
-        assert False, f"Module {name} not found in module_table"
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
@@ -108,15 +106,13 @@ def test_smartswitch_moduleupdater_check_valid_fields():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert desc == fvs_dict[CHASSIS_MODULE_INFO_DESC_FIELD]
-        assert NOT_AVAILABLE == fvs_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-        assert serial == fvs_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]
-    else:
-        assert False, f"Module {name} not found in module_table"
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+    assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
 
 def test_smartswitch_moduleupdater_status_transitions():
     # Mock the chassis and module
@@ -188,8 +184,8 @@ def test_smartswitch_moduleupdater_check_invalid_name():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    assert fvs == []
+    fvs = module_updater.module_table.get(name)
+    assert fvs == None
 
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 0
@@ -216,7 +212,7 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
+    fvs = module_updater.module_table.get(name)
 
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 2
@@ -243,9 +239,8 @@ def test_smartswitch_moduleupdater_check_invalid_slot():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
+    fvs = module_updater.module_table.get(name)
+    assert fvs != None
 
 def test_moduleupdater_check_invalid_name():
     chassis = MockChassis()
@@ -266,8 +261,8 @@ def test_moduleupdater_check_invalid_name():
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
                                    module.supervisor_slot)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    assert fvs == []
+    fvs = module_updater.module_table.get(name)
+    assert fvs == None
 
 def test_smartswitch_moduleupdater_check_invalid_index():
     chassis = MockSmartSwitchChassis()
@@ -287,9 +282,8 @@ def test_smartswitch_moduleupdater_check_invalid_index():
 
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
+    fvs = module_updater.module_table.get(name)
+    assert fvs != None
 
     # Run chassis db clean up
     module_updater.module_down_chassis_db_cleanup()
@@ -312,28 +306,28 @@ def test_moduleupdater_check_status_update():
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
                                    module.supervisor_slot)
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        print('Initial DB-entry {}'.format(fvs))
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    print('Initial DB-entry {}'.format(fvs))
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Update status
     status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        print('Not updated DB-entry {}'.format(fvs))
-        assert status != fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    print('Not updated DB-entry {}'.format(fvs))
+    assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Update status and db
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        print('Updated DB-entry {}'.format(fvs))
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    print('Updated DB-entry {}'.format(fvs))
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Run chassis db clean up from LC.
     module_updater.module_down_chassis_db_cleanup()
@@ -357,15 +351,15 @@ def test_moduleupdater_check_deinit():
                                    module.supervisor_slot)
     module_updater.modules_num_update()
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = module_updater.module_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     module_table = module_updater.module_table
     module_updater.deinit()
-    success, fvs = module_table.get(name)
-    assert fvs == []
+    fvs = module_table.get(name)
+    assert fvs == None
 
 def test_smartswitch_moduleupdater_check_deinit():
     chassis = MockSmartSwitchChassis()
@@ -385,12 +379,15 @@ def test_smartswitch_moduleupdater_check_deinit():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.modules_num_update()
     module_updater.module_db_update()
-    success, fvs = module_updater.module_table.get(name)
+    fvs = module_updater.module_table.get(name)
+    # if isinstance(fvs, list):
+    #    fvs = dict(fvs[-1])
+    # assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     module_table = module_updater.module_table
     module_updater.deinit()
-    success, fvs = module_table.get(name)
-    assert fvs == []
+    fvs = module_table.get(name)
+    assert fvs == None
 
 def test_configupdater_check_valid_names():
     chassis = MockChassis()
@@ -619,20 +616,20 @@ def test_configupdater_check_num_modules():
     module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
                                    module.supervisor_slot)
     module_updater.modules_num_update()
-    success, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    assert fvs == []
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    assert fvs == None
 
     # Add a module
     chassis.module_list.append(module)
     module_updater.modules_num_update()
-    success, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    if success:
-        fvs_dict = dict(fvs)
-        assert chassis.get_num_modules() == int(fvs_dict[CHASSIS_INFO_CARD_NUM_FIELD])
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert chassis.get_num_modules() == int(fvs[CHASSIS_INFO_CARD_NUM_FIELD])
 
     module_updater.deinit()
-    success, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    assert fvs == []
+    fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    assert fvs == None
 
 def test_moduleupdater_check_string_slot():
     chassis = MockChassis()
@@ -732,40 +729,37 @@ def test_midplane_presence_modules():
 
     #Check fields in database
     name = "LINE-CARD0"
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Set access of line-card to Up (midplane connectivity is down initially)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Set access of line-card to Down (to mock midplane connectivity state change)
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Deinit
     module_updater.deinit()
-    success, fvs = midplane_table.get(name)
-    assert fvs == []
+    fvs = midplane_table.get(name)
+    assert fvs == None
 
 
 @patch('os.makedirs')
@@ -805,35 +799,32 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         assert 1 == midplane_table.size()
 
         #Check fields in database
-        success, fvs = midplane_table.get(name)
-        fvs_dict = dict(fvs)
-        assert fvs_dict != None
-        if success:
-            fvs_dict = dict(fvs)
-            assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-            assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
         #Set access of DPU0 to Up (midplane connectivity is down initially)
         module.set_midplane_reachable(True)
         module_updater.check_midplane_reachability()
-        success, fvs = midplane_table.get(name)
-        fvs_dict = dict(fvs)
-        assert fvs_dict != None
-        if success:
-            fvs_dict = dict(fvs)
-            assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-            assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
         #Set access of DPU0 to Down (to mock midplane connectivity state change)
         module.set_midplane_reachable(False)
         module_updater.check_midplane_reachability()
-        success, fvs = midplane_table.get(name)
-        fvs_dict = dict(fvs)
-        assert fvs_dict != None
-        if success:
-            fvs_dict = dict(fvs)
-            assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-            assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        fvs = midplane_table.get(name)
+        assert fvs != None
+        if isinstance(fvs, list):
+            fvs = dict(fvs[-1])
+        assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+        assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
         # Run chassis db clean up
         module_updater.module_down_chassis_db_cleanup()
@@ -842,8 +833,8 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
 
         #Deinit
         module_updater.deinit()
-        success, fvs = midplane_table.get(name)
-        assert fvs == []
+        fvs = midplane_table.get(name)
+        assert fvs == None
 
 
 @patch('os.makedirs')
@@ -941,24 +932,22 @@ def test_midplane_presence_modules_linecard_reboot():
 
     #Check fields in database
     name = "LINE-CARD0"
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Set access of line-card to Up (midplane connectivity is down initially)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     
     #Set access of line-card to Down (to mock midplane connectivity state change)
@@ -968,23 +957,22 @@ def test_midplane_presence_modules_linecard_reboot():
     linecard_fvs = swsscommon.FieldValuePairs([("reboot", "expected")])
     module_reboot_table.set(name,linecard_fvs)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Set access of line-card to up on time (to mock midplane connectivity state change)
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     # test linecard reboot midplane connectivity restored timeout
     # Set access of line-card to Down (to mock midplane connectivity state change)
@@ -996,14 +984,13 @@ def test_midplane_presence_modules_linecard_reboot():
     linecard_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD, str(time_now))])
     module_reboot_table.set(name,linecard_fvs)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]   
-        assert module_updater.linecard_reboot_timeout == 240    
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]   
+    assert module_updater.linecard_reboot_timeout == 240    
     
 def test_midplane_presence_supervisor():
     chassis = MockChassis()
@@ -1055,44 +1042,42 @@ def test_midplane_presence_supervisor():
 
     #Check fields in database
     name = "SUPERVISOR0"
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert supervisor.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(supervisor.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert supervisor.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(supervisor.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Set access of line-card to down
     supervisor.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert supervisor.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(supervisor.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert supervisor.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(supervisor.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     #Deinit
     module_updater.deinit()
-    success, fvs = midplane_table.get(name)
-    assert fvs == []
+    fvs = midplane_table.get(name)
+    assert fvs == None
 
 def verify_asic(asic_name, asic_pci_address, module_name, asic_id_in_module, asic_table):
-    success, fvs =  asic_table.get(asic_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert fvs_dict[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
-        assert fvs_dict[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
-        assert fvs_dict[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
+    fvs = asic_table.get(asic_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_ASIC_PCI_ADDRESS_FIELD] == asic_pci_address
+    assert fvs[CHASSIS_MODULE_INFO_NAME_FIELD] == module_name
+    assert fvs[CHASSIS_ASIC_ID_IN_MODULE_FIELD] == asic_id_in_module
 
 def verify_asic_in_module_table(lc, slot, num_asics, chassis_module_table):
-    success, fvs = chassis_module_table.get(lc)
-    if success:
-        fvs_dict = dict(fvs)
-        assert fvs_dict['slot'] == str(slot)
-        assert fvs_dict['num_asics'] == str(num_asics)
+    fvs = chassis_module_table.get(lc)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs['slot'] == str(slot)
+    assert fvs['num_asics'] == str(num_asics)
 
 def test_asic_presence():
     chassis = MockChassis()
@@ -1157,8 +1142,8 @@ def test_asic_presence():
     module_updater.module_db_update()
     module_updater.deinit()
     midplane_table = module_updater.midplane_table
-    success, fvs = midplane_table.get(name)
-    assert fvs == []
+    fvs = midplane_table.get(name)
+    assert fvs == None
     verify_asic("asic4", "0000:04:00.0", name, "0", fabric_asic_table)
     verify_asic("asic5", "0000:05:00.0", name, "1", fabric_asic_table)
 
@@ -1380,13 +1365,12 @@ def test_set_initial_dpu_admin_state_down():
     midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(True)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fvs_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     # Patching platform's Chassis object to return the mocked module
     with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch, \
@@ -1471,13 +1455,12 @@ def test_set_initial_dpu_admin_state_up():
     midplane_table = module_updater.midplane_table
     module.set_midplane_reachable(False)
     module_updater.check_midplane_reachability()
-    success, fvs = midplane_table.get(name)
-    fvs_dict = dict(fvs)
-    assert fvs_dict != None
-    if success:
-        fvs_dict = dict(fvs)
-        assert module.get_midplane_ip() == fvs_dict[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-        assert str(module.is_midplane_reachable()) == fv_dict[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+    fvs = midplane_table.get(name)
+    assert fvs != None
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
+    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
 
     # Patching platform's Chassis object to return the mocked module
     with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch, \
@@ -1609,20 +1592,20 @@ def test_chassis_db_cleanup():
     module.set_oper_status(status)
     sup_module_updater.module_db_update()
 
-    success, fvs = sup_module_updater.module_table.get(lc_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Change linecard module status to OFFLINE
     status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
     sup_module_updater.module_db_update()
 
-    success, fvs = sup_module_updater.module_table.get(lc_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Mock >= CHASSIS_DB_CLEANUP_MODULE_DOWN_PERIOD module down period for LINE-CARD0
     down_module_key = lc_name+"|"+hostname
@@ -1682,16 +1665,16 @@ def test_chassis_db_bootup_with_empty_slot():
     sup_module_updater.module_db_update()
 
     # check LC1 STATUS ONLINE in module table
-    success, fvs = sup_module_updater.module_table.get(lc_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert ModuleBase.MODULE_STATUS_ONLINE == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert ModuleBase.MODULE_STATUS_ONLINE == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # check LC2 STATUS EMPTY in module table 
-    success, fvs = sup_module_updater.module_table.get(lc2_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert ModuleBase.MODULE_STATUS_EMPTY == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = sup_module_updater.module_table.get(lc2_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert ModuleBase.MODULE_STATUS_EMPTY == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Both should no tbe in down_module keys.
     
@@ -1705,10 +1688,10 @@ def test_chassis_db_bootup_with_empty_slot():
     module.set_oper_status(status)
     sup_module_updater.module_db_update()
 
-    success, fvs = sup_module_updater.module_table.get(lc_name)
-    if success:
-        fvs_dict = dict(fvs)
-        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    fvs = sup_module_updater.module_table.get(lc_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert down_module_lc1_key in sup_module_updater.down_modules.keys()
 
 
