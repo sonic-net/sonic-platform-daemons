@@ -84,9 +84,9 @@ def test_moduleupdater_check_valid_fields():
     status, fvs = module_updater.module_table.get(name)
     if status:
         fvs_dict = dict(fvs)
-        assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-        assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-        assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+        assert desc == fvs_dict[CHASSIS_MODULE_INFO_DESC_FIELD]
+        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+        assert serial == fvs_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]
     else:
         assert False, f"Module {name} not found in module_table"
 
@@ -109,12 +109,14 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
-    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        assert desc == fvs_dict[CHASSIS_MODULE_INFO_DESC_FIELD]
+        assert NOT_AVAILABLE == fvs_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]
+        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+        assert serial == fvs_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    else:
+        assert False, f"Module {name} not found in module_table"
 
 def test_smartswitch_moduleupdater_status_transitions():
     # Mock the chassis and module
@@ -309,27 +311,27 @@ def test_moduleupdater_check_status_update():
                                    module.supervisor_slot)
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    print('Initial DB-entry {}'.format(fvs))
-    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        print('Initial DB-entry {}'.format(fvs))
+        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Update status
     status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    print('Not updated DB-entry {}'.format(fvs))
-    assert status != fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        print('Not updated DB-entry {}'.format(fvs))
+        assert status != fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Update status and db
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    print('Updated DB-entry {}'.format(fvs))
-    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        print('Updated DB-entry {}'.format(fvs))
+        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     # Run chassis db clean up from LC.
     module_updater.module_down_chassis_db_cleanup()
@@ -354,9 +356,9 @@ def test_moduleupdater_check_deinit():
     module_updater.modules_num_update()
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        assert status == fvs_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     module_table = module_updater.module_table
     module_updater.deinit()
@@ -382,9 +384,6 @@ def test_smartswitch_moduleupdater_check_deinit():
     module_updater.modules_num_update()
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    # if isinstance(fvs, list):
-    #    fvs = dict(fvs[-1])
-    # assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
     module_table = module_updater.module_table
     module_updater.deinit()
@@ -625,9 +624,9 @@ def test_configupdater_check_num_modules():
     chassis.module_list.append(module)
     module_updater.modules_num_update()
     status, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert chassis.get_num_modules() == int(fvs[CHASSIS_INFO_CARD_NUM_FIELD])
+    if status:
+        fvs_dict = dict(fvs)
+        assert chassis.get_num_modules() == int(fvs_dict[CHASSIS_INFO_CARD_NUM_FIELD])
 
     module_updater.deinit()
     status, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
