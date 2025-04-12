@@ -82,11 +82,13 @@ def test_moduleupdater_check_valid_fields():
                                    module.supervisor_slot)
     module_updater.module_db_update()
     status, fvs = module_updater.module_table.get(name)
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
-    assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    if status:
+        fvs_dict = dict(fvs)
+        assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
+        assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+        assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    else:
+        assert False, f"Module {name} not found in module_table"
 
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
