@@ -32,8 +32,8 @@ def test_provision_db():
 
     chassis_table = provision_db(chassis, log)
 
-    status, fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    if status:
+    success, fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    if success:
         fvs_dict = dict(fvs)
         assert serial == fvs_dict[CHASSIS_INFO_SERIAL_FIELD]
         assert model == fvs_dict[CHASSIS_INFO_MODEL_FIELD]
