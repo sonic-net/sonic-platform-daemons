@@ -189,7 +189,7 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     module_updater.module_db_update()
     success, fvs = module_updater.module_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
     admin_state = 0
@@ -266,7 +266,7 @@ def test_moduleupdater_check_invalid_name():
                                    module.supervisor_slot)
     module_updater.module_db_update()
     success, fvs = module_updater.module_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
 def test_smartswitch_moduleupdater_check_invalid_index():
     chassis = MockSmartSwitchChassis()
@@ -363,7 +363,7 @@ def test_moduleupdater_check_deinit():
     module_table = module_updater.module_table
     module_updater.deinit()
     success, fvs = module_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
 def test_smartswitch_moduleupdater_check_deinit():
     chassis = MockSmartSwitchChassis()
@@ -388,7 +388,7 @@ def test_smartswitch_moduleupdater_check_deinit():
     module_table = module_updater.module_table
     module_updater.deinit()
     success, fvs = module_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
 def test_configupdater_check_valid_names():
     chassis = MockChassis()
@@ -618,7 +618,7 @@ def test_configupdater_check_num_modules():
                                    module.supervisor_slot)
     module_updater.modules_num_update()
     success, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    assert fvs == None
+    assert fvs == []
 
     # Add a module
     chassis.module_list.append(module)
@@ -630,7 +630,7 @@ def test_configupdater_check_num_modules():
 
     module_updater.deinit()
     success, fvs = module_updater.chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
-    assert fvs == None
+    assert fvs == []
 
 def test_moduleupdater_check_string_slot():
     chassis = MockChassis()
@@ -760,7 +760,7 @@ def test_midplane_presence_modules():
     #Deinit
     module_updater.deinit()
     success, fvs = midplane_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
 
 @patch('os.makedirs')
@@ -835,7 +835,7 @@ def test_midplane_presence_dpu_modules(mock_open, mock_makedirs):
         #Deinit
         module_updater.deinit()
         success, fvs = midplane_table.get(name)
-        assert fvs == None
+        assert fvs == []
 
 
 @patch('os.makedirs')
@@ -1063,7 +1063,7 @@ def test_midplane_presence_supervisor():
     #Deinit
     module_updater.deinit()
     success, fvs = midplane_table.get(name)
-    assert fvs == None
+    assert fvs == []
 
 def verify_asic(asic_name, asic_pci_address, module_name, asic_id_in_module, asic_table):
     fvs = asic_table.get(asic_name)
@@ -1144,7 +1144,7 @@ def test_asic_presence():
     module_updater.deinit()
     midplane_table = module_updater.midplane_table
     success, fvs = midplane_table.get(name)
-    assert fvs == None
+    assert fvs == []
     verify_asic("asic4", "0000:04:00.0", name, "0", fabric_asic_table)
     verify_asic("asic5", "0000:05:00.0", name, "1", fabric_asic_table)
 
