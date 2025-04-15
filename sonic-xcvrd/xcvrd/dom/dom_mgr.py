@@ -217,7 +217,8 @@ class DomInfoUpdateTask(threading.Thread):
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
-                # Get the first logical port name
+                # Get the first logical port name since it corresponds to the first subport
+                # of the breakout group
                 logical_port_name = logical_ports[0]
 
                 if self.is_port_dom_monitoring_disabled(logical_port_name):
