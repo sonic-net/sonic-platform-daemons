@@ -89,8 +89,7 @@ class DomInfoUpdateTask(threading.Thread):
             self.log_warning("Get dom disabled: Got unknown FP port index {}".format(pport))
             return dom_polling
 
-        # Sort the logical port list to make sure we always get the first subport
-        logical_port_list = natsorted(logical_port_list, key=lambda y: y.lower())
+        # First logical port corresponds to the first subport
         first_logical_port = logical_port_list[0]
 
         asic_index = self.port_mapping.get_asic_id_for_logical_port(first_logical_port)
@@ -122,7 +121,7 @@ class DomInfoUpdateTask(threading.Thread):
             self.log_warning("Got invalid asic index for {} while checking cmis init status".format(logical_port_name))
             return False
 
-        cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index))
+        cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
         if cmis_state not in xcvrd.CMIS_TERMINAL_STATES:
             return True
         else:
@@ -217,8 +216,10 @@ class DomInfoUpdateTask(threading.Thread):
 
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
-            logical_port_list = self.port_mapping.logical_port_list
-            for logical_port_name in logical_port_list:
+            for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
+                # Get the first logical port name
+                logical_port_name = logical_ports[0]
+
                 if self.is_port_dom_monitoring_disabled(logical_port_name):
                     continue
 
@@ -232,13 +233,7 @@ class DomInfoUpdateTask(threading.Thread):
                     self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                     continue
 
-                physical_port_list = self.port_mapping.get_logical_to_physical(logical_port_name)
-                if not physical_port_list:
-                    self.log_warning("Got unknown physical port list {} for lport {}".format(physical_port_list, logical_port_name))
-                    continue
-                physical_port = physical_port_list[0]
-
-                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index)):
+                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
                     if not xcvrd._wrapper_get_presence(physical_port):
                         continue
 
@@ -348,6 +343,7 @@ class DomInfoUpdateTask(threading.Thread):
                                       *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
                                       *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
+                                      self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_status_flag_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_status_flag_change_count_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_status_flag_set_time_tbl(port_change_event.asic_id),
@@ -355,6 +351,3 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
-        xcvrd.delete_port_from_status_table_hw(port_change_event.port_name,
-                                      self.port_mapping,
-                                      self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id))

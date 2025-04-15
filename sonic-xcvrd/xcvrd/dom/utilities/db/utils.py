@@ -53,8 +53,6 @@ class DBUtils:
                     [("last_update_time", self.get_current_time())]
                 )
                 table.set(logical_port_name, fvs)
-            else:
-                return
 
         except NotImplementedError:
             self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "

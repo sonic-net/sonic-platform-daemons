@@ -1,3 +1,4 @@
+from natsort import natsorted
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
@@ -208,7 +209,13 @@ class PortMapping:
         self.logical_port_list = []
         # Logical port name to physical port index mapping
         self.logical_to_physical = {}
-        # Physical port index to logical port name mapping
+        # Mapping of physical port indices to logical port names.
+        # Each physical port index maps to a list of logical port names, which are sorted in natural order.
+        # Example:
+        # {
+        #     0: ["Ethernet0", "Ethernet4"],  # Physical port 0 maps to logical ports Ethernet0 and Ethernet4
+        #     1: ["Ethernet8", "Ethernet12"],  # Physical port 1 maps to logical ports Ethernet1 and Ethernet5
+        # }
         self.physical_to_logical = {}
         # Logical port name to ASIC ID mapping
         self.logical_to_asic = {}
@@ -226,7 +233,13 @@ class PortMapping:
         if port_change_event.port_index not in self.physical_to_logical:
             self.physical_to_logical[port_change_event.port_index] = [port_name]
         else:
+            # Append the new logical port and sort the list
             self.physical_to_logical[port_change_event.port_index].append(port_name)
+
+            self.physical_to_logical[port_change_event.port_index] = natsorted(
+                self.physical_to_logical[port_change_event.port_index], key=lambda x: x.lower()
+            )
+
         self.logical_to_asic[port_name] = port_change_event.asic_id
 
     def _handle_port_remove(self, port_change_event):
