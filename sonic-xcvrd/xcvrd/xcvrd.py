@@ -950,6 +950,7 @@ class CmisManagerTask(threading.Thread):
         tuple_list = []
         for lane in range(self.CMIS_MAX_HOST_LANES):
             if ((1 << lane) & host_lanes_mask) == 0:
+                tuple_list.append(('active_apsel_hostlane{}'.format(lane + 1), 'N/A'))
                 continue
             if reset_apsel == False:
                 act_apsel_lane = act_apsel.get('ActiveAppSelLane{}'.format(lane + 1), 'N/A')

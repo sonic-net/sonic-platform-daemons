@@ -5,6 +5,7 @@ as a child thread of xcvrd main thread.
 """
 
 from contextlib import contextmanager
+import time
 
 
 try:
@@ -25,6 +26,7 @@ try:
     from xcvrd.dom.utilities.vdm.utils import VDMUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
     from xcvrd.dom.utilities.status.db_utils import StatusDBUtils
+    from xcvrd.xcvrd_utilities.utils import XCVRDUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
@@ -32,6 +34,9 @@ SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 
 class DomInfoUpdateTask(threading.Thread):
     DOM_INFO_UPDATE_PERIOD_SECS = 60
+    DOM_PORT_CHG_OBSERVER_TBL_MAP = [
+        {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
+    ]
 
     def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr):
         threading.Thread.__init__(self)
@@ -44,7 +49,9 @@ class DomInfoUpdateTask(threading.Thread):
         self.namespaces = namespaces
         self.skip_cmis_mgr = skip_cmis_mgr
         self.sfp_obj_dict = sfp_obj_dict
+        self.pending_diagnostics_update_ports = set()
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, helper_logger)
         self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.db_utils = self.dom_db_utils
         self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
@@ -192,41 +199,58 @@ class DomInfoUpdateTask(threading.Thread):
 
     def task_worker(self):
         self.log_notice("Start DOM monitoring loop")
-        firmware_info_cache = {}
-        dom_info_cache = {}
-        dom_flag_cache = {}
-        transceiver_status_cache = {}
-        transceiver_status_flag_cache = {}
-        vdm_real_value_cache = {}
-        vdm_flag_cache = {}
-        pm_info_cache = {}
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
 
-        # Start loop to update dom info in DB periodically
-        while not self.task_stopping_event.wait(self.DOM_INFO_UPDATE_PERIOD_SECS):
-            # Clear the cache at the begin of the loop to make sure it will be clear each time
-            firmware_info_cache.clear()
-            dom_info_cache.clear()
-            dom_flag_cache.clear()
-            transceiver_status_cache.clear()
-            transceiver_status_flag_cache.clear()
-            vdm_real_value_cache.clear()
-            vdm_flag_cache.clear()
-            pm_info_cache.clear()
+        port_change_observer = port_event_helper.PortChangeObserver(self.namespaces, self.helper_logger,
+                                                  self.task_stopping_event,
+                                                  self.on_port_update_event,
+                                                  port_tbl_map=self.DOM_PORT_CHG_OBSERVER_TBL_MAP)
+
+        # Set the periodic db update time
+        dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+
+        # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
+        # before starting the periodic update
+        next_periodic_db_update_time = time.time() + dom_info_update_periodic_secs
+        is_periodic_db_update_needed = False
+
+        # Start loop to update dom info in DB periodically and handle port change events
+        while not self.task_stopping_event.is_set():
+            # Check if periodic db update is needed
+            if next_periodic_db_update_time <= time.time():
+                is_periodic_db_update_needed = True
 
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
+
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
+                # Process pending link change events and update relevant diagnostic
+                # information in the database. This ensures link change events are
+                # handled promptly between periodic updates, avoiding delays and
+                # duplicate updates for the same physical port during a single loop iteration.
+                port_change_observer.handle_port_update_event()
+                # Process each port in the pending link change set
+                for port in self.pending_diagnostics_update_ports:
+                    if self.task_stopping_event.is_set():
+                        self.log_notice("Stop event generated during DOM link change event processing")
+                        break
+                    self.update_port_db_diagnostics_on_link_change(port)
+                self.pending_diagnostics_update_ports.clear()
+
+                if self.task_stopping_event.is_set():
+                    self.log_notice("Stop event generated during DOM monitoring loop")
+                    break
+
+                if not is_periodic_db_update_needed:
+                    # If periodic db update is not needed, skip the rest of the loop
+                    continue
+
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
                 logical_port_name = logical_ports[0]
 
                 if self.is_port_dom_monitoring_disabled(logical_port_name):
                     continue
-
-                if self.task_stopping_event.is_set():
-                    self.log_notice("DomInfoUpdateTask stop event generated during DOM monitoring loop")
-                    break
 
                 # Get the asic to which this port belongs
                 asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
@@ -239,34 +263,32 @@ class DomInfoUpdateTask(threading.Thread):
                         continue
 
                     try:
-                        self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event, firmware_info_cache=firmware_info_cache)
+                        self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing firmware info for port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     try:
-                        self.dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name, db_cache=dom_info_cache)
+                        self.dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since exception could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     try:
-                        self.dom_db_utils.post_port_dom_flags_to_db(logical_port_name, db_cache=dom_flag_cache)
+                        self.dom_db_utils.post_port_dom_flags_to_db(logical_port_name)
                     except (KeyError, TypeError) as e:
                         self.log_warning("Got exception {} while processing dom flags for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     try:
-                        self.status_db_utils.post_port_transceiver_hw_status_to_db(logical_port_name,
-                                                                                    db_cache=transceiver_status_cache)
+                        self.status_db_utils.post_port_transceiver_hw_status_to_db(logical_port_name)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since exception could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
                     try:
-                        self.status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name,
-                                                                                        db_cache=transceiver_status_flag_cache)
+                        self.status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since exception could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw flags for "
@@ -280,24 +302,29 @@ class DomInfoUpdateTask(threading.Thread):
                                 continue
                             try:
                                 # Read and post VDM real values to DB
-                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache=vdm_real_value_cache)
+                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
                             try:
                                 # Read and post VDM flags and metadata to DB
-                                self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name, db_cache=vdm_flag_cache)
+                                self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
                             try:
-                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event, pm_info_cache=pm_info_cache)
+                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
                             except (KeyError, TypeError) as e:
                                 #continue to process next port since execption could be raised due to port reset, transceiver removal
                                 self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
                                 continue
+
+            # Set the periodic db update time after all the ports are processed
+            if is_periodic_db_update_needed:
+                next_periodic_db_update_time = time.time() + dom_info_update_periodic_secs
+                is_periodic_db_update_needed = False
 
         self.log_notice("Stop DOM monitoring loop")
 
@@ -317,6 +344,72 @@ class DomInfoUpdateTask(threading.Thread):
         threading.Thread.join(self)
         if self.exc:
             raise self.exc
+
+    def on_port_update_event(self, port_change_event):
+        """Called when a port change event is received
+
+        Args:
+            port_change_event (object): port change event
+        """
+        if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_SET and \
+            port_change_event.db_name == 'APPL_DB':
+            # Add the port to the pending link change set to consolidate
+            # link change events for all subports of the breakout group
+            # into a single event for processing.
+            self.pending_diagnostics_update_ports.add(port_change_event.port_index)
+
+    def update_port_db_diagnostics_on_link_change(self, physical_port):
+        if self.task_stopping_event.is_set():
+            return
+
+        logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
+        if logical_port_list is None:
+            self.log_warning("Update DB diagnostics during link change: Unknown physical port index {}".format(physical_port))
+            return
+
+        # First logical port corresponds to the first subport
+        first_logical_port = logical_port_list[0]
+
+        if self.is_port_dom_monitoring_disabled(first_logical_port):
+            return
+
+        # Get the asic to which this port belongs
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(first_logical_port)
+        if asic_index is None:
+            self.log_warning(f"Update DB diagnostics during link change: Got invalid asic index for {first_logical_port}, ignored")
+            return
+
+        # Check if the port is in error status
+        if sfp_status_helper.detect_port_in_error_status(first_logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
+            return
+
+        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
+            return
+
+        # Update TRANSCEIVER_DOM_FLAG and metadata tables
+        try:
+            self.dom_db_utils.post_port_dom_flags_to_db(first_logical_port)
+        except (KeyError, TypeError) as e:
+            self.log_warning(f"Update DB diagnostics during link change: Got exception {repr(e)} while processing dom flags for port {first_logical_port}, ignored")
+            return
+
+        # Update TRANSCEIVER_STATUS_FLAG and metadata tables
+        try:
+            self.status_db_utils.post_port_transceiver_hw_status_flags_to_db(first_logical_port)
+        except (KeyError, TypeError) as e:
+            #continue to process next port since exception could be raised due to port reset, transceiver removal
+            self.log_warning(f"Update DB diagnostics during link change: Got exception {repr(e)} while processing transceiver status hw flags for port {first_logical_port}, ignored")
+            return
+
+        # Update TRANSCEIVER_VDM_XXX_FLAG and metadata tables
+        if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+            try:
+                # Read and post VDM flags and metadata to DB
+                self.vdm_db_utils.post_port_vdm_flags_to_db(first_logical_port)
+            except (KeyError, TypeError) as e:
+                #continue to process next port since execption could be raised due to port reset, transceiver removal
+                self.log_warning(f"Update DB diagnostics during link change: Got exception {repr(e)} while processing vdm flags for port {first_logical_port}, ignored")
+                return
 
     def on_port_config_change(self, port_change_event):
         if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:

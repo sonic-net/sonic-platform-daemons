@@ -2503,8 +2503,14 @@ class TestXcvrdScript(object):
         host_lanes_mask = 0xc
         ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert int_tbl.getKeys() == ["Ethernet0"]
-        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane1': 'N/A',
+                                                        'active_apsel_hostlane2': 'N/A',
+                                                        'active_apsel_hostlane3': '1',
                                                         'active_apsel_hostlane4': '1',
+                                                        'active_apsel_hostlane5': 'N/A',
+                                                        'active_apsel_hostlane6': 'N/A',
+                                                        'active_apsel_hostlane7': 'N/A',
+                                                        'active_apsel_hostlane8': 'N/A',
                                                         'host_lane_count': '8',
                                                         'media_lane_count': '4'}
         # case: full lanes update
@@ -2512,8 +2518,14 @@ class TestXcvrdScript(object):
         host_lanes_mask = 0xff
         task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8"]
-        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane3': '1',
+        assert dict(int_tbl.mock_dict["Ethernet0"]) == {'active_apsel_hostlane1': 'N/A',
+                                                        'active_apsel_hostlane2': 'N/A',
+                                                        'active_apsel_hostlane3': '1',
                                                         'active_apsel_hostlane4': '1',
+                                                        'active_apsel_hostlane5': 'N/A',
+                                                        'active_apsel_hostlane6': 'N/A',
+                                                        'active_apsel_hostlane7': 'N/A',
+                                                        'active_apsel_hostlane8': 'N/A',
                                                         'host_lane_count': '8',
                                                         'media_lane_count': '4'}
         assert dict(int_tbl.mock_dict["Ethernet8"]) == {'active_apsel_hostlane1': '2',
@@ -2532,8 +2544,14 @@ class TestXcvrdScript(object):
         host_lanes_mask = 0xc
         ret = task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask, reset_apsel=True)
         assert int_tbl.getKeys() == ["Ethernet0", "Ethernet8", "Ethernet16"]
-        assert dict(int_tbl.mock_dict["Ethernet16"]) == {'active_apsel_hostlane3': 'N/A',
+        assert dict(int_tbl.mock_dict["Ethernet16"]) == {'active_apsel_hostlane1': 'N/A',
+                                                        'active_apsel_hostlane2': 'N/A',
+                                                        'active_apsel_hostlane3': 'N/A',
                                                         'active_apsel_hostlane4': 'N/A',
+                                                        'active_apsel_hostlane5': 'N/A',
+                                                        'active_apsel_hostlane6': 'N/A',
+                                                        'active_apsel_hostlane7': 'N/A',
+                                                        'active_apsel_hostlane8': 'N/A',
                                                         'host_lane_count': 'N/A',
                                                         'media_lane_count': 'N/A'}
 
@@ -3339,12 +3357,14 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.task_stopping_event.is_set = MagicMock(return_value=True)
         task.start()
         task.join()
         assert not task.is_alive()
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status')
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
@@ -3366,10 +3386,11 @@ class TestXcvrdScript(object):
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
         mock_detect_error.return_value = True
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task.dom_db_utils = MagicMock()
         task.dom_db_utils.post_port_dom_sensor_info_to_db = MagicMock()
         task.dom_db_utils.post_port_dom_flags_to_db.return_value = MagicMock()
@@ -3393,7 +3414,10 @@ class TestXcvrdScript(object):
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
         assert mock_post_pm_info.call_count == 0
         mock_detect_error.return_value = False
-        task.task_stopping_event.wait = MagicMock(side_effect=[False, False, True])
+        mock_select.return_value = (swsscommon.Select.TIMEOUT, None)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(side_effect=('disabled', 'enabled'))
         task.task_worker()
         assert mock_post_firmware_info.call_count == 1
@@ -3410,23 +3434,21 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
-    @patch('swsscommon.swsscommon.SubscriberStateTable')
-    @patch('swsscommon.swsscommon.Select.select')
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
-    def test_DomInfoUpdateTask_task_worker_vdm_failure(self, mock_post_pm_info, mock_select, mock_sub_table):
-        mock_selectable = MagicMock()
-        mock_selectable.pop = MagicMock(
-            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None), (None, None, None), (None, None, None)])
-        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
-        mock_sub_table.return_value = mock_selectable
-
+    def test_DomInfoUpdateTask_task_worker_vdm_failure(self, mock_post_pm_info):
         port_mapping = PortMapping()
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
         task.dom_db_utils = MagicMock()
@@ -3441,10 +3463,6 @@ class TestXcvrdScript(object):
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
         task.task_worker()
-        assert task.port_mapping.logical_port_list.count('Ethernet0')
-        assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
-        assert task.port_mapping.get_physical_to_logical(1) == ['Ethernet0']
-        assert task.port_mapping.get_logical_to_physical('Ethernet0') == [1]
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
@@ -3460,7 +3478,7 @@ class TestXcvrdScript(object):
         # Test the case where the VDM stats are successfully frozen but the VDM stats are not successfully unfrozen
         task.vdm_utils._freeze_vdm_stats_and_confirm.return_value = True
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = False
-        task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
@@ -3478,13 +3496,80 @@ class TestXcvrdScript(object):
         # mock_post_diagnostic_value raises an exception
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = True
         task.vdm_db_utils.post_port_vdm_real_values_to_db.side_effect = TypeError
-        task.task_stopping_event.wait = MagicMock(side_effect=[False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
         assert mock_post_pm_info.call_count == 0
+
+    @pytest.mark.parametrize(
+        "physical_port, logical_port_list, asic_index, transceiver_presence, port_in_error_status, vdm_supported, expected_logs",
+        [
+            # Case 1: Valid port, all updates succeed
+            (1, ["Ethernet0"], 0, True, False, True, []),
+
+            # Case 2: Invalid physical port (logical_port_list is None)
+            (2, None, None, False, False, False, ["Update DB diagnostics during link change: Unknown physical port index 2"]),
+
+            # Case 3: Invalid ASIC index
+            (3, ["Ethernet1"], None, False, False, False, ["Update DB diagnostics during link change: Got invalid asic index for Ethernet1, ignored"]),
+
+            # Case 4: Port in error status
+            (4, ["Ethernet2"], 1, True, True, False, []),
+
+            # Case 5: Transceiver not present
+            (5, ["Ethernet3"], 1, False, False, False, []),
+
+            # Case 6: VDM not supported
+            (6, ["Ethernet4"], 1, True, False, False, []),
+        ],
+    )
+    def test_update_port_db_diagnostics_on_link_change(
+        self,
+        physical_port,
+        logical_port_list,
+        asic_index,
+        transceiver_presence,
+        port_in_error_status,
+        vdm_supported,
+        expected_logs,
+    ):
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+
+        # Mock dependencies
+        task.task_stopping_event.is_set = MagicMock(return_value=False)
+        task.port_mapping.get_physical_to_logical = MagicMock(return_value=logical_port_list)
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=asic_index)
+        task.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=transceiver_presence)
+        task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
+        task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=vdm_supported)
+        task.xcvr_table_helper.get_status_sw_tbl = MagicMock()
+        task.dom_db_utils.post_port_dom_flags_to_db = MagicMock()
+        task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
+        task.log_warning = MagicMock()
+
+        # Mock sfp_status_helper
+        with patch("xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status", return_value=port_in_error_status):
+            # Call the function
+            task.update_port_db_diagnostics_on_link_change(physical_port)
+
+        # Verify logs
+        for log in expected_logs:
+            task.log_warning.assert_any_call(log)
+
+        # Verify function calls
+        if asic_index and transceiver_presence and logical_port_list and not port_in_error_status:
+            assert task.dom_db_utils.post_port_dom_flags_to_db.call_count == 1
+            assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count == 1
+            if vdm_supported:
+                assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
 
     @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd.XcvrTableHelper')

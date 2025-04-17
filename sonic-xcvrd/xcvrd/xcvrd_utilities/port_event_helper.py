@@ -32,7 +32,13 @@ class PortChangeEvent:
         self.table_name = table_name
 
     def __str__(self):
-        return '{} - name={} index={} asic_id={}'.format('Add' if self.event_type == self.PORT_ADD else 'Remove',
+        event_type_str = {
+            self.PORT_ADD: 'Add',
+            self.PORT_REMOVE: 'Remove',
+            self.PORT_SET: 'Set',
+            self.PORT_DEL: 'Delete'
+        }.get(self.event_type, 'Unknown')
+        return '{} - name={} index={} asic_id={}'.format(event_type_str,
                                                          self.port_name,
                                                          self.port_index,
                                                          self.asic_id)
