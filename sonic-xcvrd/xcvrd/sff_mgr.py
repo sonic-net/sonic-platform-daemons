@@ -34,6 +34,9 @@ class SffLoggerForPortUpdateEvent:
     def log_error(self, message):
         self.logger.log_error("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
+    def log_debug(self, message):
+        self.logger.log_debug("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
 # Thread wrapper class for SFF compliant transceiver management
 class SffManagerTask(threading.Thread):
 

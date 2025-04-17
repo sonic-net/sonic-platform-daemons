@@ -27,11 +27,11 @@ def fetch_generic_error_description(error_bits):
     return error_descriptions
 
 
-def detect_port_in_error_status(logical_port_name, status_tbl):
-    rec, fvp = status_tbl.get(logical_port_name)
+def detect_port_in_error_status(logical_port_name, status_sw_tbl):
+    rec, fvp = status_sw_tbl.get(logical_port_name)
     if rec:
-        status_dict = dict(fvp)
-        error = status_dict.get('error')
+        status_sw_dict = dict(fvp)
+        error = status_sw_dict.get('error')
         if error is not None:
             return SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING in error
         else:

@@ -11,8 +11,17 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 TRANSCEIVER_INFO_TABLE = 'TRANSCEIVER_INFO'
 TRANSCEIVER_FIRMWARE_INFO_TABLE = 'TRANSCEIVER_FIRMWARE_INFO'
 TRANSCEIVER_DOM_SENSOR_TABLE = 'TRANSCEIVER_DOM_SENSOR'
+TRANSCEIVER_DOM_FLAG_TABLE = 'TRANSCEIVER_DOM_FLAG'
+TRANSCEIVER_DOM_FLAG_CHANGE_COUNT_TABLE = 'TRANSCEIVER_DOM_FLAG_CHANGE_COUNT'
+TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE = 'TRANSCEIVER_DOM_FLAG_SET_TIME'
+TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE = 'TRANSCEIVER_DOM_FLAG_CLEAR_TIME'
 TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
+TRANSCEIVER_STATUS_FLAG_TABLE = 'TRANSCEIVER_STATUS_FLAG'
+TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE = 'TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT'
+TRANSCEIVER_STATUS_FLAG_SET_TIME_TABLE = 'TRANSCEIVER_STATUS_FLAG_SET_TIME'
+TRANSCEIVER_STATUS_FLAG_CLEAR_TIME_TABLE = 'TRANSCEIVER_STATUS_FLAG_CLEAR_TIME'
+TRANSCEIVER_STATUS_SW_TABLE = 'TRANSCEIVER_STATUS_SW'
 TRANSCEIVER_VDM_REAL_VALUE_TABLE = 'TRANSCEIVER_VDM_REAL_VALUE'
 TRANSCEIVER_VDM_HALARM_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_HALARM_THRESHOLD'
 TRANSCEIVER_VDM_LALARM_THRESHOLD_TABLE = 'TRANSCEIVER_VDM_LALARM_THRESHOLD'
@@ -48,6 +57,15 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.cfg_db = {}
+        self.dom_flag_tbl = {}
+        self.dom_flag_change_count_tbl = {}
+        self.dom_flag_set_time_tbl = {}
+        self.dom_flag_clear_time_tbl = {}
+        self.status_flag_tbl = {}
+        self.status_flag_change_count_tbl = {}
+        self.status_flag_set_time_tbl = {}
+        self.status_flag_clear_time_tbl = {}
+        self.status_sw_tbl = {}
         self.vdm_real_value_tbl = {}
         VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
         self.vdm_threshold_tbl = {f'vdm_{t}_threshold_tbl': {} for t in VDM_THRESHOLD_TYPES}
@@ -60,8 +78,17 @@ class XcvrTableHelper:
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
             self.int_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
             self.dom_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_SENSOR_TABLE)
+            self.dom_flag_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_TABLE)
+            self.dom_flag_change_count_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_CHANGE_COUNT_TABLE)
+            self.dom_flag_set_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE)
+            self.dom_flag_clear_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE)
             self.dom_threshold_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_THRESHOLD_TABLE)
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
+            self.status_flag_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_TABLE)
+            self.status_flag_change_count_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE)
+            self.status_flag_set_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_SET_TIME_TABLE)
+            self.status_flag_clear_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_CLEAR_TIME_TABLE)
+            self.status_sw_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_SW_TABLE)
             self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
             self.firmware_info_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_FIRMWARE_INFO_TABLE)
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
@@ -83,11 +110,38 @@ class XcvrTableHelper:
     def get_dom_tbl(self, asic_id):
         return self.dom_tbl[asic_id]
 
+    def get_dom_flag_tbl(self, asic_id):
+        return self.dom_flag_tbl[asic_id]
+
+    def get_dom_flag_change_count_tbl(self, asic_id):
+        return self.dom_flag_change_count_tbl[asic_id]
+
+    def get_dom_flag_set_time_tbl(self, asic_id):
+        return self.dom_flag_set_time_tbl[asic_id]
+
+    def get_dom_flag_clear_time_tbl(self, asic_id):
+        return self.dom_flag_clear_time_tbl[asic_id]
+
     def get_dom_threshold_tbl(self, asic_id):
         return self.dom_threshold_tbl[asic_id]
 
     def get_status_tbl(self, asic_id):
         return self.status_tbl[asic_id]
+
+    def get_status_flag_tbl(self, asic_id):
+        return self.status_flag_tbl[asic_id]
+
+    def get_status_flag_change_count_tbl(self, asic_id):
+        return self.status_flag_change_count_tbl[asic_id]
+
+    def get_status_flag_set_time_tbl(self, asic_id):
+        return self.status_flag_set_time_tbl[asic_id]
+
+    def get_status_flag_clear_time_tbl(self, asic_id):
+        return self.status_flag_clear_time_tbl[asic_id]
+
+    def get_status_sw_tbl(self, asic_id):
+        return self.status_sw_tbl[asic_id]
 
     def get_vdm_threshold_tbl(self, asic_id, threshold_type):
         return self.vdm_threshold_tbl[f'vdm_{threshold_type}_threshold_tbl'][asic_id]
