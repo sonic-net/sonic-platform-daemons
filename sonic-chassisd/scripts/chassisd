@@ -878,7 +878,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def persist_dpu_reboot_time(self, module):
         """Persist the current reboot time to a file."""
         time_str = self._get_current_time_str()
-        path = self._get_history_path(module, "prev_reboot_time.txt")
+        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w') as f:
@@ -886,7 +886,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def retrieve_dpu_reboot_time(self, module):
         """Retrieve the persisted reboot time from a file."""
-        path = self._get_history_path(module, "prev_reboot_time.txt")
+        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
 
         try:
             with open(path, 'r') as f:
@@ -912,8 +912,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if prev_reboot_time is None:
             prev_reboot_time = self._get_current_time_str()
 
-        file_name = f"{prev_reboot_time}_reboot_cause.txt"
-        prev_reboot_path = self._get_history_path(module, "prev_reboot_time.txt")
+        file_name = f"{prev_reboot_time}_reboot_cause.json"
+        prev_reboot_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
 
         if os.path.exists(prev_reboot_path):
             os.remove(prev_reboot_path)
@@ -982,7 +982,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 self.chassis_state_db.delete(key)
 
         # Fetch the list of reboot cause history files
-        history_path = f"/host/reboot-cause/module/{module.lower()}/history/*_reboot_cause.txt"
+        history_path = f"/host/reboot-cause/module/{module.lower()}/history/*_reboot_cause.json"
         reboot_cause_files = glob.glob(history_path)
 
         if not reboot_cause_files:
