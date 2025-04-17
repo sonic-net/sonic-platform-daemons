@@ -5,7 +5,7 @@ as a child thread of xcvrd main thread.
 """
 
 from contextlib import contextmanager
-import time
+import datetime
 
 
 try:
@@ -34,6 +34,7 @@ SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 
 class DomInfoUpdateTask(threading.Thread):
     DOM_INFO_UPDATE_PERIOD_SECS = 60
+    DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
     DOM_PORT_CHG_OBSERVER_TBL_MAP = [
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
     ]
@@ -49,7 +50,7 @@ class DomInfoUpdateTask(threading.Thread):
         self.namespaces = namespaces
         self.skip_cmis_mgr = skip_cmis_mgr
         self.sfp_obj_dict = sfp_obj_dict
-        self.pending_diagnostics_update_ports = set()
+        self.link_change_affected_ports = {}
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, helper_logger)
         self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
@@ -211,31 +212,33 @@ class DomInfoUpdateTask(threading.Thread):
 
         # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
         # before starting the periodic update
-        next_periodic_db_update_time = time.time() + dom_info_update_periodic_secs
+        next_periodic_db_update_time = datetime.datetime.now() + datetime.timedelta(seconds=dom_info_update_periodic_secs)
         is_periodic_db_update_needed = False
 
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
             # Check if periodic db update is needed
-            if next_periodic_db_update_time <= time.time():
+            if next_periodic_db_update_time <= datetime.datetime.now():
                 is_periodic_db_update_needed = True
 
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
 
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
-                # Process pending link change events and update relevant diagnostic
-                # information in the database. This ensures link change events are
-                # handled promptly between periodic updates, avoiding delays and
-                # duplicate updates for the same physical port during a single loop iteration.
+                # Process pending link change events and update diagnostic
+                # information in the database. Ensures timely handling of link
+                # change events and avoids duplicate updates in case of breakout ports.
                 port_change_observer.handle_port_update_event()
-                # Process each port in the pending link change set
-                for port in self.pending_diagnostics_update_ports:
+                # Process each port in the pending link change set based on the
+                # corresponding time to update the DB after the link change.
+                for link_changed_port in list(self.link_change_affected_ports.keys()):
                     if self.task_stopping_event.is_set():
                         self.log_notice("Stop event generated during DOM link change event processing")
                         break
-                    self.update_port_db_diagnostics_on_link_change(port)
-                self.pending_diagnostics_update_ports.clear()
+                    if self.link_change_affected_ports[link_changed_port] <= datetime.datetime.now():
+                        self.log_notice(f"Updating port db diagnostics post link change for port {link_changed_port}")
+                        self.update_port_db_diagnostics_on_link_change(link_changed_port)
+                        del self.link_change_affected_ports[link_changed_port]
 
                 if self.task_stopping_event.is_set():
                     self.log_notice("Stop event generated during DOM monitoring loop")
@@ -323,7 +326,8 @@ class DomInfoUpdateTask(threading.Thread):
 
             # Set the periodic db update time after all the ports are processed
             if is_periodic_db_update_needed:
-                next_periodic_db_update_time = time.time() + dom_info_update_periodic_secs
+                next_periodic_db_update_time = datetime.datetime.now() + \
+                                               datetime.timedelta(seconds=dom_info_update_periodic_secs)
                 is_periodic_db_update_needed = False
 
         self.log_notice("Stop DOM monitoring loop")
@@ -353,10 +357,15 @@ class DomInfoUpdateTask(threading.Thread):
         """
         if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_SET and \
             port_change_event.db_name == 'APPL_DB':
-            # Add the port to the pending link change set to consolidate
-            # link change events for all subports of the breakout group
+            # Add the port to the affected ports dictionary with the time
+            # to update the DB after the link change.
+            # This allows the module to update the real-time flag status
+            # before the DB is updated.
+            # Also, consolidate link change events for all affected subports of the breakout group
             # into a single event for processing.
-            self.pending_diagnostics_update_ports.add(port_change_event.port_index)
+            self.link_change_affected_ports[port_change_event.port_index] = (
+                            datetime.datetime.now() +
+                            datetime.timedelta(seconds=self.DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE))
 
     def update_port_db_diagnostics_on_link_change(self, physical_port):
         if self.task_stopping_event.is_set():
