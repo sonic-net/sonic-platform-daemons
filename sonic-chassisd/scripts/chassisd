@@ -746,6 +746,15 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             return 'empty'
 
+    def clear_transition_flag(self, key):
+        status, fvs = self.module_table.get(key)
+        if status:
+            fvs_dict = dict(fvs)
+            fvs_dict['state_transition_in_progress'] = 'False'
+            self.module_table.set(key, list(fvs_dict.items()))
+        else:
+            self.log_error("Could not clear module admin_status transition flag! {}".format(key))
+
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
@@ -776,6 +785,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
 
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
+
                 elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to online".format(key))
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
@@ -785,6 +797,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         self.persist_dpu_reboot_cause(reboot_cause, key)
                         # publish reboot cause to db
                         self.update_dpu_reboot_cause_to_db(key)
+
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
 
     def _get_module_info(self, module_index):
         """
