@@ -299,7 +299,7 @@ class FanUpdater(logger.Logger):
         if fan_type == FanType.PSU:
             parent_name = 'PSU {}'.format(parent_index + 1)
         elif fan_type == FanType.MODULE:
-            parent_name = 'Module {}'.format(parent_index + 1)
+            parent_name = try_get(parent.get_name, default='Module {}'.format(parent_index + 1))
         else:
             parent_name = drawer_name if drawer_name != NOT_AVAILABLE else CHASSIS_INFO_KEY
         fan_name = try_get(fan.get_name, '{} fan {}'.format(parent_name, fan_index + 1))
