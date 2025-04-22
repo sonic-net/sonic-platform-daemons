@@ -274,3 +274,67 @@ def test_get_port_table_event_no_key(mock_cast_selectable, mock_subscriber_table
     # Verify that the mock methods were called
     mock_cast_selectable.assert_called_once()
     mock_table.pop.assert_called_once()
+
+@pytest.fixture
+def mock_daemon_ledd():
+    """Fixture to create a mock DaemonLedd instance."""
+    daemon = ledd.DaemonLedd()
+    daemon.log_notice = mock.MagicMock()
+    daemon.fp_ports = mock.MagicMock()
+    return daemon
+
+def test_port_does_not_exist(mock_daemon_ledd):
+    """Test behavior when the port does not exist."""
+    mock_daemon_ledd.fp_ports.getPort.return_value = None
+
+    mock_daemon_ledd.processPortStateChange("Ethernet0", ledd.Port().PORT_DOWN)
+
+    mock_daemon_ledd.fp_ports.getPort.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.fp_ports.updatePortState.assert_not_called()
+    mock_daemon_ledd.log_notice.assert_not_called()
+    mock_daemon_ledd.fp_ports.updatePortLed.assert_not_called()
+
+def test_port_exists_state_unchanged(mock_daemon_ledd):
+    """Test behavior when the port exists but the state does not change."""
+    mock_daemon_ledd.fp_ports.getPort.return_value = "Ethernet0"
+    mock_daemon_ledd.fp_ports.updatePortState.return_value = False
+
+    mock_daemon_ledd.processPortStateChange("Ethernet0", ledd.Port().PORT_UP)
+
+    mock_daemon_ledd.fp_ports.getPort.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.fp_ports.updatePortState.assert_called_once_with("Ethernet0", ledd.Port().PORT_UP)
+    mock_daemon_ledd.fp_ports.areAllSubportsUp.assert_not_called()
+    mock_daemon_ledd.log_notice.assert_not_called()
+    mock_daemon_ledd.fp_ports.updatePortLed.assert_not_called()
+
+def test_port_exists_state_changed_all_subports_up(mock_daemon_ledd):
+    """Test behavior when the port exists, state changes, and all subports are up."""
+    mock_daemon_ledd.fp_ports.getPort.return_value = "valid_port"
+    mock_daemon_ledd.fp_ports.updatePortState.return_value = True
+    mock_daemon_ledd.fp_ports.areAllSubportsUp.return_value = True
+
+    mock_daemon_ledd.processPortStateChange("Ethernet0", ledd.Port().PORT_UP)
+
+    mock_daemon_ledd.fp_ports.getPort.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.fp_ports.updatePortState.assert_called_once_with("Ethernet0", ledd.Port().PORT_UP)
+    mock_daemon_ledd.fp_ports.areAllSubportsUp.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.log_notice.assert_called_once_with(
+        "Setting Port %s LED state change for %s" % ("Ethernet0", ledd.Port().PORT_UP)
+    )
+    mock_daemon_ledd.fp_ports.updatePortLed.assert_called_once_with("Ethernet0", ledd.Port().PORT_UP)
+
+def test_port_exists_state_changed_subports_down(mock_daemon_ledd):
+    """Test behavior when the port exists, state changes, but not all subports are up."""
+    mock_daemon_ledd.fp_ports.getPort.return_value = "valid_port"
+    mock_daemon_ledd.fp_ports.updatePortState.return_value = True
+    mock_daemon_ledd.fp_ports.areAllSubportsUp.return_value = False
+
+    mock_daemon_ledd.processPortStateChange("Ethernet0", ledd.Port().PORT_DOWN)
+
+    mock_daemon_ledd.fp_ports.getPort.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.fp_ports.updatePortState.assert_called_once_with("Ethernet0", ledd.Port().PORT_DOWN)
+    mock_daemon_ledd.fp_ports.areAllSubportsUp.assert_called_once_with("Ethernet0")
+    mock_daemon_ledd.log_notice.assert_called_once_with(
+        "Setting Port %s LED state change for %s" % ("Ethernet0", ledd.Port().PORT_DOWN)
+    )
+    mock_daemon_ledd.fp_ports.updatePortLed.assert_called_once_with("Ethernet0", ledd.Port().PORT_DOWN)
