@@ -73,6 +73,7 @@ class DOMDBUtils(DBUtils):
                 if db_cache is not None:
                     # If cache is enabled, put dom flag values to cache
                     db_cache[physical_port] = dom_flags_dict
+
             if dom_flags_dict is not None:
                 if not dom_flags_dict:
                     return
