@@ -162,7 +162,7 @@ def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, moc
 
 @mock.patch('swsscommon.swsscommon.Select.addSelectable', mock.MagicMock())
 @mock.patch("ledd.DaemonLedd.load_platform_util")
-@mock.patch("ledd.PortStateObserver.getDatabseTable")
+@mock.patch("ledd.PortStateObserver.getDatabaseTable")
 def test_find_front_panel_ports(mock_get_database_table, mock_load_platform_util):
     """
     Test DaemonLedd.findFrontPanelPorts to ensure it correctly processes namespaces and returns
