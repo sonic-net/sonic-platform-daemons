@@ -55,6 +55,7 @@ class Port():
 
     def isFrontPanelPort(self):
         return multi_asic.is_front_panel_port(self._name, self._role)
+
 class FrontPanelPorts:
     def __init__(self, fp_list, up_subports, logical_pmap, led_ctrl):
         # {port-index, total subports oper UP}
@@ -137,7 +138,7 @@ class PortStateObserver:
         db = daemon_base.db_connect(dbname, namespace=namespace)
         return db
     
-    def getDatabseTable(self, dbname, tblname, namespace):
+    def getDatabaseTable(self, dbname, tblname, namespace):
         db = self.connectDB(dbname, namespace)
         table = swsscommon.Table(db, tblname)
         return table
@@ -206,8 +207,8 @@ class DaemonLedd(daemon_base.DaemonBase):
         logical_port_mapping = {}
         
         for namespace in namespaces:
-            port_cfg_table = self.portObserver.getDatabseTable("CONFIG_DB", swsscommon.CFG_PORT_TABLE_NAME, namespace)
-            port_st_table = self.portObserver.getDatabseTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
+            port_cfg_table = self.portObserver.getDatabaseTable("CONFIG_DB", swsscommon.CFG_PORT_TABLE_NAME, namespace)
+            port_st_table = self.portObserver.getDatabaseTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
             for key in port_cfg_table.getKeys():
                 _, pcfg = port_cfg_table.get(key)
                 _, pstate = port_st_table.get(key)
@@ -220,8 +221,6 @@ class DaemonLedd(daemon_base.DaemonBase):
                             pcfg_dict.get('role', None))
                 if p.isFrontPanelPort():
                     logical_port_mapping[key] = p
-                    self.log_notice("$$$ Port = {}".format(p))
-                    #print("port list = {}".format(self.fp_port_list))
                     fp_port_list[p._index].add(key)
                     if p._state == Port.PORT_UP:
                         fp_port_up_subports[p._index] += 1

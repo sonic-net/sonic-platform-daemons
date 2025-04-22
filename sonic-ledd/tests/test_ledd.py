@@ -109,7 +109,7 @@ def test_port_state_observer_initialization(mock_select):
 @mock.patch("ledd.daemon_base.db_connect")
 def test_port_state_observer_get_database_table(mock_db_connect, mock_table):
     observer = ledd.PortStateObserver()
-    table = observer.getDatabseTable("STATE_DB", "PORT_TABLE", "namespace")
+    table = observer.getDatabaseTable("STATE_DB", "PORT_TABLE", "namespace")
     mock_db_connect.assert_called_once_with("STATE_DB", namespace="namespace")
     mock_table.assert_called_once_with(mock_db_connect.return_value, "PORT_TABLE")
     assert table == mock_table.return_value
