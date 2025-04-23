@@ -179,7 +179,7 @@ class DaemonLedd(daemon_base.DaemonBase):
 
         # Load platform-specific LedControl module
         try:
-            led_control = self.load_platform_util(LED_MODULE_NAME, LED_CLASS_NAME)
+            self.led_control = self.load_platform_util(LED_MODULE_NAME, LED_CLASS_NAME)
         except Exception as e:
             self.log_error("Failed to load ledutil: %s" % (str(e)), True)
             sys.exit(LEDUTIL_LOAD_ERROR)
@@ -194,7 +194,7 @@ class DaemonLedd(daemon_base.DaemonBase):
 
         # Discover the front panel ports
         fp_plist, fp_ups, lmap = self.findFrontPanelPorts(namespaces)
-        self.fp_ports = FrontPanelPorts(fp_plist, fp_ups, lmap, led_control)
+        self.fp_ports = FrontPanelPorts(fp_plist, fp_ups, lmap, self.led_control)
 
         # Initialize the port LEDs color
         self.fp_ports.initPortLeds()
