@@ -247,6 +247,37 @@ def strip_unit_and_beautify(value, unit):
         return str(value)
 
 
+def notify_system_ready(fail_status=False, fail_reason='-'):
+    key = 'FEATURE|pmon'
+    statusvalue = {}
+
+    try:
+        state_db = swsscommon.SonicV2Connector()
+        state_db.connect(state_db.STATE_DB)
+    except Exception:
+        helper_logger.log_error('Failed to connect STATE_DB to report '
+                                f'{SYSLOG_IDENTIFIER} ready status')
+        return
+
+    if fail_status:
+        statusvalue['up_status'] = 'false'
+        statusvalue['fail_reason'] = fail_reason
+    else:
+        statusvalue['up_status'] = 'true'
+
+    if getattr(notify_system_ready, 'reported', False):
+        helper_logger.log_debug(
+            f'{SYSLOG_IDENTIFIER} ready status already reported. Tried to '
+            f'report status: {statusvalue}')
+        return
+
+    state_db.delete(state_db.STATE_DB, key)
+    state_db.hmset(state_db.STATE_DB, key, statusvalue)
+    helper_logger.log_info(f'Report {SYSLOG_IDENTIFIER} ready status: '
+                           f'{statusvalue}')
+    notify_system_ready.reported = True
+
+
 def _wrapper_get_presence(physical_port):
     if platform_chassis is not None:
         try:
@@ -2346,6 +2377,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         for thread in self.threads:
             self.log_notice("Started thread {}".format(thread.getName()))
 
+        notify_system_ready()
         self.stop_event.wait()
 
         self.log_notice("Stop daemon main loop")
@@ -2361,6 +2393,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                     generate_sigkill = True
 
         if generate_sigkill is True:
+            # Notify system not ready
+            notify_system_ready(False, "Exception occured in xcvrd daemon")
             self.log_error("Exiting main loop as child thread raised exception!")
             os.kill(os.getpid(), signal.SIGKILL)
 
@@ -2389,6 +2423,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Shutting down...")
 
         if self.sfp_error_event.is_set():
+            # Notify system not ready
+            notify_system_ready(False, "SFP system error")
             sys.exit(SFP_SYSTEM_ERROR)
 
 
