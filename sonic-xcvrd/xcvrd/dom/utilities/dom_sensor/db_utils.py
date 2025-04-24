@@ -35,8 +35,7 @@ class DOMDBUtils(DBUtils):
                                                  self.xcvr_table_helper.get_dom_tbl(asic_index),
                                                  self.dom_utils.get_transceiver_dom_sensor_real_value,
                                                  db_cache=db_cache,
-                                                 beautify_func=self._beautify_dom_info_dict,
-                                                 enable_flat_memory_check=True)
+                                                 beautify_func=self._beautify_dom_info_dict)
 
     def post_port_dom_flags_to_db(self, logical_port_name, db_cache=None):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
@@ -45,7 +44,7 @@ class DOMDBUtils(DBUtils):
                                   "as no asic index found")
             return
 
-        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check=True)
+        physical_port = self._validate_and_get_physical_port(logical_port_name)
         if physical_port is None:
             return
 
@@ -103,8 +102,7 @@ class DOMDBUtils(DBUtils):
                                                  self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
                                                  self.dom_utils.get_transceiver_dom_thresholds,
                                                  db_cache=db_cache,
-                                                 beautify_func=self._beautify_dom_info_dict,
-                                                 enable_flat_memory_check=True)
+                                                 beautify_func=self._beautify_dom_info_dict)
 
     def _strip_unit(self, value, unit):
         # Strip unit from raw data
