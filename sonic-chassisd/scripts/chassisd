@@ -711,11 +711,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             return 'empty'
 
     def clear_transition_flag(self, key):
-        status, fvs = self.module_table.get(key)
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        chassis_module_table = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
+        status, fvs = chassis_module_table.get(key)
         if status:
             fvs_dict = dict(fvs)
             fvs_dict['state_transition_in_progress'] = 'False'
-            self.module_table.set(key, list(fvs_dict.items()))
+            chassis_module_table.set(key, list(fvs_dict.items()))
         else:
             self.log_error("Could not clear module admin_status transition flag! {}".format(key))
 
