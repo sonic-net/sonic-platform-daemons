@@ -834,8 +834,8 @@ class CmisManagerTask(threading.Thread):
         """
         Reset app code if non default app code needs to configured
         """
-	status_tbl = self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport))
-	is_decomm = get_decommission_state_from_state_db(lport, status_tbl)
+        status_tbl = self.xcvr_table_helper.get_status_tbl(self.get_asic_id(lport))
+        is_decomm = get_decommission_state_from_state_db(lport, status_tbl)
 
         if is_decomm == True:
             return False
