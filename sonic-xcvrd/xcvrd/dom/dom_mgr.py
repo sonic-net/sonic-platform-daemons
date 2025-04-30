@@ -34,6 +34,7 @@ class DomInfoUpdateTask(threading.Thread):
         threading.Thread.__init__(self)
         self.name = "DomInfoUpdateTask"
         self.exc = None
+        self.dom_th_info_cache = {}
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.helper_logger = helper_logger
@@ -265,10 +266,12 @@ class DomInfoUpdateTask(threading.Thread):
         self.log_notice("Start DOM monitoring loop")
         firmware_info_cache = {}
         dom_info_cache = {}
+        dom_th_info_cache = {}
         transceiver_status_cache = {}
         vdm_real_value_cache = {}
         vdm_flag_cache = {}
         pm_info_cache = {}
+        temperature_status = {}
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
 
         # Start loop to update dom info in DB periodically
@@ -276,10 +279,12 @@ class DomInfoUpdateTask(threading.Thread):
             # Clear the cache at the begin of the loop to make sure it will be clear each time
             firmware_info_cache.clear()
             dom_info_cache.clear()
+            dom_th_info_cache.clear()
             transceiver_status_cache.clear()
             vdm_real_value_cache.clear()
             vdm_flag_cache.clear()
             pm_info_cache.clear()
+            temperature_status.clear()
 
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
@@ -310,6 +315,7 @@ class DomInfoUpdateTask(threading.Thread):
 
                     try:
                         self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event, firmware_info_cache=firmware_info_cache)
+                        xcvrd.post_port_dom_threshold_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_dom_threshold_tbl(asic_index), self.task_stopping_event, dom_th_info_cache=self.dom_th_info_cache)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing firmware info for port {}, ignored".format(repr(e), logical_port_name))
@@ -326,6 +332,11 @@ class DomInfoUpdateTask(threading.Thread):
                                                                 self.xcvr_table_helper.get_status_tbl(asic_index),
                                                                 self.task_stopping_event,
                                                                 transceiver_status_cache=transceiver_status_cache)
+                        self.update_transceiver_temperature_status(logical_port_name,
+                                                                self.port_mapping,
+                                                                dom_info_cache,
+                                                                self.dom_th_info_cache,
+                                                                temperature_status)
                     except (KeyError, TypeError) as e:
                         #continue to process next port since execption could be raised due to port reset, transceiver removal
                         self.log_warning("Got exception {} while processing transceiver status hw for port {}, ignored".format(repr(e), logical_port_name))
@@ -359,6 +370,66 @@ class DomInfoUpdateTask(threading.Thread):
                                 continue
 
         self.log_notice("Stop DOM monitoring loop")
+
+    def update_transceiver_temperature_status(self, logical_port_name,port_mapping,dom_info_cache, dom_th_info_cache, temperature_status):
+        TEMP_NORMAL = 0
+        TEMP_HIGH_ALARM = 1
+        TEMP_LOW_ALARM = 2
+        TEMP_HIGH_WARNING = 3
+        TEMP_LOW_WARNING = 4
+
+        TEMP_ERROR_TO_DESCRIPTION_DICT = {
+            TEMP_NORMAL: "normal",
+            TEMP_HIGH_ALARM: "temperature high alarm",
+            TEMP_LOW_ALARM: "temperature low alarm",
+            TEMP_HIGH_WARNING: "temperature high warning",
+            TEMP_LOW_WARNING: "temperature low warning"
+        }
+
+        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
+            if self.task_stopping_event.is_set():
+                break
+
+            if not xcvrd._wrapper_get_presence(physical_port):
+                continue
+
+            ori_temp_status = temperature_status.get(physical_port)
+            if ori_temp_status is None:
+                ori_temp_status = TEMP_NORMAL
+                temperature_status[physical_port] = ori_temp_status
+            new_temp_status = TEMP_NORMAL
+
+            dom_info_dict = dom_info_cache.get(physical_port)
+            dom_th_info_dict = dom_th_info_cache.get(physical_port)
+            if dom_info_dict is not None and dom_th_info_dict is not None:
+                temperature = dom_info_dict.get("temperature")
+                temphighalarm = dom_th_info_dict.get("temphighalarm")
+                templowalarm = dom_th_info_dict.get("templowalarm")
+                temphighwarning = dom_th_info_dict.get("temphighwarning")
+                templowwarning = dom_th_info_dict.get("templowwarning")
+                if temperature != 'N/A' and temphighalarm != 'N/A' and templowalarm != 'N/A' and \
+                   temphighwarning != 'N/A' and templowwarning != 'N/A':
+                    if float(temperature) > float(temphighalarm):
+                        new_temp_status = TEMP_HIGH_ALARM
+                    elif float(temperature) > float(temphighwarning):
+                        new_temp_status = TEMP_HIGH_WARNING
+                    elif float(temperature) < float(templowalarm):
+                        new_temp_status = TEMP_LOW_ALARM
+                    elif float(temperature) < float(templowwarning):
+                        new_temp_status = TEMP_LOW_WARNING
+                    else:
+                        new_temp_status = TEMP_NORMAL
+
+            # Add syslog for temperature
+            if ori_temp_status != new_temp_status:
+                temperature_status[physical_port] = new_temp_status
+                helper_logger.log_notice("{}: temperature status change from {} to {}".format(
+                                         physical_port_name,
+                                         TEMP_ERROR_TO_DESCRIPTION_DICT[ori_temp_status],
+                                         TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
+            elif new_temp_status > 0:
+                helper_logger.log_notice("{}: {}".format(physical_port_name, TEMP_ERROR_TO_DESCRIPTION_DICT[new_temp_status]))
+                
 
     def run(self):
         if self.task_stopping_event.is_set():

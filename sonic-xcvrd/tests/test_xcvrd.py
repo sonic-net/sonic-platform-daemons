@@ -776,6 +776,57 @@ class TestXcvrdScript(object):
         assert status_tbl.get_size_for_key(logical_port_name) == 5
 
     @patch('xcvrd.xcvrd.get_physical_port_name_dict', MagicMock(return_value={0: 'Ethernet0'}))
+    @patch('xcvrd.xcvrd._wrapper_get_presence', MagicMock(return_value=True))
+    def test_update_transceiver_temperature_status(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        mock_sfp_obj_dict = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, helper_logger)
+        temperature_status = {}
+        logical_port_name = 'Ethernet0'
+        physical_port = 0
+
+        # Case: temperature exceeds high alarm
+        dom_info_cache = {
+            physical_port: {'temperature': '95'}
+        }
+        dom_th_info_cache = {
+            physical_port: {
+                'temphighalarm': '90',
+                'templowalarm': '10',
+                'temphighwarning': '80',
+                'templowwarning': '20'
+            }
+        }
+        temperature_status={}
+
+        task.update_transceiver_error_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
+
+        # Assert that status updated and logger was called with expected message
+        assert temperature_status[0] == 1  # TEMP_HIGH_ALARM
+        
+        # Case: Low temperaturealarm
+        dom_info_cache = {
+            physical_port: {'temperature': '0'}
+        }
+        dom_th_info_cache = {
+            physical_port: {
+                'temphighalarm': '90',
+                'templowalarm': '10',
+                'temphighwarning': '80',
+                'templowwarning': '20'
+            }
+        }
+        
+        temperature_status.clear()
+
+        task.update_transceiver_error_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
+
+        # Assert that status updated and logger was called with expected message
+        assert temperature_status[0] == 2  # LOW_HIGH_ALARM
+
+    @patch('xcvrd.xcvrd.get_physical_port_name_dict', MagicMock(return_value={0: 'Ethernet0'}))
     def test_delete_port_from_status_table_hw(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
