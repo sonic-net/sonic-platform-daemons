@@ -187,7 +187,14 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
@@ -214,7 +221,14 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 2
     config_updater.module_config_update(name, admin_state)
 
@@ -475,7 +489,14 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
     assert module.get_admin_state() == admin_state
