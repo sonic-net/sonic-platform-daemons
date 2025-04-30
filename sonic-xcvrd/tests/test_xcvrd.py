@@ -801,7 +801,7 @@ class TestXcvrdScript(object):
         }
         temperature_status={}
 
-        task.update_transceiver_error_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
+        task.update_transceiver_temperature_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
 
         # Assert that status updated and logger was called with expected message
         assert temperature_status[0] == 1  # TEMP_HIGH_ALARM
@@ -821,7 +821,7 @@ class TestXcvrdScript(object):
         
         temperature_status.clear()
 
-        task.update_transceiver_error_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
+        task.update_transceiver_temperature_status(logical_port_name, port_mapping,dom_info_cache, dom_th_info_cache, temperature_status)
 
         # Assert that status updated and logger was called with expected message
         assert temperature_status[0] == 2  # LOW_HIGH_ALARM
