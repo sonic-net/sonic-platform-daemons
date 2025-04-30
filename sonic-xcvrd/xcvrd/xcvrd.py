@@ -952,23 +952,6 @@ class CmisManagerTask(threading.Thread):
 
         return done
 
-    def update_port_xcvr_status_tbl_decommission_state(self, lport, decommission_state):
-        """
-        Update decommission state for all logical ports in physical port
-        """
-        physical_port = self.port_mapping.get_logical_to_physical(lport)
-        logical_ports = self.port_mapping.get_physical_to_logical(int(physical_port[0]))
-        for port in logical_ports:
-            asic_index = self.port_mapping.get_asic_id_for_logical_port(port)
-            status_table = self.xcvr_table_helper.get_status_tbl(asic_index)
-            if status_table is None:
-                self.log_error("status_table is None while updating "
-                                    "sw DECOMMISSION state for lport {}".format(port))
-                return
-
-            fvs = swsscommon.FieldValuePairs([('decommission_state', decommission_state)])
-            status_table.set(port, fvs)
-
     def check_datapath_init_pending(self, api, host_lanes_mask):
         """
         Check if the CMIS datapath init is pending
