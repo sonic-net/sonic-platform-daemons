@@ -2682,7 +2682,7 @@ class TestXcvrdScript(object):
         # Shouldn't proceed to DP_DEINIT on error
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert not get_cmis_state_from_state_db('Ethernet1', task.xcvr_table_helper.get_status_tbl(task.get_asic_id('Ethernet1'))) == CMIS_STATE_DP_PRE_INIT_CHECK
+        assert not get_cmis_state_from_state_db('Ethernet1', task.xcvr_table_helper.get_status_tbl(task.get_asic_id('Ethernet1'))) == CMIS_STATE_DP_DEINIT
 
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
