@@ -566,7 +566,7 @@ def get_decommission_state_from_state_db(lport, status_tbl):
     if found and 'decommission_state' in dict(xcvr_status_dict):
         return dict(xcvr_status_dict)['decommission_state']
     else:
-        return CMIS_STATE_UNKNOWN
+        return False
 
 # Delete port from SFP status table
 
