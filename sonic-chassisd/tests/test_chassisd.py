@@ -1538,7 +1538,7 @@ def test_task_worker_loop():
 
     # Patch the swsscommon.Select to use this mock
     with patch('tests.mock_swsscommon.Select', return_value=mock_select):
-        config_manager = SmartSwitchConfigManagerTask()
+        config_manager = SmartSwitchConfigManagerTask(set_transition_flag_callback=MagicMock())
 
         config_manager.config_updater = MagicMock()
 
