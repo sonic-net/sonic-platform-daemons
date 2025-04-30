@@ -2115,6 +2115,15 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_status_tbl.return_value = mock_status_tbl
         task.update_port_xcvr_status_tbl_decommission_state(port_mapping, lport, decommission_state)
 
+    @pytest.mark.parametrize("mock_found, mock_status_dict, expected_decom_state", [
+        (True, {'decommission_state': True}, True),
+        (False, {}, False),
+        (True, {'other_key': 'some_value'}, False)
+    ])
+    def test_get_decommission_state_from_state_db(self, mock_found, mock_status_dict, expected_decom_state):
+        status_tbl = MagicMock()
+        status_tbl.get.return_value = (mock_found, mock_status_dict)
+        assert get_decommission_state_from_state_db("Ethernet0", status_tbl) == expected_decom_state
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
