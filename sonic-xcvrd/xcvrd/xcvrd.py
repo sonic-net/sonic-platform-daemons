@@ -904,9 +904,9 @@ class CmisManagerTask(threading.Thread):
         Try to force the restart of CMIS state machine
         """
         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_INSERTED)
-	self.port_dict[lport]['cmis_decom_state'] =  CMIS_DECOM_DEINIT
+        self.port_dict[lport]['cmis_decom_state'] =  CMIS_DECOM_DEINIT
         self.port_dict[lport]['cmis_retries'] = retries
-	self.port_dict[lport]['cmis_decom_expired'] = None
+        self.port_dict[lport]['cmis_decom_expired'] = None
         self.port_dict[lport]['cmis_expired'] = None # No expiration
 
     def check_module_state(self, api, states):
@@ -1453,7 +1453,7 @@ class CmisManagerTask(threading.Thread):
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
                         # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
-			if self.is_appl_reconfigure_required(api, appl, lport):
+                        if self.is_appl_reconfigure_required(api, appl, lport):
                             self.log_notice(f"{lport}: Decommissioning all lanes/datapaths to default AppSel=0")
                             decom_state = self.decomission_all_datapaths(lport, api)
                             if decom_state == RETRY:
