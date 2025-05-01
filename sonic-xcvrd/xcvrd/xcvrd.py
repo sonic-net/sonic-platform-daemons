@@ -622,6 +622,7 @@ class CmisManagerTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
+        self.port_mapping = copy.deepcopy(port_mapping)
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
