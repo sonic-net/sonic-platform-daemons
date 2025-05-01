@@ -1751,7 +1751,7 @@ def test_clear_transition_flag_sets_false_when_flag_present():
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
     daemon_chassisd.module_updater = module_updater
 
-    daemon_chassisd.clear_transition_flag("DPU0")
+    daemon_chassisd.module_updater.clear_transition_flag("DPU0")
 
     args = module_table.set.call_args[0][1]
     assert ('state_transition_in_progress', 'False') in args
@@ -1759,7 +1759,7 @@ def test_clear_transition_flag_sets_false_when_flag_present():
 
 def test_clear_transition_flag_sets_false_when_flag_missing():
     module_table = MagicMock()
-    module_table.get.return_value = (True, [('desc', 'test module')])  # no flag present
+    module_table.get.return_value = (True, [('desc', 'test module')])  # flag is absent
 
     module_updater = MagicMock()
     module_updater.module_table = module_table
@@ -1767,7 +1767,7 @@ def test_clear_transition_flag_sets_false_when_flag_missing():
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
     daemon_chassisd.module_updater = module_updater
 
-    daemon_chassisd.clear_transition_flag("DPU0")
+    daemon_chassisd.module_updater.clear_transition_flag("DPU0")
 
     args = module_table.set.call_args[0][1]
     assert ('state_transition_in_progress', 'False') in args
@@ -1788,24 +1788,26 @@ def test_clear_all_transition_flags_calls_clear_and_handles_exceptions():
         if key == "DPU1":
             raise Exception("Simulated error")
 
-    daemon_chassisd.clear_transition_flag = MagicMock(side_effect=mock_clear_transition_flag)
+    module_updater.clear_transition_flag.side_effect = mock_clear_transition_flag
 
-    daemon_chassisd.clear_all_transition_flags()
+    daemon_chassisd.module_updater.clear_all_transition_flags()
 
-    daemon_chassisd.clear_transition_flag.assert_any_call("DPU0")
-    daemon_chassisd.clear_transition_flag.assert_any_call("DPU1")
+    module_updater.clear_transition_flag.assert_any_call("DPU0")
+    module_updater.clear_transition_flag.assert_any_call("DPU1")
     daemon_chassisd.log_error.assert_called_once_with("Failed to clear transition flag for DPU1: Simulated error")
 
 
 def test_set_transition_flag_creates_entry_if_key_missing():
     module_table = MagicMock()
-    module_table.get.return_value = None  # Key doesn't exist
+    module_table.get.return_value = None  # Simulate missing key
 
     module_updater = MagicMock()
+    module_updater.module_table = module_table
+
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
     daemon_chassisd.module_updater = module_updater
 
-    daemon_chassisd.set_transition_flag(module_table, "DPU0")
+    daemon_chassisd.module_updater.set_transition_flag(module_table, "DPU0")
 
     args = module_table.set.call_args[0][1]
     assert ('state_transition_in_progress', 'True') in args
