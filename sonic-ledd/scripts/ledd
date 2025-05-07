@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
     ledd
@@ -10,12 +10,11 @@ import sys
 
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
-from sonic_py_common.interface import backplane_prefix, inband_prefix, recirc_prefix
 from swsscommon import swsscommon
 
 #============================= Constants =============================
 
-VERSION = '1.0'
+VERSION = '2.0'
 
 SYSLOG_IDENTIFIER = "ledd"
 
@@ -33,12 +32,150 @@ LED_CLASS_NAME = "LedControl"
 SELECT_TIMEOUT = 1000
 
 LEDUTIL_LOAD_ERROR = 1
+LEDUTIL_RUNTIME_ERROR = 2
+LEDD_SELECT_ERROR = 3
 
+MAX_FRONT_PANEL_PORTS = 256
+
+class Port():
+    PORT_UP = "up" # All subports are up
+    PORT_DOWN = "down" # All subports are down
+    PORT_OP_FIELD = "netdev_oper_status"
+
+    def __init__(self, name, index, state, subport, role):
+        self._name = name
+        self._index = index
+        self._state = state
+        self._subport = subport
+        self._role = role
+
+    def __str__(self):
+        return "Port(name={}, index={}, state={}, subport={}, role={})".format(
+                    self._name, self._index, self._state, self._subport, self._role)
+
+    def isFrontPanelPort(self):
+        return multi_asic.is_front_panel_port(self._name, self._role)
+
+class FrontPanelPorts:
+    def __init__(self, fp_list, up_subports, logical_pmap, led_ctrl):
+        # {port-index, total subports oper UP}
+        self.fp_port_up_subports = up_subports
+        # {port-index, list of logical ports}
+        self.fp_port_list = fp_list
+        self.logical_port_mapping = logical_pmap
+        self.led_control = led_ctrl
+
+    def initPortLeds(self):
+        """
+        Initialize the port LEDs based on the current state of the front panel ports
+        """
+        for index in range(MAX_FRONT_PANEL_PORTS):
+            if len(self.fp_port_list[index]) > 0:
+               name = next(iter(self.fp_port_list[index]))
+               if self.areAllSubportsUp(name):
+                  self.updatePortLed(name, Port.PORT_UP)
+               else:
+                  self.updatePortLed(name, Port.PORT_DOWN)
+
+    def updatePortLed(self, port_name, port_state):
+        try:
+            self.led_control.port_link_state_change(port_name, port_state)
+        except Exception as e:
+            sys.exit(LEDUTIL_RUNTIME_ERROR)
+
+    def getPort(self, name):
+        if name in self.logical_port_mapping:
+            port = self.logical_port_mapping[name]
+            return port
+        return None
+
+    def areAllSubportsUp(self, name):
+        port = self.getPort(name)
+        if port:
+            return self.fp_port_up_subports[port._index] == self.getTotalSubports(port._index)
+
+        return False
+
+    def areAllSubportsDown(self, name):
+        port = self.getPort(name)
+        if port:
+            return self.fp_port_up_subports[port._index] == 0
+
+        return True
+
+    def getTotalSubports(self, index):
+        if index < MAX_FRONT_PANEL_PORTS:
+            return len(self.fp_port_list[index])
+        return 0
+
+    def updatePortState(self, port_name, port_state):
+        """
+        Return True if the port state has changed, False otherwise
+        """
+        assert port_state in [Port.PORT_UP, Port.PORT_DOWN]
+        port = self.getPort(port_name)
+        if port and port_state != port._state:
+            if port_state == Port.PORT_UP:
+                self.fp_port_up_subports[port._index] = min(1 + self.fp_port_up_subports[port._index],
+                                                            self.getTotalSubports(port._index))
+            else:
+                self.fp_port_up_subports[port._index] = max(0, self.fp_port_up_subports[port._index] - 1)
+            port._state = port_state
+            return True
+        return False
+
+class PortStateObserver:
+    def __init__(self):
+       # Subscribe to PORT table notifications in the STATE DB
+        self.tables = {}
+        self.sel = swsscommon.Select()
+
+    def subscribePortTable(self, namespaces):
+        for namespace in namespaces:
+            self.subscribeDbTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
+ 
+    def connectDB(self, dbname, namespace):
+        db = daemon_base.db_connect(dbname, namespace=namespace)
+        return db
+    
+    def getDatabaseTable(self, dbname, tblname, namespace):
+        db = self.connectDB(dbname, namespace)
+        table = swsscommon.Table(db, tblname)
+        return table
+
+    def subscribeDbTable(self, dbname, tblname, namespace):
+        db = self.connectDB(dbname, namespace)
+        self.tables[namespace] = swsscommon.SubscriberStateTable(db, tblname)
+        self.sel.addSelectable(self.tables[namespace])
+
+    def getSelectEvent(self, timeout=SELECT_TIMEOUT):
+        return self.sel.select(timeout)
+
+    def getPortTableEvent(self, selectableObj):
+        redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(selectableObj)
+        namespace = redisSelectObj.getDbConnector().getNamespace()
+
+        (key, op, fvp) = self.tables[namespace].pop()
+        if not key:
+            return None
+
+        if fvp:
+            if key in ["PortConfigDone", "PortInitDone"]:
+                return None
+
+            fvp_dict = dict(fvp)
+            if op == "SET" and Port.PORT_OP_FIELD in fvp_dict:
+                return (key, fvp_dict[Port.PORT_OP_FIELD])
+
+        return None
 
 class DaemonLedd(daemon_base.DaemonBase):
-
     def __init__(self):
         daemon_base.DaemonBase.__init__(self, SYSLOG_IDENTIFIER)
+
+        if multi_asic.is_multi_asic():
+            # Load the namespace details first from the database_global.json file.
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
 
         # Load platform-specific LedControl module
         try:
@@ -47,62 +184,76 @@ class DaemonLedd(daemon_base.DaemonBase):
             self.log_error("Failed to load ledutil: %s" % (str(e)), True)
             sys.exit(LEDUTIL_LOAD_ERROR)
 
-        if multi_asic.is_multi_asic():
-            # Load the namespace details first from the database_global.json file.
-            swsscommon.SonicDBConfig.initializeGlobalConfig()
 
-        # Get the namespaces in the platform. For multi-asic devices we get the namespaces
-        # of front-end ascis which have front-panel interfaces.
+        # Initialize the PortStateObserver
+        self.portObserver = PortStateObserver()
+
+        # subscribe to all the front panel ports namespaces
         namespaces = multi_asic.get_front_end_namespaces()
+        self.portObserver.subscribePortTable(namespaces)
 
-        # Subscribe to PORT table notifications in the Application DB
-        appl_db = {}
-        self.sst = {}
-        self.sel = swsscommon.Select()
+        # Discover the front panel ports
+        fp_plist, fp_ups, lmap = self.findFrontPanelPorts(namespaces)
+        self.fp_ports = FrontPanelPorts(fp_plist, fp_ups, lmap, self.led_control)
 
+        # Initialize the port LEDs color
+        self.fp_ports.initPortLeds()
+
+    def findFrontPanelPorts(self, namespaces):
+        # {port-index, list of logical ports}
+        fp_port_list = [set() for _ in range(MAX_FRONT_PANEL_PORTS)]
+        # {port-index, total subports oper UP}
+        fp_port_up_subports = [0] * MAX_FRONT_PANEL_PORTS
+        logical_port_mapping = {}
+        
         for namespace in namespaces:
-            # Open a handle to the Application database, in all namespaces
-            appl_db[namespace] = daemon_base.db_connect("APPL_DB", namespace=namespace)
-            self.sst[namespace] = swsscommon.SubscriberStateTable(appl_db[namespace], swsscommon.APP_PORT_TABLE_NAME)
-            self.sel.addSelectable(self.sst[namespace])
+            port_cfg_table = self.portObserver.getDatabaseTable("CONFIG_DB", swsscommon.CFG_PORT_TABLE_NAME, namespace)
+            port_st_table = self.portObserver.getDatabaseTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
+            for key in port_cfg_table.getKeys():
+                _, pcfg = port_cfg_table.get(key)
+                _, pstate = port_st_table.get(key)
+                pcfg_dict = dict(pcfg)
+                pstate_dict = dict(pstate)
+                p = Port(key,
+                            int(pcfg_dict['index']),
+                            pstate_dict.get(Port.PORT_OP_FIELD, Port.PORT_DOWN), # Current oper state
+                            pcfg_dict.get('subport', 0),
+                            pcfg_dict.get('role', None))
+                if p.isFrontPanelPort():
+                    logical_port_mapping[key] = p
+                    fp_port_list[p._index].add(key)
+                    if p._state == Port.PORT_UP:
+                        fp_port_up_subports[p._index] += 1
+        return fp_port_list, fp_port_up_subports, logical_port_mapping
 
+    def processPortStateChange(self, port_name, port_state):
+        if self.fp_ports.getPort(port_name):
+            # Update the port state for front panel ports
+            if self.fp_ports.updatePortState(port_name, port_state):
+                if self.fp_ports.areAllSubportsUp(port_name):
+                    state = Port.PORT_UP
+                else:
+                    state = Port.PORT_DOWN
+                self.log_notice("Setting Port %s LED state change for %s" % (port_name, state))
+                self.fp_ports.updatePortLed(port_name, state)
     # Run daemon
     def run(self):
-        # Use timeout to prevent ignoring the signals we want to handle
-        # in signal_handler() (e.g. SIGTERM for graceful shutdown)
-        (state, selectableObj) = self.sel.select(SELECT_TIMEOUT)
+        state, event = self.portObserver.getSelectEvent()
 
         if state == swsscommon.Select.TIMEOUT:
-            # Do not flood log when select times out
-            return 1
+            # Process final state
+            return 0
 
         if state != swsscommon.Select.OBJECT:
-            self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-            return 2
+            self.log_warning("sel.select() did not return swsscommon.Select.OBJECT - May be socket closed???")
+            return -1 ## Fail here so that the daemon can be restarted
 
-        # Get the redisselect object from selectable object
-        redisSelectObj = swsscommon.CastSelectableToRedisSelectObj(selectableObj)
-
-        # Get the corresponding namespace from redisselect db connector object
-        namespace = redisSelectObj.getDbConnector().getNamespace()
-
-        (key, op, fvp) = self.sst[namespace].pop()
-        if fvp:
-            # TODO: Once these flag entries have been removed from the DB,
-            # we can remove this check
-            if key in ["PortConfigDone", "PortInitDone"]:
-                return 3
-
-            fvp_dict = dict(fvp)
-
-            if op == "SET" and "oper_status" in fvp_dict:
-                if not key.startswith((backplane_prefix(), inband_prefix(), recirc_prefix())):
-                    self.led_control.port_link_state_change(key, fvp_dict["oper_status"])
-        else:
-            return 4
+        portEvent = self.portObserver.getPortTableEvent(event)
+        if portEvent:
+            self.log_notice("Received PORT table event: key=%s, state=%s" % (portEvent[0], portEvent[1]))
+            self.processPortStateChange(portEvent[0], portEvent[1])
 
         return 0
-
 
 def main():
     # Parse options if provided
@@ -124,10 +275,11 @@ def main():
 
     ledd = DaemonLedd()
 
-    # Listen indefinitely for changes to the PORT table in the Application DB's
+    # Listen indefinitely for port oper status changes
     while True:
-        ledd.run()
-
+        if 0 != ledd.run():
+            print("ledd.run() failed... Exiting")
+            sys.exit(LEDD_SELECT_ERROR)
 
 if __name__ == '__main__':
     main()
