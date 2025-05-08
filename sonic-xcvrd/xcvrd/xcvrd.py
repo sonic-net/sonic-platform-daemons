@@ -358,10 +358,13 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
         ganged_member_num += 1
 
         try:
-            port_info_dict = _wrapper_get_transceiver_info(physical_port)
+            if physical_port in transceiver_dict:
+                port_info_dict = transceiver_dict[physical_port]
+            else:
+                port_info_dict = _wrapper_get_transceiver_info(physical_port)
+                transceiver_dict[physical_port] = port_info_dict
             if port_info_dict is not None:
                 is_replaceable = _wrapper_is_replaceable(physical_port)
-                transceiver_dict[physical_port] = port_info_dict
                 # if cmis is supported by the module
                 if 'cmis_rev' in port_info_dict:
                     fvs = swsscommon.FieldValuePairs(
@@ -437,11 +440,8 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     status_sw_tbl.set(logical_port_name, fvs)
 
 def get_cmis_state_from_state_db(lport, status_sw_tbl):
-    found, transceiver_status_dict = status_sw_tbl.get(lport)
-    if found and 'cmis_state' in dict(transceiver_status_dict):
-        return dict(transceiver_status_dict)['cmis_state']
-    else:
-        return CMIS_STATE_UNKNOWN
+    found, cmis_state = status_sw_tbl.hget(lport, 'cmis_state')
+    return cmis_state if found else CMIS_STATE_UNKNOWN
 
 # Delete port from SFP status table
 
@@ -859,46 +859,31 @@ class CmisManagerTask(threading.Thread):
         """
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
-        freq = 0
         port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
-        found, port_info = port_tbl.get(lport)
-        if found and 'laser_freq' in dict(port_info):
-            freq = dict(port_info)['laser_freq']
-        return int(freq)
+        found, laser_freq = port_tbl.hget(lport, 'laser_freq')
+        return int(laser_freq) if found else 0
 
     def get_configured_tx_power_from_db(self, lport):
         """
            Return the Tx power configured by user in CONFIG_DB's PORT table
         """
-        power = 0
         port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
-        found, port_info = port_tbl.get(lport)
-        if found and 'tx_power' in dict(port_info):
-            power = dict(port_info)['tx_power']
-        return float(power)
+        found, power = port_tbl.hget(lport, 'tx_power')
+        return float(power) if found else 0
 
     def get_host_tx_status(self, lport):
-        host_tx_ready = 'false'
-
         state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
 
-        found, port_info = state_port_tbl.get(lport)
-        if found and 'host_tx_ready' in dict(port_info):
-            host_tx_ready = dict(port_info)['host_tx_ready']
-        return host_tx_ready
+        found, host_tx_ready = state_port_tbl.hget(lport, 'host_tx_ready')
+        return host_tx_ready if found else 'false'
 
     def get_port_admin_status(self, lport):
-        admin_status = 'down'
-
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
-        found, port_info = cfg_port_tbl.get(lport)
-        if found:
-            # Check admin_status too ...just in case
-            admin_status = dict(port_info).get('admin_status', 'down')
-        return admin_status
+        found, admin_status = cfg_port_tbl.hget(lport, 'admin_status')
+        return admin_status if found else 'down'
 
     def configure_tx_output_power(self, api, lport, tx_power):
         min_p, max_p = api.get_supported_power_config()
@@ -1503,16 +1488,21 @@ class SfpStateUpdateTask(threading.Thread):
                 continue
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
-                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name)
-                # Read the VDM thresholds and post them to the DB
-                self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name)
-
-                # Do not notify media settings during warm reboot to avoid dataplane traffic impact
                 if is_warm_start == False:
                     media_settings_parser.notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
-                    transceiver_dict.clear()
             else:
                 retry_eeprom_set.add(logical_port_name)
+        
+        dom_thresholds_cache = {}
+        vdm_thresholds_cache = {}
+        for logical_port_name in logical_port_list:
+            if stop_event.is_set():
+                break
+            
+            if logical_port_name not in retry_eeprom_set:
+                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_thresholds_cache)
+                # Read the VDM thresholds and post them to the DB
+                self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_thresholds_cache)
 
         return retry_eeprom_set
 
