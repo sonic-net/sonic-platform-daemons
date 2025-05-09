@@ -1268,7 +1268,7 @@ class CmisManagerTask(threading.Thread):
                             continue
 
                         #Sets module to high power mode and doesn't impact datapath if module is already in high power mode
-                        api.set_lpmode(False)
+                        api.set_lpmode(False, wait_state_change = False)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_AP_CONF)
                         dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
                         modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
