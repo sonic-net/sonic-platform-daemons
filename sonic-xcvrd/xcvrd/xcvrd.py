@@ -111,10 +111,6 @@ VOLT_UNIT = 'Volts'
 POWER_UNIT = 'dBm'
 BIAS_UNIT = 'mA'
 
-SUCCESS = 0
-RETRY = 1
-CONTINUE = 2
-
 g_dict = {}
 # Global platform specific sfputil class instance
 platform_sfputil = None
@@ -612,7 +608,6 @@ class CmisManagerTask(threading.Thread):
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
-        self.port_mapping = copy.deepcopy(port_mapping)
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
@@ -1181,21 +1176,6 @@ class CmisManagerTask(threading.Thread):
             current_time = datetime.datetime.now()
 
         return expired_time <= current_time
-
-    def update_port_xcvr_status_tbl_decommission_state(self, port_mapping, lport, decommission_state):
-        """
-        Update decommission state for all logical ports in physical port
-        """
-        physical_port = port_mapping.get_logical_to_physical(lport)
-        logical_ports = port_mapping.get_physical_to_logical(int(physical_port[0]))
-        for port in logical_ports:
-            status_tbl = self.xcvr_table_helper.get_status_tbl(self.get_asic_id(port))
-            if status_tbl is None:
-                self.log_error("status_table is None while updating "
-                                       "sw DECOMMISSION state for lport {}".format(port))
-                return
-            fvs = swsscommon.FieldValuePairs([('decommission_state', decommission_state)])
-            status_tbl.set(port, fvs)
 
     def task_worker(self):
         is_fast_reboot = is_fast_reboot_enabled()
