@@ -236,9 +236,8 @@ class DomInfoUpdateTask(threading.Thread):
                    continue
 
             if logical_port_set:
-               self.log_error("wait_port_initialization() still waiting for {} ports to be initialized".format(logical_port_set))
+               self.log_debug("wait_port_initialization() still waiting for {} ports to be initialized".format(logical_port_set))
 
-        self.log_notice("$$$ All ports are in CMIS terminal state, start DOM monitoring")
 
     def task_worker(self):
         self.log_notice("Start DOM monitoring loop")
@@ -254,6 +253,7 @@ class DomInfoUpdateTask(threading.Thread):
 
         # Wait for all PORTs to be initialized
         self.wait_port_initialization(dom_info_update_periodic_secs)
+        self.log_notice("All ports are in CMIS terminal state, start DOM monitoring")
 
         # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
         # before starting the periodic update
