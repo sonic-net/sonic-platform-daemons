@@ -7,9 +7,9 @@ as a child thread of xcvrd main thread.
 from contextlib import contextmanager
 import datetime
 
-
 try:
     import threading
+    import time
     import copy
     import sys
     import re
@@ -198,6 +198,48 @@ class DomInfoUpdateTask(threading.Thread):
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
+    def wait_port_initialization(self, delay):
+        logical_port_set = set(self.port_mapping.logical_port_list)
+
+        while logical_port_set:
+            time.sleep(delay)
+
+            for logical_port_name in list(logical_port_set):
+                # Get the asic to which this port belongs
+                asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
+                if asic_index is None:
+                   self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                physical_port_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+                if not physical_port_list:
+                   self.log_warning("Failed to find physical port for lport {}".format(logical_port_name))
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                physical_port = physical_port_list[0]
+                if not xcvrd._wrapper_get_presence(physical_port):
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                # Read the CMIS state machine's SW state from the DB
+                status_tbl = self.xcvr_table_helper.get_status_tbl(asic_index)
+                cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, status_tbl)
+                
+                if cmis_state is None:
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                if cmis_state in xcvrd.CMIS_TERMINAL_STATES:
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+            if logical_port_set:
+               self.log_error("wait_port_initialization() still waiting for {} ports to be initialized".format(logical_port_set))
+
+        self.log_notice("$$$ All ports are in CMIS terminal state, start DOM monitoring")
+
     def task_worker(self):
         self.log_notice("Start DOM monitoring loop")
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
@@ -209,6 +251,9 @@ class DomInfoUpdateTask(threading.Thread):
 
         # Set the periodic db update time
         dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+
+        # Wait for all PORTs to be initialized
+        self.wait_port_initialization(dom_info_update_periodic_secs)
 
         # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
         # before starting the periodic update
