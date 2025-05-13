@@ -224,9 +224,9 @@ class DomInfoUpdateTask(threading.Thread):
                    continue
 
                 # Read the CMIS state machine's SW state from the DB
-                status_tbl = self.xcvr_table_helper.get_status_tbl(asic_index)
-                cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, status_tbl)
-                
+                sw_status_tbl = self.xcvr_table_helper.get_status_sw_tbl(asic_index)
+                cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, sw_status_tbl)
+
                 if cmis_state is None:
                    logical_port_set.remove(logical_port_name)
                    continue
