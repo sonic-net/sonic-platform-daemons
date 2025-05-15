@@ -19,7 +19,7 @@ LANE_SPEED_KEY_PREFIX = "speed:"
 VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
-MEDIA_TYE_KEY = 'media_type_key'
+MEDIA_TYPE_KEY = 'media_type_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
@@ -159,7 +159,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
         LANE_SPEED_KEY: lane_speed_key,
-        MEDIA_TYE_KEY: media_type_ex
+        MEDIA_TYPE_KEY: media_type_ex
     }
 
 
@@ -298,7 +298,7 @@ def get_media_settings_value(physical_port, key):
         elif len(default_dict) != 0:
             return default_dict
         else:
-            if "copper" in key[MEDIA_TYE_KEY]:
+            if "copper" in key[MEDIA_TYPE_KEY]:
                 media_dict = media_dict["copper"]
             else:
                 media_dict = media_dict["fiber"]
