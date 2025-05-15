@@ -3925,6 +3925,28 @@ class TestXcvrdScript(object):
 
         assert port_dict == removal
 
+    def test_sfp_removal_from_dict(self):
+        """
+        Test that SFP object is properly removed from sfp_obj_dict when SFP status is SFP_STATUS_REMOVED
+        """
+        from xcvrd.xcvrd import SfpStateUpdateTask, PortChangeEvent, DEFAULT_NAMESPACE
+        from xcvrd.xcvrd_utilities.port_event_helper import PortMapping
+        import threading
+        from unittest.mock import MagicMock
+
+        # Setup test environment
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        mock_sfp_obj_dict = {1: MagicMock()}  # Create a mock SFP object for port 1
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event)
+
+        # Simulate SFP removal event
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL)
+        task.on_port_update_event(port_change_event)
+
+        # Verify that the SFP object is removed from the dictionary
+        assert 1 not in mock_sfp_obj_dict
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
     def test_wrapper_get_presence(self, mock_sfputil, mock_chassis):
