@@ -95,7 +95,6 @@ def test_wrapper_get_psu_status():
     assert psud.platform_psuutil.get_psu_status.call_count == 2
     psud.platform_psuutil.get_psu_status.assert_called_with(1)
 
-
 def test_log_on_status_changed():
     normal_log = "Normal log message"
     abnormal_log = "Abnormal log message"
