@@ -233,3 +233,225 @@ def test_dpu_chassis_daemon():
         daemon_chassisd.stop.wait.return_value = True
 
         thread.join()
+
+
+def test_dpu_state_manager_table_deletion():
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'DEL', None)):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify state was updated since this is a DEL operation
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'up',
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}
+
+
+def test_dpu_state_manager_none_result():
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    def mock_pop():
+        return None
+
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', side_effect=mock_pop):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify state was updated even with None result
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'up',
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}
+
+
+def test_dpu_state_manager_state_tracking():
+    """Test that DpuStateManagerTask correctly tracks current states and avoids unnecessary updates"""
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    # First update - should set initial states
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', return_value=('DPU0', 'SET', None)):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.task_worker()
+
+                # Verify initial state was set
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'up',
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}
+
+                # Verify current states are tracked
+                assert dpu_state_mng.current_dp_state == 'up'
+                assert dpu_state_mng.current_cp_state == 'up'
+
+
+def test_dpu_state_manager_avoid_duplicate_updates():
+    """Test that DpuStateManagerTask avoids duplicate state updates"""
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+    update_count = 0
+
+    def hset(key, field, value):
+        nonlocal update_count
+        update_count += 1
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    # Test with same state update
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop',
+            return_value=('DPU0', 'SET', (('dpu_data_plane_state', 'up'), ('dpu_control_plane_state', 'up')))):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), (swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.current_dp_state = 'up'
+                dpu_state_mng.current_cp_state = 'up'
+                dpu_state_mng.task_worker()
+
+                # Verify no updates occurred since states were unchanged
+                assert update_count == 0
+
+
+def test_dpu_state_manager_different_dpu():
+    """Test that DpuStateManagerTask handles updates for different DPUs correctly"""
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    chassis_state_db = {}
+    update_count = 0
+
+    def hset(key, field, value):
+        nonlocal update_count
+        update_count += 1
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    # Test with update for different DPU
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop',
+            return_value=('DPU1', 'SET', (('dpu_data_plane_state', 'down'), ('dpu_control_plane_state', 'down')))):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.current_dp_state = 'up'
+                dpu_state_mng.current_cp_state = 'up'
+                dpu_state_mng.task_worker()
+
+                # Verify no updates occurred since it was for a different DPU
+                assert update_count == 0
+
+
+def test_dpu_state_manager_state_change():
+    """Test that DpuStateManagerTask handles state changes correctly"""
+    chassis = MockDpuChassis()
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=False)  # CP state changed to False
+
+    chassis_state_db = {}
+
+    def hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    # Test with state change
+    with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
+        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop',
+            return_value=('DPU0', 'SET', None)):
+            with mock.patch.object(swsscommon.Select, 'select',
+                side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
+
+                dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+                dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+
+                dpu_state_mng = DpuStateManagerTask(SYSLOG_IDENTIFIER, dpu_updater)
+                dpu_state_mng.current_dp_state = 'up'
+                dpu_state_mng.current_cp_state = 'up'  # Previous state was up
+                dpu_state_mng.task_worker()
+
+                # Verify state was updated since control plane state changed
+                assert chassis_state_db == {'DPU0': {
+                    'dpu_data_plane_state': 'up',
+                    'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                    'dpu_control_plane_state': 'down',  # Changed to down
+                    'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000'
+                }}
+
+                # Verify current states were updated
+                assert dpu_state_mng.current_dp_state == 'up'
+                assert dpu_state_mng.current_cp_state == 'down'
