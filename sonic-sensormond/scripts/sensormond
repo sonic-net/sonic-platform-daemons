@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import yaml
-import argparse
+import os
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger, device_info
@@ -22,6 +22,8 @@ SYSLOG_IDENTIFIER = 'sensormond'
 NOT_AVAILABLE     = 'N/A'
 CHASSIS_INFO_KEY  = 'chassis 1'
 INVALID_SLOT      = -1
+
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 
@@ -201,7 +203,6 @@ class VoltageUpdater(SensorUpdater):
         self.log_debug("Start voltage update")
 
         sensor_list = self.fs_sensors + self.chassis.get_all_voltage_sensors()
-
         for index, voltage_sensor in enumerate(sensor_list):
             if(stop_event_signal.is_set()):
                 self.log_info("Stop signal received while running voltage update")
@@ -461,8 +462,9 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
     INITIAL_INTERVAL = 5
     # Periodic Update interval 
     UPDATE_INTERVAL = 60
+    UPDATE_ELAPSED_THRESHOLD = 30
 
-    def __init__(self, update_elapsed_threshold):
+    def __init__(self):
         '''
         Initializer of SensorMonitorDaemon
         '''
@@ -479,6 +481,17 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         self._voltage_sensor_fs = []
         self._current_sensor_fs = []
+
+        if os.path.isfile(PLATFORM_ENV_CONF_FILE):
+            with open(PLATFORM_ENV_CONF_FILE, 'r') as file:
+                for line in file:
+                    content = line.split('=')
+                    if(content[0].strip() == "SENSORMOND_WARNING_TIME"):
+                        try:
+                            self.UPDATE_ELAPSED_THRESHOLD = int(content[1].strip())
+                        except ValueError as e:
+                            self.log_error(f"Failed to load warning time, falling back to default, err: {e}")
+                            break
 
         try:
             self.chassis = sonic_platform.platform.Platform().get_chassis()
@@ -559,12 +572,7 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 def main():
-    parser = argparse.ArgumentParser()
-    # A threshold for monitoring being excessive can differ wildly per vendor and platform, as such allow it to be configured
-    parser.add_argument('-u', '--update_elapsed_threshold', type=int, default=30, help='configure a threshold in seconds for update to trigger a log warning, defaults to 30 seconds')
-    args = parser.parse_args()
-
-    sensor_control = SensorMonitorDaemon(args.update_elapsed_threshold)
+    sensor_control = SensorMonitorDaemon()
 
     sensor_control.log_info("Starting up...")
 
