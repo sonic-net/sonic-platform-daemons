@@ -140,8 +140,62 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.check_pcie_devices = mock.MagicMock()
 
-        daemon_pcied.run()
-        assert daemon_pcied.check_pcie_devices.call_count == 1
+        # Case 1: Test normal execution path
+        daemon_pcied.stop_event.wait = mock.MagicMock(return_value=False)
+        assert daemon_pcied.run() == True
+        daemon_pcied.check_pcie_devices.assert_called_once()
+
+        # Case 2: Test when stop_event.wait returns True (signal received)
+        daemon_pcied.check_pcie_devices.reset_mock()
+        daemon_pcied.stop_event.wait = mock.MagicMock(return_value=True)
+        assert daemon_pcied.run() == False
+        daemon_pcied.check_pcie_devices.assert_not_called()
+
+        # Case 3: Test exception handling during stop_event.wait
+        daemon_pcied.check_pcie_devices.reset_mock()
+        daemon_pcied.stop_event.wait = mock.MagicMock(side_effect=Exception("Test Exception"))
+        daemon_pcied.log_error = mock.MagicMock()
+        assert daemon_pcied.run() == False
+        daemon_pcied.log_error.assert_called_once_with(
+            "Exception occurred during stop_event wait: Test Exception"
+        )
+        daemon_pcied.check_pcie_devices.assert_not_called()
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    def test_del(self):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.device_table = mock.MagicMock()
+        daemon_pcied.status_table = mock.MagicMock()
+        daemon_pcied.detach_info = mock.MagicMock()
+
+        daemon_pcied.device_table.getKeys.return_value = ['device1', 'device2']
+        daemon_pcied.status_table.getKeys.return_value = ['status1']
+        daemon_pcied.detach_info.getKeys.return_value = ['detach1', 'detach2', 'detach3']
+
+        daemon_pcied.__del__()
+
+        assert daemon_pcied.device_table._del.call_count == 2
+        daemon_pcied.device_table._del.assert_any_call('device1')
+        daemon_pcied.device_table._del.assert_any_call('device2')
+
+        assert daemon_pcied.status_table._del.call_count == 1
+        daemon_pcied.status_table._del.assert_called_with('status1')
+
+        assert daemon_pcied.detach_info._del.call_count == 3
+        daemon_pcied.detach_info._del.assert_any_call('detach1')
+        daemon_pcied.detach_info._del.assert_any_call('detach2')
+        daemon_pcied.detach_info._del.assert_any_call('detach3')
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.log.log_warning')
+    def test_del_exception(self, mock_log_warning):
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.device_table = mock.MagicMock()
+        daemon_pcied.device_table.getKeys.side_effect = Exception("Test Exception")
+
+        del daemon_pcied
+
+        mock_log_warning.assert_called_once_with("Exception during cleanup: Test Exception", True)
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_is_dpu_in_detaching_mode(self):
@@ -229,18 +283,38 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.log_info = mock.MagicMock()
         daemon_pcied.log_error = mock.MagicMock()
+        daemon_pcied.status_table = mock.MagicMock()
 
-        # test for pass resultInfo
+        # Case 1: test for pass resultInfo
         daemon_pcied.update_pcie_devices_status_db(0)
-        assert daemon_pcied.log_info.call_count == 1
-        assert daemon_pcied.log_error.call_count == 0
+        daemon_pcied.log_info.assert_called_once_with("PCIe device status check : PASSED")
+        daemon_pcied.status_table.set.assert_called_once_with(
+            "status", pcied.swsscommon.FieldValuePairs([('status', 'PASSED')])
+        )
+        daemon_pcied.log_error.assert_not_called()
 
         daemon_pcied.log_info.reset_mock()
+        daemon_pcied.status_table.set.reset_mock()
+        daemon_pcied.log_error.reset_mock()
 
-        # test for resultInfo with 1 device failed to detect
+        # Case 2: test for resultInfo with 1 device failed to detect
         daemon_pcied.update_pcie_devices_status_db(1)
-        assert daemon_pcied.log_info.call_count == 0
-        assert daemon_pcied.log_error.call_count == 1
+        daemon_pcied.log_error.assert_called_once_with("PCIe device status check : FAILED")
+        daemon_pcied.status_table.set.assert_called_once_with(
+            "status", pcied.swsscommon.FieldValuePairs([('status', 'FAILED')])
+        )
+        daemon_pcied.log_info.assert_not_called()
+
+        daemon_pcied.log_info.reset_mock()
+        daemon_pcied.status_table.set.reset_mock()
+        daemon_pcied.log_error.reset_mock()
+
+        # Case 3: test exception handling
+        daemon_pcied.status_table.set.side_effect = Exception("Test Exception")
+        daemon_pcied.update_pcie_devices_status_db(0)
+        daemon_pcied.log_error.assert_called_once_with(
+            "Exception while updating PCIe device status to STATE_DB: Test Exception"
+        )
 
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
@@ -248,36 +322,82 @@ class TestDaemonPcied(object):
     def test_check_n_update_pcie_aer_stats(self, mock_read):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.update_aer_to_statedb = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        daemon_pcied.log_error = mock.MagicMock()
         pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock()
 
+        # Case 1: read_id_file returns None, no further actions
         mock_read.return_value = None
-        daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
-        assert daemon_pcied.update_aer_to_statedb.call_count == 0
-        assert pcied.platform_pcieutil.get_pcie_aer_stats.call_count == 0
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+        daemon_pcied.device_table.set.assert_not_called()
+        daemon_pcied.update_aer_to_statedb.assert_not_called()
+        pcied.platform_pcieutil.get_pcie_aer_stats.assert_not_called()
+        daemon_pcied.log_error.assert_not_called()
 
+        # Case 2: read_id_file returns valid ID, normal flow
         mock_read.return_value = '1714'
-        daemon_pcied.check_n_update_pcie_aer_stats(0,1,0)
-        assert daemon_pcied.update_aer_to_statedb.call_count == 1
-        assert pcied.platform_pcieutil.get_pcie_aer_stats.call_count == 1
+        pcied.platform_pcieutil.get_pcie_aer_stats.return_value = pcie_aer_stats_no_err
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+        daemon_pcied.device_table.set.assert_called_once_with(
+            '00:01.0', pcied.swsscommon.FieldValuePairs([('id', '1714')])
+        )
+        daemon_pcied.update_aer_to_statedb.assert_called_once()
+        pcied.platform_pcieutil.get_pcie_aer_stats.assert_called_once_with(bus=0, dev=1, func=0)
+        daemon_pcied.log_error.assert_not_called()
+
+        # Case 3: Exception handling when get_pcie_aer_stats raises exception
+        daemon_pcied.device_table.set.reset_mock()
+        daemon_pcied.update_aer_to_statedb.reset_mock()
+        pcied.platform_pcieutil.get_pcie_aer_stats.side_effect = Exception("Test Exception")
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+        daemon_pcied.log_error.assert_called_once_with(
+            "Exception while checking AER attributes for 00:01.0: Test Exception"
+        )
 
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     def test_update_aer_to_statedb(self):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.log_debug = mock.MagicMock()
-        daemon_pcied.device_name = mock.MagicMock()
-        daemon_pcied.aer_stats = pcie_aer_stats_no_err
+        daemon_pcied.log_error = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        daemon_pcied.device_name = "PCIe Device 1"
 
-        """
-        mocked_expected_fvp = pcied.swsscommon.FieldValuePairs(
-            [("correctable|field1", '0'),
-             ("correctable|field2", '0'),
-             ("fatal|field3", '0'),
-             ("fatal|field4", '0'),
-             ("non_fatal|field5", '0'),
-             ("non_fatal|field6", '0'),
-             ])
-        """
-
+        # Case 1: Test when aer_stats is None
+        daemon_pcied.aer_stats = None
         daemon_pcied.update_aer_to_statedb()
-        assert daemon_pcied.log_debug.call_count == 0
+        daemon_pcied.log_debug.assert_called_once_with("PCIe device PCIe Device 1 has no AER Stats")
+        daemon_pcied.device_table.set.assert_not_called()
+        daemon_pcied.log_debug.reset_mock()
+
+        # Case 2: Test when aer_stats is empty
+        daemon_pcied.aer_stats = {'correctable': {}, 'fatal': {}, 'non_fatal': {}}
+        daemon_pcied.update_aer_to_statedb()
+        daemon_pcied.log_debug.assert_called_once_with("PCIe device PCIe Device 1 has no AER attributes")
+        daemon_pcied.device_table.set.assert_not_called()
+        daemon_pcied.log_debug.reset_mock()
+
+        # Case 3: Test when aer_stats has valid data
+        daemon_pcied.aer_stats = pcie_aer_stats_no_err
+        daemon_pcied.update_aer_to_statedb()
+        expected_fields = [
+            ("correctable|field1", '0'),
+            ("correctable|field2", '0'),
+            ("fatal|field3", '0'),
+            ("fatal|field4", '0'),
+            ("non_fatal|field5", '0'),
+            ("non_fatal|field6", '0'),
+        ]
+        daemon_pcied.device_table.set.assert_called_once_with(
+            "PCIe Device 1",
+            pcied.swsscommon.FieldValuePairs(expected_fields)
+        )
+        daemon_pcied.log_debug.assert_not_called()
+        daemon_pcied.device_table.set.reset_mock()
+
+        # Case 4: Test exception handling
+        daemon_pcied.device_table.set.side_effect = Exception("Test Exception")
+        daemon_pcied.update_aer_to_statedb()
+        daemon_pcied.log_error.assert_called_once_with(
+            "Exception while updating AER attributes to STATE_DB for PCIe Device 1: Test Exception"
+        )
