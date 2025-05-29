@@ -835,9 +835,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # If midplane state is down, set control plane, data plane states to down as well
             if state == "down":
                 updates[CP_STATE] = "down"
-                updates[CP_UPDATE_TIME] = get_formatted_time()
                 updates[DP_STATE] = "down"
-                updates[DP_UPDATE_TIME] = get_formatted_time()
 
             # Update each field directly
             for field, value in updates.items():
