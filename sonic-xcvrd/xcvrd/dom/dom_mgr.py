@@ -7,9 +7,9 @@ as a child thread of xcvrd main thread.
 from contextlib import contextmanager
 import datetime
 
-
 try:
     import threading
+    import time
     import copy
     import sys
     import re
@@ -34,6 +34,8 @@ SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 
 class DomInfoUpdateTask(threading.Thread):
     DOM_INFO_UPDATE_PERIOD_SECS = 60
+    DOM_WAIT_PORT_INITIALIZATION_POLL_SECS = 60
+    DOM_WAIT_PORT_INIT_TIMEOUT_SECS = 300
     DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
     DOM_PORT_CHG_OBSERVER_TBL_MAP = [
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
@@ -198,6 +200,52 @@ class DomInfoUpdateTask(threading.Thread):
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
+    def wait_port_initialization(self, timeout_secs):
+        logical_port_set = set(self.port_mapping.logical_port_list)
+
+        dom_wait_time_end = datetime.datetime.now() + datetime.timedelta(seconds=timeout_secs)
+
+        while not self.task_stopping_event.is_set() and logical_port_set:
+            time.sleep(self.DOM_WAIT_PORT_INITIALIZATION_POLL_SECS)
+
+            for logical_port_name in list(logical_port_set):
+                # Get the asic to which this port belongs
+                asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
+                if asic_index is None:
+                   self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                physical_port_list = self.port_mapping.get_logical_to_physical(logical_port_name)
+                if not physical_port_list:
+                   self.log_warning("Failed to find physical port for lport {}".format(logical_port_name))
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                physical_port = physical_port_list[0]
+                if not self.xcvrd_utils.get_transceiver_presence(physical_port):
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                # Read the CMIS state machine's SW state from the DB
+                sw_status_tbl = self.xcvr_table_helper.get_status_sw_tbl(asic_index)
+                cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, sw_status_tbl)
+
+                if cmis_state is None:
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+                if cmis_state in xcvrd.CMIS_TERMINAL_STATES:
+                   logical_port_set.remove(logical_port_name)
+                   continue
+
+            if logical_port_set:
+               self.log_debug("wait_port_initialization() still waiting for {} ports to be initialized".format(logical_port_set))
+               if datetime.datetime.now() > dom_wait_time_end:
+                   break
+
+        return logical_port_set
+
     def task_worker(self):
         self.log_notice("Start DOM monitoring loop")
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
@@ -207,14 +255,15 @@ class DomInfoUpdateTask(threading.Thread):
                                                   self.on_port_update_event,
                                                   port_tbl_map=self.DOM_PORT_CHG_OBSERVER_TBL_MAP)
 
-        # Set the periodic db update time
-        dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+        # Wait for all PORTs to be initialized
+        remaining_ports = self.wait_port_initialization(self.DOM_WAIT_PORT_INIT_TIMEOUT_SECS)
+        if remaining_ports:
+            self.log_error("wait_port_initialization() timed out after {} seconds, remaining ports: {}".format(
+                    self.DOM_WAIT_PORT_INIT_TIMEOUT_SECS, remaining_ports))
+        else:
+            self.log_notice("All ports are in CMIS terminal state, start DOM monitoring")
 
-        # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
-        # before starting the periodic update
-        next_periodic_db_update_time = datetime.datetime.now() + datetime.timedelta(seconds=dom_info_update_periodic_secs)
-        is_periodic_db_update_needed = False
-
+        next_periodic_db_update_time = datetime.datetime.now()
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
             # Check if periodic db update is needed
