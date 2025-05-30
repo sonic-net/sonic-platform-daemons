@@ -17,28 +17,27 @@ class VDMUtils:
     def is_transceiver_vdm_supported(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].is_transceiver_vdm_supported()
-        except (KeyError, NotImplementedError):
+        except (NotImplementedError):
             return False
 
     def get_vdm_real_values(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value()
-        except (KeyError, NotImplementedError):
+        except (NotImplementedError):
             self.logger.log_error(f"Failed to get VDM real values for port {physical_port}")
             return {}
 
     def get_vdm_flags(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_flags()
-        except (KeyError, NotImplementedError):
+        except (NotImplementedError):
             self.logger.log_error(f"Failed to get VDM flags for port {physical_port}")
             return {}
 
     def get_vdm_thresholds(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_thresholds()
-        except (KeyError, NotImplementedError):
-            self.logger.log_error(f"Failed to get VDM thresholds for port {physical_port}")
+        except (NotImplementedError):
             return {}
 
     @contextmanager
