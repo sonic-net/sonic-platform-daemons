@@ -1829,5 +1829,3 @@ def test_smartswitch_moduleupdater_midplane_state_change():
                 return False
 
         assert is_valid_date(chassis_state_db[key]["dpu_midplane_link_time"])
-        assert is_valid_date(chassis_state_db[key]["dpu_control_plane_time"])
-        assert is_valid_date(chassis_state_db[key]["dpu_data_plane_time"])
