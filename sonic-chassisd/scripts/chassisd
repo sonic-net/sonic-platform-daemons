@@ -818,7 +818,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def update_dpu_state(self, key, state):
         """
         Update specific DPU state fields in chassisStateDB using the given key.
-        If state is 'down', delete the table first before setting new values.
+        If state is 'down', set control plane, data plane states to down as well.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
