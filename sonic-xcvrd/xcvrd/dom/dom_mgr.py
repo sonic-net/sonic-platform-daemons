@@ -34,8 +34,8 @@ SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 
 class DomInfoUpdateTask(threading.Thread):
     DOM_INFO_UPDATE_PERIOD_SECS = 60
-    DOM_WAIT_PORT_INITIALIZATION_POLL_SECS = 60
-    DOM_WAIT_PORT_INIT_TIMEOUT_SECS = 300
+    DOM_WAIT_PORT_INITIALIZATION_POLL_SECS = 150
+    DOM_WAIT_PORT_INIT_TIMEOUT_SECS = 600
     DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
     DOM_PORT_CHG_OBSERVER_TBL_MAP = [
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
@@ -264,6 +264,8 @@ class DomInfoUpdateTask(threading.Thread):
             self.log_notice("All ports are in CMIS terminal state, start DOM monitoring")
 
         next_periodic_db_update_time = datetime.datetime.now()
+        dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
             # Check if periodic db update is needed
