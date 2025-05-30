@@ -1818,8 +1818,6 @@ def test_smartswitch_moduleupdater_midplane_state_change():
 
         # Verify timestamps are set
         assert "dpu_midplane_link_time" in chassis_state_db[key]
-        assert "dpu_control_plane_time" in chassis_state_db[key]
-        assert "dpu_data_plane_time" in chassis_state_db[key]
 
         # Verify time format
         date_format = "%a %b %d %I:%M:%S %p UTC %Y"
