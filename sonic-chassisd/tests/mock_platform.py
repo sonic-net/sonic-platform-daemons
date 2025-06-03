@@ -72,6 +72,12 @@ class MockModule(MockDevice):
         else:
             self.midplane_ip = '192.168.1.{}'.format(self.get_slot())
 
+    def module_pre_shutdown(self):
+        pass
+
+    def module_post_startup(self):
+        pass
+
     def is_midplane_reachable(self):
         return self.midplane_access
 
