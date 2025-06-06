@@ -1362,7 +1362,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         # Update or add transition fields only
         fvs_dict.update({
             'state_transition_in_progress': 'True',
-            'transition_start_time': datetime.utcnow().isoformat()
+            'transition_start_time': get_formatted_time()
         })
 
         # Write merged data back
