@@ -39,6 +39,9 @@ CHASSIS_MODULE_INFO_DESC_FIELD = 'desc'
 CHASSIS_MODULE_INFO_SLOT_FIELD = 'slot'
 CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = 'oper_status'
 CHASSIS_MODULE_INFO_SERIAL_FIELD = 'serial'
+CHASSIS_MODULE_INFO_PRESENCE_FIELD = 'presence'
+CHASSIS_MODULE_INFO_MODEL_FIELD = 'model'
+CHASSIS_MODULE_INFO_REPLACEABLE_FIELD = 'is_replaceable'
 
 CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
 CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
@@ -71,10 +74,16 @@ def test_moduleupdater_check_valid_fields():
     serial = "FC1000101"
     module_type = ModuleBase.MODULE_TYPE_FABRIC
     module = MockModule(index, name, desc, module_type, slot, serial)
+    replaceable = True
+    presence = True
+    model = 'N/A'
 
     # Set initial state
     status = ModuleBase.MODULE_STATUS_ONLINE
     module.set_oper_status(status)
+    module.set_replaceable(replaceable)
+    module.set_presence(presence)
+    module.set_model(model)
 
     chassis.module_list.append(module)
 
@@ -87,6 +96,44 @@ def test_moduleupdater_check_valid_fields():
     assert desc == fvs[CHASSIS_MODULE_INFO_DESC_FIELD]
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
+    assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
+    assert str(presence) == fvs[CHASSIS_MODULE_INFO_PRESENCE_FIELD]
+
+def test_moduleupdater_check_phyentity_fields():
+    chassis = MockChassis()
+    index = 0
+    name = "FABRIC-CARD0"
+    desc = "Switch Fabric Module"
+    slot = 10
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    replaceable = True
+    presence = True
+    model = 'N/A'
+    parent_name = 'chassis 1'
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    module.set_replaceable(replaceable)
+    module.set_presence(presence)
+    module.set_model(model)
+
+    chassis.module_list.append(module)
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.phy_entity_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert str(index) == fvs['position_in_parent']
+    assert parent_name == fvs['parent_name']
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
+    assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
 
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
@@ -489,21 +536,23 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    mock_module_table = MagicMock()
-    mock_set_flag_callback = MagicMock()
-    config_updater = SmartSwitchModuleConfigUpdater(
-        SYSLOG_IDENTIFIER,
-        chassis,
-        mock_module_table,
-        mock_set_flag_callback
-    )
-    admin_state = 0
-    config_updater.module_config_update(name, admin_state)
-    assert module.get_admin_state() == admin_state
+    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
 
+    # Test setting admin state to down
+    admin_state = 0
+    with patch.object(module, 'module_pre_shutdown') as mock_module_pre_shutdown, \
+         patch.object(module, 'set_admin_state') as mock_set_admin_state:
+        config_updater.module_config_update(name, admin_state)
+        mock_module_pre_shutdown.assert_called_once()
+        mock_set_admin_state.assert_called_once_with(admin_state)
+
+    # Test setting admin state to up
     admin_state = 1
-    config_updater.module_config_update(name, admin_state)
-    assert module.get_admin_state() == admin_state
+    with patch.object(module, 'set_admin_state') as mock_set_admin_state, \
+         patch.object(module, 'module_post_startup') as mock_module_post_startup:
+        config_updater.module_config_update(name, admin_state)
+        mock_set_admin_state.assert_called_once_with(admin_state)
+        mock_module_post_startup.assert_called_once()
 
 
     @patch("your_module.glob.glob")

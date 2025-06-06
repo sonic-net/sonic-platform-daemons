@@ -4,6 +4,7 @@ class MockDevice:
         self.presence = True
         self.model = 'Module Model'
         self.serial = 'Module Serial'
+        self.replaceable = True
 
     def get_name(self):
         return self.name
@@ -17,10 +18,13 @@ class MockDevice:
     def get_serial(self):
         return self.serial
 
+    def is_replaceable(self):
+        return self.replaceable
 
 class MockModule(MockDevice):
     def __init__(self, module_index, module_name, module_desc, module_type, module_slot,
                  module_serial, asic_list=[]):
+        super(MockModule, self).__init__()
         self.module_index = module_index
         self.module_name = module_name
         self.module_desc = module_desc
@@ -32,7 +36,7 @@ class MockModule(MockDevice):
         self.midplane_access = False
         self.asic_list = asic_list
         self.module_serial = module_serial
- 
+
     def get_name(self):
         return self.module_name
 
@@ -68,6 +72,12 @@ class MockModule(MockDevice):
         else:
             self.midplane_ip = '192.168.1.{}'.format(self.get_slot())
 
+    def module_pre_shutdown(self):
+        pass
+
+    def module_post_startup(self):
+        pass
+
     def is_midplane_reachable(self):
         return self.midplane_access
 
@@ -82,6 +92,18 @@ class MockModule(MockDevice):
 
     def get_serial(self):
         return self.module_serial
+
+    def set_serial(self, serial):
+        self.serial = serial
+
+    def set_replaceable(self, replaceable):
+        self.replaceable = replaceable
+
+    def set_model(self, model):
+        self.model = model
+
+    def set_presence(self, presence):
+        self.presence = presence
 
 class MockChassis:
     def __init__(self):

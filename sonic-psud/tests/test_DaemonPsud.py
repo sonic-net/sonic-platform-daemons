@@ -517,20 +517,19 @@ class TestDaemonPsud(object):
         assert daemon_psud.log_warning.call_count == 1
         daemon_psud.log_warning.assert_called_with("Failed to update PSU data - Test message")
 
-    @mock.patch('psud.try_get', mock.MagicMock(return_value=0))
     def test_update_single_psu_entity_info(self):
-        mock_psu1 = MockPsu("PSU 1", 0, True, True)
-
+        #creating psu object in slot not used to allow for name specific check
+        mock_psu1 = MockPsu("PSU 3", 2, True, True)
         expected_fvp = psud.swsscommon.FieldValuePairs(
-            [('position_in_parent', '0'),
+            [('position_in_parent', '2'),
              ('parent_name', psud.CHASSIS_INFO_KEY),
              ])
 
         daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
         daemon_psud.phy_entity_tbl = mock.MagicMock()
 
-        daemon_psud._update_single_psu_entity_info(0, mock_psu1)
-        daemon_psud.phy_entity_tbl.set.assert_called_with('PSU 0', expected_fvp)
+        daemon_psud._update_single_psu_entity_info(3, mock_psu1)
+        daemon_psud.phy_entity_tbl.set.assert_called_with('PSU 3', expected_fvp)
 
     @mock.patch('psud.datetime')
     def test_update_psu_fan_data(self, mock_datetime):
