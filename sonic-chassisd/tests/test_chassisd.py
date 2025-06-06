@@ -234,7 +234,14 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
@@ -261,7 +268,14 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 2
     config_updater.module_config_update(name, admin_state)
 
@@ -1573,7 +1587,7 @@ def test_task_worker_loop():
 
     # Patch the swsscommon.Select to use this mock
     with patch('tests.mock_swsscommon.Select', return_value=mock_select):
-        config_manager = SmartSwitchConfigManagerTask()
+        config_manager = SmartSwitchConfigManagerTask(set_transition_flag_callback=MagicMock())
 
         config_manager.config_updater = MagicMock()
 
@@ -1774,3 +1788,20 @@ def test_smartswitch_time_format():
     if not date_value:
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
+
+
+def test_clear_transition_flag_sets_false_when_flag_present():
+    module_table = MagicMock()
+    module_table.get.return_value = (True, [('state_transition_in_progress', 'True')])
+
+    # Use a real updater instance
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, MagicMock())
+    updater.module_table = module_table
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
+    daemon_chassisd.module_updater = updater
+
+    daemon_chassisd.module_updater.clear_transition_flag("DPU0")
+
+    args = module_table.set.call_args[0][1]
+    assert ('state_transition_in_progress', 'False') in args
