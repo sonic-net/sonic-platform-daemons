@@ -102,7 +102,7 @@ class DaemonPcied(daemon_base.DaemonBase):
             self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
             self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
         except Exception as e:
-            log.log_error("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
+            log.log_critical("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
             sys.exit(PCIEUTIL_CONF_FILE_ERROR)
 
     def __del__(self):
@@ -158,13 +158,14 @@ class DaemonPcied(daemon_base.DaemonBase):
 
     # Update the PCIe devices status to DB
     def update_pcie_devices_status_db(self, err):
+        if err:
+            pcie_status = "FAILED"
+            self.log_error("PCIe device status check : {}".format(pcie_status))
+        else:
+            pcie_status = "PASSED"
+            self.log_info("PCIe device status check : {}".format(pcie_status))
+
         try:
-            if err:
-                pcie_status = "FAILED"
-                self.log_error("PCIe device status check : {}".format(pcie_status))
-            else:
-                pcie_status = "PASSED"
-                self.log_info("PCIe device status check : {}".format(pcie_status))
             self.status_table.set("status", swsscommon.FieldValuePairs([('status', pcie_status)]))
         except Exception as e:
             self.log_error("Exception while updating PCIe device status to STATE_DB: {}".format(str(e)))
