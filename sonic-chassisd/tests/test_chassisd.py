@@ -1807,9 +1807,7 @@ def test_submit_dpu_callback():
         mock_pre_shutdown.assert_called_once()
         mock_set_admin_state.assert_called_once_with(MODULE_ADMIN_DOWN)
         mock_post_startup.assert_not_called()
-        # Verify call order: pre_shutdown should be called before set_admin_state
-        calls = [call[0][0] for call in [mock_pre_shutdown.call_args, mock_set_admin_state.call_args]]
-        assert len(calls) == 2
+
 
     # Reset mocks for next test
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
@@ -1823,6 +1821,3 @@ def test_submit_dpu_callback():
         mock_set_admin_state.assert_called_once_with(MODULE_ADMIN_UP)
         mock_post_startup.assert_called_once()
 
-        # Verify call order: set_admin_state should be called before post_startup
-        calls = [call[0][0] for call in [mock_set_admin_state.call_args, mock_post_startup.call_args]]
-        assert len(calls) == 2
