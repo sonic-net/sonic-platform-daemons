@@ -2,7 +2,7 @@
     Mock implementation of sonic_platform package for unit testing
 """
 
-from sonic_platform_base.pcie_base import PcieBase
+from sonic_platform_base.sonic_pcie.pcie_base import PcieBase
 
 
 class Pcie(PcieBase):
