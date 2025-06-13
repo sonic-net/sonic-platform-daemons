@@ -4436,6 +4436,108 @@ class TestXcvrdScript(object):
         mock_api.is_flat_memory = MagicMock(side_effect=NotImplementedError)
         assert xcvrd_util.is_transceiver_flat_memory(1)
 
+    @patch('time.sleep', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
+    @patch('os.kill')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
+    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.del_port_sfp_dom_info_from_db')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
+    @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.update_port_transceiver_status_table_sw')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_sfp_removal_from_dict(self, mock_platform_chassis, mock_update_status, mock_post_sfp_info,
+                                            mock_post_firmware_info, mock_update_media_setting,
+                                            mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill):
+        port_mapping = PortMapping()
+        mock_sfp = MagicMock()
+        mock_sfp.remove_xcvr_api = MagicMock(return_value=None)
+        mock_platform_chassis.get_sfp.return_value = mock_sfp
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
+        mock_change_event.return_value = (True, {0: 0}, {})
+        mock_mapping_event.return_value = SYSTEM_NOT_READY
+
+        # Test state machine: STATE_INIT + SYSTEM_NOT_READY event => STATE_INIT + SYSTEM_NOT_READY event ... => STATE_EXIT
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_os_kill.call_count == 1
+        assert sfp_error_event.is_set()
+
+        mock_mapping_event.return_value = SYSTEM_FAIL
+        mock_os_kill.reset_mock()
+        sfp_error_event.clear()
+        # Test state machine: STATE_INIT + SYSTEM_FAIL event => STATE_INIT + SYSTEM_FAIL event ... => STATE_EXIT
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_os_kill.call_count == 1
+        assert sfp_error_event.is_set()
+
+        mock_mapping_event.side_effect = [SYSTEM_BECOME_READY, SYSTEM_NOT_READY]
+        mock_os_kill.reset_mock()
+        sfp_error_event.clear()
+        # Test state machine: STATE_INIT + SYSTEM_BECOME_READY event => STATE_NORMAL + SYSTEM_NOT_READY event ... => STATE_EXIT
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_os_kill.call_count == 1
+        assert not sfp_error_event.is_set()
+
+        mock_mapping_event.side_effect = [SYSTEM_BECOME_READY, SYSTEM_FAIL] + \
+            [SYSTEM_FAIL] * (RETRY_TIMES_FOR_SYSTEM_READY + 1)
+        mock_os_kill.reset_mock()
+        sfp_error_event.clear()
+        # Test state machine: STATE_INIT + SYSTEM_BECOME_READY event => STATE_NORMAL + SYSTEM_FAIL event ... => STATE_INIT
+        # + SYSTEM_FAIL event ... => STATE_EXIT
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_os_kill.call_count == 1
+        assert sfp_error_event.is_set()
+
+        task.port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        mock_change_event.return_value = (True, {1: SFP_STATUS_INSERTED}, {})
+        mock_mapping_event.side_effect = None
+        mock_mapping_event.return_value = NORMAL_EVENT
+        mock_post_sfp_info.return_value = SFP_EEPROM_NOT_READY
+        stop_event.is_set = MagicMock(side_effect=[False, True])
+        # Test state machine: handle SFP insert event, but EEPROM read failure
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_update_status.call_count == 1
+        assert mock_post_sfp_info.call_count == 2  # first call and retry call
+        assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 0
+        assert mock_post_firmware_info.call_count == 0
+        assert mock_update_media_setting.call_count == 0
+        assert 'Ethernet0' in task.retry_eeprom_set
+        task.retry_eeprom_set.clear()
+
+        stop_event.is_set = MagicMock(side_effect=[False, True])
+        mock_post_sfp_info.return_value = None
+        mock_update_status.reset_mock()
+        mock_post_sfp_info.reset_mock()
+        # Test state machine: handle SFP insert event, and EEPROM read success
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_update_status.call_count == 1
+        assert mock_post_sfp_info.call_count == 1
+        assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
+        assert mock_post_firmware_info.call_count == 0
+        assert mock_update_media_setting.call_count == 1
+
+        stop_event.is_set = MagicMock(side_effect=[False, True])
+        mock_change_event.return_value = (True, {1: SFP_STATUS_REMOVED}, {})
+        mock_update_status.reset_mock()
+        # Test state machine: handle SFP remove event
+        task.task_worker(stop_event, sfp_error_event)
+        assert mock_update_status.call_count == 1
+        assert mock_del_dom.call_count == 1
+        mock_sfp.remove_xcvr_api.assert_called_once()
+
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
     while wait_time <= total_wait_time:
