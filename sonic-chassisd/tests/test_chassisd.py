@@ -564,9 +564,8 @@ def test_smartswitch_configupdater_check_admin_state():
 
 @patch("scripts.chassisd.glob.glob")
 @patch("scripts.chassisd.open", new_callable=mock_open)
-def test_update_dpu_reboot_cause_to_db(self, mock_glob, mock_open):
-    # Set up the SmartSwitchModuleUpdater and test inputs
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
+def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
+    module_updater = SmartSwitchModuleUpdater("TEST_LOG", chassis=MagicMock())
     module = "dpu0"
     module_updater.chassis_state_db = MagicMock()
 
@@ -581,7 +580,7 @@ def test_update_dpu_reboot_cause_to_db(self, mock_glob, mock_open):
     mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
     with patch.object(module_updater, "log_warning") as mock_log_warning:
         module_updater.update_dpu_reboot_cause_to_db(module)
-        mock_log_warning.assert_not_called()  # No warnings expected
+        mock_log_warning.assert_not_called()
         module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
         module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
 
