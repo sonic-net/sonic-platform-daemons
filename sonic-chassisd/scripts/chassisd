@@ -104,6 +104,12 @@ MODULE_ADMIN_UP = 1
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
+DP_STATE = 'dpu_data_plane_state'
+DP_UPDATE_TIME = 'dpu_data_plane_time'
+CP_STATE = 'dpu_control_plane_state'
+CP_UPDATE_TIME = 'dpu_control_plane_time'
+
+
 # This daemon should return non-zero exit code so that supervisord will
 # restart it automatically.
 exit_code = 0
@@ -850,11 +856,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def update_dpu_state(self, key, state):
         """
         Update specific DPU state fields in chassisStateDB using the given key.
+        If state is 'down', set control plane, data plane states to down as well.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
             if not self.chassis_state_db:
                 self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
 
             # Prepare the fields to update
             updates = {
@@ -862,6 +870,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 "dpu_midplane_link_reason": "",
                 "dpu_midplane_link_time": get_formatted_time(),
             }
+            # If midplane state is down, set control plane, data plane states to down as well
+            if state == "down":
+                updates[CP_STATE] = "down"
+                updates[DP_STATE] = "down"
 
             # Update each field directly
             for field, value in updates.items():
@@ -1216,11 +1228,6 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
 
 class DpuStateUpdater(logger.Logger):
 
-    DP_STATE = 'dpu_data_plane_state'
-    DP_UPDATE_TIME = 'dpu_data_plane_time'
-    CP_STATE = 'dpu_control_plane_state'
-    CP_UPDATE_TIME = 'dpu_control_plane_time'
-
     def __init__(self, log_identifier, chassis):
         super(DpuStateUpdater, self).__init__(log_identifier)
 
@@ -1275,12 +1282,12 @@ class DpuStateUpdater(logger.Logger):
         return get_formatted_time()
 
     def _update_dp_dpu_state(self, state):
-        self.dpu_state_table.hset(self.name, self.DP_STATE, state)
-        self.dpu_state_table.hset(self.name, self.DP_UPDATE_TIME, self._time_now())
+        self.dpu_state_table.hset(self.name, DP_STATE, state)
+        self.dpu_state_table.hset(self.name, DP_UPDATE_TIME, self._time_now())
 
     def _update_cp_dpu_state(self, state):
-        self.dpu_state_table.hset(self.name, self.CP_STATE, state)
-        self.dpu_state_table.hset(self.name, self.CP_UPDATE_TIME, self._time_now())
+        self.dpu_state_table.hset(self.name, CP_STATE, state)
+        self.dpu_state_table.hset(self.name, CP_UPDATE_TIME, self._time_now())
 
     def get_dp_state(self):
         return 'up' if self._get_dp_state() else 'down'
@@ -1291,16 +1298,17 @@ class DpuStateUpdater(logger.Logger):
     def update_state(self):
 
         dp_current_state = self.get_dp_state()
-        _, dp_prev_state = self.dpu_state_table.hget(self.name, self.DP_STATE)
+        _, dp_prev_state = self.dpu_state_table.hget(self.name, DP_STATE)
 
         if dp_current_state != dp_prev_state:
             self._update_dp_dpu_state(dp_current_state)
 
         cp_current_state = self.get_cp_state()
-        _, cp_prev_state = self.dpu_state_table.hget(self.name, self.CP_STATE)
+        _, cp_prev_state = self.dpu_state_table.hget(self.name, CP_STATE)
 
         if cp_current_state != cp_prev_state:
             self._update_cp_dpu_state(cp_current_state)
+        return [dp_current_state, cp_current_state]
 
     def deinit(self):
         self._update_dp_dpu_state('down')
@@ -1469,12 +1477,16 @@ class DpuStateManagerTask(ProcessTaskBase):
         self.dpu_state_updater = dpu_state_updater
         self.state_db = daemon_base.db_connect('STATE_DB')
         self.app_db = daemon_base.db_connect('APPL_DB')
+        self.chassis_state_db = daemon_base.db_connect('CHASSIS_STATE_DB')
+        self.current_dp_state = None
+        self.current_cp_state = None
 
     def task_worker(self):
         sel = swsscommon.Select()
         selectable = [
             swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
-            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY')
+            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY'),
+            swsscommon.SubscriberStateTable(self.chassis_state_db, 'DPU_STATE')
         ]
 
         for s in selectable:
@@ -1490,10 +1502,31 @@ class DpuStateManagerTask(ProcessTaskBase):
                 if state != swsscommon.Select.OBJECT:
                     continue
 
-                for s in selectable:
-                    s.pops()
+                update_required = False
 
-                self.dpu_state_updater.update_state()
+                for s in selectable:
+                    result = s.pop()
+                    update_required = True # If there is any selectable object, we need to update the state
+                    if result is None:
+                        continue
+                    key, op, fvp = result  # Changed from _ to fvp to match what we use below
+                    # Check if this is the DPU_STATE table
+                    if s.getDbConnector().getDbName() == 'CHASSIS_STATE_DB':
+                        # Don't update if this is a change for another DPU
+                        if key != self.dpu_state_updater.name:
+                            update_required = False
+                            continue
+                        if op == 'SET' and isinstance(fvp, tuple):
+                            fvs = dict(fvp)
+                            # No need to update if the state is the same as the current state
+                            if ('dpu_data_plane_state' in fvs and fvs['dpu_data_plane_state'] == self.current_dp_state) and \
+                                ('dpu_control_plane_state' in fvs and fvs['dpu_control_plane_state'] == self.current_cp_state):
+                                update_required = False
+                                continue
+                        self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")
+
+                if update_required:
+                    [self.current_dp_state, self.current_cp_state] = self.dpu_state_updater.update_state()
 
         except KeyboardInterrupt:
             pass

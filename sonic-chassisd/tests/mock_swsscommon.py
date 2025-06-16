@@ -75,6 +75,15 @@ class SubscriberStateTable(Table):
     def pops(self):
         return None
 
+    def getDbConnector(self):
+        return MockDbConnector()
+
+
+class MockDbConnector:
+
+    def getDbName(self):
+        return 'CHASSIS_STATE_DB'
+
 class RedisPipeline:
     def __init__(self, db):
         self.db = db
