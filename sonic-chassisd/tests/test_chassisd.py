@@ -10,6 +10,7 @@ from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts"))
 
 # Assuming OBJECT should be a specific value, define it manually
 SELECT_OBJECT = 1  # Replace with the actual value for OBJECT if know
@@ -562,8 +563,8 @@ def test_smartswitch_configupdater_check_admin_state():
         mock_module_post_startup.assert_called_once()
 
 
-@patch("scripts.chassisd.glob.glob")
-@patch("scripts.chassisd.open", new_callable=mock_open)
+@patch("chassisd.glob.glob")
+@patch("chassisd.open", new_callable=mock_open)
 def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
     module_updater = SmartSwitchModuleUpdater("TEST_LOG", chassis=MagicMock())
     module = "dpu0"
