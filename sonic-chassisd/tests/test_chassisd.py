@@ -555,46 +555,46 @@ def test_smartswitch_configupdater_check_admin_state():
         mock_module_post_startup.assert_called_once()
 
 
-    @patch("your_module.glob.glob")
-    @patch("your_module.open", new_callable=mock_open)
-    def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
-        # Set up the SmartSwitchModuleUpdater and test inputs
-        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
-        module = "dpu0"
-        module_updater.chassis_state_db = MagicMock()
+@patch("your_module.glob.glob")
+@patch("your_module.open", new_callable=mock_open)
+def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
+    # Set up the SmartSwitchModuleUpdater and test inputs
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
+    module = "dpu0"
+    module_updater.chassis_state_db = MagicMock()
 
-        # Case 1: No history files found
-        mock_glob.return_value = []
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
+    # Case 1: No history files found
+    mock_glob.return_value = []
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
 
-        # Case 2: Valid JSON file with reboot cause
-        mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
-        mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_not_called()  # No warnings expected
-            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
-            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
+    # Case 2: Valid JSON file with reboot cause
+    mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
+    mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_not_called()  # No warnings expected
+        module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
+        module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
 
-        # Case 3: Empty JSON object in file
-        mock_open().read.return_value = json.dumps({})
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
+    # Case 3: Empty JSON object in file
+    mock_open().read.return_value = json.dumps({})
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
 
-        # Case 4: Invalid JSON in file
-        mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
+    # Case 4: Invalid JSON in file
+    mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
 
-        # Case 5: General exception handling
-        mock_open.side_effect = IOError("Unable to read file")
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
+    # Case 5: General exception handling
+    mock_open.side_effect = IOError("Unable to read file")
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
 
 
 def test_smartswitch_module_db_update():
