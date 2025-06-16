@@ -536,7 +536,14 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
 
     # Test setting admin state to down
     admin_state = 0
