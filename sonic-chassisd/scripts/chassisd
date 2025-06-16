@@ -248,7 +248,7 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
-            t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state, key))
+            t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
             t.start()
         else:
             self.log_warning("Invalid admin_state value: {}".format(admin_state))
