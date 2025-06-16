@@ -564,7 +564,7 @@ def test_smartswitch_configupdater_check_admin_state():
 
 @patch("scripts.chassisd.glob.glob")
 @patch("scripts.chassisd.open", new_callable=mock_open)
-def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
+def test_update_dpu_reboot_cause_to_db(self, mock_glob, mock_open):
     # Set up the SmartSwitchModuleUpdater and test inputs
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
     module = "dpu0"
