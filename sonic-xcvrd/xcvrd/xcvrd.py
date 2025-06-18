@@ -1735,6 +1735,12 @@ class SfpStateUpdateTask(threading.Thread):
                                     media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
+                                # Remove the SFP API object for this physical port
+                                try:
+                                    sfp = platform_chassis.get_sfp(int(key))
+                                    sfp.remove_xcvr_api()
+                                except (NotImplementedError, AttributeError) as e:
+                                    helper_logger.log_error(f"Failed to remove xcvr api for port {key}: {str(e)}")
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
                                 state_port_table = self.xcvr_table_helper.get_state_port_tbl(asic_index)
                                 state_port_table.set(logical_port, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_DEFAULT_VALUE)])
