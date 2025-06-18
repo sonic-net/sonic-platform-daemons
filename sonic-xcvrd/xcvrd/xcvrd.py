@@ -55,6 +55,7 @@ PLATFORM_SPECIFIC_CLASS_NAME = "SfpUtil"
 CMIS_STATE_UNKNOWN   = 'UNKNOWN'
 CMIS_STATE_INSERTED  = 'INSERTED'
 CMIS_STATE_DP_PRE_INIT_CHECK = 'DP_PRE_INIT_CHECK'
+CMIS_STATE_DP_DECOM_INIT_CHECK = 'DP_DECOM_INIT_CHECK'
 CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
 CMIS_STATE_AP_CONF   = 'AP_CONFIGURED'
 CMIS_STATE_DP_ACTIVATE = 'DP_ACTIVATION'
@@ -687,13 +688,26 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
-    def is_appl_reconfigure_required(self, api, app_new):
+    def is_decommission_required(self, lport, api):
         """
-	   Reset app code if non default app code needs to configured 
+	    Reset app code if non default app code needs to configured 
         """
+        if self.port_dict[lport].get('is_decomm_required', False):
+            return True
+
+        for port in self.port_dict:
+            if self.port_dict[port]['index'] == self.port_dict[lport]['index'] and self.port_dict[port]['is_decomm_required']:
+                return False
+
+        reference_app = None
+
         for lane in range(self.CMIS_MAX_HOST_LANES):
-            app_cur = api.get_application(lane)
-            if app_cur != 0 and app_cur != app_new:
+            app = api.get_application(lane) & 0xF
+            if app == 0:
+                continue
+            else:
+                #decommission all lanes/datapaths to default AppSel=0
+                self.log_notice(f"{lport}: Decommissioning: DP_DEINIT and set all lanes/datapaths to default AppSel=0")
                 return True
         return False
 
@@ -757,6 +771,7 @@ class CmisManagerTask(threading.Thread):
         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_INSERTED)
         self.port_dict[lport]['cmis_retries'] = retries
         self.port_dict[lport]['cmis_expired'] = None # No expiration
+        self.port_dict[lport]['is_decomm_required'] = False
 
     def check_module_state(self, api, states):
         """
@@ -1182,6 +1197,11 @@ class CmisManagerTask(threading.Thread):
                                self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
+                        elif self.is_decommission_required(lport, api):
+                            self.port_dict[lport]['is_decomm_required'] = True
+                            api.decommission_all_datapaths(False)
+                            dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
+                            self.update_cmis_state_expiration_time(lport, dpDeinitDuration)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
                     if state == CMIS_STATE_DP_PRE_INIT_CHECK:
                         if self.port_dict[lport].get('forced_tx_disabled', False):
@@ -1207,12 +1227,20 @@ class CmisManagerTask(threading.Thread):
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
                         # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
-                        if True == self.is_appl_reconfigure_required(api, appl):
-                            self.log_notice("{}: Decommissioning all lanes/datapaths to default AppSel=0".format(lport))
-                            if True != api.decommission_all_datapaths():
-                                self.log_notice("{}: Failed to default to AppSel=0".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
+                        if self.port_dict[lport]['is_decomm_required']:
+                            self.log_notice(f"{lport}: Decommissioning: DPInit all lanes/datapaths")
+                            api.decommission_all_datapaths(True)
+                            dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
+                            self.update_cmis_state_expiration_time(lport, dpInitDuration)
+                        self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DECOM_INIT_CHECK)
+                    if state == CMIS_STATE_DP_DECOM_INIT_CHECK:
+                        if self.port_dict[lport]['is_decomm_required']:
+                            if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: Decommissioning: timeout for 'Config Success'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
                                 continue
+                            self.log_notice(f"{lport}: Decommissioned physical port {self.port_mapping.get_logical_to_physical(lport)}")
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
