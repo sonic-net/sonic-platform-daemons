@@ -100,7 +100,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     extended_spec_compliance_str = 'Extended Specification Compliance'
     vendor_name_str = transceiver_dict[physical_port]['manufacturer']
     vendor_pn_str = transceiver_dict[physical_port]['model']
-    vendor_key = vendor_name_str.upper() + '-' + vendor_pn_str
+    vendor_key = vendor_name_str.strip().upper() + '-' + vendor_pn_str.strip().upper()
 
     media_len = ''
     if transceiver_dict[physical_port]['cable_type'] == sup_len_str:
