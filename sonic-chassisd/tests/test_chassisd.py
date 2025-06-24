@@ -1775,7 +1775,6 @@ def test_smartswitch_time_format():
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
 
-
 def test_smartswitch_moduleupdater_midplane_state_change():
     """Test that when midplane goes down, control plane and data plane states are set to down"""
     chassis = MockSmartSwitchChassis()
@@ -1840,7 +1839,7 @@ def test_smartswitch_moduleupdater_midplane_state_change():
 
         assert is_valid_date(chassis_state_db[key]["dpu_midplane_link_time"])
 
-        def test_submit_dpu_callback():
+def test_submit_dpu_callback():
     """Test that submit_dpu_callback calls the right functions in the correct order"""
     chassis = MockSmartSwitchChassis()
 
