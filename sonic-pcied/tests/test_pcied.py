@@ -53,7 +53,38 @@ def test_read_id_file():
 
 @patch('pcied.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', None)))
 def test_load_platform_pcieutil():
-    from sonic_platform_base.sonic_pcie.pcie_common import PcieUtil
-    rc = pcied.load_platform_pcieutil()
+    with patch('pcied.log') as mock_log:
 
-    assert isinstance(rc, PcieUtil)
+        # Case 1: Successfully import sonic_platform.pcie.Pcie
+        with patch('sonic_platform.pcie.Pcie') as mock_pcie:
+            instance = mock_pcie.return_value
+            result = pcied.load_platform_pcieutil()
+
+            mock_pcie.assert_called_once_with('/tmp')
+            assert result == instance
+            mock_log.log_notice.assert_not_called()
+            mock_log.log_error.assert_not_called()
+            mock_log.log_critical.assert_not_called()
+
+        # Case 2: Fallback to sonic_platform_base.sonic_pcie.pcie_common.PcieUtil
+        with patch('sonic_platform.pcie.Pcie', side_effect=ImportError("No module named 'sonic_platform.pcie'")), \
+             patch('sonic_platform_base.sonic_pcie.pcie_common.PcieUtil') as mock_pcieutil:
+            instance = mock_pcieutil.return_value
+            result = pcied.load_platform_pcieutil()
+
+            mock_pcieutil.assert_called_once_with('/tmp')
+            assert result == instance
+            mock_log.log_notice.assert_called_once()
+            mock_log.log_error.assert_not_called()
+            mock_log.log_critical.assert_not_called()
+            mock_log.reset_mock()
+
+        # Case 3: Failure to import both modules
+        with patch('sonic_platform.pcie.Pcie', side_effect=ImportError("No module named 'sonic_platform.pcie'")), \
+             patch('sonic_platform_base.sonic_pcie.pcie_common.PcieUtil', side_effect=ImportError("No module named 'sonic_platform_base.sonic_pcie.pcie_common'")):
+            with pytest.raises(RuntimeError, match="Unable to load PCIe utility module."):
+                pcied.load_platform_pcieutil()
+
+            mock_log.log_notice.assert_called_once()
+            mock_log.log_error.assert_called_once()
+            mock_log.log_critical.assert_called_once()
