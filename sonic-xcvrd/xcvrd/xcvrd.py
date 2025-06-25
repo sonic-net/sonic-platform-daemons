@@ -699,12 +699,12 @@ class CmisManagerTask(threading.Thread):
                 Boolean, True, if decommission pending is set, False otherwise
                          False, it means the datapath is ready to be reinitialized.
         """
-        target_index = self.port_dict[lport]['index']
-        for port, pdata in self.port_dict.items():
-            if pdata['index'] == target_index:
+        physical_port = self.port_dict[lport]['index']
+        for logical_port, pdata in self.port_dict.items():
+            if pdata['index'] == physical_port:
                 pdata['is_decomm_pending'] = decomm_pending
                 if not decomm_pending:
-                    self.force_cmis_reinit(port, 0)
+                    self.force_cmis_reinit(logical_port, 0)
 
     def is_decommission_required(self, lport, api):
         """
@@ -1168,7 +1168,7 @@ class CmisManagerTask(threading.Thread):
                 try:
                     # CMIS state transitions
                     if state == CMIS_STATE_INSERTED:
-                        f self.is_decommission_required(lport, api):
+                        if self.is_decommission_required(lport, api):
                             self.port_dict[lport]['appl'] = appl = 0
                             self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask = 0xff
                             self.port_dict[lport]['media_lane_mask'] = 0xff
