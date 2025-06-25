@@ -523,13 +523,22 @@ def test_smartswitch_configupdater_check_admin_state():
     chassis.module_list.append(module)
 
     config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
-    admin_state = 0
-    config_updater.module_config_update(name, admin_state)
-    assert module.get_admin_state() == admin_state
 
+    # Test setting admin state to down
+    admin_state = 0
+    with patch.object(module, 'module_pre_shutdown') as mock_module_pre_shutdown, \
+         patch.object(module, 'set_admin_state') as mock_set_admin_state:
+        config_updater.module_config_update(name, admin_state)
+        mock_module_pre_shutdown.assert_called_once()
+        mock_set_admin_state.assert_called_once_with(admin_state)
+
+    # Test setting admin state to up
     admin_state = 1
-    config_updater.module_config_update(name, admin_state)
-    assert module.get_admin_state() == admin_state
+    with patch.object(module, 'set_admin_state') as mock_set_admin_state, \
+         patch.object(module, 'module_post_startup') as mock_module_post_startup:
+        config_updater.module_config_update(name, admin_state)
+        mock_set_admin_state.assert_called_once_with(admin_state)
+        mock_module_post_startup.assert_called_once()
 
 
     @patch("your_module.glob.glob")
@@ -1765,3 +1774,67 @@ def test_smartswitch_time_format():
     if not date_value:
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
+
+def test_smartswitch_moduleupdater_midplane_state_change():
+    """Test that when midplane goes down, control plane and data plane states are set to down"""
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+
+    # Create the updater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.midplane_initialized = True
+
+    # Mock chassis_state_db
+    chassis_state_db = {}
+    def mock_hset(key, field, value):
+        if key not in chassis_state_db:
+            chassis_state_db[key] = {}
+        chassis_state_db[key][field] = value
+
+    def mock_hget(key, field):
+        if key in chassis_state_db and field in chassis_state_db[key]:
+            return chassis_state_db[key][field]
+        return None
+
+    with patch.object(module_updater, 'chassis_state_db') as mock_db:
+        mock_db.hset = MagicMock(side_effect=mock_hset)
+        mock_db.hget = MagicMock(side_effect=mock_hget)
+
+        # Initially set midplane as up
+        module.set_midplane_reachable(True)
+        module_updater.check_midplane_reachability()
+
+        # Verify initial state
+        key = "DPU_STATE|" + name
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "up"
+
+        # Now set midplane as down
+        module.set_midplane_reachable(False)
+        module_updater.check_midplane_reachability()
+
+        # Verify all states are set to down
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "down"
+        assert chassis_state_db[key]["dpu_control_plane_state"] == "down"
+        assert chassis_state_db[key]["dpu_data_plane_state"] == "down"
+
+        # Verify timestamps are set
+        assert "dpu_midplane_link_time" in chassis_state_db[key]
+
+        # Verify time format
+        date_format = "%a %b %d %I:%M:%S %p UTC %Y"
+        def is_valid_date(date_str):
+            try:
+                datetime.strptime(date_str, date_format)
+                return True
+            except ValueError:
+                return False
+
+        assert is_valid_date(chassis_state_db[key]["dpu_midplane_link_time"])
