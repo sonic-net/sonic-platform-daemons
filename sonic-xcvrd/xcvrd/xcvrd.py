@@ -689,8 +689,8 @@ class CmisManagerTask(threading.Thread):
 
     def set_dp_decommision_pending(self, lport, decomm_pending):
         """
-            Set decommission pending flag for the datapath of the given logical port
-            and force CMIS reinit if decomm_pending is False.
+        Set decommission pending flag for the datapath of the given logical port
+        and force CMIS reinit if decomm_pending is False.
 
         Args:
             lport:
@@ -708,7 +708,7 @@ class CmisManagerTask(threading.Thread):
 
     def is_decommission_required(self, lport, api):
         """
-            Reset app code if non default app code needs to configured
+        Reset app code if non default app code needs to configured
 
         Args:
             api:
@@ -1168,10 +1168,11 @@ class CmisManagerTask(threading.Thread):
                 try:
                     # CMIS state transitions
                     if state == CMIS_STATE_INSERTED:
+                        # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
                         if self.is_decommission_required(lport, api):
                             self.port_dict[lport]['appl'] = appl = 0
                             self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask = 0xff
-                            self.port_dict[lport]['media_lane_mask'] = 0xff
+                            self.port_dict[lport]['media_lanes_mask'] = 0xff
                         else:
                             self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
                             if self.port_dict[lport]['appl'] is None:
@@ -1222,11 +1223,6 @@ class CmisManagerTask(threading.Thread):
                                self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
-                        elif self.is_decommission_required(lport, api):
-                            self.port_dict[lport]['is_decomm_required'] = True
-                            api.decommission_all_datapaths(False)
-                            dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
-                            self.update_cmis_state_expiration_time(lport, dpDeinitDuration)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
                     if state == CMIS_STATE_DP_PRE_INIT_CHECK:
                         if self.port_dict[lport].get('forced_tx_disabled', False):
@@ -1241,9 +1237,20 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['forced_tx_disabled'] = False
                             self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
 
+                        # Skip rest of the pre-init when decommission is required
                         if self.port_dict[lport]['is_decomm_pending'] == True:
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
                             continue
+
+                        # Configure the target output power if ZR module
+                        if api.is_coherent_module():
+                           tx_power = self.port_dict[lport]['tx_power']
+                           # Prevent configuring same tx power multiple times
+                           if 0 != tx_power and tx_power != api.get_tx_config_power():
+                              if 1 != self.configure_tx_output_power(api, lport, tx_power):
+                                 self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
+                              else:
+                                 self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
@@ -1290,6 +1297,7 @@ class CmisManagerTask(threading.Thread):
                         modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
                         self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
                         self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
+
                     elif state == CMIS_STATE_AP_CONF:
                         # Explicit control bit to apply custom Host SI settings. 
                         # It will be set to 1 and applied via set_application if 
@@ -1309,6 +1317,7 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
+                        # Set the app code 0 if decommission is required
                         if self.port_dict[lport]['is_decomm_pending'] == True:
                             # D.1.3 Software Configuration and Initialization
                             api.set_application(host_lanes_mask, appl, ec)
@@ -1368,6 +1377,8 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
+                        # Set the decommission pending flag to False and invoke CMIS reinit
+                        # so that normal CMIS initialization can begin
                         if self.port_dict[lport]['is_decomm_pending'] == True:
                             self.set_dp_decommision_pending(lport, False)
                             continue
