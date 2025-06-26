@@ -829,7 +829,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     is_reboot = False
                     if current_cause and stored_cause and stored_time_str:
                         try:
-                            from datetime import datetime, timezone
                             stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
                             now = datetime.now(timezone.utc)
                             delta_sec = (now - stored_dt).total_seconds()
