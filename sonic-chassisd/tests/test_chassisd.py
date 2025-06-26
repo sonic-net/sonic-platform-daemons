@@ -240,6 +240,24 @@ def test_online_transition_skips_reboot_update():
         mock_persist.assert_not_called()
         mock_update.assert_not_called()
 
+def test_retrieve_dpu_reboot_info_success():
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, None)
+    fake_path = "/tmp/DPU0/previous-reboot-cause.json"
+    fake_json = '{"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52"}'
+
+    with patch("os.path.exists", return_value=True), \
+         patch("builtins.open", mock_open(read_data=fake_json)):
+        cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
+        assert cause == "Switch rebooted DPU"
+        assert time_str == "2025_06_25_17_18_52"
+
+def test_retrieve_dpu_reboot_info_file_missing():
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, None)
+    with patch("os.path.exists", return_value=False):
+        cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
+        assert cause is None
+        assert time_str is None
+
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
     index = 0
