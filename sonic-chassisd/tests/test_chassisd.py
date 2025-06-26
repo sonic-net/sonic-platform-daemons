@@ -242,7 +242,8 @@ def test_online_transition_skips_reboot_update():
 
 def test_retrieve_dpu_reboot_info_success():
     class DummyChassis:
-        def get_num_modules(self): return 0  # Minimal requirement
+        def get_num_modules(self): return 0
+        def init_midplane_switch(self): return False
 
     updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
     sample_json = {"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52"}
@@ -255,6 +256,7 @@ def test_retrieve_dpu_reboot_info_success():
 def test_retrieve_dpu_reboot_info_file_missing():
     class DummyChassis:
         def get_num_modules(self): return 0
+        def init_midplane_switch(self): return False  # required for SmartSwitchModuleUpdater
 
     updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
     with patch("os.path.exists", return_value=False):
