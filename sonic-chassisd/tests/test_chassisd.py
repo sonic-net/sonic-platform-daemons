@@ -241,20 +241,24 @@ def test_online_transition_skips_reboot_update():
         mock_update.assert_not_called()
 
 def test_retrieve_dpu_reboot_info_success():
-    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, None)
-    fake_path = "/tmp/DPU0/previous-reboot-cause.json"
-    fake_json = '{"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52"}'
+    class DummyChassis:
+        def get_num_modules(self): return 0  # Minimal requirement
 
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
+    sample_json = {"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52"}
     with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=fake_json)):
-        cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
+         patch("builtins.open", mock_open(read_data=json.dumps(sample_json))):
+        cause, time_str = updater.retrieve_dpu_reboot_info("dpu0")
         assert cause == "Switch rebooted DPU"
         assert time_str == "2025_06_25_17_18_52"
 
 def test_retrieve_dpu_reboot_info_file_missing():
-    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, None)
+    class DummyChassis:
+        def get_num_modules(self): return 0
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
     with patch("os.path.exists", return_value=False):
-        cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
+        cause, time_str = updater.retrieve_dpu_reboot_info("dpu0")
         assert cause is None
         assert time_str is None
 
