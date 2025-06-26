@@ -226,6 +226,7 @@ def test_online_transition_skips_reboot_update():
 
     with patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Switch rebooted DPU", datetime.now(timezone.utc).strftime("%Y_%m_%d_%H_%M_%S"))), \
+         patch.object(module, 'get_reboot_cause', return_value="Switch rebooted DPU"), \
          patch.object(updater, '_is_first_boot', return_value=False), \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update, \
