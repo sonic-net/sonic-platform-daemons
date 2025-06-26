@@ -181,15 +181,14 @@ def test_smartswitch_moduleupdater_status_transitions():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
 
     # Mock dependent methods
-    with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2024-11-19T00:00:00") \
-            as mock_retrieve_reboot_time, \
-         patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
-         patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
-         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
-         patch("os.makedirs") as mock_makedirs, \
-         patch("builtins.open", mock_open()) as mock_file, \
-         patch.object(module_updater, '_get_history_path',
-                      return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
+    with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2023_01_01_00_00_00") as mock_reboot_time, \
+        patch.object(module_updater, 'retrieve_dpu_reboot_cause', return_value="Switch rebooted DPU") as mock_reboot_cause, \
+        patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
+        patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
+        patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
+        patch("os.makedirs") as mock_makedirs, \
+        patch("builtins.open", mock_open()) as mock_file, \
+        patch.object(module_updater, '_get_history_path', return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
 
         # Transition from ONLINE to OFFLINE
         offline_status = ModuleBase.MODULE_STATUS_OFFLINE
