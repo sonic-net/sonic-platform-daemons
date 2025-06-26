@@ -211,6 +211,34 @@ def test_smartswitch_moduleupdater_status_transitions():
         mock_persist_reboot_cause.assert_called_once()
         mock_update_reboot_db.assert_called_once()
 
+def test_online_transition_skips_reboot_update():
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    module = MockModule(index, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN123")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
+    chassis.module_list.append(module)
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # Mock the module going ONLINE
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+
+    with patch.object(updater, 'retrieve_dpu_reboot_info',
+                      return_value=("Switch rebooted DPU", datetime.now(timezone.utc).strftime("%Y_%m_%d_%H_%M_%S"))), \
+         patch.object(updater, '_is_first_boot', return_value=False), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update, \
+         patch("builtins.open", mock_open()), \
+         patch("os.makedirs"), \
+         patch.object(updater, '_get_history_path', return_value="/tmp/fake.json"):
+
+        updater.module_db_update()
+
+        # Ensure no reboot update due to is_reboot = True
+        mock_persist.assert_not_called()
+        mock_update.assert_not_called()
+
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
     index = 0
