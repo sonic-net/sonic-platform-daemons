@@ -181,8 +181,7 @@ def test_smartswitch_moduleupdater_status_transitions():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
 
     # Mock dependent methods
-    with patch.object(module_updater, 'retrieve_dpu_reboot_time', return_value="2023_01_01_00_00_00") as mock_reboot_time, \
-        patch.object(module_updater, 'retrieve_dpu_reboot_cause', return_value="Switch rebooted DPU") as mock_reboot_cause, \
+    with patch.object(module_updater, 'retrieve_dpu_reboot_info', return_value=("Switch rebooted DPU", "2023_01_01_00_00_00")) as mock_reboot_info, \
         patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
         patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
