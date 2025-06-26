@@ -251,6 +251,10 @@ def _wrapper_get_transceiver_info(physical_port):
             return platform_chassis.get_sfp(physical_port).get_transceiver_info()
         except NotImplementedError:
             pass
+        except Exception:
+            helper_logger.log_error("Failed to get transceiver info for physical port {}".format(physical_port))
+            log_exception_traceback()
+            return None
     return platform_sfputil.get_transceiver_info_dict(physical_port)
 
 def _wrapper_get_transceiver_firmware_info(physical_port):
