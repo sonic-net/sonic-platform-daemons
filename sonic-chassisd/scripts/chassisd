@@ -1314,7 +1314,15 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     def submit_dpu_callback(self, module_index, admin_state):
+        if admin_state == MODULE_ADMIN_DOWN:
+            # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.module_updater.chassis.get_module(module_index).module_pre_shutdown, default=False)
         try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        if admin_state == MODULE_ADMIN_UP:
+            # This is only valid on platforms which have pci_rescan sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.module_updater.chassis.get_module(module_index).module_post_startup, default=False)
         pass
 
     def set_initial_dpu_admin_state(self):
