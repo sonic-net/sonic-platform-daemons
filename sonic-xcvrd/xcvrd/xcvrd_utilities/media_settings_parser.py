@@ -26,6 +26,8 @@ LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
+unreliable_los_change_event_media_key = ['unreliable_los']
+
 PHYSICAL_PORT_NOT_EXIST = -1
 
 def load_media_settings():
@@ -316,7 +318,7 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
 
 
 def notify_media_setting(logical_port_name, transceiver_dict,
-                         xcvr_table_helper, port_mapping):
+                         xcvr_table_helper, port_mapping, is_unreliable_los_setting_required=False):
 
     if not media_settings_present():
         return
@@ -367,6 +369,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             return
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
+        fvs_unreliable_los = swsscommon.FieldValuePairs(len(unreliable_los_change_event_media_key))
 
         index = 0
         helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
@@ -378,6 +381,15 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
             fvs[index] = (str(media_key), str(val_str))
             index += 1
+
+            if media_key in unreliable_los_change_event_media_key and is_unreliable_los_setting_required == True:
+                fvs_unreliable_los[0] = (str("apply_"+media_key), str(val_str))
+
+ 
+        if is_unreliable_los_setting_required == True:
+           xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs_unreliable_los)
+           # No need to apply other settings if unreliable_los_setting flag check is on
+           return
 
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
         xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
