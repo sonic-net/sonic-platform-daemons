@@ -3979,6 +3979,9 @@ class TestXcvrdScript(object):
         mock_sfputil.get_transceiver_info_dict = MagicMock(return_value=False)
         assert not _wrapper_get_transceiver_info(1)
 
+        mock_chassis.get_sfp = MagicMock(side_effect=Exception)
+        assert not _wrapper_get_transceiver_info(1)
+
     @pytest.mark.parametrize("mock_sfp, expected", [
         (MagicMock(is_transceiver_vdm_supported=MagicMock(side_effect=NotImplementedError)), False),
         (MagicMock(is_transceiver_vdm_supported=MagicMock(return_value=False)), False),
