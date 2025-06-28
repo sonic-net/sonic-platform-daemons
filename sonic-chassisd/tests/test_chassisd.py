@@ -1903,7 +1903,7 @@ def test_submit_dpu_callback():
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
          patch.object(module, 'set_admin_state') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN)
+        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
         # Verify correct functions are called for admin down
         mock_pre_shutdown.assert_called_once()
         mock_set_admin_state.assert_called_once_with(MODULE_ADMIN_DOWN)
@@ -1915,7 +1915,7 @@ def test_submit_dpu_callback():
          patch.object(module, 'set_admin_state') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
 
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP)
+        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
 
         # Verify correct functions are called for admin up
         mock_pre_shutdown.assert_not_called()
