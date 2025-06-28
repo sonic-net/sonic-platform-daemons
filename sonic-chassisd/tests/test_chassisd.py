@@ -1898,6 +1898,7 @@ def test_submit_dpu_callback():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.module_updater = module_updater
+    module_updater.module_table.get = MagicMock(return_value=(True, []))
 
     # Test MODULE_ADMIN_DOWN scenario
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
@@ -1915,6 +1916,7 @@ def test_submit_dpu_callback():
          patch.object(module, 'set_admin_state') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
 
+        module_updater.module_table.get = MagicMock(return_value=(True, []))
         daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
 
         # Verify correct functions are called for admin up
