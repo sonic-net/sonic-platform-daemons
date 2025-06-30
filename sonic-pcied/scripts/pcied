@@ -115,10 +115,6 @@ class DaemonPcied(daemon_base.DaemonBase):
                 stable_keys = self.status_table.getKeys()
                 for stk in stable_keys:
                     self.status_table._del(stk)
-            if self.detach_info:
-                detach_info_keys = self.detach_info.getKeys()
-                for dk in detach_info_keys:
-                    self.detach_info._del(dk)
         except Exception as e:
             log.log_warning("Exception during cleanup: {}".format(str(e)), True)
 
@@ -185,8 +181,10 @@ class DaemonPcied(daemon_base.DaemonBase):
         for key in detach_info_keys:
             dpu_info = self.detach_info.get(key)
             if dpu_info:
-                bus_info = dpu_info.get(PCIE_DETACH_BUS_INFO_FIELD)
-                dpu_state = dpu_info.get(PCIE_DETACH_DPU_STATE_FIELD)
+                # Convert tuple of field-value pairs to dictionary for easier access
+                dpu_dict = dict(dpu_info[1])
+                bus_info = dpu_dict.get(PCIE_DETACH_BUS_INFO_FIELD)
+                dpu_state = dpu_dict.get(PCIE_DETACH_DPU_STATE_FIELD)
                 if bus_info == pcie_dev and dpu_state == "detaching":
                     return True
 
