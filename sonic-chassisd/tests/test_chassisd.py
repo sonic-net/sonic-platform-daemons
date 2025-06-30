@@ -10,6 +10,7 @@ from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts"))
 
 # Assuming OBJECT should be a specific value, define it manually
 SELECT_OBJECT = 1  # Replace with the actual value for OBJECT if know
@@ -234,7 +235,14 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
 
@@ -261,7 +269,14 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
     admin_state = 2
     config_updater.module_config_update(name, admin_state)
 
@@ -522,7 +537,14 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    mock_module_table = MagicMock()
+    mock_set_flag_callback = MagicMock()
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis,
+        mock_module_table,
+        mock_set_flag_callback
+    )
 
     # Test setting admin state to down
     admin_state = 0
@@ -541,46 +563,45 @@ def test_smartswitch_configupdater_check_admin_state():
         mock_module_post_startup.assert_called_once()
 
 
-    @patch("your_module.glob.glob")
-    @patch("your_module.open", new_callable=mock_open)
-    def test_update_dpu_reboot_cause_to_db(self, mock_open, mock_glob):
-        # Set up the SmartSwitchModuleUpdater and test inputs
-        module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis=MagicMock())
-        module = "dpu0"
-        module_updater.chassis_state_db = MagicMock()
+@patch("chassisd.glob.glob")
+@patch("chassisd.open", new_callable=mock_open)
+def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
+    module_updater = SmartSwitchModuleUpdater("TEST_LOG", chassis=MagicMock())
+    module = "dpu0"
+    module_updater.chassis_state_db = MagicMock()
 
-        # Case 1: No history files found
-        mock_glob.return_value = []
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
+    # Case 1: No history files found
+    mock_glob.return_value = []
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_called_once_with(f"No reboot cause history files found for module: {module}")
 
-        # Case 2: Valid JSON file with reboot cause
-        mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
-        mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_not_called()  # No warnings expected
-            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
-            module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
+    # Case 2: Valid JSON file with reboot cause
+    mock_glob.return_value = ["/host/reboot-cause/module/dpu0/history/file1.txt"]
+    mock_open().read.return_value = json.dumps({"name": "reboot_2024", "reason": "Power loss"})
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_not_called()
+        module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "name", "reboot_2024")
+        module_updater.chassis_state_db.hset.assert_any_call("REBOOT_CAUSE|DPU0|reboot_2024", "reason", "Power loss")
 
-        # Case 3: Empty JSON object in file
-        mock_open().read.return_value = json.dumps({})
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
+    # Case 3: Empty JSON object in file
+    mock_open().read.return_value = json.dumps({})
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call(f"{module} reboot_cause_dict is empty")
 
-        # Case 4: Invalid JSON in file
-        mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
+    # Case 4: Invalid JSON in file
+    mock_open().read.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call("Failed to decode JSON from file: /host/reboot-cause/module/dpu0/history/file1.txt")
 
-        # Case 5: General exception handling
-        mock_open.side_effect = IOError("Unable to read file")
-        with patch.object(module_updater, "log_warning") as mock_log_warning:
-            module_updater.update_dpu_reboot_cause_to_db(module)
-            mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
+    # Case 5: General exception handling
+    mock_open.side_effect = IOError("Unable to read file")
+    with patch.object(module_updater, "log_warning") as mock_log_warning:
+        module_updater.update_dpu_reboot_cause_to_db(module)
+        mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
 
 
 def test_smartswitch_module_db_update():
@@ -1573,7 +1594,7 @@ def test_task_worker_loop():
 
     # Patch the swsscommon.Select to use this mock
     with patch('tests.mock_swsscommon.Select', return_value=mock_select):
-        config_manager = SmartSwitchConfigManagerTask()
+        config_manager = SmartSwitchConfigManagerTask(set_transition_flag_callback=MagicMock())
 
         config_manager.config_updater = MagicMock()
 
@@ -1775,6 +1796,22 @@ def test_smartswitch_time_format():
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
 
+def test_clear_transition_flag_sets_false_when_flag_present():
+    module_table = MagicMock()
+    module_table.get.return_value = (True, [('state_transition_in_progress', 'True')])
+
+    # Use a real updater instance
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, MagicMock())
+    updater.module_table = module_table
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
+    daemon_chassisd.module_updater = updater
+
+    daemon_chassisd.module_updater.clear_transition_flag("DPU0")
+
+    args = module_table.set.call_args[0][1]
+    assert ('state_transition_in_progress', 'False') in args
+
 def test_smartswitch_moduleupdater_midplane_state_change():
     """Test that when midplane goes down, control plane and data plane states are set to down"""
     chassis = MockSmartSwitchChassis()
@@ -1861,14 +1898,15 @@ def test_submit_dpu_callback():
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.module_updater = module_updater
+    module_updater.module_table.get = MagicMock(return_value=(True, []))
 
     # Test MODULE_ADMIN_DOWN scenario
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
          patch.object(module, 'set_admin_state') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN)
+        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
         # Verify correct functions are called for admin down
-        mock_pre_shutdown.assert_called_once()
+        mock_pre_shutdown.assert_not_called()
         mock_set_admin_state.assert_called_once_with(MODULE_ADMIN_DOWN)
         mock_post_startup.assert_not_called()
 
@@ -1878,7 +1916,8 @@ def test_submit_dpu_callback():
          patch.object(module, 'set_admin_state') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
 
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP)
+        module_updater.module_table.get = MagicMock(return_value=(True, []))
+        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
 
         # Verify correct functions are called for admin up
         mock_pre_shutdown.assert_not_called()
