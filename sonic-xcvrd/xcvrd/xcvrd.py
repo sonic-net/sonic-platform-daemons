@@ -687,7 +687,7 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
-     def is_decomm_pending_for_lport(self, lport):
+    def is_decomm_pending_for_lport(self, lport):
         """
         Get the decommission pending status for the given logical port.
         Args:
@@ -747,7 +747,7 @@ class CmisManagerTask(threading.Thread):
             if app_cur != 0 and app_cur != app_new:
                 return True
         return False
-    
+
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
         Check if the CMIS application update is required
@@ -1185,11 +1185,11 @@ class CmisManagerTask(threading.Thread):
 
                 try:
                     # CMIS state transitions
-                    if state == CMIS_STATE_INSERTED: 
+                    if state == CMIS_STATE_INSERTED:
                         self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] is None:
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
-                                           "host_speed {}".format(lport, appl, host_lane_count, host_speed))
+                                            "host_speed {}".format(lport, appl, host_lane_count, host_speed))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                             continue
                         appl = self.port_dict[lport]['appl']
@@ -1199,7 +1199,7 @@ class CmisManagerTask(threading.Thread):
                                                                         appl, host_lane_count, subport)
                         if self.port_dict[lport]['host_lanes_mask'] <= 0:
                             self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
-                                           "appl {}!".format(lport, host_lane_count, subport, appl))
+                                            "appl {}!".format(lport, host_lane_count, subport, appl))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                             continue
                         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
@@ -1213,8 +1213,8 @@ class CmisManagerTask(threading.Thread):
                                                                         appl, lport, subport)
                         if self.port_dict[lport]['media_lanes_mask'] <= 0:
                             self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
-                                           "media_lane_assignment_options {} subport {}"
-                                           " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
+                                            "media_lane_assignment_options {} subport {}"
+                                            " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                             continue
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
