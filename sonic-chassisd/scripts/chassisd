@@ -104,6 +104,12 @@ MODULE_ADMIN_UP = 1
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
+DP_STATE = 'dpu_data_plane_state'
+DP_UPDATE_TIME = 'dpu_data_plane_time'
+CP_STATE = 'dpu_control_plane_state'
+CP_UPDATE_TIME = 'dpu_control_plane_time'
+
+
 # This daemon should return non-zero exit code so that supervisord will
 # restart it automatically.
 exit_code = 0
@@ -211,14 +217,15 @@ class ModuleConfigUpdater(logger.Logger):
 
 class SmartSwitchModuleConfigUpdater(logger.Logger):
 
-    def __init__(self, log_identifier, chassis):
+    def __init__(self, log_identifier, chassis, module_table, set_flag_callback):
         """
         Constructor for SmartSwitchModuleConfigUpdater
         :param chassis: Object representing a platform chassis
         """
         super(SmartSwitchModuleConfigUpdater, self).__init__(log_identifier)
-
         self.chassis = chassis
+        self.module_table = module_table
+        self.set_transition_flag = set_flag_callback
 
     def deinit(self):
         """
@@ -247,7 +254,16 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
             self.log_warning("Invalid admin_state value: {}".format(admin_state))
 
     def submit_callback(self, module_index, admin_state):
+        if admin_state == MODULE_ADMIN_DOWN:
+            # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.chassis.get_module(module_index).module_pre_shutdown, default=False)
+
         try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        if admin_state == MODULE_ADMIN_UP:
+            # This is only valid on platforms which have pci_rescan sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.chassis.get_module(module_index).module_post_startup, default=False)
         pass
 
 #
@@ -746,6 +762,28 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             return 'empty'
 
+    def clear_transition_flag(self, key):
+        status, fvs = self.module_table.get(key)
+        if status and fvs:
+            fvs_dict = dict(fvs)
+            if 'state_transition_in_progress' in fvs_dict:
+                fvs_dict['state_transition_in_progress'] = 'False'
+            else:
+                self.log_warning(f"Transition flag not found in {key}, adding it as False.")
+                fvs_dict['state_transition_in_progress'] = 'False'
+            self.module_table.set(key, list(fvs_dict.items()))
+        else:
+            self.log_error(f"Could not clear module admin_status transition flag for {key}")
+
+    def clear_all_transition_flags(self):
+        self.log_warning("Clearing all stale state_transition_in_progress flags at startup")
+        keys = self.module_table.getKeys()
+        for key in keys:
+            try:
+                self.clear_transition_flag(key)
+            except Exception as e:
+                self.log_error(f"Failed to clear transition flag for {key}: {e}")
+
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
@@ -776,6 +814,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
 
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
+
                 elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to online".format(key))
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
@@ -785,6 +826,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         self.persist_dpu_reboot_cause(reboot_cause, key)
                         # publish reboot cause to db
                         self.update_dpu_reboot_cause_to_db(key)
+
+                    # Clear transition flag in STATE_DB
+                    self.clear_transition_flag(key)
 
     def _get_module_info(self, module_index):
         """
@@ -812,11 +856,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
     def update_dpu_state(self, key, state):
         """
         Update specific DPU state fields in chassisStateDB using the given key.
+        If state is 'down', set control plane, data plane states to down as well.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
             if not self.chassis_state_db:
                 self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+
 
             # Prepare the fields to update
             updates = {
@@ -824,6 +870,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 "dpu_midplane_link_reason": "",
                 "dpu_midplane_link_time": get_formatted_time(),
             }
+            # If midplane state is down, set control plane, data plane states to down as well
+            if state == "down":
+                updates[CP_STATE] = "down"
+                updates[DP_STATE] = "down"
 
             # Update each field directly
             for field, value in updates.items():
@@ -1120,15 +1170,23 @@ class ConfigManagerTask(ProcessTaskBase):
 
 
 class SmartSwitchConfigManagerTask(ProcessTaskBase):
-    def __init__(self):
-        ProcessTaskBase.__init__(self)
-
-        # TODO: Refactor to eliminate the need for this Logger instance
+    def __init__(self, set_transition_flag_callback):
+        super(SmartSwitchConfigManagerTask, self).__init__()
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
+        self.set_transition_flag = set_transition_flag_callback
+        self.config_updater = None
 
     def task_worker(self):
-        self.config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, get_chassis())
         config_db = daemon_base.db_connect("CONFIG_DB")
+        state_db = daemon_base.db_connect("STATE_DB")
+        module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
+
+        self.config_updater = SmartSwitchModuleConfigUpdater(
+            SYSLOG_IDENTIFIER,
+            get_chassis(),
+            module_table,
+            self.set_transition_flag
+        )
 
         # Subscribe to CHASSIS_MODULE table notifications in the Config DB
         sel = swsscommon.Select()
@@ -1169,11 +1227,6 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
 #
 
 class DpuStateUpdater(logger.Logger):
-
-    DP_STATE = 'dpu_data_plane_state'
-    DP_UPDATE_TIME = 'dpu_data_plane_time'
-    CP_STATE = 'dpu_control_plane_state'
-    CP_UPDATE_TIME = 'dpu_control_plane_time'
 
     def __init__(self, log_identifier, chassis):
         super(DpuStateUpdater, self).__init__(log_identifier)
@@ -1229,12 +1282,12 @@ class DpuStateUpdater(logger.Logger):
         return get_formatted_time()
 
     def _update_dp_dpu_state(self, state):
-        self.dpu_state_table.hset(self.name, self.DP_STATE, state)
-        self.dpu_state_table.hset(self.name, self.DP_UPDATE_TIME, self._time_now())
+        self.dpu_state_table.hset(self.name, DP_STATE, state)
+        self.dpu_state_table.hset(self.name, DP_UPDATE_TIME, self._time_now())
 
     def _update_cp_dpu_state(self, state):
-        self.dpu_state_table.hset(self.name, self.CP_STATE, state)
-        self.dpu_state_table.hset(self.name, self.CP_UPDATE_TIME, self._time_now())
+        self.dpu_state_table.hset(self.name, CP_STATE, state)
+        self.dpu_state_table.hset(self.name, CP_UPDATE_TIME, self._time_now())
 
     def get_dp_state(self):
         return 'up' if self._get_dp_state() else 'down'
@@ -1245,16 +1298,17 @@ class DpuStateUpdater(logger.Logger):
     def update_state(self):
 
         dp_current_state = self.get_dp_state()
-        _, dp_prev_state = self.dpu_state_table.hget(self.name, self.DP_STATE)
+        _, dp_prev_state = self.dpu_state_table.hget(self.name, DP_STATE)
 
         if dp_current_state != dp_prev_state:
             self._update_dp_dpu_state(dp_current_state)
 
         cp_current_state = self.get_cp_state()
-        _, cp_prev_state = self.dpu_state_table.hget(self.name, self.CP_STATE)
+        _, cp_prev_state = self.dpu_state_table.hget(self.name, CP_STATE)
 
         if cp_current_state != cp_prev_state:
             self._update_cp_dpu_state(cp_current_state)
+        return [dp_current_state, cp_current_state]
 
     def deinit(self):
         self._update_dp_dpu_state('down')
@@ -1297,8 +1351,31 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
-    def submit_dpu_callback(self, module_index, admin_state):
+    def set_transition_flag(self, module_table, key):
+        self.log_info(f"set transition flag: key={key}")
+
+        _, fvs = module_table.get(key)
+
+        # Merge existing fields, preserving all others
+        fvs_dict = dict(fvs) if fvs else {}
+
+        # Update or add transition fields only
+        fvs_dict.update({
+            'state_transition_in_progress': 'True',
+            'transition_start_time': get_formatted_time()
+        })
+
+        # Write merged data back
+        module_table.set(key, list(fvs_dict.items()))
+
+    def submit_dpu_callback(self, module_index, admin_state, module_name):
+        # Set admin_state change in progress using the centralized method
+        self.set_transition_flag(self.module_updater.module_table, module_name)
         try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
+        if admin_state == MODULE_ADMIN_UP:
+            # This is only valid on platforms which have pci_rescan sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.module_updater.chassis.get_module(module_index).module_post_startup, default=False)
         pass
 
     def set_initial_dpu_admin_state(self):
@@ -1327,7 +1404,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
                 if op is not None:
                     # Create and start a thread for the DPU logic
-                    thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op))
+                    thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op, module_name))
                     thread.daemon = True  # Set as a daemon thread
                     thread.start()
                     threads.append(thread)
@@ -1363,7 +1440,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start configuration manager task
         if self.smartswitch:
-            config_manager = SmartSwitchConfigManagerTask()
+            config_manager = SmartSwitchConfigManagerTask(self.set_transition_flag)
             config_manager.task_run()
         elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
             config_manager = ConfigManagerTask()
@@ -1376,6 +1453,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Set the initial DPU admin state for SmartSwitch
         if self.smartswitch:
+            self.module_updater.clear_all_transition_flags()
             self.set_initial_dpu_admin_state()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
@@ -1403,12 +1481,16 @@ class DpuStateManagerTask(ProcessTaskBase):
         self.dpu_state_updater = dpu_state_updater
         self.state_db = daemon_base.db_connect('STATE_DB')
         self.app_db = daemon_base.db_connect('APPL_DB')
+        self.chassis_state_db = daemon_base.db_connect('CHASSIS_STATE_DB')
+        self.current_dp_state = None
+        self.current_cp_state = None
 
     def task_worker(self):
         sel = swsscommon.Select()
         selectable = [
             swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
-            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY')
+            swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY'),
+            swsscommon.SubscriberStateTable(self.chassis_state_db, 'DPU_STATE')
         ]
 
         for s in selectable:
@@ -1424,10 +1506,31 @@ class DpuStateManagerTask(ProcessTaskBase):
                 if state != swsscommon.Select.OBJECT:
                     continue
 
-                for s in selectable:
-                    s.pops()
+                update_required = False
 
-                self.dpu_state_updater.update_state()
+                for s in selectable:
+                    result = s.pop()
+                    update_required = True # If there is any selectable object, we need to update the state
+                    if result is None:
+                        continue
+                    key, op, fvp = result  # Changed from _ to fvp to match what we use below
+                    # Check if this is the DPU_STATE table
+                    if s.getDbConnector().getDbName() == 'CHASSIS_STATE_DB':
+                        # Don't update if this is a change for another DPU
+                        if key != self.dpu_state_updater.name:
+                            update_required = False
+                            continue
+                        if op == 'SET' and isinstance(fvp, tuple):
+                            fvs = dict(fvp)
+                            # No need to update if the state is the same as the current state
+                            if ('dpu_data_plane_state' in fvs and fvs['dpu_data_plane_state'] == self.current_dp_state) and \
+                                ('dpu_control_plane_state' in fvs and fvs['dpu_control_plane_state'] == self.current_cp_state):
+                                update_required = False
+                                continue
+                        self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")
+
+                if update_required:
+                    [self.current_dp_state, self.current_cp_state] = self.dpu_state_updater.update_state()
 
         except KeyboardInterrupt:
             pass

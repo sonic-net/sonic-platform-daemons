@@ -57,6 +57,9 @@ def load_platform_pcieutil():
             _platform_pcieutil = PcieUtil(platform_path)
         except ImportError as e:
             log.log_error("Failed to load default PcieUtil module. Error : {}".format(str(e)), True)
+    if _platform_pcieutil is None:
+        log.log_critical("Failed to load any PCIe utility module. Exiting...", True)
+        raise RuntimeError("Unable to load PCIe utility module.")
     return _platform_pcieutil
 
 def read_id_file(device_name):
@@ -93,57 +96,60 @@ class DaemonPcied(daemon_base.DaemonBase):
             sys.exit(PCIEUTIL_LOAD_ERROR)
 
         # Connect to STATE_DB and create pcie device table
-        self.state_db = daemon_base.db_connect("STATE_DB")
-        self.device_table = swsscommon.Table(self.state_db, PCIE_DEVICE_TABLE_NAME)
-        self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
-        self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
+        try:
+            self.state_db = daemon_base.db_connect("STATE_DB")
+            self.device_table = swsscommon.Table(self.state_db, PCIE_DEVICE_TABLE_NAME)
+            self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
+            self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
+        except Exception as e:
+            log.log_critical("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
+            sys.exit(PCIEUTIL_CONF_FILE_ERROR)
 
     def __del__(self):
-        if self.device_table:
-            table_keys = self.device_table.getKeys()
-            for tk in table_keys:
-                self.device_table._del(tk)
-        if self.status_table:
-            stable_keys = self.status_table.getKeys()
-            for stk in stable_keys:
-                self.status_table._del(stk)
-        if self.detach_info:
-            detach_info_keys = self.detach_info.getKeys()
-            for dk in detach_info_keys:
-                self.detach_info._del(dk)
+        try:
+            if self.device_table:
+                table_keys = self.device_table.getKeys()
+                for tk in table_keys:
+                    self.device_table._del(tk)
+            if self.status_table:
+                stable_keys = self.status_table.getKeys()
+                for stk in stable_keys:
+                    self.status_table._del(stk)
+        except Exception as e:
+            log.log_warning("Exception during cleanup: {}".format(str(e)), True)
 
     # load aer-fields into statedb
     def update_aer_to_statedb(self):
         if self.aer_stats is None:
-            self.log_debug("PCIe device {} has no AER Stats".format(device_name))
+            self.log_debug("PCIe device {} has no AER Stats".format(self.device_name))
             return
 
-        aer_fields = {}
-
-        for key, fv in self.aer_stats.items():
-            for field, value in fv.items():
-                key_field = "{}|{}".format(key,field)
-                aer_fields[key_field] = value
-
-        if aer_fields:
-            formatted_fields = swsscommon.FieldValuePairs(list(aer_fields.items()))
-            self.device_table.set(self.device_name, formatted_fields)
-        else:
-            self.log_debug("PCIe device {} has no AER attriutes".format(self.device_name))
+        try:
+            aer_fields = {
+                f"{key}|{field}": value
+                for key, fv in self.aer_stats.items()
+                for field, value in fv.items()
+            }
+            if aer_fields:
+                self.device_table.set(self.device_name, swsscommon.FieldValuePairs(list(aer_fields.items())))
+            else:
+                self.log_debug("PCIe device {} has no AER attributes".format(self.device_name))
+        except Exception as e:
+            self.log_error("Exception while updating AER attributes to STATE_DB for {}: {}".format(self.device_name, str(e)))
 
 
     # Check the PCIe AER Stats
     def check_n_update_pcie_aer_stats(self, Bus, Dev, Fn):
-        self.device_name = "%02x:%02x.%d" % (Bus, Dev, Fn)
-
-        Id = read_id_file(self.device_name)
-
-        self.aer_stats = {}
-        if Id is not None:
-            fvp = swsscommon.FieldValuePairs([('id', Id)])
-            self.device_table.set(self.device_name, fvp)
-            self.aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, dev=Dev, func=Fn)
-            self.update_aer_to_statedb()
+        try:
+            self.device_name = "%02x:%02x.%d" % (Bus, Dev, Fn)
+            Id = read_id_file(self.device_name)
+            self.aer_stats = {}
+            if Id is not None:
+                self.device_table.set(self.device_name, swsscommon.FieldValuePairs([('id', Id)]))
+                self.aer_stats = platform_pcieutil.get_pcie_aer_stats(bus=Bus, dev=Dev, func=Fn)
+                self.update_aer_to_statedb()
+        except Exception as e:
+            self.log_error("Exception while checking AER attributes for {}: {}".format(self.device_name, str(e)))
 
 
     # Update the PCIe devices status to DB
@@ -154,11 +160,11 @@ class DaemonPcied(daemon_base.DaemonBase):
         else:
             pcie_status = "PASSED"
             self.log_info("PCIe device status check : {}".format(pcie_status))
-        fvs = swsscommon.FieldValuePairs([
-            ('status', pcie_status)
-        ])
 
-        self.status_table.set("status", fvs)
+        try:
+            self.status_table.set("status", swsscommon.FieldValuePairs([('status', pcie_status)]))
+        except Exception as e:
+            self.log_error("Exception while updating PCIe device status to STATE_DB: {}".format(str(e)))
 
     # Check if any PCI interface is in detaching mode by querying the state_db
     def is_dpu_in_detaching_mode(self, pcie_dev):
@@ -175,8 +181,10 @@ class DaemonPcied(daemon_base.DaemonBase):
         for key in detach_info_keys:
             dpu_info = self.detach_info.get(key)
             if dpu_info:
-                bus_info = dpu_info.get(PCIE_DETACH_BUS_INFO_FIELD)
-                dpu_state = dpu_info.get(PCIE_DETACH_DPU_STATE_FIELD)
+                # Convert tuple of field-value pairs to dictionary for easier access
+                dpu_dict = dict(dpu_info[1])
+                bus_info = dpu_dict.get(PCIE_DETACH_BUS_INFO_FIELD)
+                dpu_state = dpu_dict.get(PCIE_DETACH_DPU_STATE_FIELD)
                 if bus_info == pcie_dev and dpu_state == "detaching":
                     return True
 
@@ -229,8 +237,12 @@ class DaemonPcied(daemon_base.DaemonBase):
 
     # Main daemon logic
     def run(self):
-        if self.stop_event.wait(self.timeout):
-            # We received a fatal signal
+        try:
+            if self.stop_event.wait(self.timeout):
+                # We received a fatal signal
+                return False
+        except Exception as e:
+            self.log_error("Exception occurred during stop_event wait: {}".format(str(e)))
             return False
 
         self.check_pcie_devices()
