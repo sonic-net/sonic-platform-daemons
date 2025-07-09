@@ -3256,7 +3256,7 @@ class TestXcvrdScript(object):
         assert task.port_dict['Ethernet0']['forced_tx_disabled'] == False
         assert task.port_dict['Ethernet0']['cmis_retries'] == 1
 
-@patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.is_fast_reboot_enabled', MagicMock(return_value=(False)))
     @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
