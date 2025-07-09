@@ -725,7 +725,7 @@ class CmisManagerTask(threading.Thread):
         for logical_port, pdata in self.port_dict.items():
             if pdata.get('index') == self.port_dict[lport]['index']:
                 if pdata.get('is_decomm_pending', False) and \
-                    get_cmis_state_from_state_db(logical_port, self.xcvr_table_helper.get_status_tbl(self.get_asic_id(logical_port))) == CMIS_STATE_FAILED:
+                    get_cmis_state_from_state_db(logical_port, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(logical_port))) == CMIS_STATE_FAILED:
                     return True
         return False
 
@@ -1219,7 +1219,7 @@ class CmisManagerTask(threading.Thread):
                             continue
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
-    
+
                         if (not self.is_decomm_pending_for_pport(lport) and self.is_decommission_required(api, appl)):
                             self.port_dict[lport]['is_decomm_pending'] = True
                             self.log_notice(f"{lport}: DECOMMISSION: setting is_decomm_pending=True")
@@ -1370,13 +1370,12 @@ class CmisManagerTask(threading.Thread):
                                 # Apply module SI settings if applicable
                                 lane_speed = int(speed/1000)//host_lane_count
                                 optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-                            
                                 self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                                 for key, sub_dict in optics_si_dict.items():
                                     self.log_debug("{}".format(key))
                                     for sub_key, value in sub_dict.items():
                                         self.log_debug("{}: {}".format(sub_key, str(value)))
-                            
+
                                 if optics_si_dict:
                                     self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
                                                     format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
