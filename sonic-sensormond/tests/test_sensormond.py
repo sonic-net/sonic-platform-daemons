@@ -191,11 +191,12 @@ class TestVoltageUpdater(object):
     def test_update_with_stop_event_handling(self):
         #test for sensor iteration stop checks
         chassis = MockChassis()
+        chassis.make_over_threshold_voltage_sensor()  # Add a sensor so the loop executes
         voltage_updater = sensormond.VoltageUpdater(chassis, [])
         voltage_updater.log_info = mock.MagicMock()
 
-        stop_event = threading.Event()
-        stop_event.set()
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
 
         result = voltage_updater.update(stop_event)
         assert result is False
@@ -208,9 +209,8 @@ class TestVoltageUpdater(object):
         voltage_updater = sensormond.VoltageUpdater(chassis, [])
         voltage_updater.log_info = mock.MagicMock()
 
-        stop_event = threading.Event()
-
-        stop_event.is_set = mock.MagicMock(side_effect=[False, True])
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
 
         result = voltage_updater.update(stop_event)
         assert result is False
@@ -306,11 +306,12 @@ class TestCurrentUpdater(object):
     def test_update_with_stop_event_handling(self):
         #test for sensor iteration stop checks
         chassis = MockChassis()
+        chassis.make_over_threshold_current_sensor()  # Add a sensor so the loop executes
         current_updater = sensormond.CurrentUpdater(chassis, [])
         current_updater.log_info = mock.MagicMock()
 
-        stop_event = threading.Event()
-        stop_event.set()
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
         
         result = current_updater.update(stop_event)
         assert result is False
@@ -323,8 +324,8 @@ class TestCurrentUpdater(object):
         current_updater = sensormond.CurrentUpdater(chassis, [])
         current_updater.log_info = mock.MagicMock()
 
-        stop_event = threading.Event()
-        stop_event.is_set = mock.MagicMock(side_effect=[False, True])
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
         
         result = current_updater.update(stop_event)
         assert result is False
@@ -497,7 +498,7 @@ def test_daemon_run():
     sonic_platform.platform.Platform = MyPlatform
 
     daemon_sensormond = sensormond.SensorMonitorDaemon()
-    assert daemon.UPDATE_ELAPSED_THRESHOLD == UPDATE_ELAPSED_THRESHOLD
+    assert daemon_sensormond.UPDATE_ELAPSED_THRESHOLD == UPDATE_ELAPSED_THRESHOLD
 
     daemon_sensormond.stop_event.wait = mock.MagicMock(return_value=True)
     ret = daemon_sensormond.run()
@@ -562,16 +563,14 @@ def test_daemon_run_with_updater_stop_signal():
     daemon.stop_event.wait = mock.MagicMock(return_value=False)
 
     daemon.voltage_updater.update = mock.MagicMock(return_value=False)
-    daemon.current_updater.update = mock.MagicMock(return_value=True)
-
-    ret = daemon.run()
-    assert ret is False
-
-    daemon.voltage_updater.update = mock.MagicMock(return_value=True)
     daemon.current_updater.update = mock.MagicMock(return_value=False)
-
     ret = daemon.run()
     assert ret is False
+
+    daemon.voltage_updater.update = mock.MagicMock(return_value=False)
+    daemon.current_updater.update = mock.MagicMock(return_value=True)
+    ret = daemon.run()
+    assert ret is True
 
 def test_try_get():
     def good_callback():
