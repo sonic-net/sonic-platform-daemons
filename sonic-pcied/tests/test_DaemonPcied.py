@@ -170,7 +170,6 @@ class TestDaemonPcied(object):
 
         daemon_pcied.device_table.getKeys.return_value = ['device1', 'device2']
         daemon_pcied.status_table.getKeys.return_value = ['status1']
-        daemon_pcied.detach_info.getKeys.return_value = ['detach1', 'detach2', 'detach3']
 
         daemon_pcied.__del__()
 
@@ -181,10 +180,6 @@ class TestDaemonPcied(object):
         assert daemon_pcied.status_table._del.call_count == 1
         daemon_pcied.status_table._del.assert_called_with('status1')
 
-        assert daemon_pcied.detach_info._del.call_count == 3
-        daemon_pcied.detach_info._del.assert_any_call('detach1')
-        daemon_pcied.detach_info._del.assert_any_call('detach2')
-        daemon_pcied.detach_info._del.assert_any_call('detach3')
 
     @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
     @mock.patch('pcied.log.log_warning')
@@ -202,11 +197,12 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.detach_info = mock.MagicMock()
         daemon_pcied.detach_info.getKeys = mock.MagicMock(return_value=['DPU_0', 'DPU_1'])
+        # Mock the get() method to return tuple of (exists, field_value_pairs)
         daemon_pcied.detach_info.get = mock.MagicMock(
             side_effect=lambda key: {
-                'DPU_0': {'bus_info': '0000:03:00.1', 'dpu_state': 'detaching'},
-                'DPU_1': {'bus_info': '0000:03:00.2', 'dpu_state': 'attached'}
-            }.get(key, None)
+                'DPU_0': (True, [('bus_info', '0000:03:00.1'), ('dpu_state', 'detaching')]),
+                'DPU_1': (True, [('bus_info', '0000:03:00.2'), ('dpu_state', 'attached')])
+            }.get(key, (False, []))
         )
 
         # Test when the device is in detaching mode
