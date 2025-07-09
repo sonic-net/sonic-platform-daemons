@@ -202,7 +202,7 @@ class TestXcvrdThreadException(object):
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(side_effect=NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
         stop_event = threading.Event()
-        sff_mgr = SffManagerTask(True, DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
         exception_received = None
         trace = None
         try:
@@ -1654,7 +1654,7 @@ class TestXcvrdScript(object):
 
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
-        task = SffManagerTask(True, DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -1692,7 +1692,7 @@ class TestXcvrdScript(object):
         assert len(task.port_dict) == 0
 
     def test_SffManagerTask_get_active_lanes_for_lport(self):
-        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1746,7 +1746,7 @@ class TestXcvrdScript(object):
         assert result == expected_result
 
     def test_SffManagerTask_get_active_lanes_for_lport_with_invalid_input(self):
-        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1769,7 +1769,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
         mock_get_state_port_tbl.return_value.hget.return_value = (True, 'true')
 
-        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1783,7 +1783,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_admin_status(self, mock_get_cfg_port_tbl):
         mock_get_cfg_port_tbl.return_value.hget.return_value = (True, 'up')
 
-        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -1793,45 +1793,45 @@ class TestXcvrdScript(object):
         mock_get_cfg_port_tbl.assert_called_once_with(0)
         mock_get_cfg_port_tbl.return_value.hget.assert_called_once_with(lport, 'admin_status')
 
-    def test_SffManagerTask_handle_high_power_class(self):
+    def test_SffManagerTask_enable_high_power_class(self):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_power_class = MagicMock(return_value=5)
         mock_xcvr_api.set_high_power_class = MagicMock(return_value=True)
         lport = 'Ethernet0'
 
-        sff_manager_task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                           threading.Event(),
                                           MagicMock(),
                                           helper_logger)
 
         # Test with normal case
-        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
         assert mock_xcvr_api.get_power_class.call_count == 1
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
         # Test with get_power_class failed
         mock_xcvr_api.get_power_class.return_value = None
-        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
         assert mock_xcvr_api.get_power_class.call_count == 2
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
         # Test for no need to set high power class
         mock_xcvr_api.get_power_class.return_value = 4
-        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
         assert mock_xcvr_api.get_power_class.call_count == 3
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
         # Test for set_high_power_class failed
         mock_xcvr_api.get_power_class.return_value = 5
         mock_xcvr_api.set_high_power_class.return_value = False
-        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
         assert mock_xcvr_api.get_power_class.call_count == 4
         assert mock_xcvr_api.set_high_power_class.call_count == 2
 
         # Test for set_high_power_class not supported
         mock_xcvr_api.get_power_class.return_value = 5
         mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
-        sff_manager_task.handle_high_power_class(mock_xcvr_api, lport)
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
         assert mock_xcvr_api.get_power_class.call_count == 5
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
@@ -1852,7 +1852,7 @@ class TestXcvrdScript(object):
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        task = SffManagerTask(True, DEFAULT_NAMESPACE,
+        task = SffManagerTask(DEFAULT_NAMESPACE,
                               threading.Event(),
                               mock_chassis,
                               helper_logger)

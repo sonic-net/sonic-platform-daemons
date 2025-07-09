@@ -2033,12 +2033,12 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr_controlled_tx=False):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
-        self.enable_sff_mgr_controlled_tx = enable_sff_mgr_controlled_tx
+        self.enable_sff_mgr = enable_sff_mgr
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
@@ -2236,9 +2236,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data = self.init()
 
         # Start the SFF manager
-        sff_manager = SffManagerTask(self.enable_sff_mgr_controlled_tx, self.namespaces, self.stop_event, platform_chassis, helper_logger)
-        sff_manager.start()
-        self.threads.append(sff_manager)
+        sff_manager = None
+        if self.enable_sff_mgr:
+            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis, helper_logger)
+            sff_manager.start()
+            self.threads.append(sff_manager)
+        else:
+            self.log_notice("Skipping SFF Task Manager")
 
         # Start the CMIS manager
         cmis_manager = None
@@ -2318,10 +2322,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
-    parser.add_argument('--enable_sff_mgr_controlled_tx', action='store_true')
+    parser.add_argument('--enable_sff_mgr', action='store_true')
 
     args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr_controlled_tx)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr)
     xcvrd.run()
 
 
