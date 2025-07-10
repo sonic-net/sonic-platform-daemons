@@ -691,9 +691,60 @@ class CmisManagerTask(threading.Thread):
 
         return media_lanes_mask
 
-    def is_appl_reconfigure_required(self, api, app_new):
+    def is_decomm_pending_for_lport(self, lport):
         """
-	   Reset app code if non default app code needs to configured 
+        Get the decommission pending status for the given logical port.
+        Args:
+            lport:
+                String, logical port name
+        Returns:
+            Boolean, True if decommission pending, False otherwise
+        """
+        return self.port_dict.get(lport, {}).get('is_decomm_pending', False)
+
+    def is_decomm_pending_for_pport(self, lport):
+        """
+        Get the decommission pending status for the physical port the given logical port belongs to.
+        Args:
+            lport:
+                String, logical port name
+        Returns:
+            Boolean, True if decommission pending, False otherwise
+        """
+        for pdata in self.port_dict.values():
+            if pdata.get('index') == self.port_dict[lport]['index']:
+                if pdata.get('is_decomm_pending', False):
+                    return True
+        return False
+
+    def is_decomm_failed_for_pport(self, lport):
+        """
+        Get the decommission failed status for the physical port the given logical port belongs to.
+        Args:
+            lport:
+                String, logical port name
+        Returns:
+            Boolean, True if decommission failed, False otherwise
+        """
+        for logical_port, pdata in self.port_dict.items():
+            if pdata.get('index') == self.port_dict[lport]['index']:
+                if pdata.get('is_decomm_pending', False) and \
+                    get_cmis_state_from_state_db(logical_port, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(logical_port))) == CMIS_STATE_FAILED:
+                    return True
+        return False
+
+    def is_decommission_required(self, api, app_new):
+        """
+        Check if the CMIS decommission (i.e. reset appl code to 0 for all lanes
+        of the entire physical port) is required
+        Args:
+            api:
+                XcvrApi object
+            app_new:
+                Integer, the new desired appl code
+        Returns:
+            True, if decommission is required
+            False, if decommission is not required
         """
         for lane in range(self.CMIS_MAX_HOST_LANES):
             app_cur = api.get_application(lane)
@@ -1120,14 +1171,16 @@ class CmisManagerTask(threading.Thread):
                 retries = self.port_dict[lport].get('cmis_retries', 0)
                 host_lanes_mask = self.port_dict[lport].get('host_lanes_mask', 0)
                 appl = self.port_dict[lport].get('appl', 0)
-                if state != CMIS_STATE_INSERTED and (host_lanes_mask <= 0 or appl < 1):
+                if state != CMIS_STATE_INSERTED and not self.is_decomm_pending_for_lport(lport) and (host_lanes_mask <= 0 or appl < 1):
                     self.log_error("{}: Unexpected value for host_lanes_mask {} or appl {} in "
                                     "{} state".format(lport, host_lanes_mask, appl, state))
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                     continue
 
-                self.log_notice("{}: {}G, lanemask=0x{:x}, CMIS state={}, Module state={}, DP state={}, appl {} host_lane_count {} "
+                self.log_notice("{}: {}G, lanemask=0x{:x}, CMIS state={}{}, Module state={}, DP state={}, appl {} host_lane_count {} "
                                 "retries={}".format(lport, int(speed/1000), host_lanes_mask, state,
+                                "(decommission" + ("*" if self.is_decomm_pending_for_lport(lport) else "") + ")"
+                                    if self.is_decomm_pending_for_pport(lport) else "",
                                 api.get_module_state(), api.get_datapath_state(), appl, host_lane_count, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
@@ -1171,6 +1224,30 @@ class CmisManagerTask(threading.Thread):
                         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
+                        if (not self.is_decomm_pending_for_pport(lport) and self.is_decommission_required(api, appl)):
+                            self.port_dict[lport]['is_decomm_pending'] = True
+                            self.log_notice(f"{lport}: DECOMMISSION: setting is_decomm_pending=True")
+
+                        if self.is_decomm_pending_for_lport(lport):
+                            # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
+                            self.port_dict[lport]['appl'] = appl = 0
+                            self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask = 0xff
+                            self.port_dict[lport]['media_lanes_mask'] = 0xff
+                            self.log_notice("{}: DECOMMISSION: start by setting appl=0 and host_lanes_mask/media_lanes_mask=0xff, "
+                                            "moving to DP_DEINIT".format(lport))
+                            # Skip rest of the pre-init when decommission is pending on this lport
+                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
+                            continue
+                        elif self.is_decomm_pending_for_pport(lport):
+                            failed = self.is_decomm_failed_for_pport(lport)
+                            failed_str = "failed" if failed else "waiting"
+                            self.log_notice("{}: DECOMMISSION: another lport is doing decommission for this pport, {}"
+                                                                    .format(lport, failed_str))
+                            if failed:
+                                # Fail the CMIS state machine for this lport
+                                self.force_cmis_reinit(lport, self.CMIS_MAX_RETRIES + 1)
+                            continue
+                    
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
@@ -1209,14 +1286,6 @@ class CmisManagerTask(threading.Thread):
                                  self.log_error("{} failed to configure Tx power = {}".format(lport, tx_power))
                               else:
                                  self.log_notice("{} Successfully configured Tx power = {}".format(lport, tx_power))
-
-                        # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
-                        if True == self.is_appl_reconfigure_required(api, appl):
-                            self.log_notice("{}: Decommissioning all lanes/datapaths to default AppSel=0".format(lport))
-                            if True != api.decommission_all_datapaths():
-                                self.log_notice("{}: Failed to default to AppSel=0".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
-                                continue
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
@@ -1283,38 +1352,39 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        if api.is_coherent_module():
-                        # For ZR module, configure the laser frequency when Datapath is in Deactivated state
-                           freq = self.port_dict[lport]['laser_freq']
-                           if 0 != freq:
-                                if 1 != self.configure_laser_frequency(api, lport, freq):
-                                   self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
-                                else:
-                                   self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
+                        # Skip rest when decommission is required and set APP directly
+                        if not self.is_decomm_pending_for_lport(lport):
+                            if api.is_coherent_module():
+                            # For ZR module, configure the laser frequency when Datapath is in Deactivated state
+                                freq = self.port_dict[lport]['laser_freq']
+                                if 0 != freq:
+                                    if 1 != self.configure_laser_frequency(api, lport, freq):
+                                        self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
+                                    else:
+                                        self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
 
-                        # Stage custom SI settings
-                        if optics_si_parser.optics_si_present():
-                            optics_si_dict = {}
-                            # Apply module SI settings if applicable
-                            lane_speed = int(speed/1000)//host_lane_count
-                            optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-                            
-                            self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
-                            for key, sub_dict in optics_si_dict.items():
-                                self.log_debug("{}".format(key))
-                                for sub_key, value in sub_dict.items():
-                                    self.log_debug("{}: {}".format(sub_key, str(value)))
-                            
-                            if optics_si_dict:
-                                self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
-                                                 format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
-                                if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
-                                    self.log_notice("{}: unable to stage custom SI settings ".format(lport))
-                                    self.force_cmis_reinit(lport, retries + 1)
-                                    continue
+                            # Stage custom SI settings
+                            if optics_si_parser.optics_si_present():
+                                optics_si_dict = {}
+                                # Apply module SI settings if applicable
+                                lane_speed = int(speed/1000)//host_lane_count
+                                optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
+                                self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
+                                for key, sub_dict in optics_si_dict.items():
+                                    self.log_debug("{}".format(key))
+                                    for sub_key, value in sub_dict.items():
+                                        self.log_debug("{}: {}".format(sub_key, str(value)))
 
-                                # Set Explicit control bit to apply Custom Host SI settings
-                                ec = 1
+                                if optics_si_dict:
+                                    self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
+                                                    format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
+                                    if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
+                                        self.log_notice("{}: unable to stage custom SI settings ".format(lport))
+                                        self.force_cmis_reinit(lport, retries + 1)
+                                        continue
+
+                                    # Set Explicit control bit to apply Custom Host SI settings
+                                    ec = 1
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
@@ -1329,6 +1399,14 @@ class CmisManagerTask(threading.Thread):
                             if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ConfigSuccess'".format(lport))
                                 self.force_cmis_reinit(lport, retries + 1)
+                            continue
+
+                        # Set the decommission pending flag to False and invoke CMIS reinit
+                        # so that normal CMIS initialization can begin
+                        if self.is_decomm_pending_for_lport(lport):
+                            self.log_notice("{}: DECOMMISSION: done for physical port {}".format(lport, self.port_dict[lport]['index']))
+                            del self.port_dict[lport]['is_decomm_pending']
+                            self.force_cmis_reinit(lport)
                             continue
 
                         if hasattr(api, 'get_cmis_rev'):
