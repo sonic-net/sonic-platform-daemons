@@ -1273,11 +1273,6 @@ class CmisManagerTask(threading.Thread):
                             self.port_dict[lport]['forced_tx_disabled'] = False
                             self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
 
-                        # Skip rest of the pre-init when decommission is required
-                        if not self.is_decomm_pending_for_lport(lport):
-                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
-                            continue
-
                         # Configure the target output power if ZR module
                         if api.is_coherent_module():
                            tx_power = self.port_dict[lport]['tx_power']
