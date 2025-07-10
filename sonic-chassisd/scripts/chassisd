@@ -804,7 +804,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
                 # Operational status transitioning to offline
-                if prev_status != "Empty" and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
+                if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to offline".format(key))
 
                     # Persist dpu down time
