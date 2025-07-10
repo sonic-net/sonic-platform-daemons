@@ -25,6 +25,9 @@ class SffLoggerForPortUpdateEvent:
     def __init__(self, logger):
         self.logger = logger
 
+    def log_info(self, message):
+        self.logger.log_info("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
     def log_notice(self, message):
         self.logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
