@@ -211,14 +211,11 @@ def gen_cmis_lanes_dict(key_format_str, value, one_based=True):
         lanes_dict[key_format_str.format(lane_idx)] = value
     return lanes_dict
 
-
 def gen_cmis_dp_state_dict(value):
     return gen_cmis_lanes_dict('DP{}State', value)
 
-
 def gen_cmis_config_status_dict(value):
     return gen_cmis_lanes_dict('ConfigStatusLane{}', value)
-
 
 def gen_cmis_dpinit_pending_dict(value):
     return gen_cmis_lanes_dict('DPInitPending{}', value)
@@ -2641,6 +2638,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present', MagicMock(return_value=(True)))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting', MagicMock())
     def test_CmisManagerTask_task_worker(self, mock_chassis, mock_get_status_sw_tbl):
         mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
         mock_xcvr_api = MagicMock()
