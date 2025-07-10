@@ -2099,6 +2099,48 @@ class TestXcvrdScript(object):
         mock_get_cfg_port_tbl.assert_called_once_with(0)
         mock_get_cfg_port_tbl.return_value.hget.assert_called_once_with(lport, 'admin_status')
 
+    def test_SffManagerTask_enable_high_power_class(self):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_power_class = MagicMock(return_value=5)
+        mock_xcvr_api.set_high_power_class = MagicMock(return_value=True)
+        lport = 'Ethernet0'
+
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                          threading.Event(),
+                                          MagicMock(),
+                                          helper_logger)
+
+        # Test with normal case
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 1
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test with get_power_class failed
+        mock_xcvr_api.get_power_class.return_value = None
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 2
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test for no need to set high power class
+        mock_xcvr_api.get_power_class.return_value = 4
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 3
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
+        # Test for set_high_power_class failed
+        mock_xcvr_api.get_power_class.return_value = 5
+        mock_xcvr_api.set_high_power_class.return_value = False
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 4
+        assert mock_xcvr_api.set_high_power_class.call_count == 2
+
+        # Test for set_high_power_class not supported
+        mock_xcvr_api.get_power_class.return_value = 5
+        mock_xcvr_api.set_high_power_class = MagicMock(side_effect=AttributeError("Attribute not found"))
+        sff_manager_task.enable_high_power_class(mock_xcvr_api, lport)
+        assert mock_xcvr_api.get_power_class.call_count == 5
+        assert mock_xcvr_api.set_high_power_class.call_count == 1
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_SffManagerTask_task_worker(self, mock_chassis):
@@ -2107,6 +2149,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
         mock_xcvr_api.is_copper = MagicMock(return_value=False)
         mock_xcvr_api.get_tx_disable_support = MagicMock(return_value=True)
+        mock_xcvr_api.get_power_class = MagicMock(return_value=1)
 
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
