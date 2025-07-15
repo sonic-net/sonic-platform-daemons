@@ -471,6 +471,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
+    ALL_LANES_MASK = 0xff
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -697,7 +698,7 @@ class CmisManagerTask(threading.Thread):
             lport:
                 String, logical port name
         """
-        self.decomm_pending_dict.pop(self.port_dict[lport]['index'], None)
+        self.decomm_pending_dict.pop(self.port_dict.get(lport, {}).get('index'), None)
 
     def set_decomm_pending(self, lport):
         """
@@ -713,9 +714,10 @@ class CmisManagerTask(threading.Thread):
             # decommission state machine.
             return
         self.decomm_pending_dict[physical_port_idx] = lport
-        self.log_notice(f"{lport}: DECOMMISSION: setting decomm_pending for physical port {physical_port_idx}")
+        self.log_notice("{}: DECOMMISSION: setting decomm_pending for physical port "
+                        "{}".format(lport, physical_port_idx))
 
-    def is_decomm_pending_for_lport(self, lport):
+    def is_decomm_lead_lport(self, lport):
         """
         Check if this is the lead logical port doing the decommission state machine.
 
@@ -727,9 +729,10 @@ class CmisManagerTask(threading.Thread):
         """
         return self.decomm_pending_dict.get(self.port_dict[lport]['index']) == lport
 
-    def is_decomm_pending_for_pport(self, lport):
+    def is_decomm_pending(self, lport):
         """
         Get the decommission pending status for the physical port the given logical port belongs to.
+
         Args:
             lport:
                 String, logical port name
@@ -741,6 +744,7 @@ class CmisManagerTask(threading.Thread):
     def is_decomm_failed_for_pport(self, lport):
         """
         Get the decommission failed status for the physical port the given logical port belongs to.
+
         Args:
             lport:
                 String, logical port name
@@ -765,6 +769,7 @@ class CmisManagerTask(threading.Thread):
         """
         Check if the CMIS decommission (i.e. reset appl code to 0 for all lanes
         of the entire physical port) is required
+
         Args:
             api:
                 XcvrApi object
@@ -1199,7 +1204,8 @@ class CmisManagerTask(threading.Thread):
                 retries = self.port_dict[lport].get('cmis_retries', 0)
                 host_lanes_mask = self.port_dict[lport].get('host_lanes_mask', 0)
                 appl = self.port_dict[lport].get('appl', 0)
-                if state != CMIS_STATE_INSERTED and not self.is_decomm_pending_for_lport(lport) and (host_lanes_mask <= 0 or appl < 1):
+                # appl can be 0 if this lport is in decommission state machine, which should not be considered as failed case.
+                if state != CMIS_STATE_INSERTED and not self.is_decomm_lead_lport(lport) and (host_lanes_mask <= 0 or appl < 1):
                     self.log_error("{}: Unexpected value for host_lanes_mask {} or appl {} in "
                                     "{} state".format(lport, host_lanes_mask, appl, state))
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
@@ -1207,8 +1213,8 @@ class CmisManagerTask(threading.Thread):
 
                 self.log_notice("{}: {}G, lanemask=0x{:x}, CMIS state={}{}, Module state={}, DP state={}, appl {} host_lane_count {} "
                                 "retries={}".format(lport, int(speed/1000), host_lanes_mask, state,
-                                "(decommission" + ("*" if self.is_decomm_pending_for_lport(lport) else "") + ")"
-                                    if self.is_decomm_pending_for_pport(lport) else "",
+                                "(decommission" + ("*" if self.is_decomm_lead_lport(lport) else "") + ")"
+                                    if self.is_decomm_pending(lport) else "",
                                 api.get_module_state(), api.get_datapath_state(), appl, host_lane_count, retries))
                 if retries > self.CMIS_MAX_RETRIES:
                     self.log_error("{}: FAILED".format(lport))
@@ -1255,17 +1261,17 @@ class CmisManagerTask(threading.Thread):
                         if self.is_decommission_required(api, appl):
                             self.set_decomm_pending(lport)
 
-                        if self.is_decomm_pending_for_lport(lport):
+                        if self.is_decomm_lead_lport(lport):
                             # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
                             self.port_dict[lport]['appl'] = appl = 0
-                            self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask = 0xff
-                            self.port_dict[lport]['media_lanes_mask'] = 0xff
-                            self.log_notice("{}: DECOMMISSION: start by setting appl=0 and host_lanes_mask/media_lanes_mask=0xff, "
-                                            "moving to DP_DEINIT".format(lport))
-                            # Skip rest of the pre-init when decommission is pending on this lport
+                            self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask = self.ALL_LANES_MASK
+                            self.port_dict[lport]['media_lanes_mask'] = self.ALL_LANES_MASK
+                            self.log_notice("{}: DECOMMISSION: setting appl={} and "
+                                            "host_lanes_mask/media_lanes_mask={:#x}".format(lport, appl, self.ALL_LANES_MASK))
+                            # Skip rest of the deinit/pre-init when this is the lead logical port for decommission
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
                             continue
-                        elif self.is_decomm_pending_for_pport(lport):
+                        elif self.is_decomm_pending(lport):
                             if self.is_decomm_failed_for_pport(lport):
                                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                                 decomm_status_str = "failed"
@@ -1379,8 +1385,8 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
-                        # Skip rest when decommission is required and set APP directly
-                        if not self.is_decomm_pending_for_lport(lport):
+                        # Skip rest if it's in decommission state machine
+                        if not self.is_decomm_lead_lport(lport):
                             if api.is_coherent_module():
                             # For ZR module, configure the laser frequency when Datapath is in Deactivated state
                                 freq = self.port_dict[lport]['laser_freq']
@@ -1430,7 +1436,7 @@ class CmisManagerTask(threading.Thread):
 
                         # Set the decommission pending flag to False and invoke CMIS reinit
                         # so that normal CMIS initialization can begin
-                        if self.is_decomm_pending_for_lport(lport):
+                        if self.is_decomm_lead_lport(lport):
                             self.log_notice("{}: DECOMMISSION: done for physical port {}".format(lport, self.port_dict[lport]['index']))
                             self.clear_decomm_pending(lport)
                             self.force_cmis_reinit(lport)
