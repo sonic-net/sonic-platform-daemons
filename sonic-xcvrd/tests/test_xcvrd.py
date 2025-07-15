@@ -3296,7 +3296,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
 
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
-        task.is_decommission_required = MagicMock(side_effect=[True] + [False]*10)
+        task.is_decommission_required = MagicMock(side_effect=[True]*2 + [False]*10)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.get_host_tx_status = MagicMock(return_value='true')
         task.get_port_admin_status = MagicMock(return_value='up')
@@ -3307,25 +3307,26 @@ class TestXcvrdScript(object):
         task.get_cmis_host_lanes_mask = MagicMock(return_value=1)
         task.get_cmis_media_lanes_mask = MagicMock(return_value=1)
 
-        # Insert 1st subport
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'1,2', 'subport': '1'})
+        physical_port_idx = 0
+
+        # Insert 1st subport event
+        port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'1,2', 'subport': '1'})
         task.on_port_update_event(port_change_event)
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_INSERTED
 
-        # 1st subport starting decommission
+        # 1st subport (as the lead) starting decommission state machine
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*2 + [True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_DEINIT
         assert task.is_decomm_pending_for_lport('Ethernet0')
 
-        # Insert 2nd subport
-        port_change_event = PortChangeEvent('Ethernet2', 1, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'3,4', 'subport': '2'})
+        # Insert 2nd subport event
+        port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'3,4', 'subport': '2'})
         task.on_port_update_event(port_change_event)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_AP_CONF
-    
-        # 2nd subport is waiting for decommission to complete
+        # 2nd subport should not start decommission state machine as 1st subport already started decommission for the entire physical port
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_INSERTED
         assert task.is_decomm_pending_for_pport('Ethernet0')
         assert not task.is_decomm_failed_for_pport('Ethernet0')
@@ -3333,16 +3334,68 @@ class TestXcvrdScript(object):
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
         task.task_worker()
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_INIT
+        # 2nd subport is waiting for decommission to complete
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_INSERTED
         assert task.is_decomm_pending_for_lport('Ethernet0')
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
         task.task_worker()
+        # 1st subport completed decommission state machine and proceed to normal state machine, entire physical port is done on decommission
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_INSERTED
+        # 2nd subport is unblocked from decommission and continue on normal state machine
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_DP_PRE_INIT_CHECK
         assert not task.is_decomm_pending_for_lport('Ethernet0')
         assert not task.is_decomm_failed_for_pport('Ethernet0')
         assert not task.is_decomm_pending_for_pport('Ethernet0')
+
+        # Delete the config for all subports
+        port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')
+        task.on_port_update_event(port_change_event)
+        port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')
+        task.on_port_update_event(port_change_event)
+        assert not task.port_dict
+
+        # Reset is_decommission_required() to start decommission from scratch
+        task.is_decommission_required = MagicMock(side_effect=[True]*2 + [False]*10)
+
+        # Test failed decommission case:
+
+        # Insert 1st subport event
+        port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'1,2', 'subport': '1'})
+        task.on_port_update_event(port_change_event)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False]*2 + [True])
+        task.task_worker()
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_DEINIT
+        # 1st subport (as the lead) starting decommission state machine
+        assert task.is_decomm_pending_for_lport('Ethernet0')
+        # Set CMIS_STATE_FAILED to 1st subport to force decommission fail on the entire physical port
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_FAILED)
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
+        assert task.is_decomm_failed_for_pport('Ethernet0')
+
+        # Insert 2nd subport event
+        port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'3,4', 'subport': '2'})
+        task.on_port_update_event(port_change_event)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
+        task.task_worker()
+        # 1st subport should stay in failed state
+        assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
+        assert task.is_decomm_failed_for_pport('Ethernet0')
+        assert task.is_decomm_pending_for_lport('Ethernet0')
+        # 2nd subport is waiting for decommission to complete, and should also fall into failed state
+        assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_FAILED
+        assert task.is_decomm_pending_for_pport('Ethernet2')
+        assert task.is_decomm_failed_for_pport('Ethernet2')
+
+        # Delete the config for 1st subport
+        port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')
+        task.on_port_update_event(port_change_event)
+        # 1st subport is removed from port_dict
+        assert 'Ethernet0' not in task.port_dict
+        assert len(task.port_dict) == 1
+        # physical port should also be removed from decomm_pending_dict
+        assert physical_port_idx not in task.decomm_pending_dict
+        assert not task.is_decomm_pending_for_pport('Ethernet2')
 
     @pytest.mark.parametrize("lport, expected_dom_polling", [
         ('Ethernet0', 'disabled'),

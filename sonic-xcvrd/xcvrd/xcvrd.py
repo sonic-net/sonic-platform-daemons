@@ -1266,15 +1266,15 @@ class CmisManagerTask(threading.Thread):
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
                             continue
                         elif self.is_decomm_pending_for_pport(lport):
-                            failed = self.is_decomm_failed_for_pport(lport)
-                            failed_str = "failed" if failed else "waiting"
-                            self.log_notice("{}: DECOMMISSION: another lport is doing decommission for this pport, {}"
-                                                                    .format(lport, failed_str))
-                            if failed:
-                                # Fail the CMIS state machine for this lport
-                                self.force_cmis_reinit(lport, self.CMIS_MAX_RETRIES + 1)
+                            if self.is_decomm_failed_for_pport(lport):
+                                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
+                                decomm_status_str = "failed"
+                            else:
+                                decomm_status_str = "waiting for completion"
+                            self.log_notice("{}: DECOMMISSION: decommission has already started for this physical port, "
+                                            "{}".format(lport, decomm_status_str))
                             continue
-                    
+
                         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                                 self.port_dict[lport]['admin_status'] != 'up':
                            if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
