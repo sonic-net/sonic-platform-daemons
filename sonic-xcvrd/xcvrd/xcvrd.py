@@ -173,7 +173,9 @@ def get_interface_speed(ifname):
     """
     # see HOST_ELECTRICAL_INTERFACE of sff8024.py
     speed = 0
-    if '800G' in ifname:
+    if '1.6T' in ifname:
+        speed = 1600000
+    elif '800G' in ifname:
         speed = 800000
     elif '400G' in ifname:
         speed = 400000
