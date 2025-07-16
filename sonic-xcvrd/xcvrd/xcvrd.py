@@ -1402,6 +1402,7 @@ class CmisManagerTask(threading.Thread):
                                 # Apply module SI settings if applicable
                                 lane_speed = int(speed/1000)//host_lane_count
                                 optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
+
                                 self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
                                 for key, sub_dict in optics_si_dict.items():
                                     self.log_debug("{}".format(key))
