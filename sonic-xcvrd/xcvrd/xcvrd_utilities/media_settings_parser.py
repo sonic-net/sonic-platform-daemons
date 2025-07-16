@@ -7,6 +7,7 @@ import os
 import ast
 import re
 from natsort import natsorted
+from copy import deepcopy
 
 from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
@@ -23,6 +24,10 @@ MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
+CUSTOM_SERDES_ATTR_PREFIX = 'CUSTOM:'
+CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY = 'attributes'
+CUSTOM_SERDES_ATTRS_KEY_IN_DB = 'custom_serdes_attrs'
+
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
@@ -315,6 +320,64 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
+def to_int32(hex_str):
+    """
+    Parse hex_str (e.g. '0xFFEEAABB') as a signed 32-bit integer.
+    If the hex_str is negative, convert it to a signed integer.
+
+    Args:
+        hex_str: hex string to be converted to signed integer
+    Returns:
+        signed integer value
+    """
+    u = int(hex_str, 16)            # unsigned value
+    # if sign bit set, subtract 2**32 to get negative
+    return u - (1 << 32) if (u & (1 << 31)) else u
+
+
+def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
+    """
+    Handle custom SerDes attributes in the media_dict and convert them to JSON.
+
+    Args:
+        media_dict: dictionary containing SerDes settings for all lanes of the port
+        lane_count: number of lanes for this subport
+        subport_num: subport number (1-based), 0 for non-breakout case
+
+    Returns:
+        media_dict: updated media_dict with custom SerDes attributes converted to JSON
+    """
+    # Do deepcopy to avoid modifying the original media_dict
+    media_dict = deepcopy(media_dict)
+    attrs_list = []
+
+    for key, value in list(media_dict.items()):
+        if not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
+            continue
+
+        custom_serdes_attr = key[len(CUSTOM_SERDES_ATTR_PREFIX):]
+        value_list = [to_int32(lane_value_str)
+                        for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
+        attr_dict = {
+            custom_serdes_attr: {
+                'value': value_list
+            }
+        }
+        attrs_list.append(attr_dict)
+
+        # Remove the key from media_dict to avoid duplication
+        media_dict.pop(key)
+
+    if not attrs_list:
+        return media_dict
+
+    # Combine all the custom serdes attributes to a single element,
+    # and put it back into the media_dict to be published in APP DB
+    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps({CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
+                                                           separators=(',', ':'))  # remove whitespace for optimal payload
+    return media_dict
+
+
 def notify_media_setting(logical_port_name, transceiver_dict,
                          xcvr_table_helper, port_mapping):
 
@@ -365,6 +428,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         if len(media_dict) == 0:
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
+
+        media_dict = handle_custom_serdes_attrs(media_dict, lane_count, subport_num)
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
