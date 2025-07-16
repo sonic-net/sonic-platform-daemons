@@ -3329,7 +3329,7 @@ class TestXcvrdScript(object):
         # 2nd subport should not start decommission state machine as 1st subport already started decommission for the entire physical port
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_INSERTED
         assert task.is_decomm_pending('Ethernet0')
-        assert not task.is_decomm_failed_for_pport('Ethernet0')
+        assert not task.is_decomm_failed('Ethernet0')
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
         task.task_worker()
@@ -3345,7 +3345,7 @@ class TestXcvrdScript(object):
         # 2nd subport is unblocked from decommission and continue on normal state machine
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_DP_PRE_INIT_CHECK
         assert not task.is_decomm_lead_lport('Ethernet0')
-        assert not task.is_decomm_failed_for_pport('Ethernet0')
+        assert not task.is_decomm_failed('Ethernet0')
         assert not task.is_decomm_pending('Ethernet0')
 
         # Delete the config for all subports
@@ -3371,7 +3371,7 @@ class TestXcvrdScript(object):
         # Set CMIS_STATE_FAILED to 1st subport to force decommission fail on the entire physical port
         task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_FAILED)
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
-        assert task.is_decomm_failed_for_pport('Ethernet0')
+        assert task.is_decomm_failed('Ethernet0')
 
         # Insert 2nd subport event
         port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'3,4', 'subport': '2'})
@@ -3380,12 +3380,12 @@ class TestXcvrdScript(object):
         task.task_worker()
         # 1st subport should stay in failed state
         assert get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
-        assert task.is_decomm_failed_for_pport('Ethernet0')
+        assert task.is_decomm_failed('Ethernet0')
         assert task.is_decomm_lead_lport('Ethernet0')
         # 2nd subport is waiting for decommission to complete, and should also fall into failed state
         assert get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_FAILED
         assert task.is_decomm_pending('Ethernet2')
-        assert task.is_decomm_failed_for_pport('Ethernet2')
+        assert task.is_decomm_failed('Ethernet2')
 
         # Delete the config for 1st subport
         port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')

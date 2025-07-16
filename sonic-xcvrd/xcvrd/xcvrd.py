@@ -741,7 +741,7 @@ class CmisManagerTask(threading.Thread):
         """
         return self.port_dict[lport]['index'] in self.decomm_pending_dict
 
-    def is_decomm_failed_for_pport(self, lport):
+    def is_decomm_failed(self, lport):
         """
         Get the decommission failed status for the physical port the given logical port belongs to.
 
@@ -1272,7 +1272,7 @@ class CmisManagerTask(threading.Thread):
                             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
                             continue
                         elif self.is_decomm_pending(lport):
-                            if self.is_decomm_failed_for_pport(lport):
+                            if self.is_decomm_failed(lport):
                                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                                 decomm_status_str = "failed"
                             else:
