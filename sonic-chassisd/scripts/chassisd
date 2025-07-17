@@ -1359,7 +1359,17 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         # Merge existing fields, preserving all others
         fvs_dict = dict(fvs) if fvs else {}
 
-        # Update or add transition fields only
+        # Ensure mandatory fields are present
+        mandatory_defaults = {
+            'desc': 'N/A',
+            'slot': 'N/A',
+            'serial': 'N/A',
+            'oper_status': 'Unknown'
+        }
+        for field, default in mandatory_defaults.items():
+            fvs_dict.setdefault(field, default)
+
+        # Update or add transition fields
         fvs_dict.update({
             'state_transition_in_progress': 'True',
             'transition_start_time': get_formatted_time()
