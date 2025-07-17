@@ -136,6 +136,12 @@ def test_moduleupdater_check_phyentity_fields():
     assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
     assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
 
+    presence = False
+    module.set_presence(presence)
+    module_updater.module_db_update()
+    fvs = module_updater.phy_entity_table.get(name)
+    assert fvs == None
+    
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
     index = 0
