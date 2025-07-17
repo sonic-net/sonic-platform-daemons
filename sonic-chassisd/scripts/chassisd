@@ -804,7 +804,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
                 # Operational status transitioning to offline
-                if prev_status != "Empty" and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
+                if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to offline".format(key))
 
                     # Persist dpu down time
@@ -815,7 +815,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # publish reboot cause to db
                     self.update_dpu_reboot_cause_to_db(key)
 
-                elif (prev_status == "Empty" or prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
+                elif (prev_status == ModuleBase.MODULE_STATUS_EMPTY or prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice(f"{key} operational status transitioning to online")
 
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
