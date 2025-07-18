@@ -157,14 +157,18 @@ def get_formatted_time(datetimeobj=None, op_format=None):
     date_obj = datetimeobj if datetimeobj else datetime.now(timezone.utc)
     return date_obj.strftime(op_format if op_format else "%a %b %d %I:%M:%S %p UTC %Y")
 
-def update_entity_info(table, parent_name, key, index, serial, model, is_replaceable):
-    fvs = swsscommon.FieldValuePairs(
-        [('position_in_parent', str(index)),
-         ('parent_name', parent_name),
-         ('serial', serial),
-         ('model', model),
-         ('is_replaceable', is_replaceable)])
-    table.set(key, fvs)
+def update_entity_info(table, parent_name, key, index, serial, model, is_replaceable, presence):
+    if presence.lower() == "true":
+        fvs = swsscommon.FieldValuePairs(
+            [('position_in_parent', str(index)),
+             ('parent_name', parent_name),
+             ('serial', serial),
+             ('model', model),
+             ('is_replaceable', is_replaceable)])
+        table.set(key, fvs)
+    else:
+        if table.get(key) is not None:
+            table._del(key)
 
 #
 # Module Config Updater ========================================================
@@ -413,8 +417,9 @@ class ModuleUpdater(logger.Logger):
                                    module_index,
                                    module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD],
                                    module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD],
-                                   module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD])
-
+                                   module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD],
+                                   module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD])
+                
                 # Construct key for down_modules dict. Example down_modules key format: LINE-CARD0|<hostname>
                 fvs = self.hostname_table.get(key)
                 if isinstance(fvs, list) and fvs[0] is True:
