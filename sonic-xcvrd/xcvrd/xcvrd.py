@@ -1429,6 +1429,16 @@ class CmisManagerTask(threading.Thread):
 
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
                     elif state == CMIS_STATE_DP_INIT:
+                        if hasattr(api, 'get_cmis_rev'):
+                            # Check datapath init pending on module that supports CMIS 5.x
+                            # According to CMIS spec Table 6-3 and 6-4, result status gets reported in ConfigStatus after DPInitPending is set
+                            majorRev = int(api.get_cmis_rev().split('.')[0])
+                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: timeout for 'DPInitPending'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
+
                         if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                             if self.is_timer_expired(expired):
                                 self.log_notice("{}: timeout for 'ConfigSuccess', current ConfigStatus: "
@@ -1442,14 +1452,6 @@ class CmisManagerTask(threading.Thread):
                             self.clear_decomm_pending(lport)
                             self.force_cmis_reinit(lport)
                             continue
-
-                        if hasattr(api, 'get_cmis_rev'):
-                            # Check datapath init pending on module that supports CMIS 5.x
-                            majorRev = int(api.get_cmis_rev().split('.')[0])
-                            if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):
-                                self.log_notice("{}: datapath init not pending".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
-                                continue
 
                         # Ensure the Datapath is NOT Activated unless the host Tx siganl is good.
                         # NOTE: Some CMIS compliant modules may have 'auto-squelch' feature where
