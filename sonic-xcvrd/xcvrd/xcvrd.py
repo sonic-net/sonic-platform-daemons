@@ -1998,6 +1998,8 @@ class SfpStateUpdateTask(threading.Thread):
         elif port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_ADD:
             self.port_mapping.handle_port_change_event(port_change_event)
             self.on_add_logical_port(port_change_event)
+        elif port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_SET:
+            self.on_update_logical_port(port_change_event)
 
     def on_remove_logical_port(self, port_change_event):
         """Called when a logical port is removed from CONFIG_DB.
@@ -2094,6 +2096,31 @@ class SfpStateUpdateTask(threading.Thread):
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
+
+    def on_update_logical_port(self, port_change_event):
+        """Called when a logical port is updated.
+           Invoked to update media settings, when port speed is changed.
+
+        Args:
+            port_change_event (object): port change event
+        """
+        int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
+        state_port_table = self.xcvr_table_helper.get_state_port_tbl(port_change_event.asic_id)
+        found, state_port_table_fvs = state_port_table.get(port_change_event.port_name)
+        if not found:
+            helper_logger.log_warning("Logical port {} not found in STATE_DB PORT_TABLE".format(port_change_event.port_name))
+            return
+        # Initialize the NPU_SI_SETTINGS_SYNC_STATUS to default value
+        state_port_table.set(port_change_event.port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_DEFAULT_VALUE)])
+
+        if _wrapper_get_presence(port_change_event.port_index):
+            transceiver_dict = {}
+            rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
+            if rc == SFP_EEPROM_NOT_READY:
+                # Failed to read EEPROM, put it to retry set
+                self.retry_eeprom_set.add(port_change_event.port_name)
+            else:
+                media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
 
     def retry_eeprom_reading(self):
         """Retry EEPROM reading, if retry succeed, remove the logical port from the retry set
