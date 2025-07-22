@@ -33,6 +33,8 @@ swsscommon.FieldValuePairs = FieldValuePairs
 VOLTAGE_INFO_TABLE_NAME = 'VOLTAGE_INFO'
 CURRENT_INFO_TABLE_NAME = 'CURRENT_INFO'
 
+UPDATE_ELAPSED_THRESHOLD = 30
+
 @pytest.fixture(scope='function', autouse=True)
 def configure_mocks():
     sensormond.SensorStatus.log_notice = mock.MagicMock()
@@ -70,7 +72,6 @@ def test_sensor_status_set_over_threshold():
     assert ret
     assert not sensor_status.over_threshold
 
-
 def test_sensor_status_set_under_threshold():
     sensor_status = sensormond.SensorStatus()
     ret = sensor_status.set_under_threshold(sensormond.NOT_AVAILABLE, sensormond.NOT_AVAILABLE)
@@ -89,7 +90,6 @@ def test_sensor_status_set_under_threshold():
     ret = sensor_status.set_under_threshold(2, 1)
     assert ret
     assert not sensor_status.under_threshold
-
 
 def test_sensor_status_set_not_available():
     SENSOR_NAME = 'Chassis 1 Sensor 1'
@@ -188,6 +188,33 @@ class TestVoltageUpdater(object):
         voltage_updater.update()
         assert len(voltage_updater.module_voltage_sensors) == 0
 
+    def test_update_with_stop_event_handling(self):
+        #test for sensor iteration stop checks
+        chassis = MockChassis()
+        chassis.make_over_threshold_voltage_sensor()  # Add a sensor so the loop executes
+        voltage_updater = sensormond.VoltageUpdater(chassis, [])
+        voltage_updater.log_info = mock.MagicMock()
+
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
+
+        result = voltage_updater.update(stop_event)
+        assert result is False
+        voltage_updater.log_info.assert_called_with("Stop signal received while running voltage update")
+
+        #test for module sensor iteration stop checks
+        chassis = MockChassis()
+        chassis.make_module_voltage_sensor()
+        chassis.set_modular_chassis(True)
+        voltage_updater = sensormond.VoltageUpdater(chassis, [])
+        voltage_updater.log_info = mock.MagicMock()
+
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
+
+        result = voltage_updater.update(stop_event)
+        assert result is False
+        voltage_updater.log_info.assert_called_with("Stop signal received while running voltage update")
 
 class TestCurrentUpdater(object):
     """
@@ -276,8 +303,35 @@ class TestCurrentUpdater(object):
         current_updater.update()
         assert len(current_updater.module_current_sensors) == 0
 
-# Modular chassis-related tests
+    def test_update_with_stop_event_handling(self):
+        #test for sensor iteration stop checks
+        chassis = MockChassis()
+        chassis.make_over_threshold_current_sensor()  # Add a sensor so the loop executes
+        current_updater = sensormond.CurrentUpdater(chassis, [])
+        current_updater.log_info = mock.MagicMock()
 
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
+        
+        result = current_updater.update(stop_event)
+        assert result is False
+        current_updater.log_info.assert_called_with("Stop signal received while running current update")
+        
+        #test for module sensor iteration stop checks
+        chassis = MockChassis()
+        chassis.make_module_current_sensor()
+        chassis.set_modular_chassis(True)
+        current_updater = sensormond.CurrentUpdater(chassis, [])
+        current_updater.log_info = mock.MagicMock()
+
+        stop_event = mock.MagicMock()
+        stop_event.is_set.return_value = True
+        
+        result = current_updater.update(stop_event)
+        assert result is False
+        current_updater.log_info.assert_called_with("Stop signal received while running current update")
+
+# Modular chassis-related tests
 
 def test_updater_voltage_sensor_check_modular_chassis():
     chassis = MockChassis()
@@ -296,7 +350,6 @@ def test_updater_voltage_sensor_check_modular_chassis():
     voltage_updater = sensormond.VoltageUpdater(chassis, [])
     assert voltage_updater.chassis_table != None
     assert voltage_updater.chassis_table.table_name == '{}_{}'.format(VOLTAGE_INFO_TABLE_NAME, str(my_slot))
-
 
 def test_updater_voltage_sensor_check_chassis_table():
     chassis = MockChassis()
@@ -331,7 +384,6 @@ def test_updater_voltage_sensor_check_min_max():
     assert slot_dict['minimum_voltage'] == str(voltage_sensor.get_minimum_recorded())
     assert slot_dict['maximum_voltage'] == str(voltage_sensor.get_maximum_recorded())
 
-
 def test_updater_current_sensor_check_modular_chassis():
     chassis = MockChassis()
     assert chassis.is_modular_chassis() == False
@@ -350,7 +402,6 @@ def test_updater_current_sensor_check_modular_chassis():
     assert current_updater.chassis_table != None
     assert current_updater.chassis_table.table_name == '{}_{}'.format(CURRENT_INFO_TABLE_NAME, str(my_slot))
 
-
 def test_updater_current_sensor_check_chassis_table():
     chassis = MockChassis()
 
@@ -368,7 +419,6 @@ def test_updater_current_sensor_check_chassis_table():
     chassis.get_all_current_sensors().append(current_sensor2)
     current_updater.update()
     assert current_updater.chassis_table.get_size() == chassis.get_num_current_sensors()
-
 
 def test_updater_current_sensor_check_min_max():
     chassis = MockChassis()
@@ -448,6 +498,8 @@ def test_daemon_run():
     sonic_platform.platform.Platform = MyPlatform
 
     daemon_sensormond = sensormond.SensorMonitorDaemon()
+    assert daemon_sensormond.UPDATE_ELAPSED_THRESHOLD == UPDATE_ELAPSED_THRESHOLD
+
     daemon_sensormond.stop_event.wait = mock.MagicMock(return_value=True)
     ret = daemon_sensormond.run()
     assert ret is False
@@ -457,6 +509,68 @@ def test_daemon_run():
     ret = daemon_sensormond.run()
     assert ret is True
 
+builtin_open = open  # save the unpatched version
+def sensor_mock_open(*args, **kwargs):
+    if args and args[0] == sensormond.PLATFORM_ENV_CONF_FILE:
+        return mock.mock_open(read_data="SENSORMOND_WARNING_TIME=45\nOTHER_CONFIG=value\n")(*args, **kwargs)
+    # unpatched version for every other path
+    return builtin_open(*args, **kwargs)
+
+@mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
+@mock.patch("builtins.open", sensor_mock_open)
+@mock.patch('os.path.isfile', mock.MagicMock(return_value=True))
+def test_daemon_init_with_valid_platform_config():
+    import sonic_platform.platform
+    class MyPlatform():
+        def get_chassis(self):
+            return MockChassis()
+    sonic_platform.platform.Platform = MyPlatform
+
+    daemon = sensormond.SensorMonitorDaemon()
+    assert daemon.UPDATE_ELAPSED_THRESHOLD == 45
+
+def sensor_mock_open_invalid(*args, **kwargs):
+    if args and args[0] == sensormond.PLATFORM_ENV_CONF_FILE:
+        return mock.mock_open(read_data="SENSORMOND_WARNING_TIME=invalid_value\n")(*args, **kwargs)
+    # unpatched version for every other path
+    return builtin_open(*args, **kwargs)
+
+@mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
+@mock.patch("builtins.open", sensor_mock_open_invalid)
+@mock.patch('os.path.isfile', mock.MagicMock(return_value=True))
+def test_daemon_init_with_invalid_platform_config():
+    import sonic_platform.platform
+    class MyPlatform():
+        def get_chassis(self):
+            return MockChassis()
+    sonic_platform.platform.Platform = MyPlatform
+
+    with mock.patch.object(sensormond.SensorMonitorDaemon, 'log_error') as mock_log_error:
+        daemon = sensormond.SensorMonitorDaemon()
+        # Should fall back to default value and log error
+        assert daemon.UPDATE_ELAPSED_THRESHOLD == UPDATE_ELAPSED_THRESHOLD  # default value
+        mock_log_error.assert_called_once()
+
+@mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
+def test_daemon_run_with_updater_stop_signal():
+    import sonic_platform.platform
+    class MyPlatform():
+        def get_chassis(self):
+            return MockChassis()
+    sonic_platform.platform.Platform = MyPlatform
+
+    daemon = sensormond.SensorMonitorDaemon()
+    daemon.stop_event.wait = mock.MagicMock(return_value=False)
+
+    daemon.voltage_updater.update = mock.MagicMock(return_value=False)
+    daemon.current_updater.update = mock.MagicMock(return_value=False)
+    ret = daemon.run()
+    assert ret is False
+
+    daemon.voltage_updater.update = mock.MagicMock(return_value=False)
+    daemon.current_updater.update = mock.MagicMock(return_value=True)
+    ret = daemon.run()
+    assert ret is True
 
 def test_try_get():
     def good_callback():
@@ -474,7 +588,6 @@ def test_try_get():
     ret = sensormond.try_get(unimplemented_callback, 'my default')
     assert ret == 'my default'
 
-
 def test_update_entity_info():
     mock_table = mock.MagicMock()
     mock_voltage_sensor = MockVoltageSensor()
@@ -486,7 +599,6 @@ def test_update_entity_info():
     sensormond.update_entity_info(mock_table, 'Parent Name', 'Key Name', mock_voltage_sensor, 1)
     assert mock_table.set.call_count == 1
     mock_table.set.assert_called_with('Key Name', expected_fvp)
-
 
 @mock.patch('sensormond.SensorMonitorDaemon.run')
 def test_main(mock_run):
