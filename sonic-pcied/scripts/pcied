@@ -200,7 +200,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         for result in self.resultInfo:
             if result["result"] == "Failed":
                 # Convert bus, device, and function to a bus_info format like "0000:03:00.0"
-                pcie_dev = "0000:{int(result['bus'], 16):02x}:{int(result['dev'], 16):02x}.{int(result['fn'], 16)}"
+                pcie_dev = "0000:{:02x}:{:02x}.{}".format(int(result["bus"], 16), int(result["dev"], 16), int(result["fn"], 16))
 
                 # Check if the device is in detaching mode
                 if device_info.is_smartswitch() and self.is_dpu_in_detaching_mode(pcie_dev):
