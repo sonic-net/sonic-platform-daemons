@@ -136,6 +136,47 @@ def test_moduleupdater_check_phyentity_fields():
     assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
     assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
 
+def test_moduleupdater_check_phyentity_entry_after_fabric_removal():
+    chassis = MockChassis()
+    index = 0
+    name = "FABRIC-CARD0"
+    desc = "Switch Fabric Module"
+    slot = 10
+    serial = "FC1000101"
+    module_type = ModuleBase.MODULE_TYPE_FABRIC
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    replaceable = True
+    presence = True
+    model = 'N/A'
+    parent_name = 'chassis 1'
+
+    # Set initial state
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    module.set_replaceable(replaceable)
+    module.set_presence(presence)
+    module.set_model(model)
+
+    chassis.module_list.append(module)
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, slot,
+                                   module.supervisor_slot)
+    module_updater.module_db_update()
+    fvs = module_updater.phy_entity_table.get(name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert str(index) == fvs['position_in_parent']
+    assert parent_name == fvs['parent_name']
+    assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
+    assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
+
+    presence = False
+    module.set_presence(presence)
+    module_updater.module_db_update()
+    fvs = module_updater.phy_entity_table.get(name)
+    assert fvs == None
+    
 def test_smartswitch_moduleupdater_check_valid_fields():
     chassis = MockSmartSwitchChassis()
     index = 0

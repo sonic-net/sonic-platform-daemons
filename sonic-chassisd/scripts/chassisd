@@ -407,14 +407,18 @@ class ModuleUpdater(logger.Logger):
                 prev_status = self.get_module_current_status(key)
                 self.module_table.set(key, fvs)
 
-                update_entity_info(self.phy_entity_table,
-                                   "chassis {}".format(1),
-                                   key,
-                                   module_index,
-                                   module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD],
-                                   module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD],
-                                   module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD])
-
+                if module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD].lower() == "true":
+                    update_entity_info(self.phy_entity_table,
+                                       "chassis {}".format(1),
+                                       key,
+                                       module_index,
+                                       module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD],
+                                       module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD],
+                                       module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD])
+                else:
+                    if self.phy_entity_table.get(key) is not None:
+                        self.phy_entity_table._del(key)
+                    
                 # Construct key for down_modules dict. Example down_modules key format: LINE-CARD0|<hostname>
                 fvs = self.hostname_table.get(key)
                 if isinstance(fvs, list) and fvs[0] is True:
