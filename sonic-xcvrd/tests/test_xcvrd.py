@@ -1792,7 +1792,8 @@ class TestXcvrdScript(object):
     def test_handle_port_config_change(self, mock_select, mock_sub_table):
         mock_selectable = MagicMock()
         mock_selectable.pop = MagicMock(
-            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), (None, None, None)])
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '200000'))),
+                         (None, None, None)])
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
 
@@ -1808,6 +1809,25 @@ class TestXcvrdScript(object):
         assert port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
         assert port_mapping.get_physical_to_logical(1) == ['Ethernet0']
         assert port_mapping.get_logical_to_physical('Ethernet0') == [1]
+
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('speed', '100000'))),
+                         (None, None, None)])
+        handle_port_config_change(sel, asic_context, stop_event, port_mapping,
+                                  logger, port_mapping.handle_port_change_event)
+        assert port_mapping.logical_port_list.count('Ethernet0')
+        assert port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
+        assert port_mapping.get_physical_to_logical(1) == ['Ethernet0']
+        assert port_mapping.get_logical_to_physical('Ethernet0') == [1]
+        expected_cache = {
+            ('Ethernet0'): {
+                'port_name': 'Ethernet0',
+                'index': '1',
+                'asic_id': 0,
+                'speed': '100000',
+            }
+        }
+        assert port_mapping.port_event_cache == expected_cache
 
         mock_selectable.pop = MagicMock(
             side_effect=[('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )), (None, None, None)])
