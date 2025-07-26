@@ -58,7 +58,7 @@ def load_platform_pcieutil():
         except ImportError as e:
             log.log_error("Failed to load default PcieUtil module. Error : {}".format(str(e)), True)
     if _platform_pcieutil is None:
-        log.log_critical("Failed to load any PCIe utility module. Exiting...", True)
+        log.log_error("Failed to load any PCIe utility module. Exiting...", True)
         raise RuntimeError("Unable to load PCIe utility module.")
     return _platform_pcieutil
 
@@ -102,7 +102,7 @@ class DaemonPcied(daemon_base.DaemonBase):
             self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
             self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
         except Exception as e:
-            log.log_critical("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
+            log.log_error("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
             sys.exit(PCIEUTIL_CONF_FILE_ERROR)
 
     def __del__(self):
