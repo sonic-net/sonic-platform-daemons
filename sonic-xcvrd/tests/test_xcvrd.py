@@ -3426,9 +3426,7 @@ class TestXcvrdScript(object):
         # Force config status check to failed
         mock_xcvr_api.get_config_datapath_hostlane_status.return_value = gen_cmis_config_status_dict('ConfigRejected')
         mock_xcvr_api.get_datapath_state = MagicMock(return_value=gen_cmis_dp_state_dict('DataPathDeactivated'))
-        mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=0)
-        mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=0)
-        mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=0)
+        task.is_timer_expired = MagicMock(return_value=True)
 
         # Insert 1st subport event
         port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'1,2', 'subport': '1'})
