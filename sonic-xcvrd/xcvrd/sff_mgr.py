@@ -25,6 +25,9 @@ class SffLoggerForPortUpdateEvent:
     def __init__(self, logger):
         self.logger = logger
 
+    def log_info(self, message):
+        self.logger.log_info("{}{}".format(self.SFF_LOGGER_PREFIX, message))
+
     def log_notice(self, message):
         self.logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
@@ -288,6 +291,39 @@ class SffManagerTask(threading.Thread):
             mask += (1 << i if flag else 0)
         return mask
 
+    def enable_high_power_class(self, xcvr_api, lport):
+        """
+        Enable high power class for the transceiver.
+
+        Args:
+            xcvr_api (XcvrApi): The XcvrApi instance for the transceiver.
+            lport (str): Logical port name.
+        """
+        try:
+            power_class = xcvr_api.get_power_class()
+            if power_class is None:
+                self.log_error("{}: failed to get power class".format(lport))
+                return
+
+            # According to SFF-8636, section 6.2.6:
+            # In order to protect legacy host systems designed to support only
+            # the original 4 power classes, the High Power Class Enable control
+            # was defined at byte 93, bit 2. Modules in power classes 5, 6, 7 or
+            # 8 are required to limit power consumption to no more than a power
+            # class 4 module if the High Power Class Enable, byte 93 bit 2
+            # control is not set. For power class < 5, there's no such power
+            # consumption limiting, so no need to enable high power class.
+            if power_class < 5:
+                return
+
+            if xcvr_api.set_high_power_class(power_class, True):
+                self.log_notice("{}: done enabling high power class".format(lport))
+            else:
+                self.log_error("{}: failed to enable high power class".format(lport))
+
+        except (AttributeError, NotImplementedError):
+            pass
+
     def task_worker(self):
         '''
         The main goal of sff_mgr is to make sure SFF compliant modules are
@@ -438,8 +474,10 @@ class SffManagerTask(threading.Thread):
                 except (AttributeError, NotImplementedError):
                     # Skip if these essential routines are not available
                     continue
-                
+
                 if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
+                    self.enable_high_power_class(api, lport)
+
                     set_lp_success = (
                         sfp.set_lpmode(False) 
                         if isinstance(api, Sff8472Api) 
