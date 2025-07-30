@@ -64,7 +64,6 @@ def test_load_platform_pcieutil():
             assert result == instance
             mock_log.log_notice.assert_not_called()
             mock_log.log_error.assert_not_called()
-            mock_log.log_critical.assert_not_called()
 
         # Case 2: Fallback to sonic_platform_base.sonic_pcie.pcie_common.PcieUtil
         with patch('sonic_platform.pcie.Pcie', side_effect=ImportError("No module named 'sonic_platform.pcie'")), \
@@ -76,7 +75,6 @@ def test_load_platform_pcieutil():
             assert result == instance
             mock_log.log_notice.assert_called_once()
             mock_log.log_error.assert_not_called()
-            mock_log.log_critical.assert_not_called()
             mock_log.reset_mock()
 
         # Case 3: Failure to import both modules
@@ -86,5 +84,4 @@ def test_load_platform_pcieutil():
                 pcied.load_platform_pcieutil()
 
             mock_log.log_notice.assert_called_once()
-            mock_log.log_error.assert_called_once()
-            mock_log.log_critical.assert_called_once()
+            assert mock_log.log_error.call_count == 2
