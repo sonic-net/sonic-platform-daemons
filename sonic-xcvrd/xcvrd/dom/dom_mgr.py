@@ -297,7 +297,7 @@ class DomInfoUpdateTask(threading.Thread):
                         self.log_warning("Got exception {} while processing transceiver status hw flags for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port) and self.xcvrd_utils.is_transceiver_lpmode_on(physical_port):
                         # Freeze VDM stats before reading VDM values
                         with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
                             if not vdm_frozen:
