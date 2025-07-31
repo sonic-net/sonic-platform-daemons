@@ -760,7 +760,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_ADMIN_STATUS]
         else:
-            return 'empty'
+            return ModuleBase.MODULE_STATUS_EMPTY
 
     def clear_transition_flag(self, key):
         status, fvs = self.module_table.get(key)
@@ -1404,7 +1404,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             try:
                 # Get admin state of DPU
                 admin_state = self.module_updater.get_module_admin_status(module_name)
-                if admin_state == 'empty' and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
+                if admin_state == ModuleBase.MODULE_STATUS_EMPTY and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
                     # shutdown DPU
                     op = MODULE_ADMIN_DOWN
 
