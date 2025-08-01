@@ -1359,15 +1359,17 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         # Merge existing fields, preserving all others
         fvs_dict = dict(fvs) if fvs else {}
 
-        # Ensure mandatory fields are present
+        # Ensure mandatory fields are present, but only if missing
         mandatory_defaults = {
             'desc': 'N/A',
             'slot': 'N/A',
             'serial': 'N/A',
-            'oper_status': 'Unknown'
+            'oper_status': ModuleBase.MODULE_STATUS_EMPTY
         }
         for field, default in mandatory_defaults.items():
-            fvs_dict.setdefault(field, default)
+            if field not in fvs_dict:
+                self.log_info(f"{key}: '{field}' missing, setting default '{default}'")
+                fvs_dict[field] = default
 
         # Update or add transition fields
         fvs_dict.update({
