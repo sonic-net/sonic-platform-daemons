@@ -80,6 +80,7 @@ CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 DEFAULT_LINECARD_REBOOT_TIMEOUT = 180
 DEFAULT_DPU_REBOOT_TIMEOUT = 360
+MAX_DPU_REBOOT_DURATION = 800
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
 
@@ -762,6 +763,25 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             return 'empty'
 
+    def retrieve_dpu_reboot_info(self, module):
+        """
+        Retrieve the most recent reboot cause and time from previous-reboot-cause.json.
+        Returns (cause_string, time_string), or (None, None) if unavailable.
+        """
+        try:
+            path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    cause = data.get("cause")
+                    time_str = data.get("name")  # Format: "YYYY_MM_DD_HH_MM_SS"
+                    return cause, time_str
+            else:
+                self.log_debug(f"{module}: previous-reboot-cause.json not found")
+        except Exception as e:
+            self.log_error(f"{module}: Failed to read previous-reboot-cause.json: {e}")
+        return None, None
+
     def clear_transition_flag(self, key):
         status, fvs = self.module_table.get(key)
         if status and fvs:
@@ -808,23 +828,44 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
                 # Operational status transitioning to offline
-                if prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
+                if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to offline".format(key))
 
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
-
-                    # Clear transition flag in STATE_DB
-                    self.clear_transition_flag(key)
-
-                elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice("{} operational status transitioning to online".format(key))
+                    # persist reboot cause
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+                    self.persist_dpu_reboot_cause(reboot_cause, key)
+                    # publish reboot cause to db
+                    self.update_dpu_reboot_cause_to_db(key)
 
-                    if not self.retrieve_dpu_reboot_time(key) is None or self._is_first_boot(key):
-                        # persist reboot cause
+                elif (prev_status == ModuleBase.MODULE_STATUS_EMPTY or prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
+                    self.log_notice(f"{key} operational status transitioning to online")
+
+                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+                    if isinstance(reboot_cause, (tuple, list)):
+                        current_cause = reboot_cause[0]
+                    else:
+                        current_cause = reboot_cause
+
+                    stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
+
+                    is_reboot = False
+                    if current_cause and stored_cause and stored_time_str:
+                        try:
+                            stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
+                            now = datetime.now(timezone.utc)
+                            delta_sec = (now - stored_dt).total_seconds()
+
+                            if current_cause == stored_cause and delta_sec <  MAX_DPU_REBOOT_DURATION:
+                                self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
+                                is_reboot = True
+                        except Exception as e:
+                            self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
+
+                    if not is_reboot and (stored_time_str is not None or self._is_first_boot(key)):
+                        # persist reboot cause and publish to db
                         self.persist_dpu_reboot_cause(reboot_cause, key)
-                        # publish reboot cause to db
                         self.update_dpu_reboot_cause_to_db(key)
 
                     # Clear transition flag in STATE_DB
