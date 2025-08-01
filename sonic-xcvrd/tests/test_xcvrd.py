@@ -3414,6 +3414,7 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_to_db = MagicMock()
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.vdm_db_utils = MagicMock()
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.task_worker()
@@ -3478,6 +3479,7 @@ class TestXcvrdScript(object):
         task.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.task_worker()
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
