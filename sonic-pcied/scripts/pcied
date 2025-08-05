@@ -84,7 +84,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.state_db = None
         self.device_table = None
-        self.table = None
+        self.status_table = None
         self.resultInfo = []
         self.device_name = None
         self.aer_stats = {}
