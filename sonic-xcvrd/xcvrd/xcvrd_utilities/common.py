@@ -24,6 +24,8 @@ platform_chassis = None
 platform_sfputil = None
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_COMMON, enable_runtime_config=True)
 
+NOT_IMPLEMENTED_ERROR = 3
+
 def init_globals(chassis, sfputil):
     """Initialize global variables with injected dependencies"""
     global platform_chassis, platform_sfputil, helper_logger
@@ -141,7 +143,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
             return (index & 0xf)
 
-    # Note: helper_logger is not available here, so we don't log
+    helper_logger.log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
     return None
 
 def get_cmis_state_from_state_db(lport, status_sw_tbl):
@@ -229,7 +231,7 @@ def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, tbl_to_del_li
                 tbl._del(physical_port_name)
         except NotImplementedError:
             helper_logger.log_error("This functionality is currently not implemented for this platform")
-            sys.exit(2)  # NOT_IMPLEMENTED_ERROR
+            sys.exit(NOT_IMPLEMENTED_ERROR)
 
 #
 # Utility Functions ===========================================================
