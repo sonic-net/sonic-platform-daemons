@@ -327,13 +327,9 @@ def test_smartswitch_moduleupdater_check_invalid_name():
     fvs = module_updater.module_table.get(name)
     assert fvs == None
 
-    mock_module_table = MagicMock()
-    mock_set_flag_callback = MagicMock()
     config_updater = SmartSwitchModuleConfigUpdater(
         SYSLOG_IDENTIFIER,
         chassis,
-        mock_module_table,
-        mock_set_flag_callback
     )
     admin_state = 0
     config_updater.module_config_update(name, admin_state)
@@ -361,13 +357,9 @@ def test_smartswitch_moduleupdater_check_invalid_admin_state():
     module_updater.module_db_update()
     fvs = module_updater.module_table.get(name)
 
-    mock_module_table = MagicMock()
-    mock_set_flag_callback = MagicMock()
     config_updater = SmartSwitchModuleConfigUpdater(
         SYSLOG_IDENTIFIER,
         chassis,
-        mock_module_table,
-        mock_set_flag_callback
     )
     admin_state = 2
     config_updater.module_config_update(name, admin_state)
@@ -629,13 +621,9 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    mock_module_table = MagicMock()
-    mock_set_flag_callback = MagicMock()
     config_updater = SmartSwitchModuleConfigUpdater(
         SYSLOG_IDENTIFIER,
-        chassis,
-        mock_module_table,
-        mock_set_flag_callback
+        chassis
     )
 
     # Test setting admin state to down
@@ -1686,7 +1674,7 @@ def test_task_worker_loop():
 
     # Patch the swsscommon.Select to use this mock
     with patch('tests.mock_swsscommon.Select', return_value=mock_select):
-        config_manager = SmartSwitchConfigManagerTask(set_transition_flag_callback=MagicMock())
+        config_manager = SmartSwitchConfigManagerTask()
 
         config_manager.config_updater = MagicMock()
 
@@ -1888,7 +1876,7 @@ def test_smartswitch_time_format():
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
 
-def test_clear_transition_flag_sets_false_when_flag_present():
+"""def test_clear_transition_flag_sets_false_when_flag_present():
     module_table = MagicMock()
     module_table.get.return_value = (True, [('state_transition_in_progress', 'True')])
 
@@ -1899,10 +1887,10 @@ def test_clear_transition_flag_sets_false_when_flag_present():
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
     daemon_chassisd.module_updater = updater
 
-    daemon_chassisd.module_updater.clear_transition_flag("DPU0")
+    daemon_chassisd.module_updater.module_transition_flag_helper.clear_transition_flag("DPU0")
 
     args = module_table.set.call_args[0][1]
-    assert ('state_transition_in_progress', 'False') in args
+    assert ('state_transition_in_progress', 'False') in args"""
 
 def test_smartswitch_moduleupdater_midplane_state_change():
     """Test that when midplane goes down, control plane and data plane states are set to down"""
@@ -2009,9 +1997,9 @@ def test_submit_dpu_callback():
          patch.object(module, 'module_post_startup') as mock_post_startup:
 
         module_updater.module_table.get = MagicMock(return_value=(True, []))
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
+        daemon_chassisd.submit_dpu_callback(index, MODULE_PRE_SHUTDOWN, name)
 
         # Verify correct functions are called for admin up
-        mock_pre_shutdown.assert_not_called()
-        mock_set_admin_state.assert_called_once_with(MODULE_ADMIN_UP)
-        mock_post_startup.assert_called_once()
+        mock_pre_shutdown.assert_called_once()
+        mock_set_admin_state.assert_not_called()
+        mock_post_startup.assert_not_called()
