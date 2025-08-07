@@ -761,7 +761,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             fvs = dict(fvs[-1])
             return fvs[CHASSIS_MODULE_ADMIN_STATUS]
         else:
-            return 'empty'
+            return ModuleBase.MODULE_STATUS_EMPTY
 
     def retrieve_dpu_reboot_info(self, module):
         """
@@ -1400,7 +1400,19 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         # Merge existing fields, preserving all others
         fvs_dict = dict(fvs) if fvs else {}
 
-        # Update or add transition fields only
+        # Ensure mandatory fields are present, but only if missing
+        mandatory_defaults = {
+            'desc': 'N/A',
+            'slot': 'N/A',
+            'serial': 'N/A',
+            'oper_status': ModuleBase.MODULE_STATUS_EMPTY
+        }
+        for field, default in mandatory_defaults.items():
+            if field not in fvs_dict:
+                self.log_info(f"{key}: '{field}' missing, setting default '{default}'")
+                fvs_dict[field] = default
+
+        # Update or add transition fields
         fvs_dict.update({
             'state_transition_in_progress': 'True',
             'transition_start_time': get_formatted_time()
@@ -1410,6 +1422,10 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         module_table.set(key, list(fvs_dict.items()))
 
     def submit_dpu_callback(self, module_index, admin_state, module_name):
+        if admin_state == MODULE_ADMIN_DOWN:
+            # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
+            # there are no actions taken during this function execution.
+            try_get(self.module_updater.chassis.get_module(module_index).module_pre_shutdown, default=False)
         # Set admin_state change in progress using the centralized method
         self.set_transition_flag(self.module_updater.module_table, module_name)
         try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
@@ -1431,7 +1447,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             try:
                 # Get admin state of DPU
                 admin_state = self.module_updater.get_module_admin_status(module_name)
-                if admin_state == 'empty' and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
+                if admin_state == ModuleBase.MODULE_STATUS_EMPTY and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
                     # shutdown DPU
                     op = MODULE_ADMIN_DOWN
 
