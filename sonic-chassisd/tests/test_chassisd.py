@@ -1876,22 +1876,6 @@ def test_smartswitch_time_format():
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
 
-"""def test_clear_transition_flag_sets_false_when_flag_present():
-    module_table = MagicMock()
-    module_table.get.return_value = (True, [('state_transition_in_progress', 'True')])
-
-    # Use a real updater instance
-    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, MagicMock())
-    updater.module_table = module_table
-
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, MagicMock())
-    daemon_chassisd.module_updater = updater
-
-    daemon_chassisd.module_updater.module_transition_flag_helper.clear_transition_flag("DPU0")
-
-    args = module_table.set.call_args[0][1]
-    assert ('state_transition_in_progress', 'False') in args"""
-
 def test_smartswitch_moduleupdater_midplane_state_change():
     """Test that when midplane goes down, control plane and data plane states are set to down"""
     chassis = MockSmartSwitchChassis()
