@@ -818,8 +818,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Clear transition flag in STATE_DB
                     self.module_transition_flag_helper.clear_transition_flag(key)
 
-                elif prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice("{} operational status transitioning to online".format(key))
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                     # publish reboot cause to db
