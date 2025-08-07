@@ -1490,7 +1490,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             ModuleTransitionFlagHelper().clear_all_transition_flags()
             self.set_initial_dpu_admin_state()
             # Clear all transition flags for SmartSwitch after setting the initial DPU admin state
-            ModuleTransitionFlagHelper().clear_all_transition_flags()
+            module_transition_flag_helper = ModuleTransitionFlagHelper()
+            # Clear all stale transition flags for SmartSwitch on startup
+            module_transition_flag_helper.clear_all_transition_flags()
+            self.set_initial_dpu_admin_state()
+            # Clear all transition flags for SmartSwitch after setting the initial DPU admin state
+            module_transition_flag_helper.clear_all_transition_flags()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
             self.module_updater.module_db_update()
