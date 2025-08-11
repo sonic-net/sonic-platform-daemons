@@ -99,10 +99,28 @@ def _wrapper_get_num_psus():
     return platform_psuutil.get_num_psus()
 
 
-def _wrapper_get_psu_presence(psu_index):
+def _wrapper_get_psu(psu_index):
+    """
+    Get PSU object from platform chassis
+    :param psu_index: PSU index (1-based)
+    :return: PSU object if available, None otherwise
+    """
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_psu(psu_index - 1).get_presence()
+            return platform_chassis.get_psu(psu_index - 1)
+        except NotImplementedError: # TODO: Is NotImplementedError sufficient? 
+            pass # TODO: When caught, what should we do here?
+    # TODO: If platform_chassis is None, should we return None or add logging and return None?
+    return None
+
+
+def _wrapper_get_psu_presence(psu_index):
+    if platform_chassis is not None:
+        psu = _wrapper_get_psu(psu_index)
+        if not psu:
+            return False # TODO: What should we do when PSU object is not available?
+        try:
+            return psu.get_presence()
         except NotImplementedError:
             pass
     return platform_psuutil.get_psu_presence(psu_index)
@@ -110,8 +128,11 @@ def _wrapper_get_psu_presence(psu_index):
 
 def _wrapper_get_psu_status(psu_index):
     if platform_chassis is not None:
+        psu = _wrapper_get_psu(psu_index)
+        if not psu:
+            return False # TODO: What should we do when PSU object is not available?
         try:
-            return platform_chassis.get_psu(psu_index - 1).get_powergood_status()
+            return psu.get_powergood_status()
         except NotImplementedError:
             pass
     return platform_psuutil.get_psu_status(psu_index)
@@ -123,8 +144,11 @@ def _wrapper_get_psu_status(psu_index):
 
 def get_psu_key(psu_index):
     if platform_chassis is not None:
+        psu = _wrapper_get_psu(psu_index)
+        if not psu:
+            return "" # TODO: What should we do when PSU object is not available?
         try:
-            return platform_chassis.get_psu(psu_index - 1).get_name()
+            return psu.get_name()
         except NotImplementedError:
             pass
         except IndexError:
