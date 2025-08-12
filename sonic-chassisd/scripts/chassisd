@@ -102,6 +102,7 @@ INVALID_IP = '0.0.0.0'
 CHASSIS_MODULE_ADMIN_STATUS = 'admin_status'
 MODULE_ADMIN_DOWN = 0
 MODULE_ADMIN_UP = 1
+MODULE_PRE_SHUTDOWN = 2
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
@@ -218,15 +219,13 @@ class ModuleConfigUpdater(logger.Logger):
 
 class SmartSwitchModuleConfigUpdater(logger.Logger):
 
-    def __init__(self, log_identifier, chassis, module_table, set_flag_callback):
+    def __init__(self, log_identifier, chassis):
         """
         Constructor for SmartSwitchModuleConfigUpdater
         :param chassis: Object representing a platform chassis
         """
         super(SmartSwitchModuleConfigUpdater, self).__init__(log_identifier)
         self.chassis = chassis
-        self.module_table = module_table
-        self.set_transition_flag = set_flag_callback
 
     def deinit(self):
         """
@@ -249,17 +248,16 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
         if (admin_state == MODULE_ADMIN_DOWN) or (admin_state == MODULE_ADMIN_UP):
             self.log_info("Changing module {} to admin {} state".format(key, 'DOWN' if admin_state == MODULE_ADMIN_DOWN else 'UP'))
-            t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state))
+            t = threading.Thread(target=self.submit_callback, args=(module_index, admin_state, key))
             t.start()
         else:
             self.log_warning("Invalid admin_state value: {}".format(admin_state))
 
-    def submit_callback(self, module_index, admin_state):
+    def submit_callback(self, module_index, admin_state, key):
         if admin_state == MODULE_ADMIN_DOWN:
             # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
             # there are no actions taken during this function execution.
             try_get(self.chassis.get_module(module_index).module_pre_shutdown, default=False)
-
         try_get(self.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
         if admin_state == MODULE_ADMIN_UP:
             # This is only valid on platforms which have pci_rescan sensord changes required. If it is not implemented,
@@ -360,7 +358,7 @@ class ModuleUpdater(logger.Logger):
         fvs = self.module_table.get(key)
         if isinstance(fvs, list) and fvs[0] is True:
             fvs = dict(fvs[-1])
-            return fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
+            return fvs.get(CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, ModuleBase.MODULE_STATUS_EMPTY)
         return ModuleBase.MODULE_STATUS_EMPTY
 
     def get_module_admin_status(self, chassis_module_name):
@@ -721,6 +719,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
         self.down_modules = {}
         self.chassis_app_db_clean_sha = None
+        self.module_transition_flag_helper = ModuleTransitionFlagHelper()
 
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
@@ -782,28 +781,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             self.log_error(f"{module}: Failed to read previous-reboot-cause.json: {e}")
         return None, None
 
-    def clear_transition_flag(self, key):
-        status, fvs = self.module_table.get(key)
-        if status and fvs:
-            fvs_dict = dict(fvs)
-            if 'state_transition_in_progress' in fvs_dict:
-                fvs_dict['state_transition_in_progress'] = 'False'
-            else:
-                self.log_warning(f"Transition flag not found in {key}, adding it as False.")
-                fvs_dict['state_transition_in_progress'] = 'False'
-            self.module_table.set(key, list(fvs_dict.items()))
-        else:
-            self.log_error(f"Could not clear module admin_status transition flag for {key}")
-
-    def clear_all_transition_flags(self):
-        self.log_warning("Clearing all stale state_transition_in_progress flags at startup")
-        keys = self.module_table.getKeys()
-        for key in keys:
-            try:
-                self.clear_transition_flag(key)
-            except Exception as e:
-                self.log_error(f"Failed to clear transition flag for {key}: {e}")
-
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
@@ -834,6 +811,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     # Persist dpu down time
                     self.persist_dpu_reboot_time(key)
                     # persist reboot cause
+                    # Clear transition flag in STATE_DB
+                    self.module_transition_flag_helper.clear_transition_flag(key)
+
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                     # publish reboot cause to db
@@ -869,7 +849,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         self.update_dpu_reboot_cause_to_db(key)
 
                     # Clear transition flag in STATE_DB
-                    self.clear_transition_flag(key)
+                    self.module_transition_flag_helper.clear_transition_flag(key)
 
     def _get_module_info(self, module_index):
         """
@@ -1211,10 +1191,9 @@ class ConfigManagerTask(ProcessTaskBase):
 
 
 class SmartSwitchConfigManagerTask(ProcessTaskBase):
-    def __init__(self, set_transition_flag_callback):
+    def __init__(self):
         super(SmartSwitchConfigManagerTask, self).__init__()
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
-        self.set_transition_flag = set_transition_flag_callback
         self.config_updater = None
 
     def task_worker(self):
@@ -1224,9 +1203,7 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
 
         self.config_updater = SmartSwitchModuleConfigUpdater(
             SYSLOG_IDENTIFIER,
-            get_chassis(),
-            module_table,
-            self.set_transition_flag
+            get_chassis()
         )
 
         # Subscribe to CHASSIS_MODULE table notifications in the Config DB
@@ -1355,6 +1332,33 @@ class DpuStateUpdater(logger.Logger):
         self._update_dp_dpu_state('down')
         self._update_cp_dpu_state('down')
 
+class ModuleTransitionFlagHelper(logger.Logger):
+    def __init__(self, log_identifier = SYSLOG_IDENTIFIER):
+        super(ModuleTransitionFlagHelper, self).__init__(log_identifier)
+        # Use new connector to avoid redis failures
+        """Create a helper function to get the module table,
+        since multiple threads updating with the same connector will cause redis failures"""
+        state_db = daemon_base.db_connect("STATE_DB")
+        self.module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
+
+    def set_transition_flag(self, module_name):
+        try:
+            self.module_table.hset(module_name, 'state_transition_in_progress', 'True')
+            self.module_table.hset(module_name, 'transition_start_time', datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
+        except Exception as e:
+            self.log_error(f"Error setting transition flag for {module_name}: {e}")
+    
+    def clear_transition_flag(self, module_name):
+        try:
+            self.log_info(f"Clearing transition flag for {module_name}")
+            self.module_table.hdel(module_name, 'state_transition_in_progress')
+            self.module_table.hdel(module_name, 'transition_start_time')
+        except Exception as e:
+            self.log_error(f"Error clearing transition flag for {module_name}: {e}")
+    
+    def clear_all_transition_flags(self):
+        for module_name in self.module_table.getKeys():
+            self.clear_transition_flag(module_name)
 
 #
 # Daemon =======================================================================
@@ -1392,48 +1396,14 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
-    def set_transition_flag(self, module_table, key):
-        self.log_info(f"set transition flag: key={key}")
-
-        _, fvs = module_table.get(key)
-
-        # Merge existing fields, preserving all others
-        fvs_dict = dict(fvs) if fvs else {}
-
-        # Ensure mandatory fields are present, but only if missing
-        mandatory_defaults = {
-            'desc': 'N/A',
-            'slot': 'N/A',
-            'serial': 'N/A',
-            'oper_status': ModuleBase.MODULE_STATUS_EMPTY
-        }
-        for field, default in mandatory_defaults.items():
-            if field not in fvs_dict:
-                self.log_info(f"{key}: '{field}' missing, setting default '{default}'")
-                fvs_dict[field] = default
-
-        # Update or add transition fields
-        fvs_dict.update({
-            'state_transition_in_progress': 'True',
-            'transition_start_time': get_formatted_time()
-        })
-
-        # Write merged data back
-        module_table.set(key, list(fvs_dict.items()))
-
     def submit_dpu_callback(self, module_index, admin_state, module_name):
-        if admin_state == MODULE_ADMIN_DOWN:
-            # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
-            # there are no actions taken during this function execution.
-            try_get(self.module_updater.chassis.get_module(module_index).module_pre_shutdown, default=False)
+        # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
+        # there are no actions taken during this function execution.
+        try_get(self.module_updater.chassis.get_module(module_index).module_pre_shutdown, default=False)
         # Set admin_state change in progress using the centralized method
-        self.set_transition_flag(self.module_updater.module_table, module_name)
-        try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
-        if admin_state == MODULE_ADMIN_UP:
-            # This is only valid on platforms which have pci_rescan sensord changes required. If it is not implemented,
-            # there are no actions taken during this function execution.
-            try_get(self.module_updater.chassis.get_module(module_index).module_post_startup, default=False)
-        pass
+        if admin_state == MODULE_ADMIN_DOWN:
+            ModuleTransitionFlagHelper().set_transition_flag(module_name)
+            try_get(self.module_updater.chassis.get_module(module_index).set_admin_state, admin_state, default=False)
 
     def set_initial_dpu_admin_state(self):
         """Send admin_state trigger once to modules those are powered up"""
@@ -1447,9 +1417,11 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             try:
                 # Get admin state of DPU
                 admin_state = self.module_updater.get_module_admin_status(module_name)
-                if admin_state == ModuleBase.MODULE_STATUS_EMPTY and operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
-                    # shutdown DPU
-                    op = MODULE_ADMIN_DOWN
+                if admin_state == ModuleBase.MODULE_STATUS_EMPTY:
+                    op = MODULE_PRE_SHUTDOWN
+                    if operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
+                        # shutdown DPU
+                        op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
                 dpu_state_key = "DPU_STATE|" + module_name
@@ -1497,7 +1469,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start configuration manager task
         if self.smartswitch:
-            config_manager = SmartSwitchConfigManagerTask(self.set_transition_flag)
+            config_manager = SmartSwitchConfigManagerTask()
             config_manager.task_run()
         elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
             config_manager = ConfigManagerTask()
@@ -1510,8 +1482,16 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Set the initial DPU admin state for SmartSwitch
         if self.smartswitch:
-            self.module_updater.clear_all_transition_flags()
+            # Clear all stale transition flags for SmartSwitch on startup
+            ModuleTransitionFlagHelper().clear_all_transition_flags()
             self.set_initial_dpu_admin_state()
+            # Clear all transition flags for SmartSwitch after setting the initial DPU admin state
+            module_transition_flag_helper = ModuleTransitionFlagHelper()
+            # Clear all stale transition flags for SmartSwitch on startup
+            module_transition_flag_helper.clear_all_transition_flags()
+            self.set_initial_dpu_admin_state()
+            # Clear all transition flags for SmartSwitch after setting the initial DPU admin state
+            module_transition_flag_helper.clear_all_transition_flags()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
             self.module_updater.module_db_update()
