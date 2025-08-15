@@ -26,11 +26,7 @@ class XCVRDUtils:
 
     def is_transceiver_lpmode_on(self, physical_port):
         try:
-            api = self.sfp_obj_dict[physical_port].get_xcvr_api()
-            if not api:
-                return False
-            return api.get_lpmode()
-
-        except (KeyError, NotImplementedError):
-            self.logger.log_error(f"Failed to get low power mode for port {physical_port}")
+            return self.sfp_obj_dict[physical_port].get_lpmode()
+        except Exception as e:
+            self.logger.log_error(f"Failed to get low power mode for port {physical_port}. Exception: {e}")
             return False
