@@ -477,6 +477,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
+    ACTIVEAPPSEL_LANE_ENTRY_PREFIX = 'ActiveAppSelLane{}'
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -890,7 +891,7 @@ class CmisManagerTask(threading.Thread):
         for lane_idx in range(self.CMIS_MAX_HOST_LANES):
             if not (1 << lane_idx & lport_host_lanes_mask):
                 continue
-            app_cur = active_app_dict.get('ActiveAppSelLane{}'.format(lane_idx + 1), 0)
+            app_cur = self.get_active_application(active_app_dict, lane_idx)
             if app_cur == 0 or app_cur == app_new:
                 continue
             conflicting_data_paths_host_lanes_mask |= get_data_path_mask(app_advt, app_cur, lane_idx)
@@ -1012,6 +1013,47 @@ class CmisManagerTask(threading.Thread):
                 break
 
         return done
+
+    def get_active_application(self, active_app_dict, lane_idx):
+        """
+        Get the application code in Active Control Set for a specific lane
+
+        Args:
+            active_app_dict:
+                Dictionary containing active application information
+            lane_idx:
+                Index of the lane, 0-based
+
+        Returns:
+            Integer, the active application code for the specified lane, or None if not found
+        """
+        return active_app_dict.get(self.ACTIVEAPPSEL_LANE_ENTRY_PREFIX.format(lane_idx + 1))
+
+    def check_active_application(self, lport, api):
+        """
+        Check if the application code of this logical port is correctly applied at Active Control Set
+
+        Args:
+            lport:
+                Logical port name
+            api:
+                XcvrApi object
+
+        Returns:
+            Boolean, true if the application code is correctly set, otherwise false
+        """
+        active_app_dict = api.get_active_apsel_hostlane()
+        expected_app = self.port_dict[lport]['appl']
+        host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
+
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if not ((1 << lane) & host_lanes_mask):
+                continue
+            if self.get_active_application(active_app_dict, lane) != expected_app:
+                self.log_notice("{}: expecting appl {} on lanes {:#010b}, but ActiveAppSel(lane 8->1) is {}".format(
+                    lport, expected_app, host_lanes_mask, list(reversed(active_app_dict.values()))))
+                return False
+        return True
 
     def check_datapath_init_pending(self, api, host_lanes_mask):
         """
@@ -1539,11 +1581,16 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                             continue
 
+                        if not self.check_active_application(lport, api):
+                            self.log_notice("{}: module failed to correctly update appl code in Active Control Set".format(lport))
+                            self.force_cmis_reinit(lport, retries + 1)
+                            continue
+
                         # Clear decommission status and invoke CMIS reinit so that normal CMIS initialization can begin
                         if self.is_decomm_pending(lport):
                             self.log_notice("{}: DECOMM: decommission done for host lanes {:#x}".format(lport, self.port_dict[lport]['host_lanes_mask']))
                             self.clear_decomm_pending(lport)
-                            self.force_cmis_reinit(lport)
+                            self.force_cmis_reinit(lport, retries)
                             continue
 
                         if hasattr(api, 'get_cmis_rev'):
