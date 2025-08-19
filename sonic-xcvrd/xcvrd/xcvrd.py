@@ -477,7 +477,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
-    ACTIVEAPPSEL_LANE_ENTRY_PREFIX = 'ActiveAppSelLane{}'
+    ACTIVEAPPSEL_LANE_KEY_PREFIX = 'ActiveAppSelLane{}'
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -721,10 +721,9 @@ class CmisManagerTask(threading.Thread):
         only decommission the minimal set of host lanes to allow the logical port to
         be able to apply the new appl code without config errors.
 
-        decomm_pending_dict stores the host lanes pending to be decommissioned for a logical
-        port.
-        i.e. self.decomm_pending_dict[physical_port_idx][lport] = lanes_mask_requiring_decomm
-        lanes_mask_requiring_decomm of a logical port can be wider than the logical port itself.
+        decomm_pending_dict stores the host lanes pending to be decommissioned for a logical port.
+        i.e. self.decomm_pending_dict[physical_port_idx][lport] = host_lanes_mask_requiring_decomm
+        host_lanes_mask_requiring_decomm of a logical port can be wider than the logical port itself.
 
         Args:
             lport:
@@ -737,14 +736,14 @@ class CmisManagerTask(threading.Thread):
         skip_rest_processing = False
 
         lport_host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
-        lanes_mask_requiring_decomm = self.get_host_lanes_mask_requiring_decomm(lport, api)
+        host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask = self.get_host_lanes_mask_requiring_decomm(lport, api)
 
         # Check if other lports are doing decommission on the lanes overlapping with this lport
-        total_affected_lanes_mask = lport_host_lanes_mask | lanes_mask_requiring_decomm
-        if total_affected_lanes_mask & self.get_decomm_pending_host_lanes_mask(lport, exclude_lports=[lport]):
+        total_affected_host_lanes_mask = lport_host_lanes_mask | host_lanes_mask_requiring_decomm
+        if total_affected_host_lanes_mask & self.get_decomm_pending_host_lanes_mask(lport, exclude_lports=[lport]):
             self.clear_decomm_pending(lport)
 
-            if total_affected_lanes_mask & self.get_decomm_failed_host_lanes_mask(lport):
+            if total_affected_host_lanes_mask & self.get_decomm_failed_host_lanes_mask(lport):
                 # Fail this lport if any of its host lanes are in decommissioning failed state
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                 decomm_status_str = "failed"
@@ -752,26 +751,32 @@ class CmisManagerTask(threading.Thread):
                 decomm_status_str = "waiting for completion"
 
             self.log_notice("{}: DECOMM: decommission initiated by other lports is still in progress on "
-                            "host lanes {:#x}, {}".format(lport, total_affected_lanes_mask, decomm_status_str))
+                            "host lanes {:#010b}, {}".format(lport, total_affected_host_lanes_mask, decomm_status_str))
 
             skip_rest_processing = True
-        elif lanes_mask_requiring_decomm:
-            self.decomm_pending_dict.setdefault(self.port_dict[lport]['index'], {})[lport] = lanes_mask_requiring_decomm
-            self.log_notice("{}: DECOMM: setting decomm_pending for host lanes "
-                            "{:#x}".format(lport, lanes_mask_requiring_decomm))
+        elif host_lanes_mask_requiring_decomm:
+            self.decomm_pending_dict.setdefault(self.port_dict[lport]['index'], {})[lport] = host_lanes_mask_requiring_decomm
+            self.log_notice("{}: DECOMM: setting decomm_pending for host lanes {:#010b}".format(
+                lport, host_lanes_mask_requiring_decomm))
 
             self.port_dict[lport]['appl'] = 0
-            self.port_dict[lport]['host_lanes_mask'] = lanes_mask_requiring_decomm
-            self.port_dict[lport]['media_lanes_mask'] = lanes_mask_requiring_decomm
-            self.log_notice("{}: DECOMM: setting appl={} and host_lanes_mask/media_lanes_mask="
-                            "{:#x}".format(lport, self.port_dict[lport]['appl'], lanes_mask_requiring_decomm))
+            self.port_dict[lport]['host_lanes_mask'] = host_lanes_mask_requiring_decomm
+            self.port_dict[lport]['media_lanes_mask'] = corresponding_media_lanes_mask
+            self.log_notice("{}: DECOMM: setting appl={}, host_lanes_mask={:#010b}, media_lanes_mask={:#010b}".format(
+                lport, self.port_dict[lport]['appl'], host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask))
 
             # Skip rest of the deinit/pre-init when this is the logical port doing decommission
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
             skip_rest_processing = True
-        else:  # For the case of lanes_mask_requiring_decomm == 0x0:
-            # If lport was previously marked as pending, then decommissioning is no more needed, clear its status
-            self.clear_decomm_pending(lport)
+        # For the case of host_lanes_mask_requiring_decomm == 0x0 and this lport was previously marked as decomm pending:
+        elif self.is_decomm_pending(lport):
+            # No need to re-do decommissioning from scratch, just check config status to confirm completion
+            self.port_dict[lport]['appl'] = 0
+            self.port_dict[lport]['host_lanes_mask'] = self.decomm_pending_dict[self.port_dict[lport]['index']][lport]
+            self.log_notice("{}: DECOMM: {}(decommission) was already done, confirming completion in {}(decommission)".format(
+                lport, CMIS_STATE_AP_CONF, CMIS_STATE_DP_INIT))
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+            skip_rest_processing = True
 
         return skip_rest_processing
 
@@ -839,6 +844,45 @@ class CmisManagerTask(threading.Thread):
 
         return failed_mask
 
+    def get_data_path_mask(self, app_advt, app, lane_idx):
+        """
+        Get the lanes mask for the entire data path based on the appl code on one of its host lanes.
+
+        Args:
+            app_advt: The application advertisement dictionary
+            app: The application code
+            lane_idx: The index of the lane this appl code is assigned to
+        Returns:
+            Tuple of two integers:
+                - host lanes mask for the data path
+                - media lanes mask for the data path
+        """
+        if app not in app_advt:
+            return 0, 0
+
+        host_lane_assignment_options = app_advt[app].get('host_lane_assignment_options')
+        host_lane_count = app_advt[app].get('host_lane_count')
+        media_lane_assignment_options = app_advt[app].get('media_lane_assignment_options')
+        media_lane_count = app_advt[app].get('media_lane_count')
+
+        if not host_lane_assignment_options or not host_lane_count or \
+                not media_lane_assignment_options or not media_lane_count:
+            return 0, 0
+
+        host_lane_mask = 1 << lane_idx
+        data_path_idx = 0
+
+        for start_lane_idx in range(self.CMIS_MAX_HOST_LANES):
+            if not (host_lane_assignment_options & (1 << start_lane_idx)):
+                continue
+            host_lanes_mask = ((1 << host_lane_count) - 1) << start_lane_idx
+            if host_lanes_mask & host_lane_mask:
+                media_start_lane_idx = data_path_idx * media_lane_count
+                return host_lanes_mask, ((1 << media_lane_count) - 1) << media_start_lane_idx
+            data_path_idx += 1
+
+        return 0, 0
+
     def get_host_lanes_mask_requiring_decomm(self, lport, api):
         """
         Get the minimal set of host lanes that require decommissioning to allow
@@ -850,65 +894,49 @@ class CmisManagerTask(threading.Thread):
             api:
                 XcvrApi object
         Returns:
-            Integer, bitmask of host lanes that require decommissioning
+            Tuple of two integers:
+                - host lanes mask requiring decommissioning
+                - media lanes mask corresponding to the host lanes
         """
-        def get_data_path_mask(app_advt, app, lane_idx):
-            """
-            Get the host lane mask for the entire data path based on the appl code on one of its lanes.
-
-            Args:
-                app_advt: The application advertisement dictionary
-                app: The application code
-                lane_idx: The index of the lane this appl code is assigned to
-            Returns:
-                Integer, the host lane mask for this data path
-            """
-            host_lane_assignment_options = app_advt.get(app, {}).get('host_lane_assignment_options')
-            host_lane_count = app_advt.get(app, {}).get('host_lane_count')
-
-            if not host_lane_assignment_options or not host_lane_count:
-                return 0
-
-            mask_for_single_lane = 1 << lane_idx
-
-            for start_lane_idx in range(self.CMIS_MAX_HOST_LANES):
-                if not (host_lane_assignment_options & (1 << start_lane_idx)):
-                    continue
-                data_path_mask = ((1 << host_lane_count) - 1) << start_lane_idx
-                if data_path_mask & mask_for_single_lane:
-                    return data_path_mask
-
-            return 0
-
         lport_host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
         app_advt = api.get_application_advertisement()
         active_app_dict = api.get_active_apsel_hostlane()
         app_new = self.port_dict[lport]['appl']
 
+        # Look through Active Control Set to identify the configured data paths
+        # that share host lanes with this logical port and have conflicting appl
+        # codes
         conflicting_data_paths_host_lanes_mask = 0
-        # Identify the configured data paths that share host lanes with this logical port
-        # and have conflicting appl codes
+        conflicting_data_paths_media_lanes_mask = 0
         for lane_idx in range(self.CMIS_MAX_HOST_LANES):
-            if not (1 << lane_idx & lport_host_lanes_mask):
-                continue
+            lane_mask = 1 << lane_idx
+            if not (lane_mask & lport_host_lanes_mask):
+                continue  # only look at the lanes that belong to this logical port
+            if lane_mask & conflicting_data_paths_host_lanes_mask:
+                continue  # skip lanes that are already in the conflicting_data_paths mask
             app_cur = self.get_active_application(active_app_dict, lane_idx)
             if app_cur == 0 or app_cur == app_new:
                 continue
-            conflicting_data_paths_host_lanes_mask |= get_data_path_mask(app_advt, app_cur, lane_idx)
+            dp_host_lanes_mask, dp_media_lanes_mask = self.get_data_path_mask(app_advt, app_cur, lane_idx)
+            conflicting_data_paths_host_lanes_mask |= dp_host_lanes_mask
+            conflicting_data_paths_media_lanes_mask |= dp_media_lanes_mask
 
         # If conflicting_data_paths_host_lanes_mask is covered by current lport's mask,
         # then new appl code can be applied directly without decommissioning
-        host_lanes_mask_requiring_decomm = (
-            0 if not (conflicting_data_paths_host_lanes_mask & ~lport_host_lanes_mask)
-            else conflicting_data_paths_host_lanes_mask
-        )
+        if not (conflicting_data_paths_host_lanes_mask & ~lport_host_lanes_mask):
+            host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask = (0, 0)
+        else:
+            host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask = (
+                conflicting_data_paths_host_lanes_mask, conflicting_data_paths_media_lanes_mask
+            )
 
         log_func = self.log_debug if not host_lanes_mask_requiring_decomm else self.log_notice
-        log_func("{}: DECOMM: based on ActiveAppSel(lane 8->1) {}, to apply appl {} on {:#010b}, "
-                  "host lanes requiring decomm is {:#010b}".format(
-                      lport, list(reversed(active_app_dict.values())), app_new, lport_host_lanes_mask,
-                      host_lanes_mask_requiring_decomm))
-        return host_lanes_mask_requiring_decomm
+        log_func("{}: DECOMM: based on ActiveAppSel(lane 8->1) {}, to apply appl {} on host lanes {:#010b}, "
+                  "host lanes requiring decomm is {:#010b}, with media lanes {:#010b}".format(
+                      lport, self.get_compact_reversed_active_apps_str(active_app_dict), app_new, lport_host_lanes_mask,
+                      host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask))
+
+        return host_lanes_mask_requiring_decomm, corresponding_media_lanes_mask
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
         """
@@ -1027,7 +1055,40 @@ class CmisManagerTask(threading.Thread):
         Returns:
             Integer, the active application code for the specified lane, or None if not found
         """
-        return active_app_dict.get(self.ACTIVEAPPSEL_LANE_ENTRY_PREFIX.format(lane_idx + 1))
+        return active_app_dict.get(self.ACTIVEAPPSEL_LANE_KEY_PREFIX.format(lane_idx + 1))
+
+    def get_active_application_list(self, active_app_dict):
+
+        """
+        Get the application codes in Active Control Set for all lanes on this physical port
+
+        Args:
+            active_app_dict:
+                Dictionary containing active application information
+
+        Returns:
+            List, the active application codes for all lanes
+        """
+        return [
+            active_app_dict.get(self.ACTIVEAPPSEL_LANE_KEY_PREFIX.format(lane_idx + 1))
+            for lane_idx in range(self.CMIS_MAX_HOST_LANES)
+        ]
+
+    def get_compact_reversed_active_apps_str(self, active_app_dict):
+        """
+        Get a compact string representation of the reversed active application list
+        e.g. "[3,3,3,3,3,3,3,3]"
+
+        Args:
+            active_app_dict:
+                Dictionary containing active application information
+
+        Returns:
+            String, the compact reversed active application list
+        """
+        active_apps = self.get_active_application_list(active_app_dict)
+        reversed_apps = list(reversed(active_apps))
+        return str(reversed_apps).replace(', ', ',')
 
     def check_active_application(self, lport, api):
         """
@@ -1051,7 +1112,7 @@ class CmisManagerTask(threading.Thread):
                 continue
             if self.get_active_application(active_app_dict, lane) != expected_app:
                 self.log_notice("{}: expecting appl {} on lanes {:#010b}, but ActiveAppSel(lane 8->1) is {}".format(
-                    lport, expected_app, host_lanes_mask, list(reversed(active_app_dict.values()))))
+                    lport, expected_app, host_lanes_mask, self.get_compact_reversed_active_apps_str(active_app_dict)))
                 return False
         return True
 
@@ -1588,7 +1649,7 @@ class CmisManagerTask(threading.Thread):
 
                         # Clear decommission status and invoke CMIS reinit so that normal CMIS initialization can begin
                         if self.is_decomm_pending(lport):
-                            self.log_notice("{}: DECOMM: decommission done for host lanes {:#x}".format(lport, self.port_dict[lport]['host_lanes_mask']))
+                            self.log_notice("{}: DECOMM: decommission done for host lanes {:#010b}".format(lport, self.port_dict[lport]['host_lanes_mask']))
                             self.clear_decomm_pending(lport)
                             self.force_cmis_reinit(lport, retries)
                             continue
