@@ -175,7 +175,7 @@ class PortChangeObserver:
                 # 2) SET and DEL: then only last event (i.e. DEL) needs to be processed
                 # 3) SET and SET: then only last SET event needs to be processed
                 # 4) DEL and DEL: then only last DEL event needs to be processed
-                if len(fvps) == 2 and fvps[0]['op'] != swsscommon.DEL_COMMAND and fvps[1]['op'] != swsscommon.SET_COMMAND:
+                if len(fvps) == 2 and not (fvps[0]['op'] == swsscommon.DEL_COMMAND and fvps[1]['op'] == swsscommon.SET_COMMAND):
                     fvps.popleft()
 
                 for fvp in fvps:

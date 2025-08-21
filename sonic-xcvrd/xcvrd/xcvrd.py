@@ -562,6 +562,12 @@ class CmisManagerTask(threading.Thread):
             if 'subport' in port_change_event.port_dict:
                 self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
+            # Decommissioning doesn't care about host_tx_ready change event, no need to force_cmis_reinit
+            if (self.is_decomm_pending(lport) and
+                port_change_event.db_name == 'STATE_DB' and
+                port_change_event.table_name == swsscommon.STATE_PORT_TABLE_NAME):
+                return
+
             self.force_cmis_reinit(lport, 0)
 
         elif port_change_event.event_type == port_change_event.PORT_DEL:
@@ -790,7 +796,7 @@ class CmisManagerTask(threading.Thread):
         Returns:
             Boolean, True if decommission pending, False otherwise
         """
-        return lport in self.decomm_pending_dict.get(self.port_dict[lport]['index'], {})
+        return lport in self.decomm_pending_dict.get(self.port_dict.get(lport, {}).get('index'), {})
 
     def get_decomm_pending_host_lanes_mask(self, lport, exclude_lports=[]):
         """
