@@ -454,3 +454,7 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
+    def update_log_level(self):
+        """Call the logger's update log level method.
+        """
+        return self.helper_logger.update_log_level()
