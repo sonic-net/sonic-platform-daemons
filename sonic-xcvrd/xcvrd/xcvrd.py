@@ -467,7 +467,7 @@ def is_warm_reboot_enabled():
 def is_syncd_restore_complete():
     state_db = daemon_base.db_connect("STATE_DB")
     restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
-    system_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
+    system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
     return restore_count.strip() > "0" or "true" in system_enabled
 
 #
