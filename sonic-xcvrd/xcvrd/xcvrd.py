@@ -466,7 +466,8 @@ def is_warm_reboot_enabled():
 
 def is_syncd_restore_count_zero():
     restore_count = subprocess.check_output('sonic-db-cli STATE_DB hget "WARM_RESTART_TABLE|syncd" restore_count', shell=True, universal_newlines=True)
-    return restore_count.strip() == "0"
+    system_enable = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
+    return restore_count.strip() == "0" or "true" in system_enable
 #
 # Helper classes ===============================================================
 #
