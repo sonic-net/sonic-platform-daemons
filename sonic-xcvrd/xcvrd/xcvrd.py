@@ -464,10 +464,12 @@ def is_warm_reboot_enabled():
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
 
-def is_syncd_restore_count_zero():
-    restore_count = subprocess.check_output('sonic-db-cli STATE_DB hget "WARM_RESTART_TABLE|syncd" restore_count', shell=True, universal_newlines=True)
-    system_enable = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
-    return restore_count.strip() == "0" or "true" in system_enable
+def is_syncd_restore_complete():
+    state_db = daemon_base.db_connect("STATE_DB")
+    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
+    system_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
+    return restore_count.strip() > "0" or "true" in system_enabled
+
 #
 # Helper classes ===============================================================
 #
@@ -1600,7 +1602,7 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        is_warm_start = not is_syncd_restore_count_zero()
+        is_warm_start = is_syncd_restore_complete()
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -2328,7 +2330,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def deinit(self):
         self.log_info("Start daemon deinit...")
 
-        is_warm_fast_reboot = not is_syncd_restore_count_zero() or is_fast_reboot_enabled()
+        is_warm_fast_reboot = is_syncd_restore_complete() or is_fast_reboot_enabled()
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
