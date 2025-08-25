@@ -4580,9 +4580,77 @@ class TestXcvrdScript(object):
     def test_DaemonXcvrd_signal_handler(self):
         xcvrd.platform_chassis = MagicMock()
         xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrdaemon.update_log_level = MagicMock()
+        xcvrdaemon.update_loggers_log_level = MagicMock()
         xcvrdaemon.signal_handler(signal.SIGHUP, None)
-        xcvrdaemon.update_log_level.assert_called()
+        xcvrdaemon.update_loggers_log_level.assert_called()
+
+    @patch('xcvrd.xcvrd.helper_logger')
+    def test_DaemonXcvrd_update_loggers_log_level(self, mock_helper_logger):
+        """Test update_loggers_log_level method updates all logger instances"""
+        # Setup
+        xcvrd.platform_chassis = MagicMock()
+        xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+
+        # Mock the logger_instance
+        mock_logger_instance = MagicMock()
+        xcvrdaemon.logger_instance = mock_logger_instance
+
+        # Create mock threads with and without update_log_level method
+        mock_thread_with_update = MagicMock()
+        mock_thread_with_update.update_log_level = MagicMock()
+
+        mock_thread_without_update = MagicMock()
+        # This thread doesn't have update_log_level method
+        del mock_thread_without_update.update_log_level
+
+        mock_thread_with_non_callable = MagicMock()
+        mock_thread_with_non_callable.update_log_level = "not_callable"
+
+        # Add threads to the daemon
+        xcvrdaemon.threads = [
+            mock_thread_with_update,
+            mock_thread_without_update,
+            mock_thread_with_non_callable
+        ]
+
+        # Execute
+        xcvrdaemon.update_loggers_log_level()
+
+        # Verify helper_logger.update_log_level() was called
+        mock_helper_logger.update_log_level.assert_called_once()
+
+        # Verify logger_instance.update_log_level() was called
+        mock_logger_instance.update_log_level.assert_called_once()
+
+        # Verify only the thread with callable update_log_level was called
+        mock_thread_with_update.update_log_level.assert_called_once()
+
+        # Verify threads without callable update_log_level were not called
+        # (no assertion needed for mock_thread_without_update since it doesn't have the method)
+        # mock_thread_with_non_callable.update_log_level should not be called since it's not callable
+
+    @patch('xcvrd.xcvrd.helper_logger')
+    def test_DaemonXcvrd_update_loggers_log_level_empty_threads(self, mock_helper_logger):
+        """Test update_loggers_log_level method with no threads"""
+        # Setup
+        xcvrd.platform_chassis = MagicMock()
+        xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+
+        # Mock the logger_instance
+        mock_logger_instance = MagicMock()
+        xcvrdaemon.logger_instance = mock_logger_instance
+
+        # No threads
+        xcvrdaemon.threads = []
+
+        # Execute
+        xcvrdaemon.update_loggers_log_level()
+
+        # Verify helper_logger.update_log_level() was called
+        mock_helper_logger.update_log_level.assert_called_once()
+
+        # Verify logger_instance.update_log_level() was called
+        mock_logger_instance.update_log_level.assert_called_once()
 
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=(test_path, '/invalid/path')))
     def test_load_optical_si_file_from_platform_folder(self):
