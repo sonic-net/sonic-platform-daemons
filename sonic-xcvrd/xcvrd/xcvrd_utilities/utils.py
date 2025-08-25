@@ -23,3 +23,10 @@ class XCVRDUtils:
         except (KeyError, NotImplementedError):
             self.logger.log_error(f"Failed to check flat memory for port {physical_port}")
             return True
+
+    def is_transceiver_lpmode_on(self, physical_port):
+        try:
+            return self.sfp_obj_dict[physical_port].get_lpmode()
+        except Exception as e:
+            self.logger.log_error(f"Failed to get low power mode for port {physical_port}. Exception: {e}")
+            return False
