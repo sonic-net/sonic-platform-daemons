@@ -26,6 +26,32 @@ test_path = os.path.dirname(os.path.abspath(__file__))
 mocked_libs_path = os.path.join(test_path, 'mocked_libs')
 sys.path.insert(0, mocked_libs_path)
 
+# --------------------------------------------------------------------
+# SonicV2Connector
+# --------------------------------------------------------------------
+class _DummySonicV2Connector(object):
+    def __init__(self, use_unix_socket_path=True, **kwargs):
+        self.use_unix_socket_path = use_unix_socket_path
+    def connect(self, db_name):  # no-op
+        return None
+    def close(self):  # no-op
+        return None
+
+# Try to attach to whichever mocked swsscommon the testbed uses
+try:
+    import swsscommon as _swsscommon_mod
+    if not hasattr(_swsscommon_mod, "SonicV2Connector"):
+        _swsscommon_mod.SonicV2Connector = _DummySonicV2Connector
+except Exception:
+    pass
+
+try:
+    import tests.mock_swsscommon as _tests_swsscommon_mod
+    if not hasattr(_tests_swsscommon_mod, "SonicV2Connector"):
+        _tests_swsscommon_mod.SonicV2Connector = _DummySonicV2Connector
+except Exception:
+    pass
+
 modules_path = os.path.dirname(test_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
