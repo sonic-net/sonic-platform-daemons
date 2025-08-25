@@ -1,4 +1,5 @@
 from natsort import natsorted
+from collections import deque
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
@@ -159,52 +160,64 @@ class PortChangeObserver:
                     fvp['asic_id'] = self.asic_context[port_tbl]
                     fvp['op'] = op
                     fvp['FILTER'] = port_tbl.filter
-                    # Soak duplicate events and consider only the last event
-                    port_event_cache[(port_name, port_tbl.db_name, port_tbl.table_name)] = fvp
+                    # Soak duplicate events and consider only the latest event(s)
+                    # Cache up to 2 most recent events to avoid dropping DEL event followed by SET event,
+                    # since applications may have cleanup actions associated with DEL events.
+                    port_event_cache.setdefault((port_name, port_tbl.db_name, port_tbl.table_name), deque(maxlen=2)).append(fvp)
 
             # Now apply filter over soaked events
-            for key, fvp in port_event_cache.items():
+            for key, fvps in port_event_cache.items():
                 db_name = key[1]
                 table_name = key[2]
-                port_index = int(fvp['index'])
-                port_change_event = None
-                filter = fvp['FILTER']
-                del fvp['FILTER']
-                self.apply_filter_to_fvp(filter, fvp)
 
-                if key in self.port_event_cache:
-                    # Compare current event with last event on this key, to see if
-                    # there's really a need to update.
-                    diff = set(fvp.items()) - set(self.port_event_cache[key].items())
-                    # Ignore duplicate events
-                    if not diff:
-                       self.port_event_cache[key] = fvp
-                       continue
-                # Update the latest event to the cache
-                self.port_event_cache[key] = fvp
+                # If last two events are:
+                # 1) DEL and SET: then both needs to be processed to not miss the DEL event
+                # 2) SET and DEL: then only last event (i.e. DEL) needs to be processed
+                # 3) SET and SET: then only last SET event needs to be processed
+                # 4) DEL and DEL: then only last DEL event needs to be processed
+                if len(fvps) == 2 and not (fvps[0]['op'] == swsscommon.DEL_COMMAND and fvps[1]['op'] == swsscommon.SET_COMMAND):
+                    fvps.popleft()
 
-                if fvp['op'] == swsscommon.SET_COMMAND:
-                   port_change_event = PortChangeEvent(fvp['port_name'],
-                                                            port_index,
-                                                            fvp['asic_id'],
-                                                            PortChangeEvent.PORT_SET,
-                                                            fvp,
-                                                            db_name,
-                                                            table_name)
-                elif fvp['op'] == swsscommon.DEL_COMMAND:
-                   port_change_event = PortChangeEvent(fvp['port_name'],
-                                                            port_index,
-                                                            fvp['asic_id'],
-                                                            PortChangeEvent.PORT_DEL,
-                                                            fvp,
-                                                            db_name,
-                                                            table_name)
-                # This is the final event considered for processing
-                self.logger.log_notice("*** {} handle_port_update_event() fvp {}".format(
-                    key, fvp))
-                if port_change_event is not None:
-                    has_event = True
-                    self.port_change_event_handler(port_change_event)
+                for fvp in fvps:
+                    port_index = int(fvp['index'])
+                    port_change_event = None
+                    filter = fvp['FILTER']
+                    del fvp['FILTER']
+                    self.apply_filter_to_fvp(filter, fvp)
+
+                    if key in self.port_event_cache:
+                        # Compare current event with last event on this key, to see if
+                        # there's really a need to update.
+                        diff = set(fvp.items()) - set(self.port_event_cache[key].items())
+                        # Ignore duplicate events
+                        if not diff:
+                           self.port_event_cache[key] = fvp
+                           continue
+                    # Update the latest event to the cache
+                    self.port_event_cache[key] = fvp
+
+                    if fvp['op'] == swsscommon.SET_COMMAND:
+                       port_change_event = PortChangeEvent(fvp['port_name'],
+                                                                port_index,
+                                                                fvp['asic_id'],
+                                                                PortChangeEvent.PORT_SET,
+                                                                fvp,
+                                                                db_name,
+                                                                table_name)
+                    elif fvp['op'] == swsscommon.DEL_COMMAND:
+                       port_change_event = PortChangeEvent(fvp['port_name'],
+                                                                port_index,
+                                                                fvp['asic_id'],
+                                                                PortChangeEvent.PORT_DEL,
+                                                                fvp,
+                                                                db_name,
+                                                                table_name)
+                    # This is the final event considered for processing
+                    self.logger.log_notice("*** {} handle_port_update_event() fvp {}".format(
+                        key, fvp))
+                    if port_change_event is not None:
+                        has_event = True
+                        self.port_change_event_handler(port_change_event)
 
         return has_event
 
