@@ -108,9 +108,12 @@ def _wrapper_get_psu(psu_index):
     if platform_chassis is not None:
         try:
             return platform_chassis.get_psu(psu_index - 1)
-        except NotImplementedError: # TODO: Is NotImplementedError sufficient? 
-            pass # TODO: When caught, what should we do here?
-    # TODO: If platform_chassis is None, should we return None or add logging and return None?
+        except NotImplementedError as e:
+            logger.log_warning("get_psu() not implemented by platform chassis: {}".format(str(e)))
+            return None
+        except Exception as e:
+            logger.log_warning("Failed to get PSU {} from platform chassis: {}".format(psu_index, str(e)))
+            return None
     return None
 
 
@@ -118,7 +121,8 @@ def _wrapper_get_psu_presence(psu_index):
     if platform_chassis is not None:
         psu = _wrapper_get_psu(psu_index)
         if not psu:
-            return False # TODO: What should we do when PSU object is not available?
+            logger.log_error("Failed to get PSU {} object from platform chassis".format(psu_index))
+            return False
         try:
             return psu.get_presence()
         except NotImplementedError:
@@ -130,7 +134,8 @@ def _wrapper_get_psu_status(psu_index):
     if platform_chassis is not None:
         psu = _wrapper_get_psu(psu_index)
         if not psu:
-            return False # TODO: What should we do when PSU object is not available?
+            logger.log_error("Failed to get PSU {} object from platform chassis".format(psu_index))
+            return False
         try:
             return psu.get_powergood_status()
         except NotImplementedError:
@@ -146,7 +151,8 @@ def get_psu_key(psu_index):
     if platform_chassis is not None:
         psu = _wrapper_get_psu(psu_index)
         if not psu:
-            return "" # TODO: What should we do when PSU object is not available?
+            logger.log_error("Failed to get PSU {} object from platform chassis".format(psu_index))
+            return ''
         try:
             return psu.get_name()
         except NotImplementedError:
