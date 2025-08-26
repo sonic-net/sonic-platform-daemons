@@ -160,7 +160,13 @@ class DomInfoUpdateTask(threading.Thread):
                         firmware_info_cache[physical_port] = transceiver_firmware_info_dict
                 if transceiver_firmware_info_dict:
                     fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_firmware_info_dict.items()])
-                    table.set(physical_port_name, fvs)
+                    # For firmware info, we update all logical ports associated with this physical port
+                    logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
+                    if logical_port_list is None:
+                        self.log_warning("Got unknown physical port index {} while updating firmware info".format(physical_port))
+                        continue
+                    for logical_port in logical_port_list:
+                        table.set(logical_port, fvs)
                 else:
                     return xcvrd.SFP_EEPROM_NOT_READY
 
