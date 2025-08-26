@@ -824,7 +824,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         try:
             self.chassis = sonic_platform.platform.Platform().get_chassis()
         except Exception as e:
-            self.log_warning("Failed to get chassis due to {}".format(repr(e)))
+            self.log_error("Failed to get chassis due to {}".format(repr(e)))
 
         self.thermal_monitor = ThermalMonitor(self.chassis)
         self.thermal_monitor.task_run()
