@@ -472,7 +472,7 @@ def is_syncd_restore_complete():
     state_db = daemon_base.db_connect("STATE_DB")
     restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count") or "0"
     system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
-    return int(restore_count.strip()) > "0" or "true" in system_enabled
+    return int(restore_count.strip()) > 0 or "true" in system_enabled
 
 #
 # Helper classes ===============================================================
