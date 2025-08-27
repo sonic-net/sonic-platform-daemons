@@ -449,16 +449,55 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
                                                                               'inactive_firmware': '1.2.4'}))
-    @patch('xcvrd.xcvrd._wrapper_is_flat_memory')
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd._wrapper_get_presence')
-    def test_post_port_sfp_firmware_info_to_db(self, mock_get_presence, mock_is_flat_memory):
+    def test_post_port_sfp_firmware_info_to_db(self, mock_get_presence):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
+        port_mapping.get_physical_to_logical = MagicMock(return_value=["Ethernet0", "Ethernet4"])
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
+        
+        # Test 1: stop_event is set - should not update table
+        stop_event.set()
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        assert firmware_info_tbl.get_size() == 0
+        
+        # Test 2: transceiver not present - should not update table
+        stop_event.clear()
+        mock_get_presence.return_value = False
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        assert firmware_info_tbl.get_size() == 0
+        
+        # Test 3: transceiver present - should update table for both logical ports
+        mock_get_presence.return_value = True
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        # Verify firmware info is posted for Ethernet0 (2 entries: active + inactive firmware)
+        assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
+        # Verify firmware info is also posted for Ethernet4 (2 entries: active + inactive firmware)
+        assert firmware_info_tbl.get_size_for_key("Ethernet4") == 2
+        # Verify total table has 2 logical ports (keys)
+        assert firmware_info_tbl.get_size() == 2
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
+                                                                              'inactive_firmware': '1.2.4'}))
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    def test_post_port_sfp_firmware_info_to_db_lport_list_None(self, mock_get_presence):
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        port_mapping.get_physical_to_logical = MagicMock(return_value=None)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[0])
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        firmware_info_tbl = MagicMock()
+        firmware_info_tbl.get_size.return_value = 0
         stop_event.set()
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size() == 0
@@ -468,7 +507,7 @@ class TestXcvrdScript(object):
         assert firmware_info_tbl.get_size() == 0
         mock_get_presence.return_value = True
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
-        assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
+        assert firmware_info_tbl.set.call_count == 0
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
