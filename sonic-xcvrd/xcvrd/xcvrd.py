@@ -465,10 +465,14 @@ def is_warm_reboot_enabled():
     return is_warm_start
 
 def is_syncd_restore_complete():
+    """
+    This function determins whether syncd's restore count is not 0, which indicates warm-reboot
+    to avoid premature config push by xcvrd that caused port flaps.
+    """
     state_db = daemon_base.db_connect("STATE_DB")
-    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
+    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count") or "0"
     system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
-    return restore_count.strip() > "0" or "true" in system_enabled
+    return int(restore_count.strip()) > "0" or "true" in system_enabled
 
 #
 # Helper classes ===============================================================
