@@ -3453,6 +3453,7 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_to_db = MagicMock()
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.vdm_db_utils = MagicMock()
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.task_worker()
@@ -3517,6 +3518,7 @@ class TestXcvrdScript(object):
         task.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.task_worker()
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
@@ -4477,6 +4479,33 @@ class TestXcvrdScript(object):
         xcvrd_util.sfp_obj_dict = {1: mock_sfp}
         mock_api.is_flat_memory = MagicMock(side_effect=NotImplementedError)
         assert xcvrd_util.is_transceiver_flat_memory(1)
+
+    def test_is_transceiver_lpmode_on(self):
+        from xcvrd.xcvrd_utilities.utils import XCVRDUtils
+        mock_sfp = MagicMock()
+        xcvrd_util = XCVRDUtils({1: mock_sfp}, MagicMock())
+
+        # Test case where get_xcvr_api returns None
+        mock_sfp.get_lpmode = MagicMock(return_value=None)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_lpmode returns True
+        mock_sfp.get_lpmode = MagicMock(return_value=True)
+        assert xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_lpmode returns False
+
+        mock_sfp.get_lpmode = MagicMock(return_value=False)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_xcvr_api raises KeyError
+        xcvrd_util.sfp_obj_dict = {}
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where is_flat_memory raises NotImplementedError
+        xcvrd_util.sfp_obj_dict = {1: mock_sfp}
+        mock_sfp.get_lpmode = MagicMock(side_effect=NotImplementedError)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
 
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
