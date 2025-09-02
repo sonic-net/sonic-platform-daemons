@@ -468,16 +468,55 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
                                                                               'inactive_firmware': '1.2.4'}))
-    @patch('xcvrd.xcvrd._wrapper_is_flat_memory')
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd._wrapper_get_presence')
-    def test_post_port_sfp_firmware_info_to_db(self, mock_get_presence, mock_is_flat_memory):
+    def test_post_port_sfp_firmware_info_to_db(self, mock_get_presence):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
+        port_mapping.get_physical_to_logical = MagicMock(return_value=["Ethernet0", "Ethernet4"])
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
+        
+        # Test 1: stop_event is set - should not update table
+        stop_event.set()
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        assert firmware_info_tbl.get_size() == 0
+        
+        # Test 2: transceiver not present - should not update table
+        stop_event.clear()
+        mock_get_presence.return_value = False
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        assert firmware_info_tbl.get_size() == 0
+        
+        # Test 3: transceiver present - should update table for both logical ports
+        mock_get_presence.return_value = True
+        dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
+        # Verify firmware info is posted for Ethernet0 (2 entries: active + inactive firmware)
+        assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
+        # Verify firmware info is also posted for Ethernet4 (2 entries: active + inactive firmware)
+        assert firmware_info_tbl.get_size_for_key("Ethernet4") == 2
+        # Verify total table has 2 logical ports (keys)
+        assert firmware_info_tbl.get_size() == 2
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
+                                                                              'inactive_firmware': '1.2.4'}))
+    @patch('xcvrd.xcvrd._wrapper_is_flat_memory', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    def test_post_port_sfp_firmware_info_to_db_lport_list_None(self, mock_get_presence):
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        port_mapping.get_physical_to_logical = MagicMock(return_value=None)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[0])
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        firmware_info_tbl = MagicMock()
+        firmware_info_tbl.get_size.return_value = 0
         stop_event.set()
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size() == 0
@@ -487,7 +526,7 @@ class TestXcvrdScript(object):
         assert firmware_info_tbl.get_size() == 0
         mock_get_presence.return_value = True
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
-        assert firmware_info_tbl.get_size_for_key(logical_port_name) == 2
+        assert firmware_info_tbl.set.call_count == 0
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
@@ -3634,6 +3673,7 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_to_db = MagicMock()
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.vdm_db_utils = MagicMock()
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.task_worker()
@@ -3698,6 +3738,7 @@ class TestXcvrdScript(object):
         task.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.task_worker()
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
@@ -4659,6 +4700,33 @@ class TestXcvrdScript(object):
         mock_api.is_flat_memory = MagicMock(side_effect=NotImplementedError)
         assert xcvrd_util.is_transceiver_flat_memory(1)
 
+    def test_is_transceiver_lpmode_on(self):
+        from xcvrd.xcvrd_utilities.utils import XCVRDUtils
+        mock_sfp = MagicMock()
+        xcvrd_util = XCVRDUtils({1: mock_sfp}, MagicMock())
+
+        # Test case where get_xcvr_api returns None
+        mock_sfp.get_lpmode = MagicMock(return_value=None)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_lpmode returns True
+        mock_sfp.get_lpmode = MagicMock(return_value=True)
+        assert xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_lpmode returns False
+
+        mock_sfp.get_lpmode = MagicMock(return_value=False)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where get_xcvr_api raises KeyError
+        xcvrd_util.sfp_obj_dict = {}
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
+        # Test case where is_flat_memory raises NotImplementedError
+        xcvrd_util.sfp_obj_dict = {1: mock_sfp}
+        mock_sfp.get_lpmode = MagicMock(side_effect=NotImplementedError)
+        assert not xcvrd_util.is_transceiver_lpmode_on(1)
+
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
@@ -4772,3 +4840,138 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
+
+class TestOpticSiParser(object):
+    def test_match_optics_si_key_regex_error(self):
+        """Test _match_optics_si_key with invalid regex pattern (lines 31-32, 34)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
+        
+        # Test with invalid regex pattern that causes re.error
+        dict_key = "[invalid regex"  # Unclosed bracket causes regex error
+        key = "VENDOR-1234"
+        vendor_name_str = "VENDOR"
+        
+        # Should fall back to string comparison and return True for exact match
+        result = _match_optics_si_key(dict_key, key, vendor_name_str)
+        assert result == False  # No exact string match
+        
+        # Test with exact string match after regex error
+        result = _match_optics_si_key(dict_key, dict_key, vendor_name_str)
+        assert result == True  # Exact string match
+
+    def test_match_optics_si_key_fallback_string_match(self):
+        """Test _match_optics_si_key fallback string comparison (line 37)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
+        
+        # Test with invalid regex that falls back to string comparison
+        dict_key = "[invalid"
+        key = "VENDOR-1234"
+        vendor_name_str = "VENDOR"
+        
+        # Test exact key match
+        result = _match_optics_si_key(key, key, vendor_name_str)
+        assert result == True
+        
+        # Test vendor name match
+        result = _match_optics_si_key(vendor_name_str, key, vendor_name_str)
+        assert result == True
+        
+        # Test split key match
+        result = _match_optics_si_key("VENDOR", key, vendor_name_str)
+        assert result == True
+
+    def test_get_port_media_settings_speed_key_missing(self):
+        """Test _get_port_media_settings when SPEED_KEY not in optics_si_dict (line 126)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _get_port_media_settings
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+        
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {
+            'PORT_MEDIA_SETTINGS': {
+                '5': {
+                    # Missing SPEED_KEY (25G_SPEED)
+                }
+            }
+        }
+        
+        try:
+            result = _get_port_media_settings(5, 25, "VENDOR-1234", "VENDOR", {'default': 'value'})
+            assert result == {'default': 'value'}
+        finally:
+            parser.g_optics_si_dict = original_dict
+
+    def test_get_module_vendor_key_api_none(self):
+        """Test get_module_vendor_key when API is None (line 152)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+        
+        # Mock SFP with None API
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = None
+        
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_get_module_vendor_key_vendor_name_none(self):
+        """Test get_module_vendor_key when vendor name is None"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+        
+        # Mock API with None vendor name
+        mock_api = MagicMock()
+        mock_api.get_manufacturer.return_value = None
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = mock_api
+        
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_get_module_vendor_key_vendor_pn_none(self):
+        """Test get_module_vendor_key when vendor part number is None"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+        
+        # Mock API with None vendor part number
+        mock_api = MagicMock()
+        mock_api.get_manufacturer.return_value = "VENDOR"
+        mock_api.get_model.return_value = None
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = mock_api
+        
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_load_optics_si_settings_no_file(self):
+        """Test load_optics_si_settings when no file exists"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
+        
+        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', 
+                return_value=('/nonexistent/platform', '/nonexistent/hwsku')):
+            with patch('os.path.isfile', return_value=False):
+                result = load_optics_si_settings()
+                assert result == {}
+
+    def test_optics_si_present_empty_dict(self):
+        """Test optics_si_present when global dict is empty"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+        
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {}
+        
+        try:
+            result = optics_si_present()
+            assert result == False
+        finally:
+            parser.g_optics_si_dict = original_dict
+
+    def test_optics_si_present_with_data(self):
+        """Test optics_si_present when global dict has data"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+        
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {'some': 'data'}
+        
+        try:
+            result = optics_si_present()
+            assert result == True
+        finally:
+            parser.g_optics_si_dict = original_dict
