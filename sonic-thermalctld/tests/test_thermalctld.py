@@ -797,3 +797,52 @@ def test_main(mock_run):
     ret = thermalctld.main()
     assert mock_run.call_count == 1
     assert  ret != 0
+
+class TestThermalControlDaemon(object):
+    """
+    Test cases to cover functionality in ThermalControlDaemon class
+    """
+    
+    def test_get_chassis_exception(self):
+        """Test ThermalControlDaemon initialization when get_chassis() raises exception"""
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class:
+            # Mock the Platform class to raise an exception when get_chassis() is called
+            mock_platform_instance = mock.MagicMock()
+            mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
+            mock_platform_class.return_value = mock_platform_instance
+            
+            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            
+            # Verify that log_error was called with the expected message
+            daemon_thermalctld.log_error.assert_called_once()
+            args, _ = daemon_thermalctld.log_error.call_args
+            assert "Failed to get chassis due to" in args[0]
+            assert "Failed to initialize chassis" in args[0]
+            
+            # Clean up
+            daemon_thermalctld.deinit()
+
+    def test_get_chassis_success(self):
+        """Test ThermalControlDaemon initialization when get_chassis() succeeds"""
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class:
+            # Mock the Platform class to return a mock chassis successfully
+            mock_chassis = mock.MagicMock()
+            mock_platform_instance = mock.MagicMock()
+            mock_platform_instance.get_chassis.return_value = mock_chassis
+            mock_platform_class.return_value = mock_platform_instance
+            
+            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            
+            # Verify that the chassis was set correctly
+            assert daemon_thermalctld.chassis is mock_chassis
+            
+            # Verify that no error was logged (log_error should not be called in success case)
+            # Since the daemon might log other things during init, we check if the specific 
+            # "Failed to get chassis due to" message was not logged
+            if daemon_thermalctld.log_error.called:
+                for call_args in daemon_thermalctld.log_error.call_args_list:
+                    args, _ = call_args
+                    assert "Failed to get chassis due to" not in args[0]
+            
+            # Clean up
+            daemon_thermalctld.deinit()
