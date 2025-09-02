@@ -320,7 +320,7 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
-def to_int32(hex_str):
+def hex_str_to_int32(hex_str):
     """
     Parse hex_str (e.g. '0xFFEEAABB') as a signed 32-bit integer.
     If the hex_str is negative, convert it to a signed integer.
@@ -333,6 +333,18 @@ def to_int32(hex_str):
     u = int(hex_str, 16)            # unsigned value
     # if sign bit set, subtract 2**32 to get negative
     return u - (1 << 32) if (u & (1 << 31)) else u
+
+
+def str_to_int(int_str):
+    """
+    Convert a string representation of an integer to a signed integer.
+
+    Args:
+        int_str: string representation of an integer
+    Returns:
+        signed integer value
+    """
+    return hex_str_to_int32(int_str) if int_str.startswith('0x') else int(int_str)
 
 
 def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
@@ -356,8 +368,8 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
             continue
 
         custom_serdes_attr = key[len(CUSTOM_SERDES_ATTR_PREFIX):]
-        value_list = [to_int32(lane_value_str)
-                        for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
+        value_list = [str_to_int(lane_value_str)
+                      for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
         attr_dict = {
             custom_serdes_attr: {
                 'value': value_list
@@ -373,8 +385,10 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
 
     # Combine all the custom serdes attributes to a single element,
     # and put it back into the media_dict to be published in APP DB
-    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps({CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
-                                                           separators=(',', ':'))  # remove whitespace for optimal payload
+    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
+        {CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
+        separators=(',', ':')  # remove whitespace for optimal payload
+    )
     return media_dict
 
 
