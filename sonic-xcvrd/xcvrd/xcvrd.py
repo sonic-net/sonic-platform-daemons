@@ -462,6 +462,16 @@ def is_warm_reboot_enabled():
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
 
+def is_syncd_warm_restore_complete():
+    """
+    This function determins whether syncd's restore count is not 0, which indicates warm-reboot
+    to avoid premature config push by xcvrd that caused port flaps.
+    """
+    state_db = daemon_base.db_connect("STATE_DB")
+    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count") or "0"
+    system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
+    return int(restore_count.strip()) > 0 or "true" in system_enabled
+
 #
 # Helper classes ===============================================================
 #
@@ -1493,7 +1503,7 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        is_warm_start = is_warm_reboot_enabled()
+        is_warm_start = is_syncd_warm_restore_complete()
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -2216,7 +2226,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def deinit(self):
         self.log_info("Start daemon deinit...")
 
-        is_warm_fast_reboot = is_warm_reboot_enabled() or is_fast_reboot_enabled()
+        is_warm_fast_reboot = is_syncd_warm_restore_complete() or is_fast_reboot_enabled()
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
