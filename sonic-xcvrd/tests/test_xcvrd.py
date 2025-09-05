@@ -4938,6 +4938,33 @@ class TestOpticSiParser(object):
         result = get_module_vendor_key(1, mock_sfp)
         assert result is None
 
+    def test_get_port_media_settings_no_values_with_empty_default(self):
+        """Test _get_port_media_settings logging when port exists but has empty config and no default values"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _get_port_media_settings
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+
+        # Set up scenario where:
+        # 1. Port exists in PORT_MEDIA_SETTINGS but has empty configuration
+        # 2. This makes len(optics_si_dict) == 0
+        # 3. Default dict is empty (len(default_dict) == 0)
+        parser.g_optics_si_dict = {
+            'PORT_MEDIA_SETTINGS': {
+                '5': {}  # Port exists but is empty - this triggers len(optics_si_dict) == 0
+            }
+        }
+
+        try:
+            # This should trigger the log_info line at lines 119-121
+            # since len(optics_si_dict) == 0 and len(default_dict) == 0
+            result = _get_port_media_settings(5, 25, "VENDOR-1234", "VENDOR", {})
+
+            # Should return empty dict when no values found and no defaults
+            assert result == {}
+        finally:
+            parser.g_optics_si_dict = original_dict
+
     def test_load_optics_si_settings_no_file(self):
         """Test load_optics_si_settings when no file exists"""
         from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
