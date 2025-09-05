@@ -116,7 +116,9 @@ def _get_port_media_settings(physical_port, lane_speed, key, vendor_name_str, de
             if len(default_dict) != 0:
                 return default_dict
             else:
-                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+                helper_logger.log_info("No values for physical port '{}' lane speed '{}' "
+                                       "key '{}' vendor '{}'".format(
+                                       physical_port, lane_speed, key, vendor_name_str))
             return {}
 
         if SPEED_KEY in optics_si_dict:
