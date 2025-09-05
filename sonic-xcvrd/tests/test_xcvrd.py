@@ -1356,7 +1356,7 @@ class TestXcvrdScript(object):
     def test_get_port_mapping(self, mock_swsscommon_table):
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0', 'Ethernet8'])
-        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), 
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )),
                         (True, (('index', 3), )), (True, (('index', 4), ('role', 'Dpc')))])
         mock_swsscommon_table.return_value = mock_table
         port_mapping = get_port_mapping(DEFAULT_NAMESPACE)
@@ -3393,3 +3393,165 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
+
+class TestOpticSiParser(object):
+    def test_match_optics_si_key_regex_error(self):
+        """Test _match_optics_si_key with invalid regex pattern (lines 31-32, 34)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
+
+        # Test with invalid regex pattern that causes re.error
+        dict_key = "[invalid regex"  # Unclosed bracket causes regex error
+        key = "VENDOR-1234"
+        vendor_name_str = "VENDOR"
+
+        # Should fall back to string comparison and return True for exact match
+        result = _match_optics_si_key(dict_key, key, vendor_name_str)
+        assert result == False  # No exact string match
+
+        # Test with exact string match after regex error
+        result = _match_optics_si_key(dict_key, dict_key, vendor_name_str)
+        assert result == True  # Exact string match
+
+    def test_match_optics_si_key_fallback_string_match(self):
+        """Test _match_optics_si_key fallback string comparison (line 37)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
+
+        # Test with invalid regex that falls back to string comparison
+        dict_key = "[invalid"
+        key = "VENDOR-1234"
+        vendor_name_str = "VENDOR"
+
+        # Test exact key match
+        result = _match_optics_si_key(key, key, vendor_name_str)
+        assert result == True
+
+        # Test vendor name match
+        result = _match_optics_si_key(vendor_name_str, key, vendor_name_str)
+        assert result == True
+
+        # Test split key match
+        result = _match_optics_si_key("VENDOR", key, vendor_name_str)
+        assert result == True
+
+    def test_get_port_media_settings_speed_key_missing(self):
+        """Test _get_port_media_settings when SPEED_KEY not in optics_si_dict (line 126)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _get_port_media_settings
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {
+            'PORT_MEDIA_SETTINGS': {
+                '5': {
+                    # Missing SPEED_KEY (25G_SPEED)
+                }
+            }
+        }
+
+        try:
+            result = _get_port_media_settings(5, 25, "VENDOR-1234", "VENDOR", {'default': 'value'})
+            assert result == {'default': 'value'}
+        finally:
+            parser.g_optics_si_dict = original_dict
+
+    def test_get_module_vendor_key_api_none(self):
+        """Test get_module_vendor_key when API is None (line 152)"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+
+        # Mock SFP with None API
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = None
+
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_get_module_vendor_key_vendor_name_none(self):
+        """Test get_module_vendor_key when vendor name is None"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+
+        # Mock API with None vendor name
+        mock_api = MagicMock()
+        mock_api.get_manufacturer.return_value = None
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = mock_api
+
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_get_module_vendor_key_vendor_pn_none(self):
+        """Test get_module_vendor_key when vendor part number is None"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
+
+        # Mock API with None vendor part number
+        mock_api = MagicMock()
+        mock_api.get_manufacturer.return_value = "VENDOR"
+        mock_api.get_model.return_value = None
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = mock_api
+
+        result = get_module_vendor_key(1, mock_sfp)
+        assert result is None
+
+    def test_get_port_media_settings_no_values_with_empty_default(self):
+        """Test _get_port_media_settings logging when port exists but has empty config and no default values"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import _get_port_media_settings
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+
+        # Set up scenario where:
+        # 1. Port exists in PORT_MEDIA_SETTINGS but has empty configuration
+        # 2. This makes len(optics_si_dict) == 0
+        # 3. Default dict is empty (len(default_dict) == 0)
+        parser.g_optics_si_dict = {
+            'PORT_MEDIA_SETTINGS': {
+                '5': {}  # Port exists but is empty - this triggers len(optics_si_dict) == 0
+            }
+        }
+
+        try:
+            # This should trigger the log_info line at lines 119-121
+            # since len(optics_si_dict) == 0 and len(default_dict) == 0
+            result = _get_port_media_settings(5, 25, "VENDOR-1234", "VENDOR", {})
+
+            # Should return empty dict when no values found and no defaults
+            assert result == {}
+        finally:
+            parser.g_optics_si_dict = original_dict
+
+    def test_load_optics_si_settings_no_file(self):
+        """Test load_optics_si_settings when no file exists"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
+
+        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs',
+                return_value=('/nonexistent/platform', '/nonexistent/hwsku')):
+            with patch('os.path.isfile', return_value=False):
+                result = load_optics_si_settings()
+                assert result == {}
+
+    def test_optics_si_present_empty_dict(self):
+        """Test optics_si_present when global dict is empty"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {}
+
+        try:
+            result = optics_si_present()
+            assert result == False
+        finally:
+            parser.g_optics_si_dict = original_dict
+
+    def test_optics_si_present_with_data(self):
+        """Test optics_si_present when global dict has data"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+        parser.g_optics_si_dict = {'some': 'data'}
+
+        try:
+            result = optics_si_present()
+            assert result == True
+        finally:
+            parser.g_optics_si_dict = original_dict
