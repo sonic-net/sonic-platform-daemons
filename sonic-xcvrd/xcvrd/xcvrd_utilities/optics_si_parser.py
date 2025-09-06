@@ -65,7 +65,9 @@ def get_optics_si_settings_value(physical_port, lane_speed, key, vendor_name_str
             if len(default_dict) != 0:
                 return default_dict
             else:
-                helper_logger.log_error("Error: No values for physical port '{}'".format(physical_port))
+                helper_logger.log_info("No values for physical port '{}' lane speed '{}' "
+                                       "key '{}' vendor '{}'".format(
+                                       physical_port, lane_speed, key, vendor_name_str))
             return {}
 
         key_dict = {}

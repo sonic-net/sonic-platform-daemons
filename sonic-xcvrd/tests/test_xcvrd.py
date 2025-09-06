@@ -4620,3 +4620,31 @@ def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
         time.sleep(interval)
         wait_time += interval
     return False
+
+class TestOpticSiParser(object):
+    def test_get_optics_si_settings_value_no_values_with_empty_default(self):
+        """Test get_optics_si_settings_value logging when port exists but has empty config and no default values"""
+        from xcvrd.xcvrd_utilities.optics_si_parser import get_optics_si_settings_value
+        import xcvrd.xcvrd_utilities.optics_si_parser as parser
+
+        original_dict = parser.g_optics_si_dict
+
+        # Set up scenario where:
+        # 1. Port exists in PORT_MEDIA_SETTINGS but has empty configuration
+        # 2. This makes len(optics_si_dict) == 0
+        # 3. Default dict is empty (len(default_dict) == 0)
+        parser.g_optics_si_dict = {
+            'PORT_MEDIA_SETTINGS': {
+                '5': {}  # Port exists but is empty - this triggers len(optics_si_dict) == 0
+            }
+        }
+
+        try:
+            # This should trigger the log_info line at lines 119-121
+            # since len(optics_si_dict) == 0 and len(default_dict) == 0
+            result = get_optics_si_settings_value(5, 25, "VENDOR-1234", "VENDOR")
+
+            # Should return empty dict when no values found and no defaults
+            assert result == {}
+        finally:
+            parser.g_optics_si_dict = original_dict
