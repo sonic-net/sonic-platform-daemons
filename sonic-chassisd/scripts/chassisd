@@ -1467,7 +1467,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     continue
                 module_obj = self.platform_chassis.get_module(idx)
                 entry = module_obj.get_module_state_transition(v2, name) or {}
-                if entry.get("state_transition_in_progress") == "True":
+                if entry.get("state_transition_in_progress", "False") == "True":
                     module_obj.clear_module_state_transition(v2, name)
         except Exception as e:
             self.log_error(f"Failed to clear stale transition flags centrally: {e}")
