@@ -4727,6 +4727,39 @@ class TestXcvrdScript(object):
         mock_sfp.get_lpmode = MagicMock(side_effect=NotImplementedError)
         assert not xcvrd_util.is_transceiver_lpmode_on(1)
 
+    @pytest.mark.parametrize(
+        "restore_count, system_enabled, expected",
+        [
+            (1, None, True),
+            (0, None, False),
+            ("2", None, True),
+            ("0", None, False),
+            (None, "true", True),
+            (None, "false", False),
+            (None, None, False),
+        ]
+    )
+    def test_is_syncd_warm_restore_complete_valid_cases(restore_count, system_enabled, expected):
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
+        )
+
+        with patch("xcvrd.warm_restart.daemon_base.db_connect", return_value=mock_db):
+            assert is_syncd_warm_restore_complete() == expected
+
+
+    def test_is_syncd_warm_restore_complete_invalid_restore_count():
+        # restore_count = "abc" triggers ValueError in int("abc")
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            "abc" if "WARM_RESTART_TABLE|syncd" in table else None
+        )
+
+        with patch("xcvrd.warm_restart.daemon_base.db_connect", return_value=mock_db):
+            result = is_syncd_warm_restore_complete()
+            assert result is False
+
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
