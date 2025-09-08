@@ -540,7 +540,7 @@ class TestXcvrdScript(object):
             (None, None, False),
         ]
     )
-    def test_is_syncd_warm_restore_complete_valid_cases(restore_count, system_enabled, expected):
+    def test_is_syncd_warm_restore_complete_valid_cases(self, restore_count, system_enabled, expected):
         mock_db = MagicMock()
         mock_db.hget.side_effect = lambda table, key: (
             restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
