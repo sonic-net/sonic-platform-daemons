@@ -12,13 +12,18 @@ from sonic_py_common import daemon_base
 
 from .mock_platform import MockDpuChassis
 
-# Make scripts/ importable so `import chassisd` resolves
+# Make scripts/ importable so we can locate chassisd
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-chassisd = importlib.import_module("chassisd")
+# Load scripts/chassisd by file path (it has no .py extension)
+import importlib.util
+_CHASSISD_PATH = os.path.join(_SCRIPTS_DIR, "chassisd")
+_spec = importlib.util.spec_from_file_location("chassisd", _CHASSISD_PATH)
+chassisd = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(chassisd)
 from chassisd import *
 
 
