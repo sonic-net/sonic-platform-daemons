@@ -4759,7 +4759,6 @@ class TestXcvrdScript(object):
         mock_sfp.get_lpmode = MagicMock(side_effect=NotImplementedError)
         assert not xcvrd_util.is_transceiver_lpmode_on(1)
 
-
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
