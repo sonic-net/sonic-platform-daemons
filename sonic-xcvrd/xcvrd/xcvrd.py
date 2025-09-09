@@ -462,7 +462,7 @@ def is_warm_reboot_enabled():
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
 
-def is_syncd_warm_restore_complete():
+def is_syncd_warm_restore_complete(self):
     """
     This function determins whether syncd's restore count is not 0, which indicates warm-reboot
     to avoid premature config push by xcvrd that caused port flaps.
