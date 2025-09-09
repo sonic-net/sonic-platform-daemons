@@ -4,13 +4,21 @@ import mock
 import pytest
 import signal
 import threading
-from imp import load_source
+import importlib
 import re
 
 from mock import MagicMock
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockDpuChassis
+
+# Make scripts/ importable so `import chassisd` resolves
+_REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+chassisd = importlib.import_module("chassisd")
 from chassisd import *
 
 
