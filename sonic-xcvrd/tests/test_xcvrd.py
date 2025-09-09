@@ -546,7 +546,7 @@ class TestXcvrdScript(object):
             restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
         )
 
-        with patch("xcvrd.warm_restart.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
             assert is_syncd_warm_restore_complete() == expected
 
 
@@ -557,7 +557,7 @@ class TestXcvrdScript(object):
             "abc" if "WARM_RESTART_TABLE|syncd" in table else None
         )
 
-        with patch("xcvrd.warm_restart.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
             result = is_syncd_warm_restore_complete()
             assert result is False
 
