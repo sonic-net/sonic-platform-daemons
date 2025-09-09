@@ -464,7 +464,7 @@ def is_warm_reboot_enabled():
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
 
-def is_syncd_warm_restore_complete(self):
+def is_syncd_warm_restore_complete():
     """
     This function determins whether syncd's restore count is not 0, which indicates warm-reboot
     to avoid premature config push by xcvrd that caused port flaps.
@@ -488,7 +488,7 @@ def is_syncd_warm_restore_complete(self):
                 return True
 
     except Exception as e:
-        self.log_warning(f"[WARN] Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
+        helper_logger.log_warning(f"[WARN] Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
 
     return False
 #
