@@ -489,7 +489,7 @@ def is_syncd_warm_restore_complete():
 
     except Exception as e:
         helper_logger.log_warning(f"[WARN] Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
-
+        log_exception_traceback()
     return False
 #
 # Helper classes ===============================================================
