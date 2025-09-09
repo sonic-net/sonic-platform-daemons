@@ -550,7 +550,7 @@ class TestXcvrdScript(object):
             assert is_syncd_warm_restore_complete() == expected
 
 
-    def test_is_syncd_warm_restore_complete_invalid_restore_count():
+    def test_is_syncd_warm_restore_complete_invalid_restore_count(self):
         # restore_count = "abc" triggers ValueError in int("abc")
         mock_db = MagicMock()
         mock_db.hget.side_effect = lambda table, key: (
