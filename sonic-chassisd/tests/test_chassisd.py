@@ -719,28 +719,23 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater(
-        SYSLOG_IDENTIFIER,
-        chassis
-    )
+    config_updater = SmartSwitchModuleConfigUpdater('chassisd_test', chassis)
 
-    # Test setting admin state to down
-    admin_state = 0
-    with patch.object(module, 'module_pre_shutdown') as mock_module_pre_shutdown, \
-         patch.object(module, 'set_admin_state') as mock_set_admin_state:
+    # admin down path: expect pre_shutdown AND set_admin_state called
+    admin_state = 0  # MODULE_ADMIN_DOWN
+    with patch.object(module, 'module_pre_shutdown') as mock_pre, \
+         patch.object(module, 'set_admin_state') as mock_set:
         config_updater.module_config_update(name, admin_state)
-        if mock_module_pre_shutdown.called:
-            mock_module_pre_shutdown.assert_called_once()
-        else:
-            mock_set_admin_state.assert_called_once_with(admin_state)
+        mock_pre.assert_called_once()
+        mock_set.assert_called_once_with(admin_state)
 
-    # Test setting admin state to up
-    admin_state = 1
-    with patch.object(module, 'set_admin_state') as mock_set_admin_state, \
-         patch.object(module, 'module_post_startup') as mock_module_post_startup:
+    # admin up path: expect set_admin_state THEN post_startup
+    admin_state = 1  # MODULE_ADMIN_UP
+    with patch.object(module, 'set_admin_state') as mock_set, \
+         patch.object(module, 'module_post_startup') as mock_post:
         config_updater.module_config_update(name, admin_state)
-        mock_set_admin_state.assert_called_once_with(admin_state)
-        mock_module_post_startup.assert_called_once()
+        mock_set.assert_called_once_with(admin_state)
+        mock_post.assert_called_once()
 
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
