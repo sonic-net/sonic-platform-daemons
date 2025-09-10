@@ -528,6 +528,38 @@ class TestXcvrdScript(object):
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.set.call_count == 0
 
+    @pytest.mark.parametrize(
+        "restore_count, system_enabled, expected",
+        [
+            (1, None, True),
+            (0, None, False),
+            ("2", None, True),
+            ("0", None, False),
+            (None, "true", True),
+            (None, "false", False),
+            (None, None, False),
+        ]
+    )
+    def test_is_syncd_warm_restore_complete_valid_cases(self, restore_count, system_enabled, expected):
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
+        )
+
+        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+            assert is_syncd_warm_restore_complete() == expected
+
+    def test_is_syncd_warm_restore_complete_invalid_restore_count(self):
+        # restore_count = "abc" triggers ValueError in int("abc")
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            "abc" if "WARM_RESTART_TABLE|syncd" in table else None
+        )
+
+        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+            result = is_syncd_warm_restore_complete()
+            assert result is False
+
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
             return {

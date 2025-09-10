@@ -470,10 +470,27 @@ def is_syncd_warm_restore_complete():
     to avoid premature config push by xcvrd that caused port flaps.
     """
     state_db = daemon_base.db_connect("STATE_DB")
-    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count") or "0"
+    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
     system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
-    return int(restore_count.strip()) > 0 or "true" in system_enabled
+    try:
+        # --- Handle restore_count (could be int, str, or None) ---
+        if restore_count is not None:
+            if isinstance(restore_count, int):
+                if restore_count > 0:
+                    return True
+            elif isinstance(restore_count, str):
+                if restore_count.strip().isdigit() and int(restore_count.strip()) > 0:
+                    return True
 
+        # --- Handle system_enabled (only care about "true"/"false"/None) ---
+        if isinstance(system_enabled, str):
+            if system_enabled.strip().lower() == "true":
+                return True
+
+    except Exception as e:
+        helper_logger.log_warning(f"Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
+        log_exception_traceback()
+    return False
 #
 # Helper classes ===============================================================
 #
