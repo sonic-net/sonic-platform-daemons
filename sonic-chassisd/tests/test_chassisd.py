@@ -19,8 +19,32 @@ from sonic_py_common import daemon_base
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
 
-# Make scripts/ importable so `import chassisd` resolves
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts"))
+import importlib.util
+import importlib.machinery
+
+# Make scripts/ importable
+_REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+# Path to the daemon script (with or without .py)
+_chassisd_path = os.path.join(_SCRIPTS_DIR, "chassisd")
+if not os.path.exists(_chassisd_path):
+    if os.path.exists(_chassisd_path + ".py"):
+        _chassisd_path = _chassisd_path + ".py"
+
+# Try normal import first; if not present, load directly from path
+try:
+    chassisd = importlib.import_module("chassisd")
+except ModuleNotFoundError:
+    loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
+    spec = importlib.util.spec_from_loader("chassisd", loader)
+    chassisd = importlib.util.module_from_spec(spec)
+    loader.exec_module(chassisd)
+    sys.modules["chassisd"] = chassisd
+
+from chassisd import *
 
 # Some tests run with a test stub swsscommon whose SonicV2Connector lacks STATE_DB.
 # The production code calls .connect(SonicV2Connector.STATE_DB), so ensure it exists.
@@ -32,12 +56,6 @@ except Exception:
     # If swsscommon isn't importable yet in this environment, just skip; tests that
     # use it will import this file after swsscommon is available in the same process.
     pass
-
-# Ensure a usable 'swsscommon' name in this module (used directly by some tests)
-try:
-    import swsscommon  # type: ignore
-except Exception:  # pragma: no cover
-    swsscommon = importlib.import_module('tests.mock_swsscommon')  # fallback
 
 # Assuming OBJECT should be a specific value, define it manually
 SELECT_OBJECT = 1  # Replace with the actual value for OBJECT if known
@@ -51,17 +69,8 @@ test_path = os.path.dirname(os.path.abspath(__file__))
 
 # Add mocked_libs path so that the file under test can load mocked modules from there
 mocked_libs_path = os.path.join(test_path, 'mocked_libs')
-sys.path.insert(0, mocked_libs_path)
-
-# Make sure scripts/ is importable so `import chassisd` resolves
-_REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
-# Import the module under test once (avoid deprecated imp.load_source)
-chassisd = importlib.import_module("chassisd")
-from chassisd import *
+if mocked_libs_path not in sys.path:
+    sys.path.insert(0, mocked_libs_path)
 
 # Minimal fake Redis + SonicV2Connector that matches what chassisd now uses
 class _FakeRedis:
@@ -83,7 +92,7 @@ class _FakeRedis:
         raise TypeError("Unsupported hset signature in _FakeRedis")
 
 class _FakeV2:
-    STATE_DB = 0  # <-- chassisd now reads this constant
+    STATE_DB = 0
     def __init__(self, *a, **k):
         self._client = _FakeRedis()
     def connect(self, _dbid):

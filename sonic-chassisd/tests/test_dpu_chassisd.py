@@ -18,12 +18,25 @@ _SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-# Load scripts/chassisd by file path (it has no .py extension)
-import importlib.util
-_CHASSISD_PATH = os.path.join(_SCRIPTS_DIR, "chassisd")
-_spec = importlib.util.spec_from_file_location("chassisd", _CHASSISD_PATH)
-chassisd = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(chassisd)
+# Try a normal import first; if not found, load by explicit path (handles no .py suffix)
+try:
+    chassisd = importlib.import_module("chassisd")
+except ModuleNotFoundError:
+    import importlib.util
+    import importlib.machinery
+
+    # Resolve path to script (with or without .py)
+    _chassisd_path = os.path.join(_SCRIPTS_DIR, "chassisd")
+    if not os.path.exists(_chassisd_path):
+        if os.path.exists(_chassisd_path + ".py"):
+            _chassisd_path = _chassisd_path + ".py"
+
+    loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
+    spec = importlib.util.spec_from_loader("chassisd", loader)
+    chassisd = importlib.util.module_from_spec(spec)
+    loader.exec_module(chassisd)
+    sys.modules["chassisd"] = chassisd
+
 from chassisd import *
 
 
