@@ -719,9 +719,12 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater('chassisd_test', chassis)
+    config_updater = SmartSwitchModuleConfigUpdater(
+        SYSLOG_IDENTIFIER,
+        chassis
+    )
 
-    # admin down path: expect pre_shutdown AND set_admin_state called
+    # admin down path
     admin_state = 0  # MODULE_ADMIN_DOWN
     with patch.object(module, 'module_pre_shutdown') as mock_pre, \
          patch.object(module, 'set_admin_state') as mock_set:
@@ -729,7 +732,7 @@ def test_smartswitch_configupdater_check_admin_state():
         mock_pre.assert_called_once()
         mock_set.assert_called_once_with(admin_state)
 
-    # admin up path: expect set_admin_state THEN post_startup
+    # admin up path
     admin_state = 1  # MODULE_ADMIN_UP
     with patch.object(module, 'set_admin_state') as mock_set, \
          patch.object(module, 'module_post_startup') as mock_post:
