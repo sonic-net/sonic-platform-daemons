@@ -803,6 +803,71 @@ def test_daemon_initial_state_marks_startup_for_wants_up_not_online():
     assert args[1] == "DPU0"
     assert args[2] == "startup"
 
+def test_clear_all_transition_flags_centralized_walks_keys_and_clears_true_flags():
+    """Ensure we enumerate keys, resolve modules, and clear only when flag is True."""
+    chassis = MockSmartSwitchChassis()
+    m0 = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+    m1 = MockModule(1, "DPU1", "DPU", ModuleBase.MODULE_TYPE_DPU, 1, "SN1")
+    chassis.module_list.extend([m0, m1])
+
+    # Module API used by daemon
+    m0.get_module_state_transition = MagicMock(return_value={"state_transition_in_progress": "True"})
+    m0.clear_module_state_transition = MagicMock()
+    m1.get_module_state_transition = MagicMock(return_value={"state_transition_in_progress": "False"})
+    m1.clear_module_state_transition = MagicMock()
+
+    # Resolve names -> indices
+    def _get_idx(name):
+        return {"DPU0": 0, "DPU1": 1}.get(name, -1)
+    chassis.get_module_index = MagicMock(side_effect=_get_idx)
+    chassis.get_module = MagicMock(side_effect=lambda idx: [m0, m1][idx])
+
+    # Fake STATE_DB.keys()
+    class _StateDB:
+        def keys(self, pattern):
+            # include a bad key to hit the ValueError branch, and two good ones
+            return ["CHASSIS_MODULE_TABLE-bad", "CHASSIS_MODULE_TABLE|DPU0", "CHASSIS_MODULE_TABLE|DPU1"]
+
+    # Minimal V2 connector
+    class _V2:
+        STATE_DB = 6
+        def __init__(self, *a, **k): pass
+        def connect(self, *_): pass
+
+    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    # Ensure the daemon uses our test chassis as the platform_chassis
+    d.platform_chassis = chassis
+
+    with patch.object(daemon_base, "db_connect", return_value=_StateDB()):
+        with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+            d.clear_all_transition_flags_centralized()
+
+    # DPU0 had flag True -> cleared once
+    m0.get_module_state_transition.assert_called_once()
+    m0.clear_module_state_transition.assert_called_once()
+    # DPU1 had flag False -> not cleared
+    m1.get_module_state_transition.assert_called_once()
+    m1.clear_module_state_transition.assert_not_called()
+
+
+def test_clear_all_transition_flags_centralized_early_return_on_no_keys():
+    """When STATE_DB has no CHASSIS_MODULE_TABLE keys, function returns without errors."""
+    class _EmptyStateDB:
+        def keys(self, pattern): return []
+
+    class _V2:
+        STATE_DB = 6
+        def __init__(self, *a, **k): pass
+        def connect(self, *_): pass
+
+    chassis = MockSmartSwitchChassis()
+    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+
+    with patch.object(daemon_base, "db_connect", return_value=_EmptyStateDB()):
+        with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+            # Should simply do nothing (no exception)
+            d.clear_all_transition_flags_centralized()
+
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
 def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
