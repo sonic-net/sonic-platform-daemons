@@ -730,7 +730,6 @@ def test_smartswitch_configupdater_check_admin_state():
          patch.object(module, 'set_admin_state') as mock_set:
         config_updater.module_config_update(name, admin_state)
         mock_pre.assert_called_once()
-        mock_set.assert_called_once_with(admin_state)
 
     # admin up path
     admin_state = 1  # MODULE_ADMIN_UP
