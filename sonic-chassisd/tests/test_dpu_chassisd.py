@@ -9,33 +9,28 @@ import re
 
 from mock import MagicMock
 from sonic_py_common import daemon_base
-
 from .mock_platform import MockDpuChassis
 
-# Make scripts/ importable so we can locate chassisd
+# Robust loader for scripts/chassisd (works with or without .py suffix)
+import importlib.util
+import importlib.machinery
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-# Try a normal import first; if not found, load by explicit path (handles no .py suffix)
-try:
-    chassisd = importlib.import_module("chassisd")
-except ModuleNotFoundError:
-    import importlib.util
-    import importlib.machinery
+_base = os.path.join(_SCRIPTS_DIR, "chassisd")
+_candidates = [_base, _base + ".py"]
+_chassisd_path = next((p for p in _candidates if os.path.exists(p)), None)
+if _chassisd_path is None:
+    raise RuntimeError("Cannot locate scripts/chassisd (tried: %r)" % _candidates)
 
-    # Resolve path to script (with or without .py)
-    _chassisd_path = os.path.join(_SCRIPTS_DIR, "chassisd")
-    if not os.path.exists(_chassisd_path):
-        if os.path.exists(_chassisd_path + ".py"):
-            _chassisd_path = _chassisd_path + ".py"
-
-    loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
-    spec = importlib.util.spec_from_loader("chassisd", loader)
-    chassisd = importlib.util.module_from_spec(spec)
-    loader.exec_module(chassisd)
-    sys.modules["chassisd"] = chassisd
+loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
+spec = importlib.util.spec_from_loader("chassisd", loader)
+chassisd = importlib.util.module_from_spec(spec)
+loader.exec_module(chassisd)
+sys.modules["chassisd"] = chassisd
 
 from chassisd import *
 
