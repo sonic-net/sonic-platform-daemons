@@ -397,3 +397,29 @@ class TestDaemonPcied(object):
         daemon_pcied.log_error.assert_called_once_with(
             "Exception while updating AER attributes to STATE_DB for PCIe Device 1: Test Exception"
         )
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.daemon_base.db_connect', mock.MagicMock())
+    @mock.patch('pcied.sys.exit')
+    @mock.patch('pcied.log')
+    def test_init_db_connection_failure(self, mock_log, mock_exit):
+        # Case 1 : Normal Execution path; Verify error was not logged and exit was not called
+        pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        mock_log.log_error.assert_not_called()
+        mock_exit.assert_not_called()
+
+        # Reset mock objects
+        mock_log.reset_mock()
+        mock_exit.reset_mock()
+
+        # Case 2 : Test exception during Redis connection or table creation error and verify error was logged and exit was called with correct error code
+        with mock.patch('pcied.swsscommon.Table', side_effect=Exception('Test Redis DB Exception')):
+            pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+
+            mock_log.log_error.assert_called_once_with(
+                'Failed to connect to STATE_DB or create table. Error: Test Redis DB Exception',
+                True
+            )
+
+            mock_exit.assert_called_once_with(pcied.PCIEUTIL_CONF_FILE_ERROR)
