@@ -738,75 +738,70 @@ def test_smartswitch_configupdater_check_admin_state():
         # Depending on platform flow, either set_admin_state or module_post_startup may be called.
         assert mock_set.called or mock_post.called
 
-def test_configupdater_admin_up_marks_startup_transition():
-    """Admin UP should mark 'startup' transition and call set_admin_state + post_startup."""
+def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
     chassis = MockSmartSwitchChassis()
-    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    m = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
     chassis.module_list.append(m)
 
-    # Add the transition APIs expected by chassisd
+    # Add the centralized API expected by the code under test
     m.set_module_state_transition = MagicMock()
-    m.module_post_startup = MagicMock()
     m.set_admin_state = MagicMock()
+    m.module_post_startup = MagicMock()
 
-    # Use a dummy V2 connector so the code goes down the success path
+    # Minimal V2 connector that "connects"
     class _V2:
         STATE_DB = 6
         def __init__(self, *a, **k): pass
         def connect(self, *_): pass
-    with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
-        cfg = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
-        cfg.module_config_update("DPU0", MODULE_ADMIN_UP)
 
-    # Verify we marked startup transition and performed normal UP actions
-    assert m.set_module_state_transition.called
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+        updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+        # Drive the admin-UP path, which should set the centralized "startup" flag
+        updater.module_config_update("DPU0", chassisd.MODULE_ADMIN_UP)
+
+    # Verify we marked the transition and still called the usual hooks
+    assert m.set_module_state_transition.call_count == 1
     args, _ = m.set_module_state_transition.call_args
-    # args: (v2, module_name, "startup")
-    assert args[1] == "DPU0" and args[2] == "startup"
-    m.set_admin_state.assert_called_once_with(MODULE_ADMIN_UP)
+    # args: (v2, "DPU0", "startup")
+    assert args[1] == "DPU0"
+    assert args[2] == "startup"
+    m.set_admin_state.assert_called_once_with(chassisd.MODULE_ADMIN_UP)
     m.module_post_startup.assert_called_once()
 
-def test_clear_stale_module_state_transitions_clears_flags():
-    """Exercise clearing of 'in progress' transition flags if the daemon exposes such a helper."""
+
+def test_daemon_initial_state_marks_startup_for_wants_up_not_online():
+    # Chassis with one DPU that "wants up" but isn't ONLINE yet
     chassis = MockSmartSwitchChassis()
-    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    m = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
     chassis.module_list.append(m)
 
-    # Centralized transition APIs used by chassisd
-    m.get_module_state_transition = MagicMock(return_value={"state_transition_in_progress": "True"})
-    m.clear_module_state_transition = MagicMock()
+    # Centralized API on the module
+    m.set_module_state_transition = MagicMock()
 
-    # Fake STATE_DB.keys() to return one entry
-    class _StateDBKeys:
-        def keys(self, pattern):
-            return ["CHASSIS_MODULE_TABLE|DPU0"]
-
-    # Minimal SonicV2Connector that connects OK
+    # Minimal V2 so chassisd can connect
     class _V2:
         STATE_DB = 6
         def __init__(self, *a, **k): pass
         def connect(self, *_): pass
 
-    with patch.object(daemon_base, "db_connect", return_value=_StateDBKeys()):
-        with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
-            d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    # Make the daemon think there is exactly one module and it wants admin "up"
+    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    d.module_updater = MagicMock()
+    d.module_updater.num_modules = 1
+    d.module_updater.get_module_admin_status.return_value = "up"
 
-            # Try multiple possible helper names
-            helper_names = [
-                "clear_stale_module_state_transitions",
-                "_clear_stale_module_state_transitions",
-                "clear_stale_transitions",
-            ]
-            helper = next((getattr(d, n) for n in helper_names if hasattr(d, n)), None)
+    # Return a non-ONLINE oper status to force the "not_online" branch
+    m.get_oper_status = MagicMock(return_value=ModuleBase.MODULE_STATUS_PRESENT)
 
-            if helper:
-                helper()  # run the real helper
-                m.get_module_state_transition.assert_called_once()
-                m.clear_module_state_transition.assert_called_once()
-            else:
-                # Helper not present in this branch; just ensure no exception and return.
-                # (This keeps the test green across branches while not failing CI.)
-                assert True
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+        d.set_initial_dpu_admin_state()
+
+    # Startup transition should be marked once for DPU0
+    assert m.set_module_state_transition.call_count == 1
+    args, _ = m.set_module_state_transition.call_args
+    # args: (v2, "DPU0", "startup")
+    assert args[1] == "DPU0"
+    assert args[2] == "startup"
 
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
