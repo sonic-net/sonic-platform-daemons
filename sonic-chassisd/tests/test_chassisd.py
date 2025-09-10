@@ -2,7 +2,6 @@ import os
 import sys
 import tempfile
 import json
-import importlib
 import time
 import signal
 from datetime import datetime, timezone
@@ -18,9 +17,8 @@ from sonic_py_common import daemon_base
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
 
-# Robust loader for scripts/chassisd (works with or without .py suffix)
-import importlib.util
-import importlib.machinery
+# Load scripts/chassisd the classic way, once, with imp.load_source
+from imp import load_source
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
@@ -33,11 +31,11 @@ _chassisd_path = next((p for p in _candidates if os.path.exists(p)), None)
 if _chassisd_path is None:
     raise RuntimeError("Cannot locate scripts/chassisd (tried: %r)" % _candidates)
 
-loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
-spec = importlib.util.spec_from_loader("chassisd", loader)
-chassisd = importlib.util.module_from_spec(spec)
-loader.exec_module(chassisd)
-sys.modules["chassisd"] = chassisd
+# Do not duplicate-load if another test already imported it
+if "chassisd" in sys.modules:
+    chassisd = sys.modules["chassisd"]
+else:
+    chassisd = load_source("chassisd", _chassisd_path)
 
 from chassisd import *
 

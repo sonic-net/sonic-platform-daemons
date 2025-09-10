@@ -4,34 +4,13 @@ import mock
 import pytest
 import signal
 import threading
-import importlib
+from imp import load_source
 import re
 
 from mock import MagicMock
 from sonic_py_common import daemon_base
+
 from .mock_platform import MockDpuChassis
-
-# Robust loader for scripts/chassisd (works with or without .py suffix)
-import importlib.util
-import importlib.machinery
-
-_REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
-_base = os.path.join(_SCRIPTS_DIR, "chassisd")
-_candidates = [_base, _base + ".py"]
-_chassisd_path = next((p for p in _candidates if os.path.exists(p)), None)
-if _chassisd_path is None:
-    raise RuntimeError("Cannot locate scripts/chassisd (tried: %r)" % _candidates)
-
-loader = importlib.machinery.SourceFileLoader("chassisd", _chassisd_path)
-spec = importlib.util.spec_from_loader("chassisd", loader)
-chassisd = importlib.util.module_from_spec(spec)
-loader.exec_module(chassisd)
-sys.modules["chassisd"] = chassisd
-
 from chassisd import *
 
 
