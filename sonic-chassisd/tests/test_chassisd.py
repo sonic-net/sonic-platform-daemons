@@ -738,6 +738,63 @@ def test_smartswitch_configupdater_check_admin_state():
         # Depending on platform flow, either set_admin_state or module_post_startup may be called.
         assert mock_set.called or mock_post.called
 
+def test_configupdater_admin_up_marks_startup_transition():
+    """Admin UP should mark 'startup' transition and call set_admin_state + post_startup."""
+    chassis = MockSmartSwitchChassis()
+    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    chassis.module_list.append(m)
+
+    # Add the transition APIs expected by chassisd
+    m.set_module_state_transition = MagicMock()
+    m.module_post_startup = MagicMock()
+    m.set_admin_state = MagicMock()
+
+    # Use a dummy V2 connector so the code goes down the success path
+    class _V2:
+        STATE_DB = 6
+        def __init__(self, *a, **k): pass
+        def connect(self, *_): pass
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+        cfg = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+        cfg.module_config_update("DPU0", MODULE_ADMIN_UP)
+
+    # Verify we marked startup transition and performed normal UP actions
+    assert m.set_module_state_transition.called
+    args, _ = m.set_module_state_transition.call_args
+    # args: (v2, module_name, "startup")
+    assert args[1] == "DPU0" and args[2] == "startup"
+    m.set_admin_state.assert_called_once_with(MODULE_ADMIN_UP)
+    m.module_post_startup.assert_called_once()
+
+def test_clear_stale_module_state_transitions_clears_flags():
+    """clear_stale_module_state_transitions should clear any 'in progress' flags found in STATE_DB."""
+    chassis = MockSmartSwitchChassis()
+    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    chassis.module_list.append(m)
+
+    # Add centralized transition getters/clearers used by the daemon
+    m.get_module_state_transition = MagicMock(return_value={"state_transition_in_progress": "True"})
+    m.clear_module_state_transition = MagicMock()
+
+    # Fake STATE_DB.keys() to return one DPU entry
+    class _StateDBKeys:
+        def keys(self, pattern):
+            return ["CHASSIS_MODULE_TABLE|DPU0"]
+
+    # Provide a working V2 connector (daemon uses it to call module APIs)
+    class _V2:
+        STATE_DB = 6
+        def __init__(self, *a, **k): pass
+        def connect(self, *_): pass
+
+    with patch.object(daemon_base, "db_connect", return_value=_StateDBKeys()):
+        with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+            d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+            d.clear_stale_module_state_transitions()
+
+    m.get_module_state_transition.assert_called_once()
+    m.clear_module_state_transition.assert_called_once()
+
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
 def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
