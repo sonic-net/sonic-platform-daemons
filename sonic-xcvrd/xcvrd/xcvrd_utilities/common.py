@@ -56,7 +56,17 @@ def _wrapper_get_presence(physical_port):
         try:
             return platform_sfputil.get_presence(physical_port)
         except NotImplementedError:
-            pass
+            if platform_sfputil is not None:
+                try:
+                    return platform_sfputil.get_presence(physical_port)
+                except NotImplementedError:
+                    pass
+    else:
+        if platform_sfputil is not None:
+            try:
+                return platform_sfputil.get_presence(physical_port)
+            except NotImplementedError:
+                pass
     return False
 
 def is_fast_reboot_enabled():
