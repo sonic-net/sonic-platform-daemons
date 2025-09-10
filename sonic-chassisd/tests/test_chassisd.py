@@ -868,6 +868,54 @@ def test_clear_all_transition_flags_centralized_early_return_on_no_keys():
             # Should simply do nothing (no exception)
             d.clear_all_transition_flags_centralized()
 
+def test_set_initial_dpu_admin_state_logs_when_state_db_connect_fails():
+    # Chassis with one DPU module
+    chassis = MockSmartSwitchChassis()
+    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    # Make it NOT ONLINE so the daemon would try to set a startup transition
+    m.get_oper_status = MagicMock(return_value=ModuleBase.MODULE_STATUS_PRESENT)
+    chassis.module_list.append(m)
+
+    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    d.platform_chassis = chassis
+
+    # Module updater says the module "wants up"
+    d.module_updater = MagicMock()
+    d.module_updater.num_modules = 1
+    d.module_updater.get_module_admin_status.return_value = "up"
+
+    # If the connector throws, we should log and skip calling set_module_state_transition
+    m.set_module_state_transition = MagicMock()
+
+    d.log_error = MagicMock()
+    # Patch the module's swsscommon to raise on connector creation
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", side_effect=Exception("boom"), create=True):
+        d.set_initial_dpu_admin_state()
+
+    d.log_error.assert_called()  # "STATE_DB connect failed for initial transitions: ..."
+    m.set_module_state_transition.assert_not_called()
+
+
+def test_submit_dpu_callback_logs_when_state_db_connect_fails_on_admin_up():
+    # Chassis with one DPU module
+    chassis = MockSmartSwitchChassis()
+    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+    chassis.module_list.append(m)
+
+    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    d.platform_chassis = chassis
+
+    # Expect the daemon to try to set a transition on ADMIN_UP path, but connector fails
+    m.set_module_state_transition = MagicMock()
+    d.log_error = MagicMock()
+
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", side_effect=Exception("no v2"), create=True):
+        # MODULE_ADMIN_UP constant comes from chassisd import *
+        d.submit_dpu_callback(0, MODULE_ADMIN_UP, "DPU0")
+
+    d.log_error.assert_called()  # "Failed to connect STATE_DB for DPU0 transition: ..."
+    m.set_module_state_transition.assert_not_called()
+
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
 def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
