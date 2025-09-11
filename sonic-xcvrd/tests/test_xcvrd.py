@@ -503,10 +503,10 @@ class TestXcvrdScript(object):
         assert firmware_info_tbl.get_size() == 2
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
                                                                               'inactive_firmware': '1.2.4'}))
-    @patch('xcvrd.xcvrd._wrapper_is_flat_memory', MagicMock(return_value=False))
-    @patch('xcvrd.xcvrd._wrapper_get_presence')
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_is_flat_memory', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence')
     def test_post_port_sfp_firmware_info_to_db_lport_list_None(self, mock_get_presence):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
