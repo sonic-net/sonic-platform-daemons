@@ -43,7 +43,7 @@ def get_helper_logger():
     thread_name = get_syslog_identifier_common()
 
     # Use thread_id as key to ensure thread safety
-    if thread_id not in _thread_loggers:
+    if thread_id not in thread_loggers:
         thread_loggers[thread_id] = syslogger.SysLogger(thread_name, enable_runtime_config=True)
 
     return thread_loggers[thread_id]
