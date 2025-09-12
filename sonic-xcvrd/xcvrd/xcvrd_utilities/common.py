@@ -18,8 +18,16 @@ try:
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
+
+# Global variables that will be injected from the parent module
+platform_chassis = None
+platform_sfputil = None
+
+# Cache for thread-specific loggers to avoid creating multiple loggers for the same thread
+thread_loggers = {}
+
 def get_syslog_identifier_common():
-    """Get syslog identifier based on current thread name, fallback to 'common'"""
+    """Get syslog identifier based on current thread name, fallback to 'xcvrd_common'"""
     try:
         current_thread = threading.current_thread()
         thread_name = getattr(current_thread, 'name', None)
@@ -27,16 +35,7 @@ def get_syslog_identifier_common():
             return thread_name
     except Exception:
         pass
-    return "common"
-
-SYSLOG_IDENTIFIER_COMMON = get_syslog_identifier_common()
-
-# Global variables that will be injected from the parent module
-platform_chassis = None
-platform_sfputil = None
-
-# Cache for thread-specific loggers to avoid creating multiple loggers for the same thread
-_thread_loggers = {}
+    return "xcvrd_common"
 
 def get_helper_logger():
     """Get a thread-specific logger, creating one if it doesn't exist"""
@@ -45,12 +44,16 @@ def get_helper_logger():
 
     # Use thread_id as key to ensure thread safety
     if thread_id not in _thread_loggers:
-        _thread_loggers[thread_id] = syslogger.SysLogger(thread_name, enable_runtime_config=True)
+        thread_loggers[thread_id] = syslogger.SysLogger(thread_name, enable_runtime_config=True)
 
-    return _thread_loggers[thread_id]
+    return thread_loggers[thread_id]
 
-# For backward compatibility, provide a default logger
-helper_logger = syslogger.SysLogger(get_syslog_identifier_common(), enable_runtime_config=True)
+# Create a module-level attribute that acts like a dynamic property
+class HelperLoggerProxy:
+    def __getattr__(self, name):
+        return getattr(get_helper_logger(), name)
+
+helper_logger = HelperLoggerProxy()
 
 NOT_IMPLEMENTED_ERROR = 3
 
@@ -62,12 +65,11 @@ def init_globals(chassis, sfputil):
 
 def log_exception_traceback():
     """Log exception traceback using the helper logger"""
-    logger = get_helper_logger()
     exc_type, exc_value, exc_traceback = sys.exc_info()
     msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
     for tb_line in msg:
         for tb_line_split in tb_line.splitlines():
-            logger.log_error(tb_line_split)
+            helper_logger.log_error(tb_line_split)
 
 def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, status, error_descriptions='N/A'):
     """Update port SFP status table for SW fields on receiving SFP change event"""
@@ -182,7 +184,7 @@ def get_cmis_application_desired(api, host_lane_count, speed):
         get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
             return (index & 0xf)
 
-    get_helper_logger().log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
+    helper_logger.log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
     return None
 
 def get_cmis_state_from_state_db(lport, status_sw_tbl):
@@ -208,7 +210,7 @@ def get_physical_port_name_dict(logical_port_name, port_mapping):
 
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
-        get_helper_logger().log_error("No physical ports found for logical port '{}'".format(logical_port_name))
+        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
         return {}
 
     if len(physical_port_list) > 1:
@@ -269,7 +271,7 @@ def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, tbl_to_del_li
             for tbl in filter(None, tbl_to_del_list):
                 tbl._del(physical_port_name)
         except NotImplementedError:
-            get_helper_logger().log_error("This functionality is currently not implemented for this platform")
+            helper_logger.log_error("This functionality is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 #
