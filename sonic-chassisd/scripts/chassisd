@@ -1508,8 +1508,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Set the initial DPU admin state for SmartSwitch
         if self.smartswitch:
-            # Clear stale transition flags ONCE at startup, then mark startup
-            self.clear_all_transition_flags_centralized()
             self.set_initial_dpu_admin_state()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
