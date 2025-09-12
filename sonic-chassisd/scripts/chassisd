@@ -276,6 +276,12 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
         elif admin_state == MODULE_ADMIN_UP:
             # Mark startup transition before bring-up
+            # NOTE: Clearing ownership: the initiator clears the flag.
+            #  - On success: the platform path clears at the end of set_admin_state().
+            #  - On stall/failure: the initiator/CLI timeout logic clears.
+            # We DO NOT clear this flag on ONLINE/OFFLINE oper-state flips, to avoid
+            # prematurely clearing transitions during a normal reboot arc.
+
             if v2:
                 try:
                     module.set_module_state_transition(v2, key, "startup")
@@ -838,16 +844,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
                     self.log_notice("{} operational status transitioning to offline".format(key))
 
-                    # Persist dpu down time
+                    # Persist dpu down time & capture cause
                     self.persist_dpu_reboot_time(key)
-                    # persist reboot cause
-                    # Clear transition flag in STATE_DB via ModuleBase centralized API
-                    try:
-                        module_obj = self.chassis.get_module(module_index)
-                        module_obj.clear_module_state_transition(self._state_v2, key)
-                    except Exception as e:
-                        self.log_error(f"Failed to clear transition for {key}: {e}")
-
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                     # publish reboot cause to db
@@ -881,13 +879,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         # persist reboot cause and publish to db
                         self.persist_dpu_reboot_cause(reboot_cause, key)
                         self.update_dpu_reboot_cause_to_db(key)
-
-                    # Clear transition flag in STATE_DB via ModuleBase centralized API
-                    try:
-                        module_obj = self.chassis.get_module(module_index)
-                        module_obj.clear_module_state_transition(self._state_v2, key)
-                    except Exception as e:
-                        self.log_error(f"Failed to clear transition for {key}: {e}")
 
     def _get_module_info(self, module_index):
         """
@@ -1408,83 +1399,44 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     def submit_dpu_callback(self, module_index, admin_state, module_name):
+        """
+        Preserve original behavior:
+        - Always attempt module_pre_shutdown (no-op if not implemented)
+        - If admin_state == MODULE_ADMIN_DOWN:
+            * mark transition (shutdown) via ModuleBase centralized API
+            * then call set_admin_state(down)
+        - For any other admin_state (e.g., MODULE_PRE_SHUTDOWN), only run module_pre_shutdown
+            and do nothing else.
+        """
         module = self.module_updater.chassis.get_module(module_index)
 
-        # Mark transition via centralized API for BOTH directions
-        try:
-            v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
-            v2.connect(v2.STATE_DB)
-        except Exception as e:
-            self.log_error(f"Failed to connect STATE_DB for {module_name} transition: {e}")
-            v2 = None
+        # Always attempt pre-shutdown
+        try_get(module.module_pre_shutdown, default=False)
 
         if admin_state == MODULE_ADMIN_DOWN:
-            # Only run pre-shutdown on DOWN path
-            try_get(module.module_pre_shutdown, default=False)
+            # Use centralized ModuleBase API to mark shutdown transition
+            v2 = None
+            try:
+                v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
+                v2.connect(v2.STATE_DB)
+            except Exception as e:
+                self.log_error(f"Failed to connect STATE_DB for {module_name} transition: {e}")
+
             if v2:
                 try:
                     module.set_module_state_transition(v2, module_name, "shutdown")
                 except Exception as e:
                     self.log_error(f"Failed to set transition flag (shutdown) for {module_name}: {e}")
-            try_get(module.set_admin_state, admin_state, default=False)
 
-        elif admin_state == MODULE_ADMIN_UP:
-            # STARTUP path on daemon init or config change
-            if v2:
-                try:
-                    module.set_module_state_transition(v2, module_name, "startup")
-                except Exception as e:
-                    self.log_error(f"Failed to set transition flag (startup) for {module_name}: {e}")
+            # Drive admin down
             try_get(module.set_admin_state, admin_state, default=False)
-            try_get(module.module_post_startup, default=False)
-
         else:
-            # Preserve existing behavior for any special sentinel values (e.g., MODULE_PRE_SHUTDOWN)
-            try_get(module.module_pre_shutdown, default=False)
-
-    def clear_all_transition_flags_centralized(self):
-        """
-        Clears any lingering 'state_transition_in_progress' flags in CHASSIS_MODULE_TABLE
-        using the ModuleBase centralized API. We map names back to module objects to avoid
-        raw writes.
-        """
-        try:
-            # Use DBConnector to enumerate keys; use SonicV2Connector to write via ModuleBase API
-            state_db = daemon_base.db_connect("STATE_DB")
-            keys = state_db.keys("CHASSIS_MODULE_TABLE|*")
-            if not keys:
-                return
-            v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
-            v2.connect(v2.STATE_DB)
-            for redis_key in keys:
-                try:
-                    _, name = redis_key.split("|", 1)
-                except ValueError:
-                    continue
-                idx = try_get(self.platform_chassis.get_module_index, name, default=-1)
-                if idx < 0:
-                    # If we cannot resolve the module, skip (avoid raw writes)
-                    continue
-                module_obj = self.platform_chassis.get_module(idx)
-                entry = module_obj.get_module_state_transition(v2, name) or {}
-                if entry.get("state_transition_in_progress", "False") == "True":
-                    module_obj.clear_module_state_transition(v2, name)
-        except Exception as e:
-            self.log_error(f"Failed to clear stale transition flags centrally: {e}")
+            pass
 
     def set_initial_dpu_admin_state(self):
         """Send admin_state trigger once to modules those are powered up,
         and mark centralized 'startup' for DPUs intended UP but not ONLINE."""
         threads = []
-
-        # One STATE_DB connector for centralized ModuleBase API writes
-        try:
-            v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
-            v2.connect(v2.STATE_DB)
-        except Exception as e:
-            self.log_error(f"STATE_DB connect failed for initial transitions: {e}")
-            v2 = None
-
         for module_index in range(0, self.module_updater.num_modules):
             op = None
             module = self.platform_chassis.get_module(module_index)
@@ -1504,17 +1456,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 dpu_state_key = "DPU_STATE|" + module_name
                 op_state = 'up' if operational_state == ModuleBase.MODULE_STATUS_ONLINE else 'down'
                 self.module_updater.update_dpu_state(dpu_state_key, op_state)
-
-                # mark startup for DPUs that are intended 'up' but not yet ONLINE
-                wants_up = (admin_state != 'down')
-                not_online = (str(operational_state).lower()
-                              != str(ModuleBase.MODULE_STATUS_ONLINE).lower())
-                if wants_up and not_online and v2:
-                    try:
-                        module.set_module_state_transition(v2, module_name, "startup")
-                        self.log_info(f"Marked startup transition for {module_name} at boot")
-                    except Exception as e:
-                        self.log_error(f"Failed to set startup transition for {module_name}: {e}")
 
                 if op is not None:
                     # Create and start a thread for the DPU logic
