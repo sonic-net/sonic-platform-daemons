@@ -851,28 +851,64 @@ def test_submit_dpu_callback_admin_up_does_not_mark_startup():
         # Still calls set_admin_state and post_startup (unchanged original behavior avoided? If your final code
         # removed post_startup here, then assert not called instead.)
         set_admin.assert_called_once_with(MODULE_ADMIN_UP)
-        # If your preserved behavior does NOT call module_post_startup, flip this:
-        # post.assert_not_called()
 
 
-def test_submit_dpu_callback_logs_when_state_db_connect_fails_on_admin_up():
-    # Chassis with one DPU module
-    chassis = MockSmartSwitchChassis()
-    m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
-    chassis.module_list.append(m)
+    def test_daemon_initial_state_does_not_mark_startup_but_updates_state():
+        # Chassis with one DPU that "wants up" but isn't ONLINE yet
+        chassis = MockSmartSwitchChassis()
+        m = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+        chassis.module_list.append(m)
 
-    d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
-    d.platform_chassis = chassis
-    d.module_updater = make_updater(SYSLOG_IDENTIFIER, chassis)  # <-- needed
+        # Non-ONLINE oper status -> 'down' in DPU_STATE
+        m.get_oper_status = MagicMock(return_value=ModuleBase.MODULE_STATUS_PRESENT)
 
-    # Expect the daemon to try to set a transition on ADMIN_UP path, but connector fails
-    m.set_module_state_transition = MagicMock()
-    d.log_error = MagicMock()
+        d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+        d.platform_chassis = chassis
 
-    with patch.object(chassisd.swsscommon, "SonicV2Connector", side_effect=Exception("no v2"), create=True):
-        d.submit_dpu_callback(0, MODULE_ADMIN_UP, "DPU0")
+        # module_updater says "wants up"
+        d.module_updater = MagicMock()
+        d.module_updater.num_modules = 1
+        d.module_updater.get_module_admin_status.return_value = "up"
+        d.module_updater.update_dpu_state = MagicMock()
 
-    assert d.log_error.called
+        # No centralized transition calls any more
+        m.set_module_state_transition = MagicMock()
+
+        d.set_initial_dpu_admin_state()
+
+        # No startup transition should be marked
+        m.set_module_state_transition.assert_not_called()
+
+        # DPU_STATE is updated based on oper status (down because not ONLINE)
+        d.module_updater.update_dpu_state.assert_called_once()
+        key, state = d.module_updater.update_dpu_state.call_args[0]
+        assert key == "DPU_STATE|DPU0"
+        assert state == "down"
+
+
+    def test_submit_dpu_callback_admin_up_does_not_mark_startup():
+        chassis = MockSmartSwitchChassis()
+        m = MockModule(0, "DPU0", "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN")
+        chassis.module_list.append(m)
+
+        d = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+        d.platform_chassis = chassis
+        d.module_updater = make_updater(SYSLOG_IDENTIFIER, chassis)
+
+        # Observe these hooks
+        m.set_module_state_transition = MagicMock()
+        with patch.object(m, "module_pre_shutdown") as pre, \
+            patch.object(m, "set_admin_state") as set_admin, \
+            patch.object(m, "module_post_startup") as post:
+            d.submit_dpu_callback(0, MODULE_ADMIN_UP, "DPU0")
+
+            # No startup transition in ADMIN_UP path
+            m.set_module_state_transition.assert_not_called()
+            # Preserve legacy behavior: no forced set_admin_state or post_startup here
+            set_admin.assert_not_called()
+            post.assert_not_called()
+            pre.assert_not_called()
+
 
 @patch("chassisd.glob.glob")
 @patch("chassisd.open", new_callable=mock_open)
