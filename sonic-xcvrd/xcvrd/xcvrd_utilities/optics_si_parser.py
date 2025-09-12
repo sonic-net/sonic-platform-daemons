@@ -4,6 +4,7 @@ import re
 
 from sonic_py_common import device_info, syslogger
 from xcvrd import xcvrd
+from . import common
 
 g_optics_si_dict = {}
 
@@ -64,7 +65,7 @@ def _get_global_media_settings(physical_port, lane_speed, key, vendor_name_str):
                 port_list = keys.split(COMMA_SEPARATOR)
                 for port in port_list:
                     if RANGE_SEPARATOR in port:
-                        if xcvrd.check_port_in_range(port, physical_port):
+                        if common.check_port_in_range(port, physical_port):
                             optics_si_dict = g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
                             break
                     elif str(physical_port) == port:
@@ -72,7 +73,7 @@ def _get_global_media_settings(physical_port, lane_speed, key, vendor_name_str):
                         break
 
             elif RANGE_SEPARATOR in keys:
-                if xcvrd.check_port_in_range(keys, physical_port):
+                if common.check_port_in_range(keys, physical_port):
                     optics_si_dict = g_optics_si_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
 
             if SPEED_KEY in optics_si_dict:
@@ -181,7 +182,7 @@ def fetch_optics_si_setting(physical_port, lane_speed, sfp):
 
     optics_si = {}
 
-    if not xcvrd._wrapper_get_presence(physical_port):
+    if not common._wrapper_get_presence(physical_port):
         helper_logger.log_info("Module {} presence not detected during notify".format(physical_port))
         return optics_si
     vendor_key, vendor_name = get_module_vendor_key(physical_port, sfp)
