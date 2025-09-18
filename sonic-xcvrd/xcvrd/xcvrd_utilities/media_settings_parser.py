@@ -12,6 +12,7 @@ from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
 from xcvrd import xcvrd
 from .xcvr_table_helper import *
+from . import common
 
 g_dict = {}
 
@@ -79,9 +80,9 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
     api = sfp.get_xcvr_api()
     
     lane_speed_key = None
-    if xcvrd.is_cmis_api(api):
+    if common.is_cmis_api(api):
         appl_adv_dict = api.get_application_advertisement()
-        app_id = xcvrd.get_cmis_application_desired(api, lane_count, port_speed)
+        app_id = common.get_cmis_application_desired(api, lane_count, port_speed)
         if app_id and app_id in appl_adv_dict:
             host_electrical_interface_id = appl_adv_dict[app_id].get('host_electrical_interface_id')
             if host_electrical_interface_id:
@@ -115,7 +116,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     try:
         sfp = xcvrd.platform_chassis.get_sfp(physical_port)
         api = sfp.get_xcvr_api()
-        if xcvrd.is_cmis_api(api):
+        if common.is_cmis_api(api):
             media_compliance_code = media_compliance_dict_str
         else:
             media_compliance_dict = ast.literal_eval(media_compliance_dict_str)
@@ -136,7 +137,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + media_compliance_code
         sfp = xcvrd.platform_chassis.get_sfp(physical_port)
         api = sfp.get_xcvr_api()
-        if xcvrd.is_cmis_api(api):
+        if common.is_cmis_api(api):
             if media_compliance_code == "passive_copper_media_interface":
                 if media_len != 0:
                     media_key += '-' + str(media_len) + 'M'
@@ -251,7 +252,7 @@ def get_media_settings_value(physical_port, key):
                 port_list = keys.split(COMMA_SEPARATOR)
                 for port in port_list:
                     if RANGE_SEPARATOR in port:
-                        if xcvrd.check_port_in_range(port, physical_port):
+                        if common.check_port_in_range(port, physical_port):
                             media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
                             break
                     elif str(physical_port) == port:
@@ -259,7 +260,7 @@ def get_media_settings_value(physical_port, key):
                         break
 
             elif RANGE_SEPARATOR in keys:
-                if xcvrd.check_port_in_range(keys, physical_port):
+                if common.check_port_in_range(keys, physical_port):
                     media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
 
             # If there is a match in the global profile for a media type,
@@ -347,14 +348,14 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_port = True
 
     for physical_port in physical_port_list:
-        if not xcvrd._wrapper_get_presence(physical_port):
+        if not common._wrapper_get_presence(physical_port):
             helper_logger.log_info("Media {} presence not detected during notify".format(physical_port))
             continue
         if physical_port not in transceiver_dict:
             helper_logger.log_error("Media {} eeprom not populated in transceiver dict".format(physical_port))
             continue
 
-        port_name = xcvrd.get_physical_port_name(logical_port_name,
+        port_name = common.get_physical_port_name(logical_port_name,
                                            ganged_member_num, ganged_port)
         
         ganged_member_num += 1
