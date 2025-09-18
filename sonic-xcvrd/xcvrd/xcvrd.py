@@ -34,6 +34,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
+    from .xcvrd_utilities import common
     from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
     
@@ -118,126 +119,6 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 #
 # Helper functions =============================================================
 #
-def log_exception_traceback():
-    exc_type, exc_value, exc_traceback = sys.exc_info()
-    msg = traceback.format_exception(exc_type, exc_value, exc_traceback)
-    for tb_line in msg:
-        for tb_line_split in tb_line.splitlines():
-            helper_logger.log_error(tb_line_split)
-
-def is_cmis_api(api):
-   return isinstance(api, CmisApi)
-
-
-def get_cmis_application_desired(api, host_lane_count, speed):
-    """
-    Get the CMIS application code that matches the specified host side configurations
-
-    Args:
-        api:
-            XcvrApi object
-        host_lane_count:
-            Number of lanes on the host side
-        speed:
-            Integer, the port speed of the host interface
-
-    Returns:
-        Integer, the transceiver-specific application code
-    """
-
-    if speed == 0 or host_lane_count == 0:
-        return None
-
-    if not is_cmis_api(api):
-        return None
-
-    appl_dict = api.get_application_advertisement()
-    for index, app_info in appl_dict.items():
-        if (app_info.get('host_lane_count') == host_lane_count and
-        get_interface_speed(app_info.get('host_electrical_interface_id')) == speed):
-            return (index & 0xf)
-
-    helper_logger.log_notice(f'No application found from {appl_dict} with host_lane_count={host_lane_count} speed={speed}')
-    return None
-
-
-def get_interface_speed(ifname):
-    """
-    Get the port speed from the host interface name
-
-    Args:
-        ifname: String, interface name
-
-    Returns:
-        Integer, the port speed if success otherwise 0
-    """
-    # see HOST_ELECTRICAL_INTERFACE of sff8024.py
-    speed = 0
-    if '1.6T' in ifname:
-        speed = 1600000
-    elif '800G' in ifname:
-        speed = 800000
-    elif '400G' in ifname:
-        speed = 400000
-    elif '200G' in ifname:
-        speed = 200000
-    elif '100G' in ifname or 'CAUI-4' in ifname:
-        speed = 100000
-    elif '50G' in ifname or 'LAUI-2' in ifname:
-        speed = 50000
-    elif '40G' in ifname or 'XLAUI' in ifname or 'XLPPI' in ifname:
-        speed = 40000
-    elif '25G' in ifname:
-        speed = 25000
-    elif '10G' in ifname or 'SFI' in ifname or 'XFI' in ifname:
-        speed = 10000
-    elif '1000BASE' in ifname:
-        speed = 1000
-
-    return speed
-
-
-# Get physical port name
-
-
-def get_physical_port_name(logical_port, physical_port, ganged):
-    if ganged:
-        return logical_port + ":{} (ganged)".format(physical_port)
-    else:
-        return logical_port
-
-# Get physical port name dict (port_idx to port_name)
-
-
-def get_physical_port_name_dict(logical_port_name, port_mapping):
-    ganged_port = False
-    ganged_member_num = 1
-
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-        return {}
-
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
-    port_name_dict = {}
-    for physical_port in physical_port_list:
-        port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
-        ganged_member_num += 1
-        port_name_dict[physical_port] = port_name
-
-    return port_name_dict
-
-def _wrapper_get_presence(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_presence()
-        except NotImplementedError:
-            pass
-    return platform_sfputil.get_presence(physical_port)
-
-
 def _wrapper_is_replaceable(physical_port):
     if platform_chassis is not None:
         try:
@@ -255,37 +136,9 @@ def _wrapper_get_transceiver_info(physical_port):
             pass
         except Exception as e:
             helper_logger.log_error("Failed to get transceiver info for physical port {}. Exception: {}".format(physical_port, e))
-            log_exception_traceback()
+            common.log_exception_traceback()
             return None
     return platform_sfputil.get_transceiver_info_dict(physical_port)
-
-def _wrapper_get_transceiver_firmware_info(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info_firmware_versions()
-        except NotImplementedError:
-            pass
-    return {}
-
-def _wrapper_get_transceiver_pm(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_pm()
-        except NotImplementedError:
-            pass
-    return {}
-
-def _wrapper_is_flat_memory(physical_port):
-    if platform_chassis is not None:
-        try:
-            sfp = platform_chassis.get_sfp(physical_port)
-            api = sfp.get_xcvr_api()
-            if not api:
-                return True
-            return api.is_flat_memory()
-        except NotImplementedError:
-            pass
-    return None
 
 # Soak SFP insert event until management init completes
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
@@ -356,11 +209,11 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
         if stop_event.is_set():
             break
 
-        if not _wrapper_get_presence(physical_port):
+        if not common._wrapper_get_presence(physical_port):
             helper_logger.log_notice("Transceiver not present in port {}".format(logical_port_name))
             continue
 
-        port_name = get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
+        port_name = common.get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
         ganged_member_num += 1
 
         try:
@@ -409,45 +262,11 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
             helper_logger.log_error("This functionality is currently not implemented for this platform")
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
-# Delete port dom/sfp info from db
-def del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, tbl_to_del_list):
-    physical_port_names = get_physical_port_name_dict(logical_port_name, port_mapping).values()
-    for physical_port_name in physical_port_names:
-        try:
-            for tbl in filter(None, tbl_to_del_list):
-                tbl._del(physical_port_name)
-        except NotImplementedError:
-            helper_logger.log_error("This functionality is currently not implemented for this platform")
-            sys.exit(NOT_IMPLEMENTED_ERROR)
-
-
-def check_port_in_range(range_str, physical_port):
-    RANGE_SEPARATOR = '-'
-
-    range_list = range_str.split(RANGE_SEPARATOR)
-    start_num = int(range_list[0].strip())
-    end_num = int(range_list[1].strip())
-    if start_num <= physical_port <= end_num:
-        return True
-    return False
-
-
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
     time_diff = time_now - time_start
     if time_diff < time_to_wait:
         time.sleep(time_to_wait - time_diff)
-
-# Update port SFP status table for SW fields on receiving SFP change event
-
-
-def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, status, error_descriptions='N/A'):
-    fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
-    status_sw_tbl.set(logical_port_name, fvs)
-
-def get_cmis_state_from_state_db(lport, status_sw_tbl):
-    found, cmis_state = status_sw_tbl.hget(lport, 'cmis_state')
-    return cmis_state if found else CMIS_STATE_UNKNOWN
 
 # Delete port from SFP status table
 
@@ -789,7 +608,7 @@ class CmisManagerTask(threading.Thread):
         if lead_logical_port is None:
             return False
         return (
-            get_cmis_state_from_state_db(
+            common.get_cmis_state_from_state_db(
                 lead_logical_port,
                 self.xcvr_table_helper.get_status_sw_tbl(
                     self.get_asic_id(lead_logical_port)
@@ -1142,7 +961,7 @@ class CmisManagerTask(threading.Thread):
         return expired_time <= current_time
 
     def task_worker(self):
-        is_fast_reboot = is_fast_reboot_enabled()
+        is_fast_reboot = common.is_fast_reboot_enabled()
 
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
@@ -1160,7 +979,7 @@ class CmisManagerTask(threading.Thread):
                 if lport not in self.port_dict:
                     continue
 
-                state = get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
+                state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
                 if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
                     if state != CMIS_STATE_READY:
                         self.port_dict[lport]['appl'] = 0
@@ -1224,7 +1043,7 @@ class CmisManagerTask(threading.Thread):
                     continue
                 except Exception as e:
                     self.log_error("{}: Exception in xcvr api: {}".format(lport, e))
-                    log_exception_traceback()
+                    common.log_exception_traceback()
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                     continue
 
@@ -1257,7 +1076,7 @@ class CmisManagerTask(threading.Thread):
                 try:
                     # CMIS state transitions
                     if state == CMIS_STATE_INSERTED:
-                        self.port_dict[lport]['appl'] = get_cmis_application_desired(api, host_lane_count, host_speed)
+                        self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, host_speed)
                         if self.port_dict[lport]['appl'] is None:
                             self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
                                             "host_speed {}".format(lport, appl, host_lane_count, host_speed))
@@ -1528,7 +1347,7 @@ class CmisManagerTask(threading.Thread):
 
                 except Exception as e:
                     self.log_error("{}: internal errors due to {}".format(lport, e))
-                    log_exception_traceback()
+                    common.log_exception_traceback()
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
         self.log_notice("Stopped")
@@ -1553,8 +1372,8 @@ class CmisManagerTask(threading.Thread):
 
             self.task_worker()
         except Exception as e:
-            helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            log_exception_traceback()
+            helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().name, repr(e)))
+            common.log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
@@ -1672,16 +1491,16 @@ class SfpStateUpdateTask(threading.Thread):
             physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
             if physical_port_list is None:
                 helper_logger.log_error("No physical ports found for logical port '{}' during sfp status table init".format(logical_port_name))
-                update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
+                common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
 
             for physical_port in physical_port_list:
                 if stop_event.is_set():
                     break
 
-                if not _wrapper_get_presence(physical_port):
-                    update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
+                if not common._wrapper_get_presence(physical_port):
+                    common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                 else:
-                    update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
+                    common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
 
     def init(self):
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
@@ -1854,7 +1673,7 @@ class SfpStateUpdateTask(threading.Thread):
                             if value == sfp_status_helper.SFP_STATUS_INSERTED:
                                 helper_logger.log_notice("{}: Got SFP inserted event".format(logical_port))
                                 # A plugin event will clear the error state.
-                                update_port_transceiver_status_table_sw(
+                                common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
                                 helper_logger.log_notice("{}: received plug in and update port sfp status table.".format(logical_port))
                                 rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
@@ -1883,10 +1702,10 @@ class SfpStateUpdateTask(threading.Thread):
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
                                 state_port_table = self.xcvr_table_helper.get_state_port_tbl(asic_index)
                                 state_port_table.set(logical_port, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_DEFAULT_VALUE)])
-                                update_port_transceiver_status_table_sw(
+                                common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                                 helper_logger.log_notice("{}: received plug out and update port sfp status table.".format(logical_port))
-                                del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
+                                common.del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
@@ -1924,12 +1743,12 @@ class SfpStateUpdateTask(threading.Thread):
 
                                     # Add error info to database
                                     # Any existing error will be replaced by the new one.
-                                    update_port_transceiver_status_table_sw(logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), value, '|'.join(error_descriptions))
+                                    common.update_port_transceiver_status_table_sw(logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), value, '|'.join(error_descriptions))
                                     helper_logger.log_notice("{}: Receive error update port sfp status table.".format(logical_port))
                                     # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
                                     # The interface info remains in the DB since it is static.
                                     if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
-                                        del_port_sfp_dom_info_from_db(logical_port,
+                                        common.del_port_sfp_dom_info_from_db(logical_port,
                                                                       self.port_mapping, [
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
@@ -1999,8 +1818,8 @@ class SfpStateUpdateTask(threading.Thread):
         try:
             self.task_worker(self.task_stopping_event, self.sfp_error_event)
         except Exception as e:
-            helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            log_exception_traceback()
+            helper_logger.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().name, repr(e)))
+            common.log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
@@ -2037,7 +1856,7 @@ class SfpStateUpdateTask(threading.Thread):
         # To avoid race condition, remove the entry TRANSCEIVER_DOM_INFO, TRANSCEIVER_STATUS_INFO and TRANSCEIVER_INFO table.
         # The operation to remove entry from TRANSCEIVER_DOM_INFO is duplicate with DomInfoUpdateTask.on_remove_logical_port,
         # but it is necessary because TRANSCEIVER_DOM_INFO is also updated in this thread when a new SFP is inserted.
-        del_port_sfp_dom_info_from_db(port_change_event.port_name,
+        common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping, [
                                       self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
@@ -2109,7 +1928,7 @@ class SfpStateUpdateTask(threading.Thread):
                 read_eeprom = False
 
         # SFP information not in DB
-        if _wrapper_get_presence(port_change_event.port_index) and read_eeprom:
+        if common._wrapper_get_presence(port_change_event.port_index) and read_eeprom:
             transceiver_dict = {}
             status = sfp_status_helper.SFP_STATUS_INSERTED if not status else status
             rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
@@ -2122,7 +1941,7 @@ class SfpStateUpdateTask(threading.Thread):
                 media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
-        update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
+        common.update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
 
     def retry_eeprom_reading(self):
         """Retry EEPROM reading, if retry succeed, remove the logical port from the retry set
@@ -2285,9 +2104,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                     continue
                 pport = pport_list[0]
 
-                if not _wrapper_get_presence(pport):
+                if not common._wrapper_get_presence(pport):
                     self.log_notice(f"Remove stale transceiver info: Transceiver is absent for lport {lport}")
-                    del_port_sfp_dom_info_from_db(lport, port_mapping_data, [intf_tbl])
+                    common.del_port_sfp_dom_info_from_db(lport, port_mapping_data, [intf_tbl])
 
     # Initialize daemon
     def init(self):
@@ -2312,6 +2131,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 self.log_error("Failed to load sfputil: {}".format(str(e)), True)
                 sys.exit(SFPUTIL_LOAD_ERROR)
 
+        # Initialize shared utilities with platform objects
+        common.init_globals(platform_chassis, platform_sfputil)
+
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
@@ -2322,7 +2144,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
-        if is_fast_reboot_enabled():
+        if common.is_fast_reboot_enabled():
             self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             media_settings_parser.load_media_settings()
@@ -2351,7 +2173,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def deinit(self):
         self.log_info("Start daemon deinit...")
 
-        is_warm_fast_reboot = is_syncd_warm_restore_complete() or is_fast_reboot_enabled()
+        is_warm_fast_reboot = is_syncd_warm_restore_complete() or common.is_fast_reboot_enabled()
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
@@ -2367,7 +2189,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             # due to TRANSCEIVER_INFO table deletion during xcvrd shutdown/crash
             intf_tbl = None
 
-            del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
+            common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
                                           intf_tbl,
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
@@ -2390,7 +2212,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                                           ])
 
             if not is_warm_fast_reboot:
-                del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
+                common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
                                           self.xcvr_table_helper.get_status_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_sw_tbl(asic_index),
                                           ])
@@ -2434,7 +2256,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
         for thread in self.threads:
-            self.log_notice("Started thread {}".format(thread.getName()))
+            self.log_notice("Started thread {}".format(thread.name))
 
         self.stop_event.wait()
 
@@ -2447,7 +2269,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 try:
                     thread.join()
                 except Exception as e:
-                    self.log_error("Xcvrd: exception found at child thread {} due to {}".format(thread.getName(), repr(e)))
+                    self.log_error("Xcvrd: exception found at child thread {} due to {}".format(thread.name, repr(e)))
                     generate_sigkill = True
 
         if generate_sigkill is True:
