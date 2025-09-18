@@ -119,7 +119,7 @@ class DomInfoUpdateBase(threading.Thread):
         try:
             self.task_worker()
         except Exception as e:
-            self.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
+            self.log_error("Exception occurred at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
             xcvrd.log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
@@ -488,14 +488,12 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
 
-
 class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     name = 'DomThermalInfoUpdateTask'
 
-    DOM_INFO_UPDATE_PERIOD_SECS = 5
-
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, poll_interval):
         super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
+        self.poll_interval = poll_interval
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
@@ -503,7 +501,7 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
         self.log_notice("Start DOM thermal monitoring loop")
 
         # Set the periodic db update time
-        dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+        dom_info_update_periodic_secs = self.poll_interval
 
         # Poll transceiver temperature as soon as possible
         next_periodic_db_update_time = datetime.datetime.now()
@@ -514,7 +512,7 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
             now = datetime.datetime.now()
             if next_periodic_db_update_time > now:
                # Sleep for 1 second or less depending on the remaining time
-               time.sleep(min(1, (next_periodic_db_update_time - now).total_seconds()))
+               time.sleep(max(0, min(1, (next_periodic_db_update_time - now).total_seconds())))
                continue
 
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
@@ -532,7 +530,7 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
                     continue
 
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-                    if not xcvrd._wrapper_get_presence(physical_port):
+                    if not common._wrapper_get_presence(physical_port):
                         continue
 
                 try:

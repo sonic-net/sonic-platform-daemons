@@ -423,6 +423,7 @@ class TestXcvrdThreadException(object):
         mock_init.return_value = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.enable_sff_mgr = True
+        xcvrd.dom_temperature_poll_interval = 10
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
         xcvrd.run()
