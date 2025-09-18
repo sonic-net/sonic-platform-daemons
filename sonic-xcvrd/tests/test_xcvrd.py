@@ -401,21 +401,25 @@ class TestXcvrdThreadException(object):
 
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.is_alive', MagicMock(return_value = False))
+    @patch('xcvrd.xcvrd.DomThermalInfoUpdateTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.cmis.CmisManagerTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.SffManagerTask.is_alive', MagicMock(return_value=False))
     @patch('xcvrd.cmis.CmisManagerTask.join', MagicMock(side_effect=NotImplementedError))
     @patch('xcvrd.cmis.CmisManagerTask.start', MagicMock())
     @patch('xcvrd.xcvrd.SffManagerTask.start', MagicMock())
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start', MagicMock())
+    @patch('xcvrd.xcvrd.DomThermalInfoUpdateTask.start', MagicMock())
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.start', MagicMock())
     @patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock())
     @patch('os.kill')
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.join')
+    @patch('xcvrd.xcvrd.DomThermalInfoUpdateTask.join')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.join')
     @patch('xcvrd.xcvrd.SffManagerTask.join')
     def test_DaemonXcvrd_run_with_exception(self, mock_task_join_sff, mock_task_join_sfp,
-                                            mock_task_join_dom, mock_init, mock_os_kill):
+                                            mock_task_join_dom, mock_task_join_dom_thermal,
+                                            mock_init, mock_os_kill):
         mock_init.return_value = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.enable_sff_mgr = True
@@ -423,11 +427,12 @@ class TestXcvrdThreadException(object):
         xcvrd.stop_event.wait = MagicMock()
         xcvrd.run()
 
-        assert len(xcvrd.threads) == 4
+        assert len(xcvrd.threads) == 5
         assert mock_init.call_count == 1
         assert mock_task_join_sff.call_count == 1
         assert mock_task_join_sfp.call_count == 1
         assert mock_task_join_dom.call_count == 1
+        assert mock_task_join_dom_thermal.call_count == 1
         assert mock_os_kill.call_count == 1
 
 class TestXcvrdScript(object):
@@ -651,6 +656,64 @@ class TestXcvrdScript(object):
         dom_db_utils.dom_utils.get_transceiver_dom_sensor_real_value = MagicMock(return_value=None)
         dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name, db_cache=db_cache)
         assert dom_tbl.get_size_for_key(logical_port_name) == 27
+
+    def test_post_port_dom_temperature_info_to_db(self):
+        def mock_get_transceiver_dom_temperature(physical_port):
+            return {
+                'temperature': '68.75',
+            }
+
+        logical_port_name = "Ethernet0"
+        port_mapping = PortMapping()
+        port_mapping.get_logical_to_physical = MagicMock(return_value=[0])
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        stop_event = threading.Event()
+        mock_sfp_obj_dict = {0 : MagicMock()}
+
+        dom_db_utils = DOMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, helper_logger)
+        dom_db_utils.dom_utils = MagicMock()
+        dom_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=False)
+        dom_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
+        dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_TEMPERATURE_TABLE)
+        dom_db_utils.xcvr_table_helper.get_dom_temperature_tbl = MagicMock(return_value=dom_tbl)
+        dom_db_utils.dom_utils.get_transceiver_dom_temperature = MagicMock(return_value=None)
+        assert dom_tbl.get_size() == 0
+
+        # Ensure table is empty asic_index is None
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+        assert dom_tbl.get_size() == 0
+
+        # Set asic_index to 0
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+
+        # Ensure table is empty if stop_event is set
+        stop_event.set()
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+        assert dom_tbl.get_size() == 0
+        stop_event.clear()
+
+        # Ensure table is empty if transceiver is not present
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+        assert dom_tbl.get_size() == 0
+        dom_db_utils.return_value = True
+
+        # Ensure table is empty if get_values_func returns None
+        dom_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=True)
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+        assert dom_tbl.get_size() == 0
+
+        # Ensure table is populated if get_values_func returns valid values
+        db_cache = {}
+        dom_db_utils.dom_utils.get_transceiver_dom_temperature = MagicMock(side_effect=mock_get_transceiver_dom_temperature)
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name, db_cache=db_cache)
+        assert dom_tbl.get_size_for_key(logical_port_name) == 2
+
+        # Ensure db_cache is populated correctly
+        assert db_cache.get(0) is not None
+        dom_db_utils.dom_utils.get_transceiver_dom_temperature = MagicMock(return_value=None)
+        dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name, db_cache=db_cache)
+        assert dom_tbl.get_size_for_key(logical_port_name) == 2
 
     def test_post_port_dom_flags_to_db(self):
         def mock_get_transceiver_dom_flags(physical_port):
@@ -4812,6 +4875,7 @@ class TestXcvrdScript(object):
             status_sw_tbl = MagicMock()
             xcvrd.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=status_sw_tbl)
             xcvrd.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=MagicMock)
+            xcvrd.xcvr_table_helper.get_dom_temperature_tbl = MagicMock(return_value=MagicMock)
             xcvrd.xcvr_table_helper.get_dom_flag_tbl = MagicMock()
             xcvrd.xcvr_table_helper.get_dom_flag_change_count_tbl = MagicMock()
             xcvrd.xcvr_table_helper.get_dom_flag_set_time_tbl = MagicMock()
@@ -4859,6 +4923,7 @@ class TestXcvrdScript(object):
             status_sw_tbl = MagicMock()
             xcvrdaemon.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=status_sw_tbl)
             xcvrdaemon.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=MagicMock)
+            xcvrdaemon.xcvr_table_helper.get_dom_temperature_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=MagicMock)
             xcvrdaemon.xcvr_table_helper.get_dom_flag_tbl = MagicMock()
             xcvrdaemon.xcvr_table_helper.get_dom_flag_change_count_tbl = MagicMock()

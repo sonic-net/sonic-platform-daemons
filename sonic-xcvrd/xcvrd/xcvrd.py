@@ -28,7 +28,7 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom.dom_mgr import DomInfoUpdateTask
+    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
@@ -577,6 +577,7 @@ class SfpStateUpdateTask(threading.Thread):
                                 common.del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -620,6 +621,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         common.del_port_sfp_dom_info_from_db(logical_port,
                                                                       self.port_mapping, [
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -729,6 +731,7 @@ class SfpStateUpdateTask(threading.Thread):
                                       self.port_mapping, [
                                       self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_temperature_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
@@ -1086,6 +1089,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
                                           intf_tbl,
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -1142,6 +1146,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         dom_info_update.start()
         self.threads.append(dom_info_update)
 
+        # Start the dom thermal sensor info update thread
+        dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event)
+        dom_thermal_info_update.start()
+        self.threads.append(dom_thermal_info_update)
+
         # Start the sfp state info update thread
         sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
         sfp_state_update.start()
@@ -1183,6 +1192,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Stop the dom sensor info update thread
         if dom_info_update.is_alive():
             dom_info_update.join()
+
+        # Stop the dom thermal sensor info update thread
+        if dom_thermal_info_update.is_alive():
+            dom_thermal_info_update.join()
 
         # Stop the sfp state info update thread
         if sfp_state_update.is_alive():
