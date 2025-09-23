@@ -4674,6 +4674,57 @@ class TestXcvrdScript(object):
     def test_load_media_settings_file_from_hwsku_folder(self):
         assert media_settings_parser.load_media_settings() != {}
 
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_get_is_lpo_exception(self, mock_chassis):
+        mock_sfp = MagicMock()
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
+        result = media_settings_parser.get_is_lpo(0)
+        assert result == False
+
+    def test_media_settings_parser_get_media_type(self):
+        physical_port = 0
+
+        # For the case of extended media type matching enabled for LPO:
+        media_settings_g_dict = {
+            ENABLE_EXTENDED_MEDIA_TYPE_MATCHING: [EXTENDED_MEDIA_OPTICAL_LPO]
+        }
+
+        # Test LPO module
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
+            with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=False):
+                with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_lpo', return_value=True):
+                    assert media_settings_parser.get_media_type(physical_port) == EXTENDED_MEDIA_OPTICAL_LPO
+
+        # Test non-LPO optical module
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
+            with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=False):
+                with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_lpo', return_value=False):
+                    assert media_settings_parser.get_media_type(physical_port) == MEDIA_OPTICAL
+
+        # Test copper module
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
+            with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=True):
+                media_type = media_settings_parser.get_media_type(physical_port)
+                assert media_type == MEDIA_COPPER
+
+        # For the case of extended media type matching not enabled for LPO:
+        media_settings_g_dict = {ENABLE_EXTENDED_MEDIA_TYPE_MATCHING: []}
+
+        # Test LPO module in the case of extended media type matching not enabled for LPO
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
+            with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=False):
+                with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_lpo', return_value=True):
+                    assert media_settings_parser.get_media_type(physical_port) == MEDIA_OPTICAL
+
+        # For the case of extended media type matching not enabled at all:
+        media_settings_g_dict = {}
+
+        # Test LPO module in the case of extended media type matching not enabled at all
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
+            with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=False):
+                with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_lpo', return_value=True):
+                    assert media_settings_parser.get_media_type(physical_port) == MEDIA_OPTICAL
+
     @pytest.mark.parametrize("lport, freq, grid, expected", [
          (1, 193100, 75, True),
          (1, 193100, 100, False),

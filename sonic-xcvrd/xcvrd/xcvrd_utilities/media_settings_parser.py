@@ -24,6 +24,18 @@ MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
+
+# Standard media types:
+MEDIA_COPPER = 'COPPER'
+MEDIA_OPTICAL = 'OPTICAL'
+# Extended media types:
+EXTENDED_MEDIA_OPTICAL_LPO = MEDIA_OPTICAL + '_LPO'
+
+# This is a top-level key in media_settings.json that can be added to enable
+# matching extended media types in addition to COPPER and OPTICAL. Its value is
+# a list of extended media types to match.
+ENABLE_EXTENDED_MEDIA_TYPE_MATCHING = 'ENABLE_EXTENDED_MEDIA_TYPE_MATCHING'
+
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
@@ -61,6 +73,57 @@ def get_is_copper(physical_port):
         except (NotImplementedError, AttributeError):
             helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
     return True
+
+
+def get_is_lpo(physical_port):
+    """
+    Check if the transceiver is Linear Pluggable Optics (LPO)
+
+    Args:
+        physical_port: physical port number
+    Returns:
+        True if the transceiver is LPO, False otherwise
+    """
+    if xcvrd.platform_chassis:
+        try:
+            return xcvrd.platform_chassis.get_sfp(physical_port).get_xcvr_api().is_lpo()
+        except (NotImplementedError, AttributeError):
+            helper_logger.log_debug(f"No is_lpo() defined for xcvr api on physical port {physical_port}, assuming not LPO")
+    return False
+
+
+def is_extended_media_type_enabled(media_type):
+    """
+    Helper function to check if an extended media type is enabled in media_settings.json
+
+    Args:
+        media_type: The extended media type string to check
+
+    Returns:
+        True if the extended media type is enabled, False otherwise
+    """
+    return media_type in g_dict.get(ENABLE_EXTENDED_MEDIA_TYPE_MATCHING, [])
+
+
+def get_media_type(physical_port):
+    """
+    Get the media type of the transceiver
+
+    Args:
+        physical_port: physical port number
+
+    Returns:
+        'COPPER', 'OPTICAL' or extended media types included in
+        ENABLE_EXTENDED_MEDIA_TYPE_MATCHING of media_settings.json
+    """
+    if get_is_copper(physical_port):
+        return MEDIA_COPPER
+
+    # For optical transceivers:
+    if is_extended_media_type_enabled(EXTENDED_MEDIA_OPTICAL_LPO) and get_is_lpo(physical_port):
+        return EXTENDED_MEDIA_OPTICAL_LPO
+    return MEDIA_OPTICAL
+
 
 def get_lane_speed_key(physical_port, port_speed, lane_count):
     """
@@ -148,9 +211,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         media_key += '-' + '*'
 
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
-    medium = "COPPER" if get_is_copper(physical_port) else "OPTICAL"
     speed = int(int(int(port_speed) /lane_count)/1000)
-    medium_lane_speed_key = medium + str(speed)
+    medium_lane_speed_key = get_media_type(physical_port) + str(speed)
     # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
