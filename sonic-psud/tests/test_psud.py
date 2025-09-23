@@ -38,19 +38,19 @@ NOT_AVAILABLE = 'N/A'
 @mock.patch('psud.platform_psuutil', mock.MagicMock())
 def test_wrapper_get_num_psus():
     # Test new platform API is available and implemented
-    psud._wrapper_get_num_psus()
+    psud._wrapper_get_num_psus(None)
     assert psud.platform_chassis.get_num_psus.call_count == 1
     assert psud.platform_psuutil.get_num_psus.call_count == 0
 
     # Test new platform API is available but not implemented
     psud.platform_chassis.get_num_psus.side_effect = NotImplementedError
-    psud._wrapper_get_num_psus()
+    psud._wrapper_get_num_psus(None)
     assert psud.platform_chassis.get_num_psus.call_count == 2
     assert psud.platform_psuutil.get_num_psus.call_count == 1
 
     # Test new platform API not available
     psud.platform_chassis = None
-    psud._wrapper_get_num_psus()
+    psud._wrapper_get_num_psus(None)
     assert psud.platform_psuutil.get_num_psus.call_count == 2
 
 
@@ -58,19 +58,19 @@ def test_wrapper_get_num_psus():
 @mock.patch('psud.platform_psuutil', mock.MagicMock())
 def test_wrapper_get_psu_presence():
     # Test new platform API is available
-    psud._wrapper_get_psu_presence(1)
+    psud._wrapper_get_psu_presence(None, 1)
     assert psud.platform_chassis.get_psu(0).get_presence.call_count == 1
     assert psud.platform_psuutil.get_psu_presence.call_count == 0
 
     # Test new platform API is available but not implemented
     psud.platform_chassis.get_psu(0).get_presence.side_effect = NotImplementedError
-    psud._wrapper_get_psu_presence(1)
+    psud._wrapper_get_psu_presence(None, 1)
     assert psud.platform_chassis.get_psu(0).get_presence.call_count == 2
     assert psud.platform_psuutil.get_psu_presence.call_count == 1
 
     # Test new platform API not available
     psud.platform_chassis = None
-    psud._wrapper_get_psu_presence(1)
+    psud._wrapper_get_psu_presence(None, 1)
     assert psud.platform_psuutil.get_psu_presence.call_count == 2
     psud.platform_psuutil.get_psu_presence.assert_called_with(1)
 
@@ -79,19 +79,19 @@ def test_wrapper_get_psu_presence():
 @mock.patch('psud.platform_psuutil', mock.MagicMock())
 def test_wrapper_get_psu_status():
     # Test new platform API is available
-    psud._wrapper_get_psu_status(1)
+    psud._wrapper_get_psu_status(None, 1)
     assert psud.platform_chassis.get_psu(0).get_powergood_status.call_count == 1
     assert psud.platform_psuutil.get_psu_status.call_count == 0
 
     # Test new platform API is available but not implemented
     psud.platform_chassis.get_psu(0).get_powergood_status.side_effect = NotImplementedError
-    psud._wrapper_get_psu_status(1)
+    psud._wrapper_get_psu_status(None, 1)
     assert psud.platform_chassis.get_psu(0).get_powergood_status.call_count == 2
     assert psud.platform_psuutil.get_psu_status.call_count == 1
 
     # Test new platform API not available
     psud.platform_chassis = None
-    psud._wrapper_get_psu_status(1)
+    psud._wrapper_get_psu_status(None, 1)
     assert psud.platform_psuutil.get_psu_status.call_count == 2
     psud.platform_psuutil.get_psu_status.assert_called_with(1)
 
