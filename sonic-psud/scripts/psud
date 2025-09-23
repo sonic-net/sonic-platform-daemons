@@ -453,7 +453,7 @@ class DaemonPsud(daemon_base.DaemonBase):
     def __del__(self):
         # Delete all the information from DB and then exit
         for psu_index in range(1, self.num_psus + 1):
-            self.psu_tbl._del(get_psu_key(self, psu_index))
+            self.psu_tbl._del(get_psu_key(psu_index))
 
         self.chassis_tbl._del(CHASSIS_INFO_KEY)
         self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
@@ -510,7 +510,7 @@ class DaemonPsud(daemon_base.DaemonBase):
                 self.log_warning("Failed to update PSU data - {}".format(e))
 
     def _update_single_psu_data(self, index, psu):
-        name = get_psu_key(self, index)
+        name = get_psu_key(index)
         presence = _wrapper_get_psu_presence(self, index)
         power_good = False
         voltage = NOT_AVAILABLE
@@ -670,7 +670,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             [('position_in_parent', str(position)),
              ('parent_name', CHASSIS_INFO_KEY),
              ])
-        self.phy_entity_tbl.set(get_psu_key(self, psu_index), fvs)
+        self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
 
     def _update_psu_fan_data(self, psu, psu_index):
         """
@@ -678,7 +678,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         :param psu_index:
         :return:
         """
-        psu_name = get_psu_key(self, psu_index)
+        psu_name = get_psu_key(psu_index)
         presence = _wrapper_get_psu_presence(self, psu_index)
         fan_list = psu.get_all_fans()
         for index, fan in enumerate(fan_list):
@@ -710,11 +710,11 @@ class DaemonPsud(daemon_base.DaemonBase):
             fvs = swsscommon.FieldValuePairs([
                 ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
             ])
-            self.psu_tbl.set(get_psu_key(self, index), fvs)
+            self.psu_tbl.set(get_psu_key(index), fvs)
             self._update_psu_fan_led_status(psu_status.psu, index)
 
     def _update_psu_fan_led_status(self, psu, psu_index):
-        psu_name = get_psu_key(self, psu_index)
+        psu_name = get_psu_key(psu_index)
         fan_list = psu.get_all_fans()
         for index, fan in enumerate(fan_list):
             fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
