@@ -478,8 +478,25 @@ def test_dpu_state_manager_update_required_logic():
 
     # Test case 1: update_required should be True when there are changes in non-DPU_STATE tables
     with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
-        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', 
-            return_value=('PORT_TABLE_KEY', 'SET', None)):
+        # Create mock selectables
+        mock_selectable_app_db = MagicMock()
+        mock_selectable_app_db.getDbConnector.return_value.getDbName.return_value = 'APPL_DB'
+        mock_selectable_app_db.pop.return_value = ('PORT_TABLE_KEY', 'SET', None)
+        
+        mock_selectable_state_db = MagicMock()
+        mock_selectable_state_db.getDbConnector.return_value.getDbName.return_value = 'STATE_DB'
+        mock_selectable_state_db.pop.return_value = None
+        
+        mock_selectable_chassis_state_db = MagicMock()
+        mock_selectable_chassis_state_db.getDbConnector.return_value.getDbName.return_value = 'CHASSIS_STATE_DB'
+        mock_selectable_chassis_state_db.pop.return_value = None
+        
+        # Mock the SubscriberStateTable constructor to return our mock selectables
+        with mock.patch.object(swsscommon, 'SubscriberStateTable', side_effect=[
+            mock_selectable_app_db,  # PORT_TABLE
+            mock_selectable_state_db,  # SYSTEM_READY
+            mock_selectable_chassis_state_db  # DPU_STATE
+        ]):
             with mock.patch.object(swsscommon.Select, 'select',
                 side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
 
@@ -490,9 +507,6 @@ def test_dpu_state_manager_update_required_logic():
                 dpu_state_mng.current_dp_state = 'up'
                 dpu_state_mng.current_cp_state = 'up'
                 
-                # Mock the selectable to return a non-CHASSIS_STATE_DB table
-                mock_selectable = MagicMock()
-                mock_selectable.getDbConnector.return_value.getDbName.return_value = 'APPL_DB'
                 dpu_state_mng.task_worker()
 
                 # Verify state was updated since update_required should be True
@@ -505,21 +519,25 @@ def test_dpu_state_manager_update_required_logic():
     # Test case 2: update_required should be True when pop returns multiple values
     # and one key returns STATE_DB and another CHASSIS_STATE_DB
     with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
-        # Mock pop to return multiple values (simulating multiple changes)
-        def mock_pop_multiple():
-            return ('SYSTEM_READY_KEY', 'SET', (('Status', 'UP'), ('Other', 'Value')))
+        # Create mock selectables with different database names
+        mock_selectable_app_db = MagicMock()
+        mock_selectable_app_db.getDbConnector.return_value.getDbName.return_value = 'APPL_DB'
+        mock_selectable_app_db.pop.return_value = None
         
-        # Mock selectables with different database names
         mock_selectable_state_db = MagicMock()
         mock_selectable_state_db.getDbConnector.return_value.getDbName.return_value = 'STATE_DB'
+        mock_selectable_state_db.pop.return_value = ('SYSTEM_READY_KEY', 'SET', (('Status', 'UP'), ('Other', 'Value')))
         
         mock_selectable_chassis_state_db = MagicMock()
         mock_selectable_chassis_state_db.getDbConnector.return_value.getDbName.return_value = 'CHASSIS_STATE_DB'
+        mock_selectable_chassis_state_db.pop.return_value = None
         
-        # Mock the selectables list to include both types
-        mock_selectables = [mock_selectable_state_db, mock_selectable_chassis_state_db]
-        
-        with mock.patch.object(swsscommon.SubscriberStateTable, 'pop', side_effect=mock_pop_multiple):
+        # Mock the SubscriberStateTable constructor to return our mock selectables
+        with mock.patch.object(swsscommon, 'SubscriberStateTable', side_effect=[
+            mock_selectable_app_db,  # PORT_TABLE
+            mock_selectable_state_db,  # SYSTEM_READY
+            mock_selectable_chassis_state_db  # DPU_STATE
+        ]):
             with mock.patch.object(swsscommon.Select, 'select',
                 side_effect=[(swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
 
@@ -530,9 +548,7 @@ def test_dpu_state_manager_update_required_logic():
                 dpu_state_mng.current_dp_state = 'up'
                 dpu_state_mng.current_cp_state = 'up'
                 
-                # Mock the selectables to return different database names
-                with mock.patch.object(dpu_state_mng, 'selectable', mock_selectables):
-                    dpu_state_mng.task_worker()
+                dpu_state_mng.task_worker()
 
                 # Verify state was updated since update_required should be True for multiple values
                 # even with mixed STATE_DB and CHASSIS_STATE_DB
