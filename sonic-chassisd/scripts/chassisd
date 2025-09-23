@@ -1555,6 +1555,10 @@ class DpuStateManagerTask(ProcessTaskBase):
                     if result is None:
                         continue
                     key, op, fvp = result  # Changed from _ to fvp to match what we use below
+                    if key != '' and s.getDbConnector().getDbName() != 'CHASSIS_STATE_DB':
+                        # If there is any change in the non-DPU_STATE table, we need to update the state
+                        update_required = True
+                        break
                     # Check if this is the DPU_STATE table
                     if s.getDbConnector().getDbName() == 'CHASSIS_STATE_DB':
                         # Don't update if this is a change for another DPU
