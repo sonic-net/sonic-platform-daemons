@@ -570,6 +570,16 @@ def test_daemon_run_with_updater_stop_signal():
     daemon.voltage_updater.update = mock.MagicMock(return_value=False)
     daemon.current_updater.update = mock.MagicMock(return_value=True)
     ret = daemon.run()
+    assert ret is False
+
+    daemon.voltage_updater.update = mock.MagicMock(return_value=True)
+    daemon.current_updater.update = mock.MagicMock(return_value=False)
+    ret = daemon.run()
+    assert ret is False
+
+    daemon.voltage_updater.update = mock.MagicMock(return_value=True)
+    daemon.current_updater.update = mock.MagicMock(return_value=True)
+    ret = daemon.run()
     assert ret is True
 
 def test_try_get():
