@@ -1972,6 +1972,11 @@ class SfpStateUpdateTask(threading.Thread):
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
 
+    def update_log_level(self):
+        """Call the logger's update log level method.
+        """
+        return self.logger.update_log_level()
+
 
 #
 # Daemon =======================================================================
@@ -1989,11 +1994,22 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.threads = []
         self.sfp_obj_dict = {}
 
+    def update_loggers_log_level(self):
+        """
+        Update log level for all loggers
+        """
+        helper_logger.update_log_level()
+        self.logger_instance.update_log_level()
+        for thread in self.threads:
+            update_log_level = getattr(thread, 'update_log_level', None)
+            if update_log_level and callable(update_log_level):
+                thread.update_log_level()
+
     # Signal handler
     def signal_handler(self, sig, frame):
         if sig == signal.SIGHUP:
             self.log_notice("Caught SIGHUP...")
-            self.update_log_level()
+            self.update_loggers_log_level()
         elif sig == signal.SIGINT:
             self.log_info("Caught SIGINT - exiting...")
             self.stop_event.set()
