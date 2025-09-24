@@ -428,6 +428,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             platform_chassis = sonic_platform.platform.Platform().get_chassis()
         except Exception as e:
             self.log_warning("Failed to load chassis due to {}".format(repr(e)))
+            platform_chassis = None
 
         # Load platform-specific psuutil class
         if platform_chassis is None:
@@ -435,8 +436,8 @@ class DaemonPsud(daemon_base.DaemonBase):
                 platform_psuutil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
                 self.log_warning("Failed to load psuutil: %s" % (str(e)), True)
+                platform_psuutil = None
                 # Don't expect the PSUD to exit just because psuutil is not available
-                
 
         # Connect to STATE_DB and create psu/chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
