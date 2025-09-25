@@ -833,31 +833,62 @@ def test_daemon_init_with_default_thermal_monitor_config():
         platform_env_conf_file=filepath
     )
     daemon_thermalctld.deinit()  # Deinit becuase the test will hang if we assert
-    assert (
-        daemon_thermalctld.thermal_monitor.initial_interval
-        == thermalctld.ThermalMonitor.INITIAL_INTERVAL
-    )
-    assert (
-        daemon_thermalctld.thermal_monitor.update_interval
-        == thermalctld.ThermalMonitor.UPDATE_INTERVAL
-    )
-    assert (
-        daemon_thermalctld.thermal_monitor.update_elapsed_threshold
-        == thermalctld.ThermalMonitor.UPDATE_ELAPSED_THRESHOLD
-    )
+    assert daemon_thermalctld.thermal_monitor.initial_interval == 5
+    assert daemon_thermalctld.thermal_monitor.update_interval == 60
+    assert daemon_thermalctld.thermal_monitor.update_elapsed_threshold == 30
 
 
 def test_daemon_init_with_custom_thermal_monitor_config():
-    filepath = _create_platform_env_conf_file("""\
+    filepath = _create_platform_env_conf_file(
+        """\
 THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL=5
 THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL=10
 THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD=15
-""")
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(platform_env_conf_file=filepath)
-    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
+"""
+    )
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(
+        platform_env_conf_file=filepath
+    )
+    daemon_thermalctld.deinit()  # Deinit becuase the test will hang if we assert
     assert daemon_thermalctld.thermal_monitor.initial_interval == 5
     assert daemon_thermalctld.thermal_monitor.update_interval == 10
     assert daemon_thermalctld.thermal_monitor.update_elapsed_threshold == 15
+
+
+def test_daemon_init_with_invalid_thermal_monitor_config():
+    thermalctld.ThermalControlDaemon.log_error = mock.MagicMock()
+
+    filepath = _create_platform_env_conf_file(
+        """\
+THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL=non-int-value
+THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL=non-int-value
+THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD=non-int-value
+"""
+    )
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(
+        platform_env_conf_file=filepath
+    )
+    daemon_thermalctld.deinit()  # Deinit becuase the test will hang if we assert
+    assert any(
+        f"Failed to load THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL from {filepath}"
+        in call_args[0][0]
+        for call_args in thermalctld.ThermalControlDaemon.log_error.call_args_list
+    ), thermalctld.ThermalControlDaemon.log_error.call_args_list
+    assert any(
+        f"Failed to load THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL from {filepath}"
+        in call_args[0][0]
+        for call_args in thermalctld.ThermalControlDaemon.log_error.call_args_list
+    ), thermalctld.ThermalControlDaemon.log_error.call_args_list
+    assert any(
+        f"Failed to load THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD from {filepath}"
+        in call_args[0][0]
+        for call_args in thermalctld.ThermalControlDaemon.log_error.call_args_list
+    ), thermalctld.ThermalControlDaemon.log_error.call_args_list
+
+    # Verify default values are used
+    assert daemon_thermalctld.thermal_monitor.initial_interval == 5
+    assert daemon_thermalctld.thermal_monitor.update_interval == 60
+    assert daemon_thermalctld.thermal_monitor.update_elapsed_threshold == 30
 
 
 def test_try_get():

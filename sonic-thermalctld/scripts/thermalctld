@@ -843,12 +843,15 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
                     k, v = line.split('=', 1)
                     k = k.strip()
                     v = v.strip()
-                    if k == 'THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL':
-                        thermal_monitor_extra_args['initial_interval'] = int(v)
-                    elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL':
-                        thermal_monitor_extra_args['update_interval'] = int(v)
-                    elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD':
-                        thermal_monitor_extra_args['update_elapsed_threshold'] = int(v)
+                    try:
+                        if k == 'THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL':
+                            thermal_monitor_extra_args['initial_interval'] = int(v)
+                        elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL':
+                            thermal_monitor_extra_args['update_interval'] = int(v)
+                        elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD':
+                            thermal_monitor_extra_args['update_elapsed_threshold'] = int(v)
+                    except ValueError as e:
+                        self.log_error(f'Failed to load {k} from {platform_env_conf_file}, falling back to default, err: {e}')
         self.thermal_monitor = ThermalMonitor(self.chassis, **thermal_monitor_extra_args)
         self.thermal_monitor.task_run()
 
