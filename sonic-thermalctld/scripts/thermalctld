@@ -6,6 +6,7 @@
 """
 
 from enum import Enum, auto
+import os
 import signal
 import sys
 import threading
@@ -30,6 +31,8 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
+
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
@@ -742,23 +745,27 @@ class TemperatureUpdater(logger.Logger):
 
 
 class ThermalMonitor(ProcessTaskBase):
-    # Initial update interval
-    INITIAL_INTERVAL = 5
-
-    # Update interval value
-    UPDATE_INTERVAL = 60
-
-    # Update elapse threshold. If update used time is larger than the value, generate a warning log.
-    UPDATE_ELAPSED_THRESHOLD = 30
-
-    def __init__(self, chassis):
+    def __init__(
+        self,
+        chassis,
+        initial_interval=5,
+        update_interval=60,
+        update_elapsed_threshold=30,
+    ):
         """
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
         """
         super(ThermalMonitor, self).__init__()
 
-        self.wait_time = self.INITIAL_INTERVAL
+        # Initial update interval
+        self.initial_interval = initial_interval
+        # Update interval value
+        self.update_interval = update_interval
+        # Update elapse threshold. If update used time is larger than the value, generate a warning log.
+        self.update_elapsed_threshold = update_elapsed_threshold
+
+        self.wait_time = self.initial_interval
 
         # TODO: Refactor to eliminate the need for this Logger instance
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
@@ -774,12 +781,12 @@ class ThermalMonitor(ProcessTaskBase):
         self.fan_updater.update()
         self.temperature_updater.update()
         elapsed = time.time() - begin
-        if elapsed < self.UPDATE_INTERVAL:
-            self.wait_time = self.UPDATE_INTERVAL - elapsed
+        if elapsed < self.update_interval:
+            self.wait_time = self.update_interval - elapsed
         else:
-            self.wait_time = self.INITIAL_INTERVAL
+            self.wait_time = self.initial_interval
 
-        if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
+        if elapsed > self.update_elapsed_threshold:
             self.logger.log_warning('Update fan and temperature status took {} seconds, '
                                     'there might be performance risk'.format(elapsed))
 
@@ -808,9 +815,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
-    def __init__(self):
+    def __init__(self, platform_env_conf_file=PLATFORM_ENV_CONF_FILE):
         """
         Initializer of ThermalControlDaemon
+        :param platform_env_conf_file: Filepath to platform env config.
+                                       Used for dependency injection in unit tests.
         """
         super(ThermalControlDaemon, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -823,7 +832,27 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.chassis = sonic_platform.platform.Platform().get_chassis()
 
-        self.thermal_monitor = ThermalMonitor(self.chassis)
+        # Replace ThermalMonitor timing-related config with values
+        # from platform_env.conf if defined.
+        thermal_monitor_extra_args = {}
+        if os.path.isfile(platform_env_conf_file):
+            with open(platform_env_conf_file, 'r') as file:
+                for line in file:
+                    if not line or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    k = k.strip()
+                    v = v.strip()
+                    try:
+                        if k == 'THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL':
+                            thermal_monitor_extra_args['initial_interval'] = int(v)
+                        elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL':
+                            thermal_monitor_extra_args['update_interval'] = int(v)
+                        elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD':
+                            thermal_monitor_extra_args['update_elapsed_threshold'] = int(v)
+                    except ValueError as e:
+                        self.log_error(f'Failed to load {k} from {platform_env_conf_file}, falling back to default, err: {e}')
+        self.thermal_monitor = ThermalMonitor(self.chassis, **thermal_monitor_extra_args)
         self.thermal_monitor.task_run()
 
         self.thermal_manager = None
