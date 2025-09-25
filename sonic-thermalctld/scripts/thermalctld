@@ -6,7 +6,7 @@
 """
 
 from enum import Enum, auto
-import argparse
+import os
 import signal
 import sys
 import threading
@@ -31,6 +31,8 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
+
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
@@ -743,8 +745,13 @@ class TemperatureUpdater(logger.Logger):
 
 
 class ThermalMonitor(ProcessTaskBase):
-
-    def __init__(self, chassis, initial_interval, update_interval, update_elapsed_threshold):
+    def __init__(
+        self,
+        chassis,
+        initial_interval=5,
+        update_interval=60,
+        update_elapsed_threshold=30,
+    ):
         """
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
@@ -755,7 +762,7 @@ class ThermalMonitor(ProcessTaskBase):
         self.initial_interval = initial_interval
         # Update interval value
         self.update_interval = update_interval
-        # Update elapse threshold. If update used time is larger than the value, generate a warning log
+        # Update elapse threshold. If update used time is larger than the value, generate a warning log.
         self.update_elapsed_threshold = update_elapsed_threshold
 
         self.wait_time = self.initial_interval
@@ -808,10 +815,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
-    def __init__(self, thermal_monitor_initial_interval, thermal_monitor_update_interval,
-                 thermal_monitor_update_elapsed_threshold):
+    def __init__(self, platform_env_conf_file=PLATFORM_ENV_CONF_FILE):
         """
         Initializer of ThermalControlDaemon
+        :param platform_env_conf_file: Filepath to platform env config.
+                                       Used for dependency injection in unit tests.
         """
         super(ThermalControlDaemon, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -824,15 +832,24 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.chassis = sonic_platform.platform.Platform().get_chassis()
 
-        self.thermal_monitor_initial_interval = thermal_monitor_initial_interval
-        self.thermal_monitor_update_interval = thermal_monitor_update_interval
-        self.thermal_monitor_update_elapsed_threshold = thermal_monitor_update_elapsed_threshold
-        self.thermal_monitor = ThermalMonitor(
-            self.chassis,
-            self.thermal_monitor_initial_interval,
-            self.thermal_monitor_update_interval,
-            self.thermal_monitor_update_elapsed_threshold
-        )
+        # Replace ThermalMonitor timing-related config with values
+        # from platform_env.conf if defined.
+        thermal_monitor_extra_args = {}
+        if os.path.isfile(platform_env_conf_file):
+            with open(platform_env_conf_file, 'r') as file:
+                for line in file:
+                    if not line or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k == 'THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL':
+                        thermal_monitor_extra_args['initial_interval'] = int(v)
+                    elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL':
+                        thermal_monitor_extra_args['update_interval'] = int(v)
+                    elif k == 'THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD':
+                        thermal_monitor_extra_args['update_elapsed_threshold'] = int(v)
+        self.thermal_monitor = ThermalMonitor(self.chassis, **thermal_monitor_extra_args)
         self.thermal_monitor.task_run()
 
         self.thermal_manager = None
@@ -921,17 +938,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--thermal-monitor-initial-interval', type=int, default=5)
-    parser.add_argument('--thermal-monitor-update-interval', type=int, default=60)
-    parser.add_argument('--thermal-monitor-update-elapsed-threshold', type=int, default=30)
-    args = parser.parse_args()
-
-    thermal_control = ThermalControlDaemon(
-        args.thermal_monitor_initial_interval,
-        args.thermal_monitor_update_interval,
-        args.thermal_monitor_update_elapsed_threshold
-    )
+    thermal_control = ThermalControlDaemon()
 
     thermal_control.log_info("Starting up...")
 

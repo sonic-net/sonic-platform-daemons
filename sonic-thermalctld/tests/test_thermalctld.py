@@ -10,6 +10,7 @@ else:
     import mock
 
 import pytest
+import tempfile
 tests_path = os.path.dirname(os.path.abspath(__file__))
 
 # Add mocked_libs path so that the file under test can load mocked modules from there
@@ -294,13 +295,67 @@ class TestThermalMonitor(object):
     """
     def test_main(self):
         mock_chassis = MockChassis()
-        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis, 5, 60, 30)
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
         thermal_monitor.fan_updater.update = mock.MagicMock()
         thermal_monitor.temperature_updater.update = mock.MagicMock()
 
         thermal_monitor.main()
         assert thermal_monitor.fan_updater.update.call_count == 1
         assert thermal_monitor.temperature_updater.update.call_count == 1
+
+    def test_init_with_default_timing_config(self):
+        mock_chassis = MockChassis()
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
+        assert thermal_monitor.initial_interval == 5
+        assert thermal_monitor.update_interval == 60
+        assert thermal_monitor.update_elapsed_threshold == 30
+
+    def test_init_with_custom_config(self):
+        mock_chassis = MockChassis()
+        thermal_monitor = thermalctld.ThermalMonitor(
+            mock_chassis,
+            initial_interval=5,
+            update_interval=10,
+            update_elapsed_threshold=15,
+        )
+        assert thermal_monitor.initial_interval == 5
+        assert thermal_monitor.update_interval == 10
+        assert thermal_monitor.update_elapsed_threshold == 15
+
+    @mock.patch('thermalctld.time.time')
+    def test_main_with_custom_timing_config(self, mock_time):
+        # Given
+        mock_chassis = MockChassis()
+        thermal_monitor = thermalctld.ThermalMonitor(
+            mock_chassis,
+            initial_interval=5,
+            update_interval=10,
+            update_elapsed_threshold=15,
+        )
+        thermal_monitor.logger.log_warning = mock.MagicMock()
+        # First tick should match initial_interval
+        assert thermal_monitor.wait_time == 5
+
+        # When - mock elapsed time (begin=0, end=7)
+        mock_time.side_effect = [0, 7]
+        thermal_monitor.main()
+        # Then - next tick should be what is left from update_interval: 10 - 7 = 3
+        assert thermal_monitor.wait_time == 3
+
+        # When - mock elapsed time larger than update_interval
+        mock_time.side_effect = [10, 21]
+        thermal_monitor.main()
+        # Then - next tick should become initial_interval
+        assert thermal_monitor.wait_time == 5
+
+        # When - mock elapsed time larger than update_elapsed_threshold
+        mock_time.side_effect = [26, 42]
+        thermal_monitor.main()
+        # Then - a warning should be logged
+        assert thermal_monitor.logger.log_warning.call_count == 1
+        thermal_monitor.logger.log_warning.assert_called_with(
+            'Update fan and temperature status took 16 seconds, there might be performance risk'
+        )
 
 
 def test_insufficient_fan_number():
@@ -680,7 +735,7 @@ def test_updater_thermal_check_min_max():
 
 def test_signal_handler():
     # Test SIGHUP
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -695,7 +750,7 @@ def test_signal_handler():
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
     # Test SIGINT
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -712,7 +767,7 @@ def test_signal_handler():
 
     # Test SIGTERM
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -729,7 +784,7 @@ def test_signal_handler():
 
     # Test an unhandled signal
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -745,19 +800,64 @@ def test_signal_handler():
 
 
 def test_daemon_run():
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=True)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert ret is False
 
-    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+    daemon_thermalctld = thermalctld.ThermalControlDaemon()
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=False)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert ret is True
+
+def _create_platform_env_conf_file(content):
+    """
+    Creates a platform_env.conf, under a temporary directory, with the given content
+    :param content: Content to write to the file
+    :return: Path to the created file
+    """
+    root = tempfile.mkdtemp()
+    filepath = os.path.join(root, 'platform_env.conf')
+    with open(filepath, 'w+') as f:
+        f.write(content)
+    return filepath
+
+
+def test_daemon_init_with_default_thermal_monitor_config():
+    filepath = _create_platform_env_conf_file("")
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(
+        platform_env_conf_file=filepath
+    )
+    daemon_thermalctld.deinit()  # Deinit becuase the test will hang if we assert
+    assert (
+        daemon_thermalctld.thermal_monitor.initial_interval
+        == thermalctld.ThermalMonitor.INITIAL_INTERVAL
+    )
+    assert (
+        daemon_thermalctld.thermal_monitor.update_interval
+        == thermalctld.ThermalMonitor.UPDATE_INTERVAL
+    )
+    assert (
+        daemon_thermalctld.thermal_monitor.update_elapsed_threshold
+        == thermalctld.ThermalMonitor.UPDATE_ELAPSED_THRESHOLD
+    )
+
+
+def test_daemon_init_with_custom_thermal_monitor_config():
+    filepath = _create_platform_env_conf_file("""\
+THERMALCTLD_THERMAL_MONITOR_INITIAL_INTERVAL=5
+THERMALCTLD_THERMAL_MONITOR_UPDATE_INTERVAL=10
+THERMALCTLD_THERMAL_MONITOR_UPDATE_ELAPSED_THRESHOLD=15
+""")
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(platform_env_conf_file=filepath)
+    daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
+    assert daemon_thermalctld.thermal_monitor.initial_interval == 5
+    assert daemon_thermalctld.thermal_monitor.update_interval == 10
+    assert daemon_thermalctld.thermal_monitor.update_elapsed_threshold == 15
 
 
 def test_try_get():
