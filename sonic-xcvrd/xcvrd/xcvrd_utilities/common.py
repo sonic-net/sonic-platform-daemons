@@ -11,13 +11,32 @@ try:
     import traceback
     import threading
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger
+    from sonic_py_common import syslogger, daemon_base
     from . import sfp_status_helper
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
+
+# CMIS States
+CMIS_STATE_UNKNOWN = 'UNKNOWN'
+CMIS_STATE_INSERTED = 'INSERTED'
+CMIS_STATE_DP_PRE_INIT_CHECK = 'DP_PRE_INIT_CHECK'
+CMIS_STATE_DP_DEINIT = 'DP_DEINIT'
+CMIS_STATE_AP_CONF = 'AP_CONFIGURED'
+CMIS_STATE_DP_ACTIVATE = 'DP_ACTIVATION'
+CMIS_STATE_DP_INIT = 'DP_INIT'
+CMIS_STATE_DP_TXON = 'DP_TXON'
+CMIS_STATE_READY = 'READY'
+CMIS_STATE_REMOVED = 'REMOVED'
+CMIS_STATE_FAILED = 'FAILED'
+
+CMIS_TERMINAL_STATES = {
+    CMIS_STATE_FAILED,
+    CMIS_STATE_READY,
+    CMIS_STATE_REMOVED
+}
 
 # Global variables that will be injected from the parent module
 platform_chassis = None
@@ -112,6 +131,34 @@ def is_warm_reboot_enabled():
     warmstart.checkWarmStart("xcvrd", "pmon", False)
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
+
+def is_syncd_warm_restore_complete():
+    """
+    This function determins whether syncd's restore count is not 0, which indicates warm-reboot
+    to avoid premature config push by xcvrd that caused port flaps.
+    """
+    state_db = daemon_base.db_connect("STATE_DB")
+    restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
+    system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
+    try:
+        # --- Handle restore_count (could be int, str, or None) ---
+        if restore_count is not None:
+            if isinstance(restore_count, int):
+                if restore_count > 0:
+                    return True
+            elif isinstance(restore_count, str):
+                if restore_count.strip().isdigit() and int(restore_count.strip()) > 0:
+                    return True
+
+        # --- Handle system_enabled (only care about "true"/"false"/None) ---
+        if isinstance(system_enabled, str):
+            if system_enabled.strip().lower() == "true":
+                return True
+
+    except Exception as e:
+        helper_logger.log_warning(f"Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
+        log_exception_traceback()
+    return False
 
 #
 # CMIS Helper Functions ========================================================
