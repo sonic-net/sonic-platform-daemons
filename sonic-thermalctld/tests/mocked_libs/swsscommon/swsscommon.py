@@ -2,7 +2,18 @@
     Mock implementation of swsscommon package for unit testing
 '''
 
-from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
+# Mock classes that are imported by sonic_py_common
+class ConfigDBConnector:
+    def __init__(self):
+        pass
+
+class SonicV2Connector:
+    def __init__(self):
+        pass
+
+class SonicDBConfig:
+    def __init__(self):
+        pass
 
 STATE_DB = ''
 
@@ -27,6 +38,9 @@ class Table:
 
     def get_size(self):
         return (len(self.mock_dict))
+
+    def getKeys(self):
+        return list(self.mock_dict.keys())
 
 
 class FieldValuePairs:

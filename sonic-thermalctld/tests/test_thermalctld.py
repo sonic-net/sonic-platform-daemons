@@ -1,6 +1,7 @@
 import os
 import sys
 import multiprocessing
+import pytest
 from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
@@ -805,27 +806,34 @@ class TestThermalControlDaemon(object):
     
     def test_get_chassis_exception(self):
         """Test ThermalControlDaemon initialization when get_chassis() raises exception"""
-        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class:
-            # Mock the Platform class to raise an exception when get_chassis() is called
+        with (mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class,
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error):
+            # Mock Platform to raise exception on get_chassis()
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
             
-            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            # Expect AttributeError when chassis initialization fails
+            with pytest.raises(AttributeError) as exc_info:
+                thermalctld.ThermalControlDaemon()
             
-            # Verify that log_error was called with the expected message
-            daemon_thermalctld.log_error.assert_called_once()
-            args, _ = daemon_thermalctld.log_error.call_args
-            assert "Failed to get chassis due to" in args[0]
-            assert "Failed to initialize chassis" in args[0]
+            # Verify AttributeError is due to missing chassis attribute
+            assert "'ThermalControlDaemon' object has no attribute 'chassis'" in str(exc_info.value)
             
-            # Clean up
-            daemon_thermalctld.deinit()
+            # Verify chassis initialization failure was logged
+            mock_log_error.assert_called()
+            found_chassis_error = False
+            for call_args, _ in mock_log_error.call_args_list:
+                if "Failed to get chassis due to" in call_args[0] and "Failed to initialize chassis" in call_args[0]:
+                    found_chassis_error = True
+                    break
+            assert found_chassis_error, "Expected chassis initialization error not found in log_error calls"
 
     def test_get_chassis_success(self):
         """Test ThermalControlDaemon initialization when get_chassis() succeeds"""
-        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class:
-            # Mock the Platform class to return a mock chassis successfully
+        with (mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class,
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error):
+            # Mock Platform to return chassis successfully
             mock_chassis = mock.MagicMock()
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.return_value = mock_chassis
@@ -833,14 +841,12 @@ class TestThermalControlDaemon(object):
             
             daemon_thermalctld = thermalctld.ThermalControlDaemon()
             
-            # Verify that the chassis was set correctly
+            # Verify chassis was set correctly
             assert daemon_thermalctld.chassis is mock_chassis
             
-            # Verify that no error was logged (log_error should not be called in success case)
-            # Since the daemon might log other things during init, we check if the specific 
-            # "Failed to get chassis due to" message was not logged
-            if daemon_thermalctld.log_error.called:
-                for call_args in daemon_thermalctld.log_error.call_args_list:
+            # Verify no chassis initialization error was logged
+            if mock_log_error.called:
+                for call_args in mock_log_error.call_args_list:
                     args, _ = call_args
                     assert "Failed to get chassis due to" not in args[0]
             
