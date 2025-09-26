@@ -6,6 +6,13 @@ from xcvrd.xcvrd_utilities.optics_si_parser import *
 from xcvrd.xcvrd_utilities import common
 from xcvrd.dom.dom_mgr import *
 from xcvrd.xcvrd import *
+from xcvrd.cmis import CmisManagerTask
+from xcvrd.xcvrd_utilities.common import (
+    CMIS_STATE_UNKNOWN, CMIS_STATE_INSERTED, CMIS_STATE_DP_PRE_INIT_CHECK,
+    CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_DP_ACTIVATE,
+    CMIS_STATE_DP_INIT, CMIS_STATE_DP_TXON, CMIS_STATE_READY,
+    CMIS_STATE_REMOVED, CMIS_STATE_FAILED, is_syncd_warm_restore_complete
+)
 from xcvrd.sff_mgr import *
 from xcvrd.xcvrd_utilities.xcvr_table_helper import *
 from xcvrd.dom.utilities.db.utils import DBUtils
@@ -249,7 +256,7 @@ class TestXcvrdThreadException(object):
     def test_CmisManagerTask_task_run_with_exception(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         cmis_manager.wait_for_port_config_done = MagicMock(side_effect = NotImplementedError)
         exception_received = None
         trace = None
@@ -263,12 +270,12 @@ class TestXcvrdThreadException(object):
         assert not cmis_manager.is_alive()
         assert(type(exception_received) == NotImplementedError)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
-        assert("sonic-xcvrd/xcvrd/xcvrd.py" in str(trace))
+        assert("sonic-xcvrd/xcvrd/cmis/cmis_manager_task.py" in str(trace))
         assert("wait_for_port_config_done" in str(trace))
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         cmis_manager.wait_for_port_config_done = MagicMock() #no-op
         cmis_manager.update_port_transceiver_status_table_sw_cmis_state = MagicMock(side_effect = NotImplementedError)
         exception_received = None
@@ -283,11 +290,11 @@ class TestXcvrdThreadException(object):
         assert not cmis_manager.is_alive()
         assert(type(exception_received) == NotImplementedError)
         assert("NotImplementedError" in str(trace) and "effect" in str(trace))
-        assert("sonic-xcvrd/xcvrd/xcvrd.py" in str(trace))
+        assert("sonic-xcvrd/xcvrd/cmis/cmis_manager_task.py" in str(trace))
         assert("update_port_transceiver_status_table_sw_cmis_state" in str(trace))
 
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
-    @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', MagicMock(side_effect=KeyError))
     @patch('xcvrd.xcvrd_utilities.common.log_exception_traceback')
@@ -302,7 +309,7 @@ class TestXcvrdThreadException(object):
         mock_platform_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_platform_chassis)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.get_cfg_port_tbl = MagicMock()
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
@@ -394,10 +401,10 @@ class TestXcvrdThreadException(object):
 
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.is_alive', MagicMock(return_value = False))
-    @patch('xcvrd.xcvrd.CmisManagerTask.is_alive', MagicMock(return_value = False))
+    @patch('xcvrd.cmis.CmisManagerTask.is_alive', MagicMock(return_value = False))
     @patch('xcvrd.xcvrd.SffManagerTask.is_alive', MagicMock(return_value=False))
-    @patch('xcvrd.xcvrd.CmisManagerTask.join', MagicMock(side_effect=NotImplementedError))
-    @patch('xcvrd.xcvrd.CmisManagerTask.start', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.join', MagicMock(side_effect=NotImplementedError))
+    @patch('xcvrd.cmis.CmisManagerTask.start', MagicMock())
     @patch('xcvrd.xcvrd.SffManagerTask.start', MagicMock())
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start', MagicMock())
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.start', MagicMock())
@@ -467,6 +474,7 @@ class TestXcvrdScript(object):
         assert not xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_transceiver_firmware_info', MagicMock(return_value={'active_firmware': '2.1.1',
                                                                               'inactive_firmware': '1.2.4'}))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_is_flat_memory', MagicMock(return_value=False))
@@ -480,18 +488,18 @@ class TestXcvrdScript(object):
         mock_cmis_manager = MagicMock()
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
-        
+
         # Test 1: stop_event is set - should not update table
         stop_event.set()
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size() == 0
-        
+
         # Test 2: transceiver not present - should not update table
         stop_event.clear()
         mock_get_presence.return_value = False
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
         assert firmware_info_tbl.get_size() == 0
-        
+
         # Test 3: transceiver present - should update table for both logical ports
         mock_get_presence.return_value = True
         dom_info_update.post_port_sfp_firmware_info_to_db(logical_port_name, port_mapping, firmware_info_tbl, stop_event)
@@ -2029,13 +2037,15 @@ class TestXcvrdScript(object):
             else:
                 assert (port, mock_port_mapping_data, [mock_intf_tbl]) not in mock_del_port_sfp_dom_info_from_db.call_args_list
 
+    @patch('xcvrd.cmis.CmisManagerTask.join')
+    @patch('xcvrd.cmis.CmisManagerTask.start')
     @patch('xcvrd.xcvrd.DaemonXcvrd.init')
     @patch('xcvrd.xcvrd.DaemonXcvrd.deinit')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.start')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.start')
     @patch('xcvrd.xcvrd.DomInfoUpdateTask.join')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.join')
-    def test_DaemonXcvrd_run(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init):
+    def test_DaemonXcvrd_run(self, mock_task_stop1, mock_task_stop2, mock_task_run1, mock_task_run2, mock_deinit, mock_init, mock_cmis_join, mock_cmis_start):
         mock_init.return_value = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.load_feature_flags = MagicMock()
@@ -2337,7 +2347,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_update_port_transceiver_status_table_sw_cmis_state(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
 
@@ -2355,7 +2365,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_handle_port_change_event(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
@@ -2395,7 +2405,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_get_configured_freq(self, mock_table_helper):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.hget = MagicMock(return_value=(True, 193100))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
@@ -2407,7 +2417,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_get_configured_tx_power_from_db(self, mock_table_helper):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.hget = MagicMock(return_value=(True, -10))
         mock_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
@@ -2417,7 +2427,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_CmisManagerTask_task_run_stop(self, mock_chassis):
         mock_object = MagicMock()
         mock_object.get_presence = MagicMock(return_value=True)
@@ -2425,7 +2435,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         cmis_manager.wait_for_port_config_done = MagicMock()
         cmis_manager.start()
         cmis_manager.join()
@@ -2443,7 +2453,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_application = MagicMock(side_effect=get_application)
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         assert task.is_decommission_required(mock_xcvr_api, app_new) == expected
 
     DEFAULT_DP_STATE = {
@@ -2501,7 +2511,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
@@ -2570,7 +2580,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_host_lane_assignment_option = MagicMock(side_effect=get_host_lane_assignment_option_side_effect)
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
 
         appl = common.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
@@ -2750,7 +2760,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         lport = "Ethernet0"
         host_lanes_mask = 0xff
 
@@ -2812,7 +2822,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
 
@@ -2909,7 +2919,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_test_is_timer_expired(self, expired_time, current_time, expected_result):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
 
         # Call the is_timer_expired function
         result = task.is_timer_expired(expired_time, current_time)
@@ -2920,10 +2930,10 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
-    @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
-    @patch('xcvrd.xcvrd.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present', MagicMock(return_value=(True)))
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting', MagicMock())
@@ -3106,7 +3116,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_chassis)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
@@ -3174,7 +3184,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet1', 1, 0, PortChangeEvent.PORT_ADD))
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_chassis)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
@@ -3201,10 +3211,10 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(True)))
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
-    @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
-    @patch('xcvrd.xcvrd.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
     def test_CmisManagerTask_task_worker_fastboot(self, mock_chassis, mock_get_status_sw_tbl):
         mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
@@ -3305,7 +3315,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_chassis)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
@@ -3340,10 +3350,10 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
-    @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
-    @patch('xcvrd.xcvrd.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
     def test_CmisManagerTask_task_worker_host_tx_ready_false_to_true(self, mock_chassis, mock_get_status_sw_tbl):
         mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
@@ -3484,7 +3494,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_chassis)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
@@ -3545,9 +3555,9 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
-    @patch('xcvrd.xcvrd.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
-    @patch('xcvrd.xcvrd.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', MagicMock(return_value=1))
     def test_CmisManagerTask_task_worker_decommission(self, mock_chassis, mock_get_status_sw_tbl):
@@ -3584,7 +3594,7 @@ class TestXcvrdScript(object):
 
         port_mapping = PortMapping()
 
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, mock_chassis)
         task.is_decommission_required = MagicMock(side_effect=[True]*2 + [False]*10)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.get_host_tx_status = MagicMock(return_value='true')
@@ -3923,6 +3933,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
@@ -4923,7 +4934,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_supported_freq_config.return_value = (0x80, 0, 0, 191300, 196100)
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, MagicMock())
         result = task.validate_frequency_and_grid(mock_xcvr_api, lport, freq, grid)
         assert result == expected
 
@@ -5113,16 +5124,16 @@ class TestOpticSiParser(object):
     def test_match_optics_si_key_regex_error(self):
         """Test _match_optics_si_key with invalid regex pattern (lines 31-32, 34)"""
         from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
-        
+
         # Test with invalid regex pattern that causes re.error
         dict_key = "[invalid regex"  # Unclosed bracket causes regex error
         key = "VENDOR-1234"
         vendor_name_str = "VENDOR"
-        
+
         # Should fall back to string comparison and return True for exact match
         result = _match_optics_si_key(dict_key, key, vendor_name_str)
         assert result == False  # No exact string match
-        
+
         # Test with exact string match after regex error
         result = _match_optics_si_key(dict_key, dict_key, vendor_name_str)
         assert result == True  # Exact string match
@@ -5130,20 +5141,20 @@ class TestOpticSiParser(object):
     def test_match_optics_si_key_fallback_string_match(self):
         """Test _match_optics_si_key fallback string comparison (line 37)"""
         from xcvrd.xcvrd_utilities.optics_si_parser import _match_optics_si_key
-        
+
         # Test with invalid regex that falls back to string comparison
         dict_key = "[invalid"
         key = "VENDOR-1234"
         vendor_name_str = "VENDOR"
-        
+
         # Test exact key match
         result = _match_optics_si_key(key, key, vendor_name_str)
         assert result == True
-        
+
         # Test vendor name match
         result = _match_optics_si_key(vendor_name_str, key, vendor_name_str)
         assert result == True
-        
+
         # Test split key match
         result = _match_optics_si_key("VENDOR", key, vendor_name_str)
         assert result == True
@@ -5152,7 +5163,7 @@ class TestOpticSiParser(object):
         """Test _get_port_media_settings when SPEED_KEY not in optics_si_dict (line 126)"""
         from xcvrd.xcvrd_utilities.optics_si_parser import _get_port_media_settings
         import xcvrd.xcvrd_utilities.optics_si_parser as parser
-        
+
         original_dict = parser.g_optics_si_dict
         parser.g_optics_si_dict = {
             'PORT_MEDIA_SETTINGS': {
@@ -5161,7 +5172,7 @@ class TestOpticSiParser(object):
                 }
             }
         }
-        
+
         try:
             result = _get_port_media_settings(5, 25, "VENDOR-1234", "VENDOR", {'default': 'value'})
             assert result == {'default': 'value'}
@@ -5171,38 +5182,38 @@ class TestOpticSiParser(object):
     def test_get_module_vendor_key_api_none(self):
         """Test get_module_vendor_key when API is None (line 152)"""
         from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
-        
+
         # Mock SFP with None API
         mock_sfp = MagicMock()
         mock_sfp.get_xcvr_api.return_value = None
-        
+
         result = get_module_vendor_key(1, mock_sfp)
         assert result is None
 
     def test_get_module_vendor_key_vendor_name_none(self):
         """Test get_module_vendor_key when vendor name is None"""
         from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
-        
+
         # Mock API with None vendor name
         mock_api = MagicMock()
         mock_api.get_manufacturer.return_value = None
         mock_sfp = MagicMock()
         mock_sfp.get_xcvr_api.return_value = mock_api
-        
+
         result = get_module_vendor_key(1, mock_sfp)
         assert result is None
 
     def test_get_module_vendor_key_vendor_pn_none(self):
         """Test get_module_vendor_key when vendor part number is None"""
         from xcvrd.xcvrd_utilities.optics_si_parser import get_module_vendor_key
-        
+
         # Mock API with None vendor part number
         mock_api = MagicMock()
         mock_api.get_manufacturer.return_value = "VENDOR"
         mock_api.get_model.return_value = None
         mock_sfp = MagicMock()
         mock_sfp.get_xcvr_api.return_value = mock_api
-        
+
         result = get_module_vendor_key(1, mock_sfp)
         assert result is None
 
@@ -5236,7 +5247,7 @@ class TestOpticSiParser(object):
     def test_load_optics_si_settings_no_file(self):
         """Test load_optics_si_settings when no file exists"""
         from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
-        
+
         with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', 
                 return_value=('/nonexistent/platform', '/nonexistent/hwsku')):
             with patch('os.path.isfile', return_value=False):
@@ -5247,10 +5258,10 @@ class TestOpticSiParser(object):
         """Test optics_si_present when global dict is empty"""
         from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
         import xcvrd.xcvrd_utilities.optics_si_parser as parser
-        
+
         original_dict = parser.g_optics_si_dict
         parser.g_optics_si_dict = {}
-        
+
         try:
             result = optics_si_present()
             assert result == False
@@ -5261,10 +5272,10 @@ class TestOpticSiParser(object):
         """Test optics_si_present when global dict has data"""
         from xcvrd.xcvrd_utilities.optics_si_parser import optics_si_present
         import xcvrd.xcvrd_utilities.optics_si_parser as parser
-        
+
         original_dict = parser.g_optics_si_dict
         parser.g_optics_si_dict = {'some': 'data'}
-        
+
         try:
             result = optics_si_present()
             assert result == True
