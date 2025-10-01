@@ -4686,14 +4686,14 @@ class TestXcvrdScript(object):
 
         # For the case of extended media type matching enabled for LPO:
         media_settings_g_dict = {
-            ENABLE_EXTENDED_MEDIA_TYPE_MATCHING: [EXTENDED_MEDIA_OPTICAL_LPO]
+            ENABLE_EXTENDED_MEDIA_TYPE_MATCHING: [MEDIA_LPO]
         }
 
         # Test LPO module
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):
             with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_copper', return_value=False):
                 with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_is_lpo', return_value=True):
-                    assert media_settings_parser.get_media_type(physical_port) == EXTENDED_MEDIA_OPTICAL_LPO
+                    assert media_settings_parser.get_media_type(physical_port) == MEDIA_LPO
 
         # Test non-LPO optical module
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_g_dict):

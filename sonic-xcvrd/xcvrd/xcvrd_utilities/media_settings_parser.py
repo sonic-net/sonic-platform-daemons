@@ -29,7 +29,7 @@ LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
 MEDIA_COPPER = 'COPPER'
 MEDIA_OPTICAL = 'OPTICAL'
 # Extended media types:
-EXTENDED_MEDIA_OPTICAL_LPO = MEDIA_OPTICAL + '_LPO'
+MEDIA_LPO = 'LPO'
 
 # This is a top-level key in media_settings.json that can be added to enable
 # matching extended media types in addition to COPPER and OPTICAL. Its value is
@@ -120,8 +120,8 @@ def get_media_type(physical_port):
         return MEDIA_COPPER
 
     # For optical transceivers:
-    if is_extended_media_type_enabled(EXTENDED_MEDIA_OPTICAL_LPO) and get_is_lpo(physical_port):
-        return EXTENDED_MEDIA_OPTICAL_LPO
+    if is_extended_media_type_enabled(MEDIA_LPO) and get_is_lpo(physical_port):
+        return MEDIA_LPO
     return MEDIA_OPTICAL
 
 
