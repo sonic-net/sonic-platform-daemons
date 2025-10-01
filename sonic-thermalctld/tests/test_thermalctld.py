@@ -294,7 +294,7 @@ class TestThermalMonitor(object):
     """
     def test_main(self):
         mock_chassis = MockChassis()
-        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis, 5, 60, 30)
         thermal_monitor.fan_updater.update = mock.MagicMock()
         thermal_monitor.temperature_updater.update = mock.MagicMock()
 
@@ -680,7 +680,7 @@ def test_updater_thermal_check_min_max():
 
 def test_signal_handler():
     # Test SIGHUP
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -695,7 +695,7 @@ def test_signal_handler():
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
     # Test SIGINT
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -712,7 +712,7 @@ def test_signal_handler():
 
     # Test SIGTERM
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -729,7 +729,7 @@ def test_signal_handler():
 
     # Test an unhandled signal
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -745,14 +745,14 @@ def test_signal_handler():
 
 
 def test_daemon_run():
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=True)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert ret is False
 
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=False)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
