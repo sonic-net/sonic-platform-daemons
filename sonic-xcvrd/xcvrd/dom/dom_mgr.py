@@ -22,6 +22,7 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
+    from xcvrd.xcvrd_utilities import common
     from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.utils import VDMUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
@@ -129,7 +130,7 @@ class DomInfoUpdateTask(threading.Thread):
             self.log_warning("Got invalid asic index for {} while checking cmis init status".format(logical_port_name))
             return False
 
-        cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
+        cmis_state = common.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
         if cmis_state not in xcvrd.CMIS_TERMINAL_STATES:
             return True
         else:
@@ -142,11 +143,11 @@ class DomInfoUpdateTask(threading.Thread):
     # Update port sfp firmware info in db
     def post_port_sfp_firmware_info_to_db(self, logical_port_name, port_mapping, table,
                                 stop_event=threading.Event(), firmware_info_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
+        for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
             if stop_event.is_set():
                 break
 
-            if not xcvrd._wrapper_get_presence(physical_port):
+            if not common._wrapper_get_presence(physical_port):
                 continue
 
             try:
@@ -154,13 +155,19 @@ class DomInfoUpdateTask(threading.Thread):
                     # If cache is enabled and firmware information is in cache, just read from cache, no need read from EEPROM
                     transceiver_firmware_info_dict = firmware_info_cache[physical_port]
                 else:
-                    transceiver_firmware_info_dict = xcvrd._wrapper_get_transceiver_firmware_info(physical_port)
+                    transceiver_firmware_info_dict = common._wrapper_get_transceiver_firmware_info(physical_port)
                     if firmware_info_cache is not None:
                         # If cache is enabled, put firmware information to cache
                         firmware_info_cache[physical_port] = transceiver_firmware_info_dict
                 if transceiver_firmware_info_dict:
                     fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_firmware_info_dict.items()])
-                    table.set(physical_port_name, fvs)
+                    # For firmware info, we update all logical ports associated with this physical port
+                    logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
+                    if logical_port_list is None:
+                        self.log_warning("Got unknown physical port index {} while updating firmware info".format(physical_port))
+                        continue
+                    for logical_port in logical_port_list:
+                        table.set(logical_port, fvs)
                 else:
                     return xcvrd.SFP_EEPROM_NOT_READY
 
@@ -170,21 +177,21 @@ class DomInfoUpdateTask(threading.Thread):
 
     # Update port pm info in db
     def post_port_pm_info_to_db(self, logical_port_name, port_mapping, table, stop_event=threading.Event(), pm_info_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
+        for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
             if stop_event.is_set():
                 break
 
-            if not xcvrd._wrapper_get_presence(physical_port):
+            if not common._wrapper_get_presence(physical_port):
                 continue
 
-            if xcvrd._wrapper_is_flat_memory(physical_port) == True:
+            if common._wrapper_is_flat_memory(physical_port) == True:
                 continue
 
             if pm_info_cache is not None and physical_port in pm_info_cache:
                 # If cache is enabled and pm info is in cache, just read from cache, no need read from EEPROM
                 pm_info_dict = pm_info_cache[physical_port]
             else:
-                pm_info_dict = xcvrd._wrapper_get_transceiver_pm(physical_port)
+                pm_info_dict = common._wrapper_get_transceiver_pm(physical_port)
                 if pm_info_cache is not None:
                     # If cache is enabled, put dom information to cache
                     pm_info_cache[physical_port] = pm_info_dict
@@ -262,7 +269,7 @@ class DomInfoUpdateTask(threading.Thread):
                     continue
 
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-                    if not xcvrd._wrapper_get_presence(physical_port):
+                    if not common._wrapper_get_presence(physical_port):
                         continue
 
                     try:
@@ -297,7 +304,7 @@ class DomInfoUpdateTask(threading.Thread):
                         self.log_warning("Got exception {} while processing transceiver status hw flags for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port) and (not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)):
                         # Freeze VDM stats before reading VDM values
                         with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
                             if not vdm_frozen:
@@ -339,7 +346,7 @@ class DomInfoUpdateTask(threading.Thread):
             self.task_worker()
         except Exception as e:
             self.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            xcvrd.log_exception_traceback()
+            common.log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
@@ -434,7 +441,7 @@ class DomInfoUpdateTask(threading.Thread):
         # To avoid race condition, remove the entry TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table.
         # This thread only updates TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table,
         # so we don't have to remove entries from TRANSCEIVER_INFO, TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
-        xcvrd.del_port_sfp_dom_info_from_db(port_change_event.port_name,
+        common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping,
                                       [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
@@ -454,3 +461,7 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
+    def update_log_level(self):
+        """Call the logger's update log level method.
+        """
+        return self.helper_logger.update_log_level()

@@ -1594,6 +1594,10 @@ class DpuStateManagerTask(ProcessTaskBase):
                                 update_required = False
                                 continue
                         self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")
+                    elif key:
+                        # If there is any change in the non-DPU_STATE table, we need to update the state
+                        update_required = True
+                        break
 
                 if update_required:
                     [self.current_dp_state, self.current_cp_state] = self.dpu_state_updater.update_state()
