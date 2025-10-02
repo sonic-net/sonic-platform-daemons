@@ -269,10 +269,14 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
             try_get(module.module_pre_shutdown, default=False)
             if v2:
                 try:
-                    module.set_module_state_transition(v2, key, "shutdown")
+                    result = module.set_module_state_transition(v2, key, "shutdown")
+                    if not result:
+                        self.log_warning(f"Failed to set shutdown transition for {key}")
                 except Exception as e:
                     self.log_error(f"Failed to set shutdown transition for {key}: {e}")
-            try_get(module.set_admin_state, admin_state, default=False)
+            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            if not result:
+                self.log_error(f"Failed to set admin state using graceful shutdown for {key}")
 
         elif admin_state == MODULE_ADMIN_UP:
             # Mark startup transition before bring-up
@@ -284,10 +288,14 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
 
             if v2:
                 try:
-                    module.set_module_state_transition(v2, key, "startup")
+                    result = module.set_module_state_transition(v2, key, "startup")
+                    if not result:
+                        self.log_warning(f"Failed to set startup transition for {key}")
                 except Exception as e:
                     self.log_error(f"Failed to set startup transition for {key}: {e}")
-            try_get(module.set_admin_state, admin_state, default=False)
+            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            if not result:
+                self.log_error(f"Failed to set admin state using graceful shutdown for {key}")
             # Optional post-startup hook (if implemented)
             try_get(module.module_post_startup, default=False)
 
@@ -1424,12 +1432,16 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
             if v2:
                 try:
-                    module.set_module_state_transition(v2, module_name, "shutdown")
+                    result = module.set_module_state_transition(v2, module_name, "shutdown")
+                    if not result:
+                        self.log_warning(f"Failed to set transition flag (shutdown) for {module_name}")
                 except Exception as e:
                     self.log_error(f"Failed to set transition flag (shutdown) for {module_name}: {e}")
 
-            # Drive admin down
-            try_get(module.set_admin_state, admin_state, default=False)
+            # Drive admin down using graceful shutdown if available
+            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            if not result:
+                self.log_error(f"Failed to set admin state using graceful shutdown for {module_name}")
         else:
             pass
 
