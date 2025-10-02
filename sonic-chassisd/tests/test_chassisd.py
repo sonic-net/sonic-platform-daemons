@@ -2168,33 +2168,41 @@ def test_submit_dpu_callback():
 
 def test_admin_state_exception_coverage():
     """Test exception handling paths to improve code coverage"""
-    chassis = MockChassis()
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = -1
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
     daemon = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    chassis.module_list.append(module)
 
-    mock_module = MagicMock()
-    mock_module.module_pre_shutdown = MagicMock(return_value=False)
-    mock_module.set_admin_state_using_graceful_shutdown = MagicMock(return_value=False)
-    chassis.get_all_modules.return_value = [mock_module]
+    # Mock the methods to return failure values to trigger exception paths
+    with patch.object(module, 'module_pre_shutdown', return_value=False), \
+         patch.object(module, 'set_admin_state_using_graceful_shutdown', return_value=False), \
+         patch.object(module, 'set_module_state_transition', side_effect=Exception("Transition failed")):
 
-    # Test STATE_DB connection failure (lines 263-265)
-    with patch('swsscommon.SonicV2Connector') as mock_connector_class:
-        mock_connector = MagicMock()
-        mock_connector.connect.side_effect = Exception("Connection failed")
-        mock_connector_class.return_value = mock_connector
+        # Test STATE_DB connection failure
+        with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+            mock_connector = MagicMock()
+            mock_connector.connect.side_effect = Exception("Connection failed")
+            mock_connector_class.return_value = mock_connector
 
-        with patch.object(daemon, 'log_error'):
-            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_DOWN)
+            with patch.object(daemon, 'log_error'):
+                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_DOWN)
 
-    # Test transition exceptions and graceful shutdown failures
-    mock_module.set_module_state_transition = MagicMock(side_effect=Exception("Transition failed"))
-    with patch('swsscommon.SonicV2Connector') as mock_connector_class:
-        mock_connector = MagicMock()
-        mock_connector_class.return_value = mock_connector
+        # Test normal flow with successful connection but failed transitions
+        with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+            mock_connector = MagicMock()
+            mock_connector_class.return_value = mock_connector
 
-        with patch.object(daemon, 'log_error'), patch.object(daemon, 'log_warning'):
-            # Test shutdown path (lines 274-276, 279)
-            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_DOWN)
-            # Test startup path (lines 293-295, 298)
-            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_UP)
-            # Test invalid admin state (line 303)
-            daemon.modules_mgmt_task_worker("Ethernet0", 999)
+            with patch.object(daemon, 'log_error'), patch.object(daemon, 'log_warning'):
+                # Test shutdown path
+                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_DOWN)
+                # Test startup path
+                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_UP)
+                # Test invalid admin state
+                daemon.modules_mgmt_task_worker("DPU0", 999)
