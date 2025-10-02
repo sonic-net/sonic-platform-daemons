@@ -2180,6 +2180,11 @@ def test_admin_state_exception_coverage():
     daemon = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     chassis.module_list.append(module)
 
+    # Mock module_updater since submit_dpu_callback depends on it
+    mock_module_updater = MagicMock()
+    mock_module_updater.chassis = chassis
+    daemon.module_updater = mock_module_updater
+
     # Mock the methods to return failure values to trigger exception paths
     with patch.object(module, 'module_pre_shutdown', return_value=False), \
          patch.object(module, 'set_admin_state_using_graceful_shutdown', return_value=False), \
@@ -2192,7 +2197,7 @@ def test_admin_state_exception_coverage():
             mock_connector_class.return_value = mock_connector
 
             with patch.object(daemon, 'log_error'):
-                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_DOWN)
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
 
         # Test normal flow with successful connection but failed transitions
         with patch('swsscommon.SonicV2Connector') as mock_connector_class:
@@ -2201,8 +2206,8 @@ def test_admin_state_exception_coverage():
 
             with patch.object(daemon, 'log_error'), patch.object(daemon, 'log_warning'):
                 # Test shutdown path
-                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_DOWN)
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
                 # Test startup path
-                daemon.modules_mgmt_task_worker("DPU0", MODULE_ADMIN_UP)
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
                 # Test invalid admin state
-                daemon.modules_mgmt_task_worker("DPU0", 999)
+                daemon.submit_dpu_callback(index, 999, name)
