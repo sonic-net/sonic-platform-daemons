@@ -730,11 +730,11 @@ def test_smartswitch_configupdater_check_admin_state():
 
     # admin up path
     admin_state = 1  # MODULE_ADMIN_UP
-    with patch.object(module, 'set_admin_state') as mock_set, \
+    with patch.object(module, 'set_admin_state_using_graceful_shutdown') as mock_set_graceful, \
          patch.object(module, 'module_post_startup') as mock_post:
         config_updater.module_config_update(name, admin_state)
-        # Depending on platform flow, either set_admin_state or module_post_startup may be called.
-        assert mock_set.called or mock_post.called
+        # The new implementation calls set_admin_state_using_graceful_shutdown and module_post_startup
+        assert mock_set_graceful.called or mock_post.called
 
 def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
     chassis = MockSmartSwitchChassis()
@@ -743,7 +743,7 @@ def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
 
     # Add the centralized API expected by the code under test
     m.set_module_state_transition = MagicMock()
-    m.set_admin_state = MagicMock()
+    m.set_admin_state_using_graceful_shutdown = MagicMock()
     m.module_post_startup = MagicMock()
 
     # Minimal V2 connector that "connects"
@@ -763,7 +763,7 @@ def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
     # args: (v2, "DPU0", "startup")
     assert args[1] == "DPU0"
     assert args[2] == "startup"
-    m.set_admin_state.assert_called_once_with(chassisd.MODULE_ADMIN_UP)
+    m.set_admin_state_using_graceful_shutdown.assert_called_once_with(chassisd.MODULE_ADMIN_UP)
     m.module_post_startup.assert_called_once()
 
 
@@ -2143,7 +2143,8 @@ def test_submit_dpu_callback():
 
     # Test MODULE_ADMIN_DOWN scenario
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
-         patch.object(module, 'set_admin_state') as mock_set_admin_state, \
+         patch.object(module, 'set_admin_state_using_graceful_shutdown') as mock_set_admin_state, \
+         patch.object(module, 'set_module_state_transition') as mock_transition, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
         daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
         # Verify correct functions are called for admin down
@@ -2153,13 +2154,13 @@ def test_submit_dpu_callback():
 
     # Reset mocks for next test
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
-         patch.object(module, 'set_admin_state') as mock_set_admin_state, \
+         patch.object(module, 'set_admin_state_using_graceful_shutdown') as mock_set_admin_state, \
          patch.object(module, 'module_post_startup') as mock_post_startup:
 
         module_updater.module_table.get = MagicMock(return_value=(True, []))
         daemon_chassisd.submit_dpu_callback(index, MODULE_PRE_SHUTDOWN, name)
 
-        # Verify correct functions are called for admin up
+        # Verify correct functions are called for MODULE_PRE_SHUTDOWN
         mock_pre_shutdown.assert_called_once()
         mock_set_admin_state.assert_not_called()
         mock_post_startup.assert_not_called()
