@@ -2211,3 +2211,49 @@ def test_admin_state_exception_coverage():
                 daemon.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
                 # Test invalid admin state
                 daemon.submit_dpu_callback(index, 999, name)
+
+def test_dpu_callback_exception_coverage():
+    """Test exception handling paths to improve code coverage for submit_dpu_callback"""
+    chassis = MockSmartSwitchChassis()
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = -1
+    serial = "TS1000101"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+
+    daemon = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    chassis.module_list.append(module)
+
+    # Mock module_updater since submit_dpu_callback depends on it
+    mock_module_updater = MagicMock()
+    mock_module_updater.chassis = chassis
+    daemon.module_updater = mock_module_updater
+
+    # Mock the methods to return failure values to trigger exception paths
+    with patch.object(module, 'module_pre_shutdown', return_value=False), \
+         patch.object(module, 'set_admin_state_using_graceful_shutdown', return_value=False), \
+         patch.object(module, 'set_module_state_transition', return_value=False):
+
+        # Test STATE_DB connection failure
+        with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+            mock_connector = MagicMock()
+            mock_connector.connect.side_effect = Exception("Connection failed")
+            mock_connector_class.return_value = mock_connector
+
+            with patch.object(daemon, 'log_error'):
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
+
+        # Test normal flow with successful connection but failed transitions
+        with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+            mock_connector = MagicMock()
+            mock_connector_class.return_value = mock_connector
+
+            with patch.object(daemon, 'log_error'), patch.object(daemon, 'log_warning'):
+                # Test shutdown path
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
+                # Test startup path
+                daemon.submit_dpu_callback(index, MODULE_ADMIN_UP, name)
+                # Test invalid admin state
+                daemon.submit_dpu_callback(index, 999, name)
