@@ -144,14 +144,14 @@ def _wrapper_get_transceiver_info(physical_port):
 def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
     for key, value in list(port_dict.items()):
         if value == sfp_status_helper.SFP_STATUS_INSERTED:
-            sfp_insert_events[key] = time.time()
+            sfp_insert_events[key] = time.monotonic()
             del port_dict[key]
         elif value == sfp_status_helper.SFP_STATUS_REMOVED:
             if key in sfp_insert_events:
                 del sfp_insert_events[key]
 
     for key, itime in list(sfp_insert_events.items()):
-        if time.time() - itime >= MGMT_INIT_TIME_DELAY_SECS:
+        if time.monotonic() - itime >= MGMT_INIT_TIME_DELAY_SECS:
             port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
             del sfp_insert_events[key]
 
@@ -263,7 +263,7 @@ def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver
             sys.exit(NOT_IMPLEMENTED_ERROR)
 
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
-    time_now = time.time()
+    time_now = time.monotonic()
     time_diff = time_now - time_start
     if time_diff < time_to_wait:
         time.sleep(time_to_wait - time_diff)
@@ -1596,7 +1596,7 @@ class SfpStateUpdateTask(threading.Thread):
             # Retry those logical ports whose EEPROM reading failed or timeout when the SFP is inserted
             self.retry_eeprom_reading()
             next_state = state
-            time_start = time.time()
+            time_start = time.monotonic()
             # Ensure not to block for any event if sfp insert event is pending
             if self.sfp_insert_events:
                 timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
@@ -1624,7 +1624,7 @@ class SfpStateUpdateTask(threading.Thread):
                         # So need to calc the time diff,
                         # if time diff less that the pre-defined waiting time,
                         # use sleep() to complete the time.
-                        time_now = time.time()
+                        time_now = time.monotonic()
                         time_diff = time_now - time_start
                         if time_diff < RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000:
                             time.sleep(RETRY_PERIOD_FOR_SYSTEM_READY_MSECS/1000 - time_diff)
@@ -1951,7 +1951,7 @@ class SfpStateUpdateTask(threading.Thread):
 
         # Retry eeprom with an interval RETRY_EEPROM_READING_INTERVAL. No need to put sleep here
         # because _wrapper_get_transceiver_change_event has a timeout argument.
-        now = time.time()
+        now = time.monotonic()
         if now - self.last_retry_eeprom_time < self.RETRY_EEPROM_READING_INTERVAL:
             return
 

@@ -294,7 +294,7 @@ class TestThermalMonitor(object):
     """
     def test_main(self):
         mock_chassis = MockChassis()
-        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis, multiprocessing.Event())
         thermal_monitor.fan_updater.update = mock.MagicMock()
         thermal_monitor.temperature_updater.update = mock.MagicMock()
 
