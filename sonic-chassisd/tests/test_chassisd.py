@@ -2169,8 +2169,7 @@ def test_submit_dpu_callback():
 def test_admin_state_exception_coverage():
     """Test exception handling paths to improve code coverage"""
     chassis = MockChassis()
-    daemon = ChassisModuleBase(SYSLOG_IDENTIFIER)
-    daemon.chassis = chassis
+    daemon = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
 
     mock_module = MagicMock()
     mock_module.module_pre_shutdown = MagicMock(return_value=False)
