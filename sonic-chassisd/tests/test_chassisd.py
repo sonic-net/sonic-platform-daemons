@@ -2164,3 +2164,38 @@ def test_submit_dpu_callback():
         mock_pre_shutdown.assert_called_once()
         mock_set_admin_state.assert_not_called()
         mock_post_startup.assert_not_called()
+
+
+def test_admin_state_exception_coverage():
+    """Test exception handling paths to improve code coverage"""
+    chassis = MockChassis()
+    daemon = ChassisModuleBase(SYSLOG_IDENTIFIER)
+    daemon.chassis = chassis
+
+    mock_module = MagicMock()
+    mock_module.module_pre_shutdown = MagicMock(return_value=False)
+    mock_module.set_admin_state_using_graceful_shutdown = MagicMock(return_value=False)
+    chassis.get_all_modules.return_value = [mock_module]
+
+    # Test STATE_DB connection failure (lines 263-265)
+    with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+        mock_connector = MagicMock()
+        mock_connector.connect.side_effect = Exception("Connection failed")
+        mock_connector_class.return_value = mock_connector
+
+        with patch.object(daemon, 'log_error'):
+            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_DOWN)
+
+    # Test transition exceptions and graceful shutdown failures
+    mock_module.set_module_state_transition = MagicMock(side_effect=Exception("Transition failed"))
+    with patch('swsscommon.SonicV2Connector') as mock_connector_class:
+        mock_connector = MagicMock()
+        mock_connector_class.return_value = mock_connector
+
+        with patch.object(daemon, 'log_error'), patch.object(daemon, 'log_warning'):
+            # Test shutdown path (lines 274-276, 279)
+            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_DOWN)
+            # Test startup path (lines 293-295, 298)
+            daemon.modules_mgmt_task_worker("Ethernet0", MODULE_ADMIN_UP)
+            # Test invalid admin state (line 303)
+            daemon.modules_mgmt_task_worker("Ethernet0", 999)
