@@ -75,7 +75,7 @@ def test_wrapper_get_psu_presence():
     mock_psu.get_presence.reset_mock()
     mock_logger.log_error.reset_mock()
 
-        # Test _wrapper_get_psu returns None (PSU object retrieval failed)
+    # Test _wrapper_get_psu returns None (PSU object retrieval failed)
     psud.platform_chassis.get_psu.side_effect = Exception("PSU retrieval failed")
     result = psud._wrapper_get_psu_status(mock_logger, 1)
     # Should fallback to platform_psuutil
