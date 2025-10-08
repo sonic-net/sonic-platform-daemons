@@ -821,6 +821,8 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.wait_time = self.INTERVAL
 
+        self.chassis = None
+
         try:
             self.chassis = sonic_platform.platform.Platform().get_chassis()
         except Exception as e:
