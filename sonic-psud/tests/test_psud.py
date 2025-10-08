@@ -38,19 +38,19 @@ NOT_AVAILABLE = 'N/A'
 @mock.patch('psud.platform_psuutil', mock.MagicMock())
 def test_wrapper_get_num_psus():
     # Test new platform API is available and implemented
-    psud._wrapper_get_num_psus(None)
+    psud._wrapper_get_num_psus()
     assert psud.platform_chassis.get_num_psus.call_count == 1
     assert psud.platform_psuutil.get_num_psus.call_count == 0
 
     # Test new platform API is available but not implemented
     psud.platform_chassis.get_num_psus.side_effect = NotImplementedError
-    psud._wrapper_get_num_psus(None)
+    psud._wrapper_get_num_psus()
     assert psud.platform_chassis.get_num_psus.call_count == 2
     assert psud.platform_psuutil.get_num_psus.call_count == 1
 
     # Test new platform API not available
     psud.platform_chassis = None
-    psud._wrapper_get_num_psus(None)
+    psud._wrapper_get_num_psus()
     assert psud.platform_psuutil.get_num_psus.call_count == 2
 
 

@@ -90,7 +90,7 @@ exit_code = 0
 # temporary wrappers that are compliable with both new platform api and old-style plugin mode
 
 
-def _wrapper_get_num_psus(logger):
+def _wrapper_get_num_psus():
     if platform_chassis is not None:
         try:
             return platform_chassis.get_num_psus()
@@ -445,7 +445,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
 
         # Post psu number info to STATE_DB
-        self.num_psus = _wrapper_get_num_psus(self)
+        self.num_psus = _wrapper_get_num_psus()
         fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_PSU_NUM_FIELD, str(self.num_psus))])
         self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
 
