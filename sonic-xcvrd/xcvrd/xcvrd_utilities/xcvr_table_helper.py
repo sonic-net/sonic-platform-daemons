@@ -252,7 +252,7 @@ class XcvrTableHelper:
         Returns:
             dict: A dictionary where:
                 - key (str): logical port name (e.g., "Ethernet0")
-                - value (int): number of line lanes for that port
+                - value (int): number of line-side lanes for that port
 
         Example:
             {"Ethernet0": 2, "Ethernet200": 4}
