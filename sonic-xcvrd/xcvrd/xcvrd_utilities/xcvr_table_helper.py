@@ -56,6 +56,7 @@ class XcvrTableHelper:
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
+        self.appl_db = {}
         self.cfg_db = {}
         self.dom_flag_tbl = {}
         self.dom_flag_change_count_tbl = {}
@@ -92,8 +93,8 @@ class XcvrTableHelper:
             self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
             self.firmware_info_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_FIRMWARE_INFO_TABLE)
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
-            appl_db = daemon_base.db_connect("APPL_DB", namespace)
-            self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
             self.vdm_real_value_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_VDM_REAL_VALUE_TABLE)
@@ -238,3 +239,52 @@ class XcvrTableHelper:
 
         # If npu_si_settings_sync_val is None, it can also mean that the key is not present in the table
         return npu_si_settings_sync_val is None or npu_si_settings_sync_val == NPU_SI_SETTINGS_DEFAULT_VALUE
+
+    def get_gearbox_line_lanes_dict(self):
+        """
+        Retrieves the gearbox line lanes dictionary from APPL_DB
+
+        This method scans all ASICs for gearbox interface configurations and extracts
+        the line_lanes count for each logical port. The line_lanes represent the
+        number of lanes on the line side (towards the optical module) which is the
+        correct count to use for CMIS host lane configuration.
+
+        Returns:
+            dict: A dictionary where:
+                - key (str): logical port name (e.g., "Ethernet0")
+                - value (int): number of line-side lanes for that port
+
+        Example:
+            {"Ethernet0": 2, "Ethernet200": 4}
+
+        Note:
+            - Returns empty dict if no gearbox configuration is found
+            - Silently skips invalid or malformed entries
+            - Only processes keys that start with "interface:"
+        """
+        gearbox_line_lanes_dict = {}
+        try:
+            for asic_id in self.appl_db:
+                appl_db = self.appl_db[asic_id]
+                gearbox_table = swsscommon.Table(appl_db, "_GEARBOX_TABLE")
+                interface_keys = gearbox_table.getKeys()
+                for key in interface_keys:
+                    if key.startswith("interface:"):
+                        (found, fvs) = gearbox_table.get(key)
+                        if found:
+                            fvs_dict = dict(fvs)
+                            interface_name = fvs_dict.get('name', '')
+                            line_lanes_str = fvs_dict.get('line_lanes', '')
+                            if interface_name and line_lanes_str:
+                                line_lanes_count = len(line_lanes_str.split(','))
+                                gearbox_line_lanes_dict[interface_name] = line_lanes_count
+                            else:
+                                if not interface_name:
+                                    helper_logger.log_warning("get_gearbox_line_lanes_dict: ASIC {}: Interface {} missing 'name' field".format(asic_id, key))
+                                if not line_lanes_str:
+                                    helper_logger.log_debug("get_gearbox_line_lanes_dict: ASIC {}: Interface {} has empty 'line_lanes' field".format(asic_id, interface_name))
+        except Exception as e:
+            helper_logger.log_error("Error in get_gearbox_line_lanes_dict: {}".format(str(e)))
+            return gearbox_line_lanes_dict
+
+        return gearbox_line_lanes_dict

@@ -2575,6 +2575,173 @@ class TestXcvrdScript(object):
         appl = common.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
         assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
 
+    @pytest.mark.parametrize("gearbox_data, expected_dict", [
+        # Test case 1: Gearbox port with 2 line lanes
+        ({
+            "interface:0": {
+                "name": "Ethernet0",
+                "index": "0",
+                "phy_id": "1",
+                "system_lanes": "300,301,302,303",
+                "line_lanes": "304,305"
+            }
+        }, {"Ethernet0": 2}),
+        # Test case 2: Multiple gearbox ports
+        ({
+            "interface:0": {
+                "name": "Ethernet0",
+                "index": "0",
+                "phy_id": "1",
+                "system_lanes": "300,301,302,303",
+                "line_lanes": "304,305,306,307"
+            },
+            "interface:200": {
+                "name": "Ethernet200",
+                "index": "200",
+                "phy_id": "2",
+                "system_lanes": "400,401",
+                "line_lanes": "404,405"
+            }
+        }, {"Ethernet0": 4, "Ethernet200": 2}),
+        # Test case 3: Empty gearbox data
+        ({}, {}),
+        # Test case 4: Gearbox interface with empty line_lanes
+        ({
+            "interface:0": {
+                "name": "Ethernet0",
+                "index": "0",
+                "phy_id": "1",
+                "system_lanes": "300,301,302,303",
+                "line_lanes": ""
+            }
+        }, {}),
+        # Test case 5: Non-interface keys (should be ignored)
+        ({
+            "interface:0": {
+                "name": "Ethernet0",
+                "index": "0",
+                "phy_id": "1",
+                "system_lanes": "300,301,302,303",
+                "line_lanes": "304,305"
+            },
+            "phy:1": {
+                "name": "phy1",
+                "some_field": "some_value"
+            }
+        }, {"Ethernet0": 2})
+    ])
+    def test_XcvrTableHelper_get_gearbox_line_lanes_dict(self, gearbox_data, expected_dict):
+        # Mock the XcvrTableHelper and APPL_DB access
+        mock_appl_db = MagicMock()
+        mock_gearbox_table = MagicMock()
+
+        # Mock table.getKeys() to return gearbox interface keys
+        mock_gearbox_table.getKeys.return_value = list(gearbox_data.keys())
+
+        # Mock table.get() to return gearbox interface data
+        def mock_get_side_effect(key):
+            if key in gearbox_data:
+                # Convert dict to list of tuples for fvs format
+                interface_data = gearbox_data[key]
+                fvs_list = [(k, v) for k, v in interface_data.items()]
+                return (True, fvs_list)
+            return (False, [])
+
+        mock_gearbox_table.get.side_effect = mock_get_side_effect
+
+        # Mock swsscommon.Table constructor to return our mock table
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', return_value=mock_gearbox_table):
+            # Mock the helper_logger to avoid logging during tests
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+                helper.appl_db = {0: mock_appl_db}  # Mock the appl_db dict
+
+                result = helper.get_gearbox_line_lanes_dict()
+                assert result == expected_dict
+
+    @pytest.mark.parametrize("gearbox_lanes_dict, lport, port_config_lanes, expected_count", [
+        # Test case 1: Gearbox data available, should use gearbox count
+        ({"Ethernet0": 2}, "Ethernet0", "25,26,27,28", 2),
+        # Test case 2: Gearbox data available with 4 lanes
+        ({"Ethernet0": 4}, "Ethernet0", "29,30", 4),
+        # Test case 3: No gearbox data for this port, should use port config
+        ({"Ethernet4": 2}, "Ethernet0", "33,34,35,36", 4),
+        # Test case 4: Empty gearbox dict, should use port config
+        ({}, "Ethernet0", "37,38", 2),
+        # Test case 5: Multiple ports in gearbox dict
+        ({"Ethernet0": 2, "Ethernet4": 4}, "Ethernet0", "25,26,27,28", 2),
+        # Test case 6: Port not in gearbox dict
+        ({"Ethernet4": 4}, "Ethernet8", "41,42,43", 3)
+    ])
+    def test_CmisManagerTask_get_host_lane_count(self, gearbox_lanes_dict, lport, port_config_lanes, expected_count):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+
+        result = task.get_host_lane_count(lport, port_config_lanes, gearbox_lanes_dict)
+        assert result == expected_count
+
+    def test_CmisManagerTask_gearbox_integration_end_to_end(self):
+        """Test end-to-end integration of gearbox line lanes with CMIS application selection"""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+
+        # Mock gearbox lanes dictionary - port has 4 system lanes but only 2 line lanes
+        gearbox_lanes_dict = {"Ethernet0": 2}  # 2 line lanes from gearbox
+
+        # Mock port config - would normally give 4 lanes
+        port_config_lanes = "25,26,27,28"  # 4 lanes from port config
+
+        # Mock CMIS API with application advertisement
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_application_advertisement.return_value = {
+            1: {
+                'host_electrical_interface_id': '100GAUI-2 C2M (Annex 135G)',
+                'module_media_interface_id': '100G-FR/100GBASE-FR1 (Cl 140)',
+                'media_lane_count': 1,
+                'host_lane_count': 2,  # Matches our gearbox line lanes
+                'host_lane_assignment_options': 85
+            },
+            2: {
+                'host_electrical_interface_id': 'CAUI-4 C2M (Annex 83E)',
+                'module_media_interface_id': 'Active Cable assembly',
+                'media_lane_count': 4,
+                'host_lane_count': 4,  # Would match port config lanes
+                'host_lane_assignment_options': 17
+            }
+        }
+
+        # Test the integration: should use gearbox line lanes (2) not port config lanes (4)
+        host_lane_count = task.get_host_lane_count("Ethernet0", port_config_lanes, gearbox_lanes_dict)
+        assert host_lane_count == 2  # Should use gearbox line lanes, not port config
+
+        # Test that this leads to correct CMIS application selection
+        with patch('xcvrd.xcvrd_utilities.common.is_cmis_api', return_value=True):
+            appl = common.get_cmis_application_desired(mock_xcvr_api, host_lane_count, 100000)
+            assert appl == 1  # Should select application 1 (2 lanes) not application 2 (4 lanes)
+
+    def test_CmisManagerTask_gearbox_caching_integration(self):
+        """Test that gearbox lanes dictionary is properly cached and used in task worker"""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event)
+
+        # Mock the XcvrTableHelper to return a gearbox lanes dictionary
+        mock_gearbox_lanes_dict = {"Ethernet0": 2, "Ethernet4": 4}
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict.return_value = mock_gearbox_lanes_dict
+
+        # Test that get_host_lane_count uses the cached dictionary correctly
+        result1 = task.get_host_lane_count("Ethernet0", "25,26,27,28", mock_gearbox_lanes_dict)
+        assert result1 == 2  # Should use gearbox count
+
+        result2 = task.get_host_lane_count("Ethernet4", "29,30", mock_gearbox_lanes_dict)
+        assert result2 == 4  # Should use gearbox count
+
+        result3 = task.get_host_lane_count("Ethernet8", "33,34,35", mock_gearbox_lanes_dict)
+        assert result3 == 3  # Should fall back to port config count
+
     @patch('swsscommon.swsscommon.FieldValuePairs')
     def test_CmisManagerTask_post_port_active_apsel_to_db_error_cases(self, mock_field_value_pairs):
         mock_xcvr_api = MagicMock()
