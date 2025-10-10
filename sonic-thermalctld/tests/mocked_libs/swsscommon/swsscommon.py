@@ -2,19 +2,20 @@
     Mock implementation of swsscommon package for unit testing
 '''
 
-# Mock classes that are imported by sonic_py_common
-class ConfigDBConnector:
-    def __init__(self):
-        pass
-
-class SonicV2Connector:
-    def __init__(self):
-        pass
-
-class SonicDBConfig:
-    def __init__(self):
-        pass
-
+# Try to import real swsssdk classes, fallback to mocks if not available
+try:
+    from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
+except ImportError:
+    class ConfigDBConnector:
+        def __init__(self):
+            pass
+    class SonicV2Connector:
+        def __init__(self):
+            pass
+    class SonicDBConfig:
+        def __init__(self):
+            pass
+        
 STATE_DB = ''
 
 

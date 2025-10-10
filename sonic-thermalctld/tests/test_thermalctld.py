@@ -813,12 +813,11 @@ class TestThermalControlDaemon(object):
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
             
-            # Expect AttributeError when chassis initialization fails
-            with pytest.raises(AttributeError) as exc_info:
-                thermalctld.ThermalControlDaemon()
+            # ThermalControlDaemon should handle chassis initialization failure gracefully
+            daemon_thermalctld = thermalctld.ThermalControlDaemon()
             
-            # Verify AttributeError is due to missing chassis attribute
-            assert "'ThermalControlDaemon' object has no attribute 'chassis'" in str(exc_info.value)
+            # Verify chassis was set to None due to exception
+            assert daemon_thermalctld.chassis is None
             
             # Verify chassis initialization failure was logged
             mock_log_error.assert_called()
@@ -828,6 +827,9 @@ class TestThermalControlDaemon(object):
                     found_chassis_error = True
                     break
             assert found_chassis_error, "Expected chassis initialization error not found in log_error calls"
+            
+            # Clean up
+            daemon_thermalctld.deinit()
 
     def test_get_chassis_success(self):
         """Test ThermalControlDaemon initialization when get_chassis() succeeds"""
