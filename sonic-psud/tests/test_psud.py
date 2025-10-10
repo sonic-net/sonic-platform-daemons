@@ -77,11 +77,11 @@ def test_wrapper_get_psu_presence():
 
     # Test _wrapper_get_psu returns None (PSU object retrieval failed)
     psud.platform_chassis.get_psu.side_effect = Exception("PSU retrieval failed")
-    result = psud._wrapper_get_psu_status(mock_logger, 1)
+    result = psud._wrapper_get_psu_presence(mock_logger, 1)
     # Should fallback to platform_psuutil
     psud.platform_chassis.get_psu.assert_called_with(0)
-    assert psud.platform_psuutil.get_psu_status.call_count == 1
-    psud.platform_psuutil.get_psu_status.assert_called_with(1)
+    assert psud.platform_psuutil.get_psu_presence.call_count == 1
+    psud.platform_psuutil.get_psu_presence.assert_called_with(1)
 
     # Reset mocks
     psud.platform_chassis.get_psu.reset_mock()
