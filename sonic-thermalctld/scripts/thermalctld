@@ -552,7 +552,7 @@ class TemperatureUpdater(logger.Logger):
             self.is_smartswitch_dpu = chassis.is_smartswitch() and chassis.is_dpu()
             self.is_chassis_upd_required = self.is_chassis_system or self.is_smartswitch_dpu
             
-        if self.is_chassis_upd_required:
+        if self.is_chassis_upd_required and chassis is not None:
             my_slot = try_get(chassis.get_my_slot if self.is_chassis_system else chassis.get_dpu_id, INVALID_SLOT_OR_DPU)
             if my_slot != INVALID_SLOT_OR_DPU:
                 try:
