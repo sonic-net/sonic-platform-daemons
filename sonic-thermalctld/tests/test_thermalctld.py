@@ -289,6 +289,14 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
+    def test_update_with_none_chassis(self):
+        """Test FanUpdater.update() when chassis is None"""
+        fan_updater = thermalctld.FanUpdater(None, multiprocessing.Event())
+        fan_updater.update()
+        # Should log warning and return early
+        assert fan_updater.log_warning.call_count == 1
+        fan_updater.log_warning.assert_called_with("Chassis is not available, skipping fan status update")
+
 class TestThermalMonitor(object):
     """
     Test cases to cover functionality in ThermalMonitor class
@@ -552,6 +560,24 @@ class TestTemperatureUpdater(object):
         chassis._module_list = []
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0
+
+    def test_update_with_none_chassis(self):
+        """Test TemperatureUpdater.update() when chassis is None"""
+        temperature_updater = thermalctld.TemperatureUpdater(None, multiprocessing.Event())
+        temperature_updater.update()
+        # Should log warning and return early
+        assert temperature_updater.log_warning.call_count == 1
+        temperature_updater.log_warning.assert_called_with("Chassis is not available, skipping temperature status update")
+
+    def test_init_with_none_chassis(self):
+        """Test TemperatureUpdater.__init__() when chassis is None"""
+        temperature_updater = thermalctld.TemperatureUpdater(None, multiprocessing.Event())
+        # Verify properties are set to safe defaults when chassis is None
+        assert temperature_updater.chassis is None
+        assert temperature_updater.is_chassis_system is False
+        assert temperature_updater.is_smartswitch_dpu is False
+        assert temperature_updater.is_chassis_upd_required is False
+        assert temperature_updater.chassis_table is None
 
 
 # DPU chassis-related tests
