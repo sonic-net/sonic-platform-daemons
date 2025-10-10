@@ -832,8 +832,8 @@ class TestThermalControlDaemon(object):
     
     def test_get_chassis_exception(self):
         """Test ThermalControlDaemon initialization when get_chassis() raises exception"""
-        with (mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class,
-              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error):
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class, \
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error:
             # Mock Platform to raise exception on get_chassis()
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
@@ -859,8 +859,8 @@ class TestThermalControlDaemon(object):
 
     def test_get_chassis_success(self):
         """Test ThermalControlDaemon initialization when get_chassis() succeeds"""
-        with (mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class,
-              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error):
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class, \
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error:
             # Mock Platform to return chassis successfully
             mock_chassis = mock.MagicMock()
             mock_platform_instance = mock.MagicMock()
