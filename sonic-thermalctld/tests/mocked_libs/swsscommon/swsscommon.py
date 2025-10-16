@@ -5,6 +5,7 @@
 from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
 
 STATE_DB = ''
+CHASSIS_STATE_DB = ''
 
 
 class Table:
@@ -27,6 +28,9 @@ class Table:
 
     def get_size(self):
         return (len(self.mock_dict))
+
+    def getKeys(self):
+        return list(self.mock_dict.keys())
 
 
 class FieldValuePairs:

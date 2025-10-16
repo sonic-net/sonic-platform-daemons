@@ -1,13 +1,11 @@
 import os
 import sys
 import multiprocessing
-from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
+import importlib.machinery
+import importlib.util
 
-# TODO: Clean this up once we no longer need to support Python 2
-if sys.version_info.major == 3:
-    from unittest import mock
-else:
-    import mock
+from unittest import mock
+
 
 import pytest
 tests_path = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +23,10 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 from sonic_py_common import daemon_base
 
 from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
-from .mock_swsscommon import Table
+from .mocked_libs.swsscommon import swsscommon
+
+Table = swsscommon.Table
+FieldValuePairs = swsscommon.FieldValuePairs
 
 daemon_base.db_connect = mock.MagicMock()
 
@@ -33,6 +34,16 @@ daemon_base.db_connect = mock.MagicMock()
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, 'scripts')
 sys.path.insert(0, modules_path)
+
+# Replacement for imp.load_source from the Python3.12 docs:
+#   https://docs.python.org/3/whatsnew/3.12.html#imp
+def load_source(modname, filename):
+    loader = importlib.machinery.SourceFileLoader(modname, filename)
+    spec = importlib.util.spec_from_file_location(modname, filename, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module.__name__] = module
+    loader.exec_module(module)
+    return module
 
 load_source('thermalctld', os.path.join(scripts_path, 'thermalctld'))
 import thermalctld
