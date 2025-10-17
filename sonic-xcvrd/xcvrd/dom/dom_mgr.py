@@ -120,7 +120,7 @@ class DomInfoUpdateBase(threading.Thread):
             self.task_worker()
         except Exception as e:
             self.log_error("Exception occurred at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            xcvrd.log_exception_traceback()
+            common.log_exception_traceback()
             self.exc = e
             self.main_thread_stop_event.set()
 
