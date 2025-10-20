@@ -320,31 +320,38 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
-def hex_str_to_int32(hex_str):
-    """
-    Parse hex_str (e.g. '0xFFEEAABB') as a signed 32-bit integer.
-    If the hex_str is negative, convert it to a signed integer.
-
-    Args:
-        hex_str: hex string to be converted to signed integer
-    Returns:
-        signed integer value
-    """
-    u = int(hex_str, 16)            # unsigned value
-    # if sign bit set, subtract 2**32 to get negative
-    return u - (1 << 32) if (u & (1 << 31)) else u
-
-
 def str_to_int(int_str):
     """
-    Convert a string representation of an integer to a signed integer.
-
+    Convert a string representation of an integer to a 32-bit integer.
     Args:
         int_str: string representation of an integer
     Returns:
-        signed integer value
+        signed 32-bit integer value, or None if the input is out of range
     """
-    return hex_str_to_int32(int_str) if int_str.startswith('0x') else int(int_str)
+    # hex string:
+    if int_str.startswith('0x'):
+        try:
+            value = int(int_str, 16)            # unsigned value
+        except ValueError:
+            helper_logger.log_error("Invalid hex string value {}".format(int_str))
+            return None
+        if value < 0 or value > (1 << 32) - 1:
+            helper_logger.log_error("hex string value {} out of 32 bits range".format(int_str))
+            return None
+        # if sign bit set, subtract 2**32 to get negative
+        # e.g. 0xFFFFFFFF -> -1, 0xFFFFFFFE -> -2, etc.
+        return value - (1 << 32) if (value & (1 << 31)) else value
+
+    # decimal string:
+    try:
+        value = int(int_str, 10)
+    except ValueError:
+        helper_logger.log_error("Invalid decimal string value {}".format(int_str))
+        return None
+    if value < -(1 << 31) or value > (1 << 31) - 1:
+        helper_logger.log_error("decimal string value {} out of int32 range".format(int_str))
+        return None
+    return value
 
 
 def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
@@ -370,6 +377,11 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
         custom_serdes_attr = key[len(CUSTOM_SERDES_ATTR_PREFIX):]
         value_list = [str_to_int(lane_value_str)
                       for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
+        if None in value_list:
+            helper_logger.log_error("Skipping custom serdes attr {} due to invalid integer value".format(custom_serdes_attr))
+            media_dict.pop(key)
+            continue
+
         attr_dict = {
             custom_serdes_attr: {
                 'value': value_list
