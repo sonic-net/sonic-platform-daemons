@@ -48,10 +48,10 @@ def load_platform_pcieutil():
     _platform_pcieutil = None
 
     try:
-       (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
-    except Exception as e:
-       log.log_error(f"Unable to get device info from Platform : {type(e).__name__} : {e}")
-       return _platform_pcieutil
+        (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+    except (OSError, TypeError) as e:
+        log.log_error(f"Unable to get device info from Platform : {type(e).__name__} : {e}")
+        return _platform_pcieutil
 
     try:
         from sonic_platform.pcie import Pcie

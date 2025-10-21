@@ -64,11 +64,11 @@ def test_load_platform_pcieutil():
             mock_log.log_error.assert_not_called()
 
         # Case 2: Exception when getting platform path
-        with patch('pcied.device_info.get_paths_to_platform_and_hwsku_dirs', side_effect=Exception("Platform info not available")):
+        with patch('pcied.device_info.get_paths_to_platform_and_hwsku_dirs', side_effect=TypeError("Platform info not available")):
             result = pcied.load_platform_pcieutil()
 
             assert result is None
-            mock_log.log_error.assert_called_once_with("Unable to get device info from Platform : Exception : Platform info not available")
+            mock_log.log_error.assert_called_once_with("Unable to get device info from Platform : TypeError : Platform info not available")
 
 
     # Cases 3-5: Test with /tmp as platform path
