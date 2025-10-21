@@ -1,5 +1,6 @@
 '''
-    Mock implementation of swsscommon package for unit testing
+    Hybrid swsscommon module that attempts to import real classes when available,
+    with fallback mock implementations for unit testing when imports fail
 '''
 
 # Try to import real swsssdk classes, fallback to mocks if not available
