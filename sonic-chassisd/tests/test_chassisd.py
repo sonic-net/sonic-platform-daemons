@@ -719,22 +719,40 @@ def test_smartswitch_configupdater_check_admin_state():
     module.set_oper_status(status)
     chassis.module_list.append(module)
 
-    config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+    # Add the centralized API expected by the code under test
+    module.set_module_state_transition = MagicMock()
+    module.set_admin_state = MagicMock()
+    module.module_pre_shutdown = MagicMock()
+    module.module_post_startup = MagicMock()
 
-    # admin down path
-    admin_state = 0  # MODULE_ADMIN_DOWN
-    with patch.object(module, 'module_pre_shutdown') as mock_pre, \
-         patch.object(module, 'set_admin_state') as mock_set:
-        config_updater.module_config_update(name, admin_state)
-        mock_pre.assert_called_once()
+    # Minimal V2 connector that "connects"
+    class _V2:
+        STATE_DB = 6
+        def __init__(self, *a, **k): pass
+        def connect(self, *_): pass
 
-    # admin up path
-    admin_state = 1  # MODULE_ADMIN_UP
-    with patch.object(module, 'set_admin_state_using_graceful_shutdown') as mock_set_graceful, \
-         patch.object(module, 'module_post_startup') as mock_post:
+    with patch.object(chassisd.swsscommon, "SonicV2Connector", _V2, create=True):
+        config_updater = SmartSwitchModuleConfigUpdater(SYSLOG_IDENTIFIER, chassis)
+
+        # admin down path
+        admin_state = 0  # MODULE_ADMIN_DOWN
         config_updater.module_config_update(name, admin_state)
-        # The new implementation calls set_admin_state_using_graceful_shutdown and module_post_startup
-        assert mock_set_graceful.called or mock_post.called
+        time.sleep(0.1) # Allow thread to run
+        module.module_pre_shutdown.assert_called_once()
+        module.set_module_state_transition.assert_called_once_with(config_updater._state_db_connector, name, "shutdown")
+        module.set_admin_state.assert_called_once_with(admin_state)
+
+        # Reset mocks
+        module.set_module_state_transition.reset_mock()
+        module.set_admin_state.reset_mock()
+
+        # admin up path
+        admin_state = 1  # MODULE_ADMIN_UP
+        config_updater.module_config_update(name, admin_state)
+        time.sleep(0.1) # Allow thread to run
+        module.set_module_state_transition.assert_called_once_with(config_updater._state_db_connector, name, "startup")
+        module.set_admin_state.assert_called_once_with(admin_state)
+        module.module_post_startup.assert_called_once()
 
 def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
     chassis = MockSmartSwitchChassis()
@@ -743,7 +761,8 @@ def test_smartswitch_configupdater_marks_startup_transition_on_admin_up():
 
     # Add the centralized API expected by the code under test
     m.set_module_state_transition = MagicMock()
-    m.set_admin_state_using_graceful_shutdown = MagicMock()
+    m.set_admin_state = MagicMock()
+    m.module_pre_shutdown = MagicMock()
     m.module_post_startup = MagicMock()
 
     # Minimal V2 connector that "connects"

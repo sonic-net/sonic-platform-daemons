@@ -226,12 +226,16 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
         """
         super(SmartSwitchModuleConfigUpdater, self).__init__(log_identifier)
         self.chassis = chassis
+        self._state_db_connector = swsscommon.SonicV2Connector(use_unix_socket_path=True)
+        self._state_db_connector.connect(self._state_db_connector.STATE_DB)
 
     def deinit(self):
         """
         Destructor of SmartSwitchModuleConfigUpdater
         :return:
         """
+        if self._state_db_connector:
+            self._state_db_connector.close()
 
     def module_config_update(self, key, admin_state):
         if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
@@ -256,46 +260,30 @@ class SmartSwitchModuleConfigUpdater(logger.Logger):
     def submit_callback(self, module_index, admin_state, key):
         module = self.chassis.get_module(module_index)
 
-        # Use a local STATE_DB connector for centralized ModuleBase API
-        try:
-            v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
-            v2.connect(v2.STATE_DB)
-        except Exception as e:
-            self.log_error(f"STATE_DB connect failed for transition flag: {e}")
-            v2 = None
-
         if admin_state == MODULE_ADMIN_DOWN:
             # Pre-shutdown (if implemented), then mark shutdown transition and drive admin down
             try_get(module.module_pre_shutdown, default=False)
-            if v2:
-                try:
-                    result = module.set_module_state_transition(v2, key, "shutdown")
-                    if not result:
-                        self.log_warning(f"Failed to set shutdown transition for {key}")
-                except Exception as e:
-                    self.log_error(f"Failed to set shutdown transition for {key}: {e}")
-            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            try:
+                result = module.set_module_state_transition(self._state_db_connector, key, "shutdown")
+                if not result:
+                    self.log_warning(f"Failed to set shutdown transition for {key}")
+            except Exception as e:
+                self.log_error(f"Failed to set shutdown transition for {key}: {e}")
+            result = try_get(module.set_admin_state, admin_state, default=False)
             if not result:
-                self.log_error(f"Failed to set admin state using graceful shutdown for {key}")
+                self.log_error(f"Failed to set admin state for {key}")
 
         elif admin_state == MODULE_ADMIN_UP:
             # Mark startup transition before bring-up
-            # NOTE: Clearing ownership: the initiator clears the flag.
-            #  - On success: the platform path clears at the end of set_admin_state().
-            #  - On stall/failure: the initiator/CLI timeout logic clears.
-            # We DO NOT clear this flag on ONLINE/OFFLINE oper-state flips, to avoid
-            # prematurely clearing transitions during a normal reboot arc.
-
-            if v2:
-                try:
-                    result = module.set_module_state_transition(v2, key, "startup")
-                    if not result:
-                        self.log_warning(f"Failed to set startup transition for {key}")
-                except Exception as e:
-                    self.log_error(f"Failed to set startup transition for {key}: {e}")
-            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            try:
+                result = module.set_module_state_transition(self._state_db_connector, key, "startup")
+                if not result:
+                    self.log_warning(f"Failed to set startup transition for {key}")
+            except Exception as e:
+                self.log_error(f"Failed to set startup transition for {key}: {e}")
+            result = try_get(module.set_admin_state, admin_state, default=False)
             if not result:
-                self.log_error(f"Failed to set admin state using graceful shutdown for {key}")
+                self.log_error(f"Failed to set admin state for {key}")
             # Optional post-startup hook (if implemented)
             try_get(module.module_post_startup, default=False)
 
@@ -1386,6 +1374,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.stop = threading.Event()
 
         self.platform_chassis = chassis
+        self._state_db_connector = swsscommon.SonicV2Connector(use_unix_socket_path=True)
+        self._state_db_connector.connect(self._state_db_connector.STATE_DB)
 
         for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
             try:
@@ -1423,25 +1413,17 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         if admin_state == MODULE_ADMIN_DOWN:
             # Use centralized ModuleBase API to mark shutdown transition
-            v2 = None
             try:
-                v2 = swsscommon.SonicV2Connector(use_unix_socket_path=True)
-                v2.connect(v2.STATE_DB)
+                result = module.set_module_state_transition(self._state_db_connector, module_name, "shutdown")
+                if not result:
+                    self.log_warning(f"Failed to set transition flag (shutdown) for {module_name}")
             except Exception as e:
-                self.log_error(f"Failed to connect STATE_DB for {module_name} transition: {e}")
-
-            if v2:
-                try:
-                    result = module.set_module_state_transition(v2, module_name, "shutdown")
-                    if not result:
-                        self.log_warning(f"Failed to set transition flag (shutdown) for {module_name}")
-                except Exception as e:
-                    self.log_error(f"Failed to set transition flag (shutdown) for {module_name}: {e}")
+                self.log_error(f"Failed to set transition flag (shutdown) for {module_name}: {e}")
 
             # Drive admin down using graceful shutdown if available
-            result = try_get(module.set_admin_state_using_graceful_shutdown, admin_state, default=False)
+            result = try_get(module.set_admin_state, admin_state, default=False)
             if not result:
-                self.log_error(f"Failed to set admin state using graceful shutdown for {module_name}")
+                self.log_error(f"Failed to set admin state for {module_name}")
         else:
             pass
 
@@ -1534,6 +1516,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Delete all the information from DB and then exit
         self.module_updater.deinit()
+        if self._state_db_connector:
+            self._state_db_connector.close()
 
         self.log_info("Shutting down...")
 
