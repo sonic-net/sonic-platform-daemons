@@ -829,7 +829,6 @@ class TestThermalControlDaemon(object):
     """
     Test cases to cover functionality in ThermalControlDaemon class
     """
-    
     def test_get_chassis_exception(self):
         """Test ThermalControlDaemon initialization when get_chassis() raises exception"""
         with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class, \
