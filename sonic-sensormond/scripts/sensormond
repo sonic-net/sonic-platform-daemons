@@ -552,7 +552,7 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         begin = time.time()
 
-        if not (self.voltage_updater.update(self.stop_event) or self.current_updater.update(self.stop_event)):
+        if not (self.voltage_updater.update(self.stop_event) and self.current_updater.update(self.stop_event)):
             # Fatal signal received in the process of reading voltage or current sensors
             return False
 
