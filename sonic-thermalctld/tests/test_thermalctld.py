@@ -820,8 +820,9 @@ class TestThermalControlDaemon(object):
             
             # Verify chassis initialization failure was logged
             mock_log_error.assert_called()
+            expected_msg = "Failed to get chassis due to Exception('Failed to initialize chassis')"
             assert any(
-                "Failed to get chassis due to" in call_args[0] and "Failed to initialize chassis" in call_args[0]
+                expected_msg in call_args[0]
                 for call_args, _ in mock_log_error.call_args_list
             ), "Expected chassis initialization error not found in log_error calls"
 
