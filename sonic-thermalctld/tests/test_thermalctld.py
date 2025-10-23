@@ -811,7 +811,7 @@ class TestThermalControlDaemon(object):
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
             
-            # ThermalControlDaemon should exit with error code when chassis initialization fails
+            # ThermalControlDaemon should raise SystemExit with CHASSIS_GET_ERROR code when chassis initialization fails
             with pytest.raises(SystemExit) as exc_info:
                 daemon_thermalctld = thermalctld.ThermalControlDaemon()
             
@@ -842,10 +842,9 @@ class TestThermalControlDaemon(object):
             assert daemon_thermalctld.chassis is mock_chassis
             
             # Verify no chassis initialization error was logged
-            if mock_log_error.called:
-                for call_args in mock_log_error.call_args_list:
-                    args, _ = call_args
-                    assert "Failed to get chassis due to" not in args[0]
+            for call_args in mock_log_error.call_args_list:
+                args, _ = call_args
+                assert "Failed to get chassis due to" not in args[0]
             
             # Clean up
             daemon_thermalctld.deinit()
