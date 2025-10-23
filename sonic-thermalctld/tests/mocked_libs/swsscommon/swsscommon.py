@@ -1,9 +1,9 @@
 '''
-    Mock implementation of swsscommon package for unit testing.
+    Mock implementation of swsscommon package for unit testing
 '''
 
 from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
-        
+
 STATE_DB = ''
 
 
@@ -27,6 +27,7 @@ class Table:
 
     def get_size(self):
         return (len(self.mock_dict))
+
 
 class FieldValuePairs:
     fv_dict = {}

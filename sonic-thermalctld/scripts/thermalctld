@@ -590,7 +590,7 @@ class TemperatureUpdater(logger.Logger):
         """
         Update all temperature information to database
         :return:
-        """            
+        """
         self.log_debug("Start temperature updating")
         available_thermals = set()
         for index, thermal in enumerate(self.chassis.get_all_thermals()):
