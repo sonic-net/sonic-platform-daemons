@@ -1,7 +1,6 @@
 import os
 import sys
 import multiprocessing
-import pytest
 from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
@@ -289,14 +288,6 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
-    def test_update_with_none_chassis(self):
-        """Test FanUpdater.update() when chassis is None"""
-        fan_updater = thermalctld.FanUpdater(None, multiprocessing.Event())
-        fan_updater.update()
-        # Should log warning and return early
-        assert fan_updater.log_warning.call_count == 1
-        fan_updater.log_warning.assert_called_with("Chassis is not available, skipping fan status update")
-
 class TestThermalMonitor(object):
     """
     Test cases to cover functionality in ThermalMonitor class
@@ -561,24 +552,6 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0
 
-    def test_update_with_none_chassis(self):
-        """Test TemperatureUpdater.update() when chassis is None"""
-        temperature_updater = thermalctld.TemperatureUpdater(None, multiprocessing.Event())
-        temperature_updater.update()
-        # Should log warning and return early
-        assert temperature_updater.log_warning.call_count == 1
-        temperature_updater.log_warning.assert_called_with("Chassis is not available, skipping temperature status update")
-
-    def test_init_with_none_chassis(self):
-        """Test TemperatureUpdater.__init__() when chassis is None"""
-        temperature_updater = thermalctld.TemperatureUpdater(None, multiprocessing.Event())
-        # Verify properties are set to safe defaults when chassis is None
-        assert temperature_updater.chassis is None
-        assert temperature_updater.is_chassis_system is False
-        assert temperature_updater.is_smartswitch_dpu is False
-        assert temperature_updater.is_chassis_upd_required is False
-        assert temperature_updater.chassis_table is None
-
 
 # DPU chassis-related tests
 def test_dpu_chassis_thermals():
@@ -838,20 +811,19 @@ class TestThermalControlDaemon(object):
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
             
-            # ThermalControlDaemon should handle chassis initialization failure gracefully
-            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            # ThermalControlDaemon should exit with error code when chassis initialization fails
+            with pytest.raises(SystemExit) as exc_info:
+                daemon_thermalctld = thermalctld.ThermalControlDaemon()
             
-            # Verify chassis was set to None due to exception
-            assert daemon_thermalctld.chassis is None
+            # Verify it exits with the correct error code
+            assert exc_info.value.code == thermalctld.CHASSIS_GET_ERROR
             
             # Verify chassis initialization failure was logged
             mock_log_error.assert_called()
             assert any(
                 "Failed to get chassis due to" in call_args[0] and "Failed to initialize chassis" in call_args[0]
                 for call_args, _ in mock_log_error.call_args_list
-            ), "Expected chassis initialization error not found in log_error calls"            
-            # Clean up
-            daemon_thermalctld.deinit()
+            ), "Expected chassis initialization error not found in log_error calls"
 
     def test_get_chassis_success(self):
         """Test ThermalControlDaemon initialization when get_chassis() succeeds"""

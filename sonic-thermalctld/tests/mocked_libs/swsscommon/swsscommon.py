@@ -1,23 +1,8 @@
 '''
     Mock implementation of swsscommon package for unit testing.
-    
-    Attempts to import real swsssdk classes when available, 
-    with fallback mock implementations.
 '''
 
-# Try to import real swsssdk classes, fallback to mocks if not available
-try:
-    from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
-except ImportError:
-    class ConfigDBConnector:
-        def __init__(self):
-            pass
-    class SonicV2Connector:
-        def __init__(self):
-            pass
-    class SonicDBConfig:
-        def __init__(self):
-            pass
+from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
         
 STATE_DB = ''
 
@@ -42,10 +27,6 @@ class Table:
 
     def get_size(self):
         return (len(self.mock_dict))
-
-    def getKeys(self):
-        return list(self.mock_dict.keys())
-
 
 class FieldValuePairs:
     fv_dict = {}

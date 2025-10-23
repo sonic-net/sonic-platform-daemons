@@ -30,6 +30,7 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
+CHASSIS_GET_ERROR = 2
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
@@ -222,10 +223,6 @@ class FanUpdater(logger.Logger):
         Update all Fan information to database
         :return:
         """
-        if self.chassis is None:
-            self.log_warning("Chassis is not available, skipping fan status update")
-            return
-            
         self.log_debug("Start fan updating")
         old_bad_fan_count = FanStatus.get_bad_fan_count()
         FanStatus.reset_fan_counter()
@@ -543,15 +540,9 @@ class TemperatureUpdater(logger.Logger):
         self.chassis_table = None
         self.all_thermals = set()
 
-        if chassis is None:
-            self.is_chassis_system = False
-            self.is_smartswitch_dpu = False
-            self.is_chassis_upd_required = False
-        else:
-            self.is_chassis_system = chassis.is_modular_chassis()
-            self.is_smartswitch_dpu = chassis.is_smartswitch() and chassis.is_dpu()
-            self.is_chassis_upd_required = self.is_chassis_system or self.is_smartswitch_dpu
-            
+        self.is_chassis_system = chassis.is_modular_chassis()
+        self.is_smartswitch_dpu = chassis.is_smartswitch() and chassis.is_dpu()
+        self.is_chassis_upd_required = self.is_chassis_system or self.is_smartswitch_dpu
         if self.is_chassis_upd_required:
             my_slot = try_get(chassis.get_my_slot if self.is_chassis_system else chassis.get_dpu_id, INVALID_SLOT_OR_DPU)
             if my_slot != INVALID_SLOT_OR_DPU:
@@ -599,11 +590,7 @@ class TemperatureUpdater(logger.Logger):
         """
         Update all temperature information to database
         :return:
-        """
-        if self.chassis is None:
-            self.log_warning("Chassis is not available, skipping temperature status update")
-            return
-            
+        """            
         self.log_debug("Start temperature updating")
         available_thermals = set()
         for index, thermal in enumerate(self.chassis.get_all_thermals()):
@@ -839,7 +826,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.chassis = sonic_platform.platform.Platform().get_chassis()
         except Exception as e:
             self.log_error("Failed to get chassis due to {}".format(repr(e)))
-            self.chassis = None
+            sys.exit(CHASSIS_GET_ERROR)
 
         self.thermal_monitor = ThermalMonitor(self.chassis)
         self.thermal_monitor.task_run()
