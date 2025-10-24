@@ -288,6 +288,18 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
+class TestLiquidCoolingUpdater(object):
+    def test_update(self):
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater._refresh_leak_status = mock.MagicMock()
+
+        liquid_cooling_updater.update()
+
+        assert liquid_cooling_updater._refresh_leak_status.call_count == 1
+
+
 class TestThermalMonitor(object):
     """
     Test cases to cover functionality in ThermalMonitor class
@@ -793,6 +805,8 @@ def test_update_entity_info():
 @mock.patch('thermalctld.ThermalControlDaemon.run')
 def test_main(mock_run):
     mock_run.return_value = False
+
+    sys.argv = ['thermalctld']
 
     ret = thermalctld.main()
     assert mock_run.call_count == 1
