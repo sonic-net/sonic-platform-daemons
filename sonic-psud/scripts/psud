@@ -175,6 +175,7 @@ def get_psu_key(psu_index):
             except NotImplementedError:
                 pass
             except IndexError:
+                # some functionality is expectent on returning an expected key even if the psu object itself does not exist
                 pass
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
 
@@ -444,7 +445,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             try:
                 platform_psuutil = self.load_platform_util(PLATFORM_SPECIFIC_MODULE_NAME, PLATFORM_SPECIFIC_CLASS_NAME)
             except Exception as e:
-                self.log_warning("Failed to load psuutil: %s" % (str(e)))
+                self.log_error("Failed to load psuutil: %s" % (str(e)), True)
                 sys.exit(PSUUTIL_LOAD_ERROR)
 
         # Connect to STATE_DB and create psu/chassis info tables
