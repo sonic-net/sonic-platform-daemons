@@ -109,6 +109,9 @@ def _wrapper_get_psu(logger, psu_index):
     :param logger: Logger instance for error/warning messages
     :param psu_index: PSU index (1-based)
     :return: PSU object if available, None otherwise
+    
+    Note:
+        If logger is None, errors and warnings encountered during execution will not be logged.
     """
     if platform_chassis is not None:
         try:
