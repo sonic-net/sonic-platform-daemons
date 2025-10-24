@@ -1124,7 +1124,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the CMIS manager
         cmis_manager = None
         if not self.skip_cmis_mgr:
-            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, self.skip_cmis_mgr, platform_chassis)
+            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr, platform_chassis=platform_chassis)
             cmis_manager.start()
             self.threads.append(cmis_manager)
 

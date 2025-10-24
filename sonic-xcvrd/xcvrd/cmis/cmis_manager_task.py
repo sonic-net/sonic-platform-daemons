@@ -47,7 +47,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_EXPIRATION_BUFFER_MS = 2
     ALL_LANES_MASK = 0xff
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event, platform_chassis, skip_cmis_mgr=False):
+    def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False, platform_chassis=None):
         threading.Thread.__init__(self)
         self.name = "CmisManagerTask"
         self.exc = None
@@ -63,13 +63,13 @@ class CmisManagerTask(threading.Thread):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
     def log_debug(self, message):
-        helper_logger.log_debug("CMIS: {}".format(message))
+        helper_logger.log_debug(message)
 
     def log_notice(self, message):
-        helper_logger.log_notice("CMIS: {}".format(message))
+        helper_logger.log_notice(message)
 
     def log_error(self, message):
-        helper_logger.log_error("CMIS: {}".format(message))
+        helper_logger.log_error(message)
 
     def get_asic_id(self, lport):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
@@ -187,6 +187,29 @@ class CmisManagerTask(threading.Thread):
 
     def get_cmis_module_power_down_duration_secs(self, api):
         return api.get_module_pwr_down_duration()/1000
+
+    def get_host_lane_count(self, lport, port_config_lanes, gearbox_lanes_dict):
+        """
+        Get host lane count from gearbox configuration if available, otherwise from port config
+
+        Args:
+            lport: logical port name (e.g., "Ethernet0")
+            port_config_lanes: lanes string from port config (e.g., "25,26,27,28")
+            gearbox_lanes_dict: dictionary of gearbox line lanes counts
+
+        Returns:
+            Integer: number of host lanes
+        """
+        # First try to get from gearbox configuration
+        gearbox_host_lane_count = gearbox_lanes_dict.get(lport, 0)
+        if gearbox_host_lane_count > 0:
+            self.log_debug("{}: Using gearbox line lanes count: {}".format(lport, gearbox_host_lane_count))
+            return gearbox_host_lane_count
+
+        # Fallback to port config lanes
+        host_lane_count = len(port_config_lanes.split(','))
+        self.log_debug("{}: Using port config lanes count: {}".format(lport, host_lane_count))
+        return host_lane_count
 
     def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
         """
@@ -695,6 +718,9 @@ class CmisManagerTask(threading.Thread):
             # Handle port change event from main thread
             port_change_observer.handle_port_update_event()
 
+            # Cache gearbox line lanes dictionary for this set of iterations over the port_dict
+            gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():
                     break
@@ -726,7 +752,7 @@ class CmisManagerTask(threading.Thread):
 
                 # Desired port speed on the host side
                 host_speed = speed
-                host_lane_count = len(lanes.split(','))
+                host_lane_count = self.get_host_lane_count(lport, lanes, gearbox_lanes_dict)
 
                 # double-check the HW presence before moving forward
                 sfp = self.platform_chassis.get_sfp(pport)
@@ -897,7 +923,7 @@ class CmisManagerTask(threading.Thread):
 
                         need_update = self.is_cmis_application_update_required(api, appl, host_lanes_mask)
 
-                        # For ZR module, Datapath needes to be re-initlialized on new channel selection
+                        # For ZR module, Datapath needs to be re-initialized on new channel selection
                         if api.is_coherent_module():
                             freq = self.port_dict[lport]['laser_freq']
                             # If user requested frequency is NOT the same as configured on the module
