@@ -7,6 +7,7 @@ import os
 import ast
 import re
 from natsort import natsorted
+from copy import deepcopy
 
 from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
@@ -24,6 +25,10 @@ MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
+CUSTOM_SERDES_ATTR_PREFIX = 'CUSTOM:'
+CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY = 'attributes'
+CUSTOM_SERDES_ATTRS_KEY_IN_DB = 'custom_serdes_attrs'
+
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
@@ -316,6 +321,90 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
+def str_to_int(int_str):
+    """
+    Convert a string representation of an integer to a 32-bit integer.
+    Args:
+        int_str: string representation of an integer
+    Returns:
+        signed 32-bit integer value, or None if the input is out of range
+    """
+    # hex string:
+    if int_str.startswith('0x'):
+        try:
+            value = int(int_str, 16)            # unsigned value
+        except ValueError:
+            helper_logger.log_error("Invalid hex string value {}".format(int_str))
+            return None
+        if value < 0 or value > (1 << 32) - 1:
+            helper_logger.log_error("hex string value {} out of 32 bits range".format(int_str))
+            return None
+        # if sign bit set, subtract 2**32 to get negative
+        # e.g. 0xFFFFFFFF -> -1, 0xFFFFFFFE -> -2, etc.
+        return value - (1 << 32) if (value & (1 << 31)) else value
+
+    # decimal string:
+    try:
+        value = int(int_str, 10)
+    except ValueError:
+        helper_logger.log_error("Invalid decimal string value {}".format(int_str))
+        return None
+    if value < -(1 << 31) or value > (1 << 31) - 1:
+        helper_logger.log_error("decimal string value {} out of int32 range".format(int_str))
+        return None
+    return value
+
+
+def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
+    """
+    Handle custom SerDes attributes in the media_dict and convert them to JSON.
+
+    Args:
+        media_dict: dictionary containing SerDes settings for all lanes of the port
+        lane_count: number of lanes for this subport
+        subport_num: subport number (1-based), 0 for non-breakout case
+
+    Returns:
+        media_dict: updated media_dict with custom SerDes attributes converted to JSON
+    """
+    # Do deepcopy to avoid modifying the original media_dict
+    media_dict = deepcopy(media_dict)
+    attrs_list = []
+
+    for key, value in list(media_dict.items()):
+        if not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
+            continue
+
+        custom_serdes_attr = key[len(CUSTOM_SERDES_ATTR_PREFIX):]
+        value_list = [str_to_int(lane_value_str)
+                      for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
+        if None in value_list:
+            helper_logger.log_error("Skipping custom serdes attr {} due to invalid integer value".format(custom_serdes_attr))
+            media_dict.pop(key)
+            continue
+
+        attr_dict = {
+            custom_serdes_attr: {
+                'value': value_list
+            }
+        }
+        attrs_list.append(attr_dict)
+
+        # Remove the key from media_dict to avoid duplication
+        media_dict.pop(key)
+
+    if not attrs_list:
+        return media_dict
+
+    # Combine all the custom serdes attributes to a single element,
+    # and put it back into the media_dict to be published in APP DB
+    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
+        {CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
+        separators=(',', ':')  # remove whitespace for optimal payload
+    )
+    return media_dict
+
+
 def notify_media_setting(logical_port_name, transceiver_dict,
                          xcvr_table_helper, port_mapping):
 
@@ -366,6 +455,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         if len(media_dict) == 0:
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
+
+        media_dict = handle_custom_serdes_attrs(media_dict, lane_count, subport_num)
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
