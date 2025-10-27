@@ -764,6 +764,24 @@ class CmisManagerTask(threading.Thread):
 
         return done
 
+    def check_config_in_progress(self, api):
+        """
+        Check if the CMIS configuration state is in progress for any host lane
+
+        Args:
+            api:
+                XcvrApi object
+
+        Returns:
+            Boolean, true if any lanes are in ConfigInProgress state, otherwise false
+        """
+        cerr = api.get_config_datapath_hostlane_status()
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            key = "ConfigStatusLane{}".format(lane + 1)
+            if cerr[key] == 'ConfigInProgress':
+                return True
+        return False
+
     def check_datapath_init_pending(self, api, host_lanes_mask):
         """
         Check if the CMIS datapath init is pending
@@ -1297,6 +1315,14 @@ class CmisManagerTask(threading.Thread):
 
                                     # Set Explicit control bit to apply Custom Host SI settings
                                     ec = 1
+
+                        # Check to make sure no other data paths are being configured
+                        if self.check_config_in_progress(api):
+                            self.log_notice("{}: saw 'ConfigInProgress'".format(lport))
+                            if self.is_timer_expired(expired):
+                                self.log_notice("{}: timeout for clearing 'ConfigInProgress'".format(lport))
+                                self.force_cmis_reinit(lport, retries + 1)
+                            continue
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
