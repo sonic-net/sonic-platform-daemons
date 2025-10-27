@@ -2348,6 +2348,7 @@ class TestXcvrdScript(object):
         mock_get_status_tbl = MagicMock()
         mock_get_status_tbl.set = MagicMock()
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_tbl
+        task.port_dict['Ethernet0'] = dict(asic_id=0)
         task.update_port_transceiver_status_table_sw_cmis_state("Ethernet0", CMIS_STATE_INSERTED)
         assert mock_get_status_tbl.set.call_count == 1
 
