@@ -342,31 +342,39 @@ def convert_to_int32(value):
     Convert value to a signed 32-bit integer.
 
     Args:
-        value: integer or string representation of a hex integer
+        value: hex string (starting with '0x') or decimal string or integer
     Returns:
         signed 32-bit integer value, or None if the value is out of range
     """
-    if isinstance(value, str) and value.startswith('0x'):  # hex string:
+    # hex string:
+    if isinstance(value, str) and value.startswith('0x'):
         try:
-            int_value = int(value, 16)            # unsigned value
+            int_value = int(value, 16)  # unsigned value
         except ValueError:
             helper_logger.log_error("Invalid hex string value {}".format(value))
             return None
         if int_value < 0 or int_value > (1 << 32) - 1:
-            helper_logger.log_error("hex string value {} out of 32 bits range".format(value))
+            helper_logger.log_error("Hex string value {} out of 32 bits range".format(value))
             return None
         # if sign bit set, subtract 2**32 to get negative
         # e.g. 0xFFFFFFFF -> -1, 0xFFFFFFFE -> -2, etc.
         return int_value - (1 << 32) if (int_value & (1 << 31)) else int_value
-    elif isinstance(value, int):  # integer:
-        int_value = value
-        if int_value < -(1 << 31) or int_value > (1 << 31) - 1:
-            helper_logger.log_error("integer value {} out of int32 range".format(value))
-            return None
-        return int_value
 
-    helper_logger.log_error("Input value {} must be an integer or hex string (starting with '0x')".format(value))
-    return None
+    # decimal string or integer:
+    try:
+        # int() can handle both decimal string representations and integer types.
+        int_value = int(value)
+    except ValueError:
+        helper_logger.log_error(
+            "Input value {} must be a hex string (starting with '0x'), decimal string, or integer".format(value)
+        )
+        return None
+
+    if int_value < -(1 << 31) or int_value > (1 << 31) - 1:
+        helper_logger.log_error("Integer value {} out of signed 32-bit integer range".format(int_value))
+        return None
+
+    return int_value
 
 
 def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
