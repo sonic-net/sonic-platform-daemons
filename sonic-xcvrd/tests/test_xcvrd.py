@@ -1516,8 +1516,8 @@ class TestXcvrdScript(object):
         ),
         (
             {
-                'CUSTOM:XYZ': {'lane0': '10', 'lane1': '11', 'lane2': '12', 'lane3': '13'},
-                'CUSTOM:ABC': {'lane0': '1', 'lane1': '2', 'lane2': '3', 'lane3': '4'},
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
             },
             2, 2,
             {
@@ -1526,7 +1526,7 @@ class TestXcvrdScript(object):
         ),
         (
             {
-                'CUSTOM:XYZ': {'lane0': '10', 'lane1': '11', 'lane2': '17592186044415', 'lane3': 'x11'},
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 17592186044415, 'lane3': 'x11'},
             },
             2, 2,
             {},

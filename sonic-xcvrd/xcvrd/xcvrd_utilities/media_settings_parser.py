@@ -168,9 +168,35 @@ def is_si_per_speed_supported(media_dict):
     return LANE_SPEED_KEY_PREFIX in list(media_dict.keys())[0]
 
 
-def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
+def get_serdes_si_setting_val(val_dict, lane_count, subport_num=0):
     """
     Get ASIC side SerDes SI settings for the given logical port (subport)
+
+    Args:
+        val_dict: dictionary containing SerDes settings for all lanes of the port
+                  e.g. {'lane0': '0x1f', 'lane1': '0x1f', 'lane2': '0x1f', 'lane3': '0x1f'}
+        lane_count: number of lanes for this subport
+        subport_num: subport number (1-based), 0 for non-breakout case
+
+    Returns:
+        list containing SerDes settings for the given subport
+        e.g. ['0x1f', '0x1f', '0x1f', '0x1f']
+    """
+    start_lane_idx = (subport_num - 1) * lane_count if subport_num else 0
+    if start_lane_idx + lane_count > len(val_dict):
+        helper_logger.log_notice(
+            "start_lane_idx + lane_count ({}) is beyond length of {}, "
+            "default start_lane_idx to 0 as a best effort".format(start_lane_idx + lane_count, val_dict)
+        )
+        start_lane_idx = 0
+    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
+    # If subport_num ('subport') is not specified in config_db, return values for first lane_count number of lanes
+    return val_list[start_lane_idx:start_lane_idx + lane_count]
+
+
+def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
+    """
+    Get ASIC side SerDes SI settings string for the given logical port (subport)
 
     Args:
         val_dict: dictionary containing SerDes settings for all lanes of the port
@@ -182,16 +208,7 @@ def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
         string containing SerDes settings for the given subport, separated by comma
         e.g. '0x1f,0x1f,0x1f,0x1f'
     """
-    start_lane_idx = (subport_num - 1) * lane_count if subport_num else 0
-    if start_lane_idx + lane_count > len(val_dict):
-        helper_logger.log_notice(
-            "start_lane_idx + lane_count ({}) is beyond length of {}, "
-            "default start_lane_idx to 0 as a best effort".format(start_lane_idx + lane_count, val_dict)
-        )
-        start_lane_idx = 0
-    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
-    # If subport_num ('subport') is not specified in config_db, return values for first lane_count number of lanes
-    return ','.join(val_list[start_lane_idx:start_lane_idx + lane_count])
+    return ','.join(get_serdes_si_setting_val(val_dict, lane_count, subport_num))
 
 
 def get_media_settings_for_speed(settings_dict, lane_speed_key):
@@ -320,38 +337,36 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
-def str_to_int(int_str):
+def convert_to_int32(value):
     """
-    Convert a string representation of an integer to a 32-bit integer.
+    Convert value to a signed 32-bit integer.
+
     Args:
-        int_str: string representation of an integer
+        value: integer or string representation of a hex integer
     Returns:
-        signed 32-bit integer value, or None if the input is out of range
+        signed 32-bit integer value, or None if the value is out of range
     """
-    # hex string:
-    if int_str.startswith('0x'):
+    if isinstance(value, str) and value.startswith('0x'):  # hex string:
         try:
-            value = int(int_str, 16)            # unsigned value
+            int_value = int(value, 16)            # unsigned value
         except ValueError:
-            helper_logger.log_error("Invalid hex string value {}".format(int_str))
+            helper_logger.log_error("Invalid hex string value {}".format(value))
             return None
-        if value < 0 or value > (1 << 32) - 1:
-            helper_logger.log_error("hex string value {} out of 32 bits range".format(int_str))
+        if int_value < 0 or int_value > (1 << 32) - 1:
+            helper_logger.log_error("hex string value {} out of 32 bits range".format(value))
             return None
         # if sign bit set, subtract 2**32 to get negative
         # e.g. 0xFFFFFFFF -> -1, 0xFFFFFFFE -> -2, etc.
-        return value - (1 << 32) if (value & (1 << 31)) else value
+        return int_value - (1 << 32) if (int_value & (1 << 31)) else int_value
+    elif isinstance(value, int):  # integer:
+        int_value = value
+        if int_value < -(1 << 31) or int_value > (1 << 31) - 1:
+            helper_logger.log_error("integer value {} out of int32 range".format(value))
+            return None
+        return int_value
 
-    # decimal string:
-    try:
-        value = int(int_str, 10)
-    except ValueError:
-        helper_logger.log_error("Invalid decimal string value {}".format(int_str))
-        return None
-    if value < -(1 << 31) or value > (1 << 31) - 1:
-        helper_logger.log_error("decimal string value {} out of int32 range".format(int_str))
-        return None
-    return value
+    helper_logger.log_error("Input value {} must be an integer or hex string (starting with '0x')".format(value))
+    return None
 
 
 def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
@@ -366,7 +381,8 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
     Returns:
         media_dict: updated media_dict with custom SerDes attributes converted to JSON
     """
-    # Do deepcopy to avoid modifying the original media_dict
+    # Perform a deepcopy to avoid modifying the original media_dict, which may be a reference to the global 'g_dict'.
+    # Modifying g_dict would affect subsequent lookups and cause incorrect behavior.
     media_dict = deepcopy(media_dict)
     attrs_list = []
 
@@ -375,8 +391,8 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
             continue
 
         custom_serdes_attr = key[len(CUSTOM_SERDES_ATTR_PREFIX):]
-        value_list = [str_to_int(lane_value_str)
-                      for lane_value_str in get_serdes_si_setting_val_str(value, lane_count, subport_num).split(',')]
+        value_list = [convert_to_int32(lane_value)
+                      for lane_value in get_serdes_si_setting_val(value, lane_count, subport_num)]
         if None in value_list:
             helper_logger.log_error("Skipping custom serdes attr {} due to invalid integer value".format(custom_serdes_attr))
             media_dict.pop(key)
