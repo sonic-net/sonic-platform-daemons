@@ -5,6 +5,7 @@ from sonic_platform_base import module_base
 from sonic_platform_base import psu_base
 from sonic_platform_base import sfp_base
 from sonic_platform_base import thermal_base
+from sonic_platform_base import liquid_cooling_base
 from sonic_platform_base.sonic_thermal_control import thermal_manager_base
 
 
@@ -188,6 +189,24 @@ class MockPsu(psu_base.PsuBase):
     def is_replaceable(self):
         return self._replaceable
 
+class MockLiquidCoolingSensor(liquid_cooling_base.LeakageSensorBase):
+    def __init__(self):
+        super(MockLiquidCoolingSensor, self).__init__()
+        self._name = None
+        self._presence = True
+        self._model = 'Liquid Cooling Sensor Model'
+        self._serial = 'Liquid Cooling Sensor Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
+
+class MockLiquidCooling(liquid_cooling_base.LiquidCoolingBase):
+    def __init__(self):
+        super(MockLiquidCooling, self).__init__(1, [])
+        self._name = None
+        self._presence = True
+        self._model = 'Liquid Cooling Model'
+        self._serial = 'Liquid Cooling Serial'
 
 class MockSfp(sfp_base.SfpBase):
     def __init__(self):
@@ -406,6 +425,9 @@ class MockChassis(chassis_base.ChassisBase):
         module._psu_list.append(psu)
         module._fan_list.append(fan)
         module._thermal_list.append(MockThermal())
+
+    def get_liquid_cooling(self):
+        return MockLiquidCooling()
 
     def is_modular_chassis(self):
         return self._is_chassis_system
