@@ -30,6 +30,7 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
+CHASSIS_GET_ERROR = 2
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
@@ -821,7 +822,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.wait_time = self.INTERVAL
 
-        self.chassis = sonic_platform.platform.Platform().get_chassis()
+        try:
+            self.chassis = sonic_platform.platform.Platform().get_chassis()
+        except Exception as e:
+            self.log_error("Failed to get chassis due to {}".format(repr(e)))
+            sys.exit(CHASSIS_GET_ERROR)
 
         self.thermal_monitor = ThermalMonitor(self.chassis)
         self.thermal_monitor.task_run()
