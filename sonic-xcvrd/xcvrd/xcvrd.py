@@ -338,6 +338,7 @@ class CmisManagerTask(threading.Thread):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.dp_init_pending_dict = {}
 
     def log_debug(self, message):
         helper_logger.log_debug("CMIS: {}".format(message))
@@ -360,6 +361,9 @@ class CmisManagerTask(threading.Thread):
 
         fvs = swsscommon.FieldValuePairs([('cmis_state', cmis_state_to_set)])
         status_table.set(lport, fvs)
+        if cmis_state_to_set in ( CMIS_STATE_INSERTED, CMIS_STATE_FAILED, ):
+            pport = self.port_dict[lport].get('index', "-1")
+            self.clear_data_path_init_pending(pport, lport)
 
     def on_port_update_event(self, port_change_event):
         if port_change_event.event_type not in [port_change_event.PORT_SET, port_change_event.PORT_DEL]:
@@ -789,6 +793,31 @@ class CmisManagerTask(threading.Thread):
                 break
 
         return pending
+
+    def check_any_datapath_init_pending(self, pport, lport):
+        """
+        Check if the CMIS datapath init is pending on any lanes
+
+        Args:
+            api:
+                XcvrApi object
+
+        Returns:
+            Boolean, true if any lanes are pending datapath init, otherwise false
+        """
+        if pport not in self.dp_init_pending_dict:
+            self.log_notice("{}: Adding datapath init pending flag".format(lport))
+            self.dp_init_pending_dict[pport] = lport
+        return not (self.dp_init_pending_dict[pport] == lport)
+
+    def clear_data_path_init_pending(self, pport, lport):
+        """
+        Clear the datapath init pending flag
+        """
+        if pport in self.dp_init_pending_dict:
+            if lport == self.dp_init_pending_dict[pport]:
+                self.log_notice("{}: Clearing datapath init pending flag".format(lport))
+                del self.dp_init_pending_dict[pport]
 
     def check_datapath_state(self, api, host_lanes_mask, states):
         """
@@ -1298,6 +1327,19 @@ class CmisManagerTask(threading.Thread):
                                     # Set Explicit control bit to apply Custom Host SI settings
                                     ec = 1
 
+                        # Some transceiver firmwares clear DpInitPending on unrelated datapaths when
+                        # Apply_DataPathInit is written for a different datapath. So delay configuration
+                        # until DpInitPending is cleared on all datapaths.
+                        if hasattr(api, 'get_cmis_rev'):
+                            # Check datapath init pending on module that supports CMIS 5.x
+                            majorRev = int(api.get_cmis_rev().split('.')[0])
+                            if majorRev >= 5 and self.check_any_datapath_init_pending(pport, lport):
+                                self.log_notice("{}: datapath init was pending, delay config".format(lport))
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: timeout for clearing data path init pending".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
+
                         # D.1.3 Software Configuration and Initialization
                         api.set_application(host_lanes_mask, appl, ec)
                         if not api.scs_apply_datapath_init(host_lanes_mask):
@@ -1340,6 +1382,7 @@ class CmisManagerTask(threading.Thread):
 
                         # D.1.3 Software Configuration and Initialization
                         api.set_datapath_init(host_lanes_mask)
+                        self.clear_data_path_init_pending(pport, lport)
                         dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
                         self.log_notice("{}: DpInit duration {} secs".format(lport, dpInitDuration))
                         self.update_cmis_state_expiration_time(lport, dpInitDuration)
