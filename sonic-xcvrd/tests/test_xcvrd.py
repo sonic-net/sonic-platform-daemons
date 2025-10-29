@@ -3919,6 +3919,37 @@ class TestXcvrdScript(object):
         assert dom_info_dict == expected_dom_info_dict
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status')
+    @patch('time.sleep', MagicMock())
+    def test_DomThermalInfoUpdateTask_task_worker(self, mock_detect_error):
+        poll_interval = 10
+        port_mapping = PortMapping()
+        port_mapping.physical_to_logical = {
+            1: ['Ethernet0'],
+            2: ['Ethernet4'],
+            3: ['Ethernet8'],
+        }
+        port_mapping.logical_to_asic = {
+            'Ethernet0': 0,
+            'Ethernet4': 0,
+            'Ethernet8': None,
+        }
+        dom_monitoring_disabled = {
+            'Ethernet0': False,
+            'Ethernet4': True,
+            'Ethernet8': False,
+        }
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        task = DomThermalInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, poll_interval)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
+        mock_detect_error.return_value = False
+        task.is_port_dom_monitoring_disabled = lambda p: dom_monitoring_disabled[p]
+        task.task_worker()
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     def test_DomInfoUpdateTask_handle_port_change_event(self, mock_del_port_sfp_dom_info_from_db):
         port_mapping = PortMapping()
@@ -4664,6 +4695,16 @@ class TestXcvrdScript(object):
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         assert common._wrapper_get_transceiver_firmware_info(1) == {}
+
+    def test_get_transceiver_dom_temperature(self):
+        mock_sfp = MagicMock()
+        dom_utils = DOMUtils({1 : mock_sfp}, helper_logger)
+
+        mock_sfp.get_temperature.return_value = 42.
+        assert 'temperature' in dom_utils.get_transceiver_dom_temperature(1)
+
+        mock_sfp.get_temperature.side_effect = NotImplementedError
+        assert dom_utils.get_transceiver_dom_temperature(1) == {}
 
     def test_get_transceiver_dom_sensor_real_value(self):
         mock_sfp = MagicMock()
