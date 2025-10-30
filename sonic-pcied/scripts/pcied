@@ -46,7 +46,13 @@ exit_code = 0
 # wrapper functions to call the platform api
 def load_platform_pcieutil():
     _platform_pcieutil = None
-    (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+
+    try:
+        (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+    except (OSError, TypeError) as e:
+        log.log_error(f"Unable to get device info from Platform : {type(e).__name__} : {e}")
+        return _platform_pcieutil
+
     try:
         from sonic_platform.pcie import Pcie
         _platform_pcieutil = Pcie(platform_path)

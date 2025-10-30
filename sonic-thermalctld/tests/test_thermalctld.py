@@ -294,7 +294,7 @@ class TestThermalMonitor(object):
     """
     def test_main(self):
         mock_chassis = MockChassis()
-        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis)
+        thermal_monitor = thermalctld.ThermalMonitor(mock_chassis, 5, 60, 30)
         thermal_monitor.fan_updater.update = mock.MagicMock()
         thermal_monitor.temperature_updater.update = mock.MagicMock()
 
@@ -680,7 +680,7 @@ def test_updater_thermal_check_min_max():
 
 def test_signal_handler():
     # Test SIGHUP
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -695,7 +695,7 @@ def test_signal_handler():
     assert thermalctld.exit_code == thermalctld.ERR_UNKNOWN
 
     # Test SIGINT
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -712,7 +712,7 @@ def test_signal_handler():
 
     # Test SIGTERM
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -729,7 +729,7 @@ def test_signal_handler():
 
     # Test an unhandled signal
     thermalctld.exit_code = thermalctld.ERR_UNKNOWN
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.set = mock.MagicMock()
     daemon_thermalctld.log_info = mock.MagicMock()
     daemon_thermalctld.log_warning = mock.MagicMock()
@@ -745,14 +745,14 @@ def test_signal_handler():
 
 
 def test_daemon_run():
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=True)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
     daemon_thermalctld.deinit() # Deinit becuase the test will hang if we assert
     assert ret is False
 
-    daemon_thermalctld = thermalctld.ThermalControlDaemon()
+    daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
     daemon_thermalctld.stop_event.wait = mock.MagicMock(return_value=False)
     daemon_thermalctld.thermal_manager.get_interval = mock.MagicMock(return_value=60)
     ret = daemon_thermalctld.run()
@@ -797,3 +797,54 @@ def test_main(mock_run):
     ret = thermalctld.main()
     assert mock_run.call_count == 1
     assert  ret != 0
+
+class TestThermalControlDaemon(object):
+    """
+    Test cases to cover functionality in ThermalControlDaemon class
+    """
+    def test_get_chassis_exception(self):
+        """Test ThermalControlDaemon initialization when get_chassis() raises exception"""
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class, \
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error:
+            # Mock Platform to raise exception on get_chassis()
+            mock_platform_instance = mock.MagicMock()
+            mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
+            mock_platform_class.return_value = mock_platform_instance
+            
+            # ThermalControlDaemon should raise SystemExit with CHASSIS_GET_ERROR code when chassis initialization fails
+            with pytest.raises(SystemExit) as exc_info:
+                daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            
+            # Verify it exits with the correct error code
+            assert exc_info.value.code == thermalctld.CHASSIS_GET_ERROR
+            
+            # Verify chassis initialization failure was logged
+            mock_log_error.assert_called()
+            expected_msg = "Failed to get chassis due to Exception('Failed to initialize chassis')"
+            assert any(
+                expected_msg in call_args[0]
+                for call_args, _ in mock_log_error.call_args_list
+            ), "Expected chassis initialization error not found in log_error calls"
+
+    def test_get_chassis_success(self):
+        """Test ThermalControlDaemon initialization when get_chassis() succeeds"""
+        with mock.patch('thermalctld.sonic_platform.platform.Platform') as mock_platform_class, \
+              mock.patch.object(thermalctld.ThermalControlDaemon, 'log_error') as mock_log_error:
+            # Mock Platform to return chassis successfully
+            mock_chassis = mock.MagicMock()
+            mock_platform_instance = mock.MagicMock()
+            mock_platform_instance.get_chassis.return_value = mock_chassis
+            mock_platform_class.return_value = mock_platform_instance
+            
+            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            
+            # Verify chassis was set correctly
+            assert daemon_thermalctld.chassis is mock_chassis
+            
+            # Verify no chassis initialization error was logged
+            for call_args in mock_log_error.call_args_list:
+                args, _ = call_args
+                assert "Failed to get chassis due to" not in args[0]
+            
+            # Clean up
+            daemon_thermalctld.deinit()

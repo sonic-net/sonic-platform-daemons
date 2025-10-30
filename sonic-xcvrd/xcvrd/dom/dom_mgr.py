@@ -131,7 +131,7 @@ class DomInfoUpdateTask(threading.Thread):
             return False
 
         cmis_state = common.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
-        if cmis_state not in xcvrd.CMIS_TERMINAL_STATES:
+        if cmis_state not in common.CMIS_TERMINAL_STATES:
             return True
         else:
             return False
@@ -461,3 +461,7 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
+    def update_log_level(self):
+        """Call the logger's update log level method.
+        """
+        return self.helper_logger.update_log_level()
