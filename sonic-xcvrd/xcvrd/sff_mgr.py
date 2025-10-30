@@ -440,16 +440,17 @@ class SffManagerTask(threading.Thread):
                     continue
                 
                 if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
-                    set_lp_success = (
-                        sfp.set_lpmode(False) 
-                        if isinstance(api, Sff8472Api) 
-                        else api.set_lpmode(False)
-                    )
-                    if not set_lp_success:
-                        self.log_error(
-                            "{}: Failed to take module out of low power mode.".format(
-                                lport)
+                    if api.get_lpmode_support():
+                        set_lp_success = (
+                            sfp.set_lpmode(False)
+                            if isinstance(api, Sff8472Api)
+                            else api.set_lpmode(False)
                         )
+                        if not set_lp_success:
+                            self.log_error(
+                                "{}: Failed to take module out of low power mode.".format(
+                                    lport)
+                            )
 
                 if active_lanes is None:
                     active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
