@@ -16,6 +16,7 @@ TRANSCEIVER_DOM_FLAG_CHANGE_COUNT_TABLE = 'TRANSCEIVER_DOM_FLAG_CHANGE_COUNT'
 TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE = 'TRANSCEIVER_DOM_FLAG_SET_TIME'
 TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE = 'TRANSCEIVER_DOM_FLAG_CLEAR_TIME'
 TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
+TRANSCEIVER_DOM_TEMPERATURE_TABLE = 'TRANSCEIVER_DOM_TEMPERATURE'
 TRANSCEIVER_STATUS_TABLE = 'TRANSCEIVER_STATUS'
 TRANSCEIVER_STATUS_FLAG_TABLE = 'TRANSCEIVER_STATUS_FLAG'
 TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE = 'TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT'
@@ -58,6 +59,7 @@ class XcvrTableHelper:
         self.state_db = {}
         self.appl_db = {}
         self.cfg_db = {}
+        self.dom_temperature_tbl = {}
         self.dom_flag_tbl = {}
         self.dom_flag_change_count_tbl = {}
         self.dom_flag_set_time_tbl = {}
@@ -84,6 +86,7 @@ class XcvrTableHelper:
             self.dom_flag_set_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE)
             self.dom_flag_clear_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE)
             self.dom_threshold_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_THRESHOLD_TABLE)
+            self.dom_temperature_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_TEMPERATURE_TABLE)
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_TABLE)
             self.status_flag_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_TABLE)
             self.status_flag_change_count_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE)
@@ -125,6 +128,9 @@ class XcvrTableHelper:
 
     def get_dom_threshold_tbl(self, asic_id):
         return self.dom_threshold_tbl[asic_id]
+
+    def get_dom_temperature_tbl(self, asic_id):
+        return self.dom_temperature_tbl[asic_id]
 
     def get_status_tbl(self, asic_id):
         return self.status_tbl[asic_id]
