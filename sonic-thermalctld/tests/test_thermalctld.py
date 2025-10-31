@@ -813,7 +813,7 @@ class TestThermalControlDaemon(object):
             
             # ThermalControlDaemon should raise SystemExit with CHASSIS_GET_ERROR code when chassis initialization fails
             with pytest.raises(SystemExit) as exc_info:
-                daemon_thermalctld = thermalctld.ThermalControlDaemon()
+                daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
             
             # Verify it exits with the correct error code
             assert exc_info.value.code == thermalctld.CHASSIS_GET_ERROR
@@ -836,7 +836,7 @@ class TestThermalControlDaemon(object):
             mock_platform_instance.get_chassis.return_value = mock_chassis
             mock_platform_class.return_value = mock_platform_instance
             
-            daemon_thermalctld = thermalctld.ThermalControlDaemon()
+            daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
             
             # Verify chassis was set correctly
             assert daemon_thermalctld.chassis is mock_chassis
