@@ -78,6 +78,10 @@ class MockModule(MockDevice):
     def module_post_startup(self):
         pass
 
+    def set_admin_state_gracefully(self, up):
+        """Mock implementation of set_admin_state_gracefully"""
+        return self.set_admin_state(up)
+
     def is_midplane_reachable(self):
         return self.midplane_access
 
