@@ -230,6 +230,7 @@ class TestDaemonPcied(object):
         daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
         daemon_pcied.update_pcie_devices_status_db = mock.MagicMock()
         daemon_pcied.check_n_update_pcie_aer_stats = mock.MagicMock()
+        daemon_pcied.redisPipeline.flush = mock.MagicMock()
         pcied.platform_pcieutil.get_pcie_check = mock.MagicMock(
             return_value=[
                 {"result": "Failed", "bus": "03", "dev": "00", "fn": "1", "name": "PCIe Device 1"},
@@ -239,6 +240,7 @@ class TestDaemonPcied(object):
         daemon_pcied.check_pcie_devices()
         assert daemon_pcied.update_pcie_devices_status_db.call_count == 1
         assert daemon_pcied.check_n_update_pcie_aer_stats.call_count == 0
+        assert daemon_pcied.redisPipeline.flush.call_count == 1
 
     @mock.patch('pcied.device_info.is_smartswitch', mock.MagicMock(return_value=False))
     @mock.patch('pcied.DaemonPcied.is_dpu_in_detaching_mode', mock.MagicMock(return_value=False))
@@ -358,20 +360,25 @@ class TestDaemonPcied(object):
         daemon_pcied.log_error = mock.MagicMock()
         daemon_pcied.device_table = mock.MagicMock()
         daemon_pcied.device_name = "PCIe Device 1"
+        daemon_pcied.pcied_cache[daemon_pcied.device_name] = mock.MagicMock()
 
         # Case 1: Test when aer_stats is None
         daemon_pcied.aer_stats = None
         daemon_pcied.update_aer_to_statedb()
         daemon_pcied.log_debug.assert_called_once_with("PCIe device PCIe Device 1 has no AER Stats")
+        daemon_pcied.pcied_cache[daemon_pcied.device_name].pop.assert_called_once()
         daemon_pcied.device_table.set.assert_not_called()
         daemon_pcied.log_debug.reset_mock()
+        daemon_pcied.pcied_cache[daemon_pcied.device_name].reset_mock()
 
         # Case 2: Test when aer_stats is empty
         daemon_pcied.aer_stats = {'correctable': {}, 'fatal': {}, 'non_fatal': {}}
         daemon_pcied.update_aer_to_statedb()
         daemon_pcied.log_debug.assert_called_once_with("PCIe device PCIe Device 1 has no AER attributes")
+        daemon_pcied.pcied_cache[daemon_pcied.device_name].pop.assert_called_once()
         daemon_pcied.device_table.set.assert_not_called()
         daemon_pcied.log_debug.reset_mock()
+        daemon_pcied.pcied_cache[daemon_pcied.device_name].reset_mock()
 
         # Case 3: Test when aer_stats has valid data
         daemon_pcied.aer_stats = pcie_aer_stats_no_err
@@ -389,6 +396,8 @@ class TestDaemonPcied(object):
             pcied.swsscommon.FieldValuePairs(expected_fields)
         )
         daemon_pcied.log_debug.assert_not_called()
+        daemon_pcied.log_error.assert_not_called()
+        daemon_pcied.pcied_cache[daemon_pcied.device_name].pop.assert_not_called()
         daemon_pcied.device_table.set.reset_mock()
 
         # Case 4: Test exception handling
@@ -423,3 +432,234 @@ class TestDaemonPcied(object):
             )
 
             mock_exit.assert_called_once_with(pcied.PCIEUTIL_CONF_FILE_ERROR)
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_device_id_unchanged(self, mock_read):
+        """Test that device_table.set is NOT called when device ID hasn't changed"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_aer_to_statedb = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=pcie_aer_stats_no_err)
+
+        # First call: Device ID is new, should write to DB
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device ID was written to DB, cache was populated with device ID and AER stats was written to DB
+        daemon_pcied.device_table.set.assert_called_once_with(
+            '00:01.0', pcied.swsscommon.FieldValuePairs([('id', '1714')])
+        )
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.update_aer_to_statedb.call_count == 1
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+        daemon_pcied.update_aer_to_statedb.reset_mock()
+
+        # Second call: Same device ID, should NOT write device ID to DB
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device_table.set was NOT called for device ID (cache hit)
+        daemon_pcied.device_table.set.assert_not_called()
+
+        # But update_aer_to_statedb should still be called (AER stats are considered "new" first time)
+        assert daemon_pcied.update_aer_to_statedb.call_count == 1
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_device_id_changed(self, mock_read):
+        """Test that device_table.set IS called when device ID changes"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_aer_to_statedb = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=pcie_aer_stats_no_err)
+
+        # First call: Initial device ID. should write device ID to DB, populate cache and write AER stats to DB
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        daemon_pcied.device_table.set.assert_called_once_with(
+            '00:01.0', pcied.swsscommon.FieldValuePairs([('id', '1714')])
+        )
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.update_aer_to_statedb.call_count == 1
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+        daemon_pcied.update_aer_to_statedb.reset_mock()
+
+        # Second call: Device ID changed (e.g., device was replaced)
+        mock_read.return_value = '1715'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device_table.set WAS called for new device ID
+        daemon_pcied.device_table.set.assert_called_once_with(
+            '00:01.0', pcied.swsscommon.FieldValuePairs([('id', '1715')])
+        )
+
+        # Verify cache was updated with new device ID and AER stats was also written to DB
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1715'
+        daemon_pcied.update_aer_to_statedb.assert_called_once()
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_aer_stats_unchanged(self, mock_read):
+        """Test that update_aer_to_statedb is NOT called when AER stats haven't changed"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.log_debug = mock.MagicMock()
+        daemon_pcied.log_error = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=pcie_aer_stats_no_err)
+
+        # NOT mocking update_aer_to_statedb as we're testing its cache update functionality here
+        # First call: Initial AER stats
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device table was updated on first call and cache was populated with AER stats
+        assert daemon_pcied.device_table.set.call_count == 2  # once for device ID, once for AER stats
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.pcied_cache['00:01.0']['aer_stats'] == pcie_aer_stats_no_err
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+
+        # Second call: Same AER stats, should NOT update DB
+        pcied.platform_pcieutil.get_pcie_aer_stats.return_value = pcie_aer_stats_no_err
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device_table.set was NOT called (both device ID and AER stats are cached)
+        daemon_pcied.device_table.set.assert_not_called()
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_aer_stats_changed(self, mock_read):
+        """Test that update_aer_to_statedb IS called when AER stats change"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.log_debug = mock.MagicMock()
+        daemon_pcied.log_error = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+
+        # NOT mocking update_aer_to_statedb as we're testing its cache update functionality here
+        initial_aer_stats = {'correctable': {'field1': '0', 'field2': '0'},
+                        'fatal': {'field3': '0', 'field4': '0'},
+                        'non_fatal': {'field5': '0', 'field6': '0'}}
+
+        changed_aer_stats = {'correctable': {'field1': '1', 'field2': '0'},  # field1 changed
+                        'fatal': {'field3': '0', 'field4': '0'},
+                        'non_fatal': {'field5': '0', 'field6': '0'}}
+
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=initial_aer_stats)
+
+        # First call: Initial AER stats
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        assert daemon_pcied.device_table.set.call_count == 2  # once for device ID, once for AER stats
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.pcied_cache['00:01.0']['aer_stats'] == initial_aer_stats
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+
+        # Second call: AER stats changed
+        pcied.platform_pcieutil.get_pcie_aer_stats.return_value = changed_aer_stats
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify device_table.set was called only once for the AER stats (not for device ID since it's cached and remains unchanged)
+        daemon_pcied.device_table.set.assert_called_once()
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+
+        # Verify cache was updated with new stats
+        assert daemon_pcied.pcied_cache['00:01.0']['aer_stats'] == changed_aer_stats
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_device_removal(self, mock_read):
+        """Test that cache entry is removed when device is no longer present"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.update_aer_to_statedb = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=pcie_aer_stats_no_err)
+
+        # First call: Device is present
+        mock_read.return_value = '1714'
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify cache entry was created
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.device_table.set.call_count == 1  # for device ID
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+
+        # Second call: Device is removed (read_id_file returns None)
+        mock_read.return_value = None
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify cache entry was removed and no DB update was attempted
+        assert '00:01.0' not in daemon_pcied.pcied_cache
+        daemon_pcied.device_table.set.assert_not_called()
+
+
+    @mock.patch('pcied.load_platform_pcieutil', mock.MagicMock())
+    @mock.patch('pcied.read_id_file')
+    def test_cache_multiple_devices(self, mock_read):
+        """Test that cache correctly handles multiple devices independently"""
+        daemon_pcied = pcied.DaemonPcied(SYSLOG_IDENTIFIER)
+        daemon_pcied.log_debug = mock.MagicMock()
+        daemon_pcied.log_error = mock.MagicMock()
+        daemon_pcied.device_table = mock.MagicMock()
+
+        aer_stats_dev1 = {'correctable': {'field1': '0'}, 'fatal': {}, 'non_fatal': {}}
+        aer_stats_dev2 = {'correctable': {'field1': '1'}, 'fatal': {}, 'non_fatal': {}}
+
+        # Device 1: 00:01.0
+        mock_read.return_value = '1714'
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=aer_stats_dev1)
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Device 2: 00:02.0
+        mock_read.return_value = '1715'
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=aer_stats_dev2)
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 2, 0)
+
+        # Verify both devices are in cache
+        assert '00:01.0' in daemon_pcied.pcied_cache
+        assert '00:02.0' in daemon_pcied.pcied_cache
+
+        # Verify each device has correct data
+        assert daemon_pcied.pcied_cache['00:01.0']['device_id'] == '1714'
+        assert daemon_pcied.pcied_cache['00:02.0']['device_id'] == '1715'
+        assert daemon_pcied.pcied_cache['00:01.0']['aer_stats'] == aer_stats_dev1
+        assert daemon_pcied.pcied_cache['00:02.0']['aer_stats'] == aer_stats_dev2
+        assert daemon_pcied.device_table.set.call_count == 4  # 2 devices x (1 for ID + 1 for AER stats)
+
+        # Reset mock
+        daemon_pcied.device_table.set.reset_mock()
+
+        # Update only Device 1's stats
+        aer_stats_dev1_updated = {'correctable': {'field1': '2'}, 'fatal': {}, 'non_fatal': {}}
+        mock_read.return_value = '1714'
+        pcied.platform_pcieutil.get_pcie_aer_stats = mock.MagicMock(return_value=aer_stats_dev1_updated)
+        daemon_pcied.check_n_update_pcie_aer_stats(0, 1, 0)
+
+        # Verify Device 1's AER stats were updated in DB (should be called once for updated stats)
+        assert daemon_pcied.device_table.set.call_count == 1
+        assert daemon_pcied.pcied_cache['00:01.0']['aer_stats'] == aer_stats_dev1_updated
+
+        # Verify Device 2's cache is unchanged
+        assert daemon_pcied.pcied_cache['00:02.0']['aer_stats'] == aer_stats_dev2
