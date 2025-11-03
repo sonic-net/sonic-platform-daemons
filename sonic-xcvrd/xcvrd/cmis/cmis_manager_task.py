@@ -706,11 +706,8 @@ class CmisManagerTask(threading.Thread):
 
         return expired_time <= current_time
 
-    def process_single_lport(self, lport, info):
+    def process_single_lport(self, lport, info, gearbox_lanes_dict):
         is_fast_reboot = common.is_fast_reboot_enabled()
-
-        # Cache gearbox line lanes dictionary for this set of iterations over the port_dict
-        gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
         if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
@@ -1093,6 +1090,9 @@ class CmisManagerTask(threading.Thread):
             # Handle port change event from main thread
             port_change_observer.handle_port_update_event()
 
+            # Cache gearbox line lanes dictionary once per iteration over all ports
+            gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():
                     break
@@ -1100,7 +1100,7 @@ class CmisManagerTask(threading.Thread):
                 if lport not in self.port_dict:
                     continue
 
-                self.process_single_lport(lport, info)
+                self.process_single_lport(lport, info, gearbox_lanes_dict)
 
         self.log_notice("Stopped")
 
