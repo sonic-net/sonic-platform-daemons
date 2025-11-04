@@ -476,8 +476,9 @@ class DaemonPsud(daemon_base.DaemonBase):
         for psu_index in range(1, self.num_psus + 1):
             self.psu_tbl._del(get_psu_key(psu_index))
 
-        self.chassis_tbl._del(CHASSIS_INFO_KEY)
-        self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        if self.chassis_tbl is not None:
+            self.chassis_tbl._del(CHASSIS_INFO_KEY)
+            self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
