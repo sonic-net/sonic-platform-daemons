@@ -133,6 +133,9 @@ def _wrapper_get_psu_presence(logger, psu_index):
                 return psu.get_presence()
             except NotImplementedError:
                 pass
+            except Exception as e:
+                logger.log_warning("Exception in psu.get_presence() for PSU {}: {}".format(psu_index, str(e)))
+                return False
     if platform_psuutil is not None:
         try:
             return platform_psuutil.get_psu_presence(psu_index)
@@ -153,6 +156,9 @@ def _wrapper_get_psu_status(logger, psu_index):
                 return psu.get_powergood_status()
             except NotImplementedError:
                 pass
+            except Exception as e:
+                logger.log_warning("Exception in psu.get_powergood_status() for PSU {}: {}".format(psu_index, str(e)))
+                return False
     if platform_psuutil is not None:
         try:
             return platform_psuutil.get_psu_status(psu_index)
@@ -180,6 +186,8 @@ def get_psu_key(psu_index):
             except IndexError:
                 # some functionality is expectent on returning an expected key even if the psu object itself does not exist
                 pass
+            except Exception as e:
+                return False
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
 
 

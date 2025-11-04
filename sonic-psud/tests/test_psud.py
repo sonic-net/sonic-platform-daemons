@@ -121,6 +121,23 @@ def test_wrapper_get_psu_presence():
     psud.platform_psuutil.get_psu_presence.reset_mock()
     mock_logger.log_error.reset_mock()
 
+    # Test psu.get_presence() raises general exception
+    psud.platform_chassis.get_psu.return_value = mock_psu
+    mock_psu.get_presence.side_effect = RuntimeError("Hardware error")
+    result = psud._wrapper_get_psu_presence(mock_logger, 1)
+    assert result is False
+    psud.platform_chassis.get_psu.assert_called_with(0)
+    mock_psu.get_presence.assert_called_once()
+    assert mock_logger.log_warning.call_count == 1
+    mock_logger.log_warning.assert_called_with("Exception in psu.get_presence() for PSU 1: Hardware error")
+
+    # Reset mocks
+    psud.platform_chassis.get_psu.reset_mock()
+    mock_psu.get_presence.reset_mock()
+    psud.platform_psuutil.get_psu_presence.reset_mock()
+    mock_logger.log_warning.reset_mock()
+    mock_logger.log_error.reset_mock()
+
     # Test new platform API not available
     psud.platform_chassis = None
     result = psud._wrapper_get_psu_presence(mock_logger, 1)
@@ -275,6 +292,23 @@ def test_wrapper_get_psu_status():
     psud.platform_psuutil.get_psu_status.reset_mock()
     mock_logger.log_error.reset_mock()
 
+    # Test psu.get_powergood_status() raises general exception
+    psud.platform_chassis.get_psu.return_value = mock_psu
+    mock_psu.get_powergood_status.side_effect = RuntimeError("Hardware error")
+    result = psud._wrapper_get_psu_status(mock_logger, 1)
+    assert result is False
+    psud.platform_chassis.get_psu.assert_called_with(0)
+    mock_psu.get_powergood_status.assert_called_once()
+    assert mock_logger.log_warning.call_count == 1
+    mock_logger.log_warning.assert_called_with("Exception in psu.get_powergood_status() for PSU 1: Hardware error")
+
+    # Reset mocks
+    psud.platform_chassis.get_psu.reset_mock()
+    mock_psu.get_powergood_status.reset_mock()
+    psud.platform_psuutil.get_psu_status.reset_mock()
+    mock_logger.log_warning.reset_mock()
+    mock_logger.log_error.reset_mock()
+
     # Test new platform API not available
     psud.platform_chassis = None
     result = psud._wrapper_get_psu_status(mock_logger, 1)
@@ -370,6 +404,17 @@ def test_get_psu_key():
     mock_psu.get_name.side_effect = IndexError
     result = psud.get_psu_key(4)
     assert result == "PSU 4"
+    psud.platform_chassis.get_psu.assert_called_with(3)  # psu_index - 1
+    mock_psu.get_name.assert_called_once()
+
+    # Reset mocks
+    psud.platform_chassis.get_psu.reset_mock()
+    mock_psu.get_name.reset_mock()
+
+    # Test PSU available but get_name() raises general Exception
+    mock_psu.get_name.side_effect = RuntimeError("Hardware error")
+    result = psud.get_psu_key(4)
+    assert result is False
     psud.platform_chassis.get_psu.assert_called_with(3)  # psu_index - 1
     mock_psu.get_name.assert_called_once()
 
