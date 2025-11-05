@@ -57,7 +57,6 @@ def test_wrapper_get_num_psus():
     # Test with None logger - should not crash
     psud.platform_chassis = mock.MagicMock()
     psud.platform_psuutil = mock.MagicMock()
-    result = psud._wrapper_get_num_psus(None)
     assert psud.platform_chassis.get_num_psus.call_count >= 1
     
     # Test when both providers are unavailable
@@ -93,7 +92,7 @@ def test_wrapper_get_psu_presence():
 
     # Test _wrapper_get_psu returns None (PSU object retrieval failed)
     psud.platform_chassis.get_psu.side_effect = Exception("PSU retrieval failed")
-    result = psud._wrapper_get_psu_presence(mock_logger, 1)
+    psud._wrapper_get_psu_presence(mock_logger, 1)
     # Should fallback to platform_psuutil
     psud.platform_chassis.get_psu.assert_called_with(0)
     assert psud.platform_psuutil.get_psu_presence.call_count == 1
@@ -108,7 +107,7 @@ def test_wrapper_get_psu_presence():
     # Test new platform API PSU available but get_presence not implemented
     psud.platform_chassis.get_psu.return_value = mock_psu
     mock_psu.get_presence.side_effect = NotImplementedError
-    result = psud._wrapper_get_psu_presence(mock_logger, 1)
+    psud._wrapper_get_psu_presence(mock_logger, 1)
     # Should fallback to platform_psuutil
     psud.platform_chassis.get_psu.assert_called_with(0)
     mock_psu.get_presence.assert_called_once()
@@ -140,7 +139,7 @@ def test_wrapper_get_psu_presence():
 
     # Test new platform API not available
     psud.platform_chassis = None
-    result = psud._wrapper_get_psu_presence(mock_logger, 1)
+    psud._wrapper_get_psu_presence(mock_logger, 1)
     # Should use platform_psuutil
     assert psud.platform_psuutil.get_psu_presence.call_count == 1
     psud.platform_psuutil.get_psu_presence.assert_called_with(1)
@@ -264,7 +263,7 @@ def test_wrapper_get_psu_status():
 
     # Test _wrapper_get_psu returns None (PSU object retrieval failed)
     psud.platform_chassis.get_psu.side_effect = Exception("PSU retrieval failed")
-    result = psud._wrapper_get_psu_status(mock_logger, 1)
+    psud._wrapper_get_psu_status(mock_logger, 1)
     # Should fallback to platform_psuutil
     psud.platform_chassis.get_psu.assert_called_with(0)
     assert psud.platform_psuutil.get_psu_status.call_count == 1
@@ -279,7 +278,7 @@ def test_wrapper_get_psu_status():
     # Test new platform API PSU available but get_powergood_status not implemented
     psud.platform_chassis.get_psu.return_value = mock_psu
     mock_psu.get_powergood_status.side_effect = NotImplementedError
-    result = psud._wrapper_get_psu_status(mock_logger, 1)
+    psud._wrapper_get_psu_status(mock_logger, 1)
     # Should fallback to platform_psuutil
     psud.platform_chassis.get_psu.assert_called_with(0)
     mock_psu.get_powergood_status.assert_called_once()
@@ -311,7 +310,6 @@ def test_wrapper_get_psu_status():
 
     # Test new platform API not available
     psud.platform_chassis = None
-    result = psud._wrapper_get_psu_status(mock_logger, 1)
     # Should use platform_psuutil
     assert psud.platform_psuutil.get_psu_status.call_count == 1
     psud.platform_psuutil.get_psu_status.assert_called_with(1)
