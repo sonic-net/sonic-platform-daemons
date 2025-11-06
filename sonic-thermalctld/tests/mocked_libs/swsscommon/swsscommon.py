@@ -6,9 +6,19 @@ from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
 
 STATE_DB = ''
 
+class RedisPipeline:
+    def __init__(self, db, batch_size=128):
+        self.db = db
+        self.batch_size = batch_size
+        self.queue = []
+
+    def flush(self):
+        # Mock flush operation - just clear the queue
+        self.queue.clear()
+        pass
 
 class Table:
-    def __init__(self, db, table_name):
+    def __init__(self, db_or_redispipeline, table_name, buffered=False):
         self.table_name = table_name
         self.mock_dict = {}
 
@@ -30,14 +40,23 @@ class Table:
 
 
 class FieldValuePairs:
-    fv_dict = {}
 
-    def __init__(self, tuple_list):
-        if isinstance(tuple_list, list) and isinstance(tuple_list[0], tuple):
+    def __init__(self, tuple_list=None):
+        if tuple_list is None:
+            self.fv_dict = {}
+        elif isinstance(tuple_list, list) and isinstance(tuple_list[0], tuple):
             self.fv_dict = dict(tuple_list)
+        else:
+            self.fv_dict = dict()
+
+    def append(self, kv_tuple):
+        self.fv_dict[kv_tuple[0]] = kv_tuple[1]
 
     def __setitem__(self, key, kv_tuple):
         self.fv_dict[kv_tuple[0]] = kv_tuple[1]
+
+    def __len__(self):
+        return len(self.fv_dict)
 
     def __getitem__(self, key):
         return self.fv_dict[key]
