@@ -183,7 +183,7 @@ def get_psu_key(psu_index):
         if psu:
             try:
                 return psu.get_name()
-            except (NotImplementedError, IndexError, Exception):
+            except Exception:
                 pass
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
 
