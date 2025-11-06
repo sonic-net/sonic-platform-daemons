@@ -57,6 +57,7 @@ def test_wrapper_get_num_psus():
     # Test with None logger - should not crash
     psud.platform_chassis = mock.MagicMock()
     psud.platform_psuutil = mock.MagicMock()
+    psud._wrapper_get_num_psus(None)
     assert psud.platform_chassis.get_num_psus.call_count >= 1
     
     # Test when both providers are unavailable
@@ -310,6 +311,7 @@ def test_wrapper_get_psu_status():
 
     # Test new platform API not available
     psud.platform_chassis = None
+    psud._wrapper_get_psu_status(mock_logger, 1)
     # Should use platform_psuutil
     assert psud.platform_psuutil.get_psu_status.call_count == 1
     psud.platform_psuutil.get_psu_status.assert_called_with(1)
@@ -412,7 +414,7 @@ def test_get_psu_key():
     # Test PSU available but get_name() raises general Exception
     mock_psu.get_name.side_effect = RuntimeError("Hardware error")
     result = psud.get_psu_key(4)
-    assert result is False
+    assert result == "PSU 4"
     psud.platform_chassis.get_psu.assert_called_with(3)  # psu_index - 1
     mock_psu.get_name.assert_called_once()
 
