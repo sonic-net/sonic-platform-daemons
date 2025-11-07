@@ -772,6 +772,15 @@ class SfpStateUpdateTask(threading.Thread):
         #  3. SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
         status_sw_tbl = self.xcvr_table_helper.get_status_sw_tbl(port_change_event.asic_id)
         int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
+        # Initialize the NPU_SI_SETTINGS_SYNC_STATUS to default value
+        state_port_table = self.xcvr_table_helper.get_state_port_tbl(port_change_event.asic_id)
+        found, state_port_table_fvs = state_port_table.get(port_change_event.port_name)
+        if not found:
+            helper_logger.log_notice("Add logical port: Creating STATE_DB PORT_TABLE as unable to find for lport {}".format(port_change_event.port_name))
+            state_port_table_fvs = []
+        state_port_table.set(port_change_event.port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY,
+                                                      NPU_SI_SETTINGS_DEFAULT_VALUE)])
+        helper_logger.log_notice("Add logical port: Initialized NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(port_change_event.port_name))
 
         error_description = 'N/A'
         status = None
