@@ -15,7 +15,7 @@ from datetime import datetime
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger
-from sonic_py_common.task_base import ProcessTaskBase
+from sonic_py_common.task_base import ThreadTaskBase
 from swsscommon import swsscommon
 
 
@@ -743,8 +743,7 @@ class TemperatureUpdater(logger.Logger):
             self.chassis_table._del(name)
 
 
-class ThermalMonitor(ProcessTaskBase):
-
+class ThermalMonitor(ThreadTaskBase):
     def __init__(
         self, chassis, initial_interval, update_interval, update_elapsed_threshold
     ):

@@ -2241,9 +2241,10 @@ class TestXcvrdScript(object):
         assert mock_xcvr_api.get_power_class.call_count == 5
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
+    @patch('xcvrd.xcvrd.helper_logger')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
-    def test_SffManagerTask_task_worker(self, mock_chassis):
+    def test_SffManagerTask_task_worker(self, mock_chassis, mock_logger):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
@@ -2261,7 +2262,7 @@ class TestXcvrdScript(object):
         task = SffManagerTask(DEFAULT_NAMESPACE,
                               threading.Event(),
                               mock_chassis,
-                              helper_logger)
+                              mock_logger)
 
         # TX enable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
@@ -2342,7 +2343,51 @@ class TestXcvrdScript(object):
         task.task_worker()
         assert mock_sfp.get_presence.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
+        mock_logger.log_error.assert_called_once_with(
+            "SFF-MAIN: Ethernet0: module not present!")
         mock_sfp.get_presence = MagicMock(return_value=True)
+
+        # lpmode setting case
+        # 1. error logged when lpmode is suppoted but unsuccessful
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'type': 'QSFP28'})
+        task.on_port_update_event(port_change_event)
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=False)
+        mock_xcvr_api.get_lpmode_support = MagicMock(return_value=True)
+        task.port_dict_prev = {}
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+        assert len(mock_logger.log_error.call_args_list) == 2
+        mock_logger.log_error.assert_called_with(
+            "SFF-MAIN: Ethernet0: Failed to take module out of low power mode.")
+
+        # 2. no error logged when lpmode is suppoted and successful
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'type': 'QSFP28'})
+        task.on_port_update_event(port_change_event)
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
+        mock_xcvr_api.get_lpmode_support = MagicMock(return_value=True)
+        task.port_dict_prev = {}
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+        assert len(mock_logger.log_error.call_args_list) == 2
+        mock_logger.log_error.assert_called_with(
+            "SFF-MAIN: Ethernet0: Failed to take module out of low power mode.")
+
+        # 3. no error logged when lpmode is not suppoted
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'type': 'QSFP28'})
+        task.on_port_update_event(port_change_event)
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=False)
+        mock_xcvr_api.get_lpmode_support = MagicMock(return_value=False)
+        task.port_dict_prev = {}
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+        assert len(mock_logger.log_error.call_args_list) == 2
+        mock_logger.log_error.assert_called_with(
+            "SFF-MAIN: Ethernet0: Failed to take module out of low power mode.")
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
+        mock_xcvr_api.get_lpmode_support = MagicMock(return_value=True)
 
     def test_CmisManagerTask_update_port_transceiver_status_table_sw_cmis_state(self):
         port_mapping = PortMapping()
