@@ -1450,7 +1450,7 @@ def test_daemon_run_smartswitch():
             daemon_chassisd.run()
 
 def test_set_initial_dpu_admin_state_down():
-    # Test the chassisd run
+    """Test set_initial_dpu_admin_state when admin state is down"""
     chassis = MockSmartSwitchChassis()
    
     # DPU0 details
@@ -1458,13 +1458,114 @@ def test_set_initial_dpu_admin_state_down():
     name = "DPU0"
     desc = "DPU Module 0"
     slot = 0
-    sup_slot = 0
     serial = "DPU0-0000"
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
+
+    # Set initial state for DPU0 - OFFLINE
+    status = ModuleBase.MODULE_STATUS_OFFLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
+
+    # ChassisdDaemon setup
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = True
+
+    # Mock the necessary methods
+    with patch.object(module_updater, 'get_module_admin_status', return_value='down'), \
+         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
+         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
+
+        # Run the function
+        daemon_chassisd.set_initial_dpu_admin_state()
+
+        # Verify state transition flags were cleared
+        mock_clear_transition.assert_called_once()
+        mock_clear_gnoi.assert_called_once()
+
+        # Verify DPU state was updated with 'down' since operational state is OFFLINE
+        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
+
+        # Verify callback was submitted with MODULE_ADMIN_DOWN since admin state is 'down' and oper state is OFFLINE
+        mock_submit_callback.assert_called_once_with(0, MODULE_ADMIN_DOWN, "DPU0")
+
+
+def test_set_initial_dpu_admin_state_up():
+    """Test set_initial_dpu_admin_state when admin state is up"""
+    chassis = MockSmartSwitchChassis()
    
-    # Set initial state for DPU0
+    # DPU0 details
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+
+    # Set initial state for DPU0 - ONLINE
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+   
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
+   
+    # ChassisdDaemon setup
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = True
+
+    # Mock the necessary methods
+    with patch.object(module_updater, 'get_module_admin_status', return_value='up'), \
+         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
+         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
+
+        # Run the function
+        daemon_chassisd.set_initial_dpu_admin_state()
+
+        # Verify state transition flags were cleared
+        mock_clear_transition.assert_called_once()
+        mock_clear_gnoi.assert_called_once()
+
+        # Verify DPU state was updated with 'up' since operational state is ONLINE
+        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'up')
+
+        # Verify callback was NOT submitted since admin state is 'up'
+        mock_submit_callback.assert_not_called()
+
+
+def test_set_initial_dpu_admin_state_empty():
+    """Test set_initial_dpu_admin_state when admin state is empty"""
+    chassis = MockSmartSwitchChassis()
+   
+    # DPU0 details
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+
+    # Set initial state for DPU0 - PRESENT
     status = ModuleBase.MODULE_STATUS_PRESENT
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -1477,69 +1578,77 @@ def test_set_initial_dpu_admin_state_down():
     # ChassisdDaemon setup
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.module_updater = module_updater
-    daemon_chassisd.stop = MagicMock()
-    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.platform_chassis = chassis
     daemon_chassisd.smartswitch = True
+
+    # Mock the necessary methods - admin state is EMPTY
+    with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
+         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
+         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
+
+        # Run the function
+        daemon_chassisd.set_initial_dpu_admin_state()
+
+        # Verify state transition flags were cleared
+        mock_clear_transition.assert_called_once()
+        mock_clear_gnoi.assert_called_once()
+
+        # Verify DPU state was updated with 'down' since operational state is PRESENT (not ONLINE)
+        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
+
+        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not OFFLINE
+        mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN, "DPU0")
+
+
+def test_set_initial_dpu_admin_state_exception():
+    """Test set_initial_dpu_admin_state handles exceptions gracefully"""
+    chassis = MockSmartSwitchChassis()
    
-    # Import platform and use chassis as platform_chassis
-    import sonic_platform.platform
-    platform_chassis = chassis
+    # DPU0 details
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
 
-    # Mock objects
-    mock_chassis = MagicMock()
-    mock_module_updater = MagicMock()
-   
-    # Mock the module (DPU0)
-    mock_module = MagicMock()
-    mock_module.get_name.return_value = "DPU0"
-   
-    # Mock chassis.get_module to return the mock_module for DPU0
-    def mock_get_module(index):
-        if index == 0:  # For DPU0
-            return mock_module
-        return None  # No other modules available in this test case
+    # Set initial state for DPU0
+    status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
 
-    # Apply the side effect for chassis.get_module
-    mock_chassis.get_module.side_effect = mock_get_module
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
 
-    # Mock state_db
-    mock_state_db = MagicMock()
-    # fvs_mock = [True, {CHASSIS_MIDPLANE_INFO_ACCESS_FIELD: 'True'}]
-    # mock_state_db.get.return_value = fvs_mock
+    # ChassisdDaemon setup
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = True
 
-    # Mock db_connect
-    mock_db_connect = MagicMock()
-    mock_db_connect.return_value = mock_state_db
-   
-    # Mock admin_status
-    # mock_module_updater.get_module_admin_status.return_value = 'down'
+    # Mock the necessary methods to raise an exception
+    with patch.object(module_updater, 'get_module_admin_status', side_effect=Exception("Test error")), \
+         patch.object(daemon_chassisd, 'log_error') as mock_log_error, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
 
-    # Set access of DPU0 Down
-    midplane_table = module_updater.midplane_table
-    module.set_midplane_reachable(True)
-    module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
-    assert fvs != None
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
+        # Run the function - should not raise exception
+        daemon_chassisd.set_initial_dpu_admin_state()
 
-    # Patching platform's Chassis object to return the mocked module
-    with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch, \
-         patch.object(sonic_platform.platform.Chassis, 'get_module', side_effect=mock_get_module):
-       
-        # Simulate that the system is a SmartSwitch
-        mock_is_smartswitch.return_value = True
+        # Verify state transition flags were cleared before exception
+        mock_clear_transition.assert_called_once()
+        mock_clear_gnoi.assert_called_once()
 
-        # Patch num_modules for the updater
-        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1), \
-             patch.object(daemon_chassisd.module_updater, 'get_module_admin_status', return_value='down'):
-            # Now run the function that sets the initial admin state
-            daemon_chassisd.set_initial_dpu_admin_state()
+        # Verify error was logged
+        mock_log_error.assert_called_once()
+        assert "Error in run: Test error" in str(mock_log_error.call_args)
 
-
-def test_set_initial_dpu_admin_state_up():
     # Test the chassisd run
     chassis = MockSmartSwitchChassis()
 
@@ -1963,18 +2072,19 @@ def test_submit_dpu_callback():
     # Test MODULE_ADMIN_DOWN scenario
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
          patch.object(module, 'set_admin_state_gracefully') as mock_set_admin_state_gracefully:
-        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN, name)
-        # Verify correct functions are called for admin down
-        mock_pre_shutdown.assert_called_once()
+        daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN)
+        # Verify pre_shutdown is not called for admin down
+        mock_pre_shutdown.assert_not_called()
+        # Verify set_admin_state_gracefully is called with MODULE_ADMIN_DOWN
         mock_set_admin_state_gracefully.assert_called_once_with(MODULE_ADMIN_DOWN)
 
-    # Test non-MODULE_ADMIN_DOWN scenario (e.g., MODULE_PRE_SHUTDOWN)
+    # Test MODULE_PRE_SHUTDOWN scenario
     with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
          patch.object(module, 'set_admin_state_gracefully') as mock_set_admin_state_gracefully:
 
         module_updater.module_table.get = MagicMock(return_value=(True, []))
-        daemon_chassisd.submit_dpu_callback(index, MODULE_PRE_SHUTDOWN, name)
+        daemon_chassisd.submit_dpu_callback(index, MODULE_PRE_SHUTDOWN)
 
-        # Verify only pre_shutdown is called for non-admin-down states
+        # Verify only pre_shutdown is called for pre-shutdown state
         mock_pre_shutdown.assert_called_once()
         mock_set_admin_state_gracefully.assert_not_called()
