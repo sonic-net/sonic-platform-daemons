@@ -1373,7 +1373,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             module_name = self.platform_chassis.get_module(module_index).get_name()
 
             # Clear any existing state transition flags
-            self.module_updater.chassis.get_module(module_index).clear_module_state_transition()
+            self.module_updater.chassis.get_module(module_index).clear_module_state_transition(module_name)
             self.module_updater.chassis.get_module(module_index).clear_module_gnoi_halt_in_progress()
 
             # Get operational state of DPU
