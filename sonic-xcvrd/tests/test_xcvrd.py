@@ -4114,6 +4114,7 @@ class TestXcvrdScript(object):
         mock_table_helper.get_int_tbl = MagicMock(return_value=mock_table)
         mock_table_helper.get_dom_tbl = MagicMock(return_value=mock_table)
         mock_table_helper.get_dom_threshold_tbl = MagicMock(return_value=mock_table)
+        mock_table_helper.get_state_port_tbl = MagicMock(return_value=mock_table)
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
         port_mapping = PortMapping()
@@ -4123,6 +4124,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
         task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
         task.xcvr_table_helper.get_dom_tbl = mock_table_helper.get_dom_tbl
+        task.xcvr_table_helper.get_state_port_tbl = mock_table_helper.get_state_port_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         wait_time = 5
         while wait_time > 0:
@@ -4353,9 +4355,13 @@ class TestXcvrdScript(object):
         dom_threshold_tbl = MockTable()
         dom_threshold_tbl.get = MagicMock(return_value=(True, (('key4', 'value4'),)))
         dom_threshold_tbl.set = MagicMock()
+        state_port_tbl = MockTable()
+        state_port_tbl.get = MagicMock(return_value=(True, (('key5', 'value5'),)))
+        state_port_tbl.set = MagicMock()
         mock_table_helper.get_status_sw_tbl = MagicMock(return_value=status_sw_tbl)
         mock_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
         mock_table_helper.get_dom_threshold_tbl = MagicMock(return_value=dom_threshold_tbl)
+        mock_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
 
         port_mapping = PortMapping()
         mock_sfp_obj_dict = MagicMock()
@@ -4366,6 +4372,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_status_sw_tbl = mock_table_helper.get_status_sw_tbl
         task.xcvr_table_helper.get_intf_tbl = mock_table_helper.get_intf_tbl
         task.xcvr_table_helper.get_dom_threshold_tbl = mock_table_helper.get_dom_threshold_tbl
+        task.xcvr_table_helper.get_state_port_tbl = mock_table_helper.get_state_port_tbl
         task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
