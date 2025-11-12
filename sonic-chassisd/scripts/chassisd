@@ -1385,9 +1385,12 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 admin_state = self.module_updater.get_module_admin_status(module_name)
                 if admin_state == ModuleBase.MODULE_STATUS_EMPTY:
                     op = MODULE_PRE_SHUTDOWN
-                    if operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
-                        # shutdown DPU
+                    if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
+                        # DPU is online and needs full shutdown
                         op = MODULE_ADMIN_DOWN
+                elif admin_state == 'down':
+                    # Admin state is explicitly set to down - issue shutdown
+                    op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
                 dpu_state_key = "DPU_STATE|" + module_name
@@ -1399,7 +1402,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
                 if op is not None:
                     # Create and start a thread for the DPU logic
-                    thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op, module_name))
+                    thread = threading.Thread(target=self.submit_dpu_callback, args=(module_index, op))
                     thread.daemon = True  # Set as a daemon thread
                     thread.start()
                     threads.append(thread)
