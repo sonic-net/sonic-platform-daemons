@@ -59,7 +59,7 @@ def test_wrapper_get_num_psus():
     psud.platform_psuutil = mock.MagicMock()
     psud._wrapper_get_num_psus(None)
     assert psud.platform_chassis.get_num_psus.call_count >= 1
-    
+
     # Test when both providers are unavailable
     psud.platform_chassis = None
     psud.platform_psuutil = None
@@ -76,7 +76,7 @@ def test_wrapper_get_psu_presence():
     mock_logger = mock.MagicMock()
     mock_psu = mock.MagicMock()
     mock_psu.get_presence.return_value = True
-    
+
     # Test new platform API is available and working
     psud.platform_chassis.get_psu.return_value = mock_psu
     result = psud._wrapper_get_psu_presence(mock_logger, 1)
@@ -178,7 +178,7 @@ def test_wrapper_get_psu_presence():
 def test_wrapper_get_psu():
     mock_logger = mock.MagicMock()
     mock_psu = mock.MagicMock()
-    
+
     # Test new platform API is available and working
     psud.platform_chassis.get_psu.return_value = mock_psu
     result = psud._wrapper_get_psu(mock_logger, 1)
@@ -247,7 +247,7 @@ def test_wrapper_get_psu_status():
     mock_logger = mock.MagicMock()
     mock_psu = mock.MagicMock()
     mock_psu.get_powergood_status.return_value = True
-    
+
     # Test new platform API is available and working
     psud.platform_chassis.get_psu.return_value = mock_psu
     result = psud._wrapper_get_psu_status(mock_logger, 1)
@@ -366,7 +366,7 @@ def test_log_on_status_changed():
 def test_get_psu_key():
     mock_psu = mock.MagicMock()
     mock_psu.get_name.return_value = "PSU-1"
-    
+
     # Test platform_chassis is available and PSU get_name() works
     psud.platform_chassis.get_psu.return_value = mock_psu
     result = psud.get_psu_key(1)
