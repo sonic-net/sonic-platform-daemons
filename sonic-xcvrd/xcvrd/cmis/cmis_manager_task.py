@@ -892,11 +892,16 @@ class CmisManagerTask(threading.Thread):
                                api.tx_disable_channel(media_lanes_mask, True)
                                self.port_dict[lport]['forced_tx_disabled'] = True
                                txoff_duration = self.get_cmis_dp_tx_turnoff_duration_secs(api)
+                               self.port_dict[lport]['txoff_duration'] = txoff_duration
                                self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
-                               self.update_cmis_state_expiration_time(lport, txoff_duration)
                                self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
                            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                            continue
+
+                        # Arm timer for CMIS_STATE_DP_PRE_INIT_CHECK state
+                        if self.port_dict[lport].get('forced_tx_disabled', False):
+                            txoff_duration = self.port_dict[lport].get('txoff_duration', 0)
+                            self.update_cmis_state_expiration_time(lport, txoff_duration)
                         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
                     if state == CMIS_STATE_DP_PRE_INIT_CHECK:
                         if self.port_dict[lport].get('forced_tx_disabled', False):
