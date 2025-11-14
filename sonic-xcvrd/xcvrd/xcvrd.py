@@ -28,7 +28,7 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom.dom_mgr import DomInfoUpdateTask
+    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
@@ -577,6 +577,7 @@ class SfpStateUpdateTask(threading.Thread):
                                 common.del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
                                                               self.xcvr_table_helper.get_intf_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                              self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                                               self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -620,6 +621,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         common.del_port_sfp_dom_info_from_db(logical_port,
                                                                       self.port_mapping, [
                                                                       self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                                                      self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                                                       self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -729,6 +731,7 @@ class SfpStateUpdateTask(threading.Thread):
                                       self.port_mapping, [
                                       self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_temperature_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
@@ -862,12 +865,13 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, dom_temperature_poll_interval=None):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
         self.enable_sff_mgr = enable_sff_mgr
+        self.dom_temperature_poll_interval = dom_temperature_poll_interval
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
@@ -1086,6 +1090,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
                                           intf_tbl,
                                           self.xcvr_table_helper.get_dom_tbl(asic_index),
+                                          self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
                                           self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
@@ -1142,6 +1147,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         dom_info_update.start()
         self.threads.append(dom_info_update)
 
+        # Start the dom thermal sensor info update thread
+        dom_thermal_info_update = None
+        if self.dom_temperature_poll_interval is not None:
+            dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event,
+                                                               self.dom_temperature_poll_interval)
+            dom_thermal_info_update.start()
+            self.threads.append(dom_thermal_info_update)
+
         # Start the sfp state info update thread
         sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
         sfp_state_update.start()
@@ -1184,6 +1197,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if dom_info_update.is_alive():
             dom_info_update.join()
 
+        # Stop the dom thermal sensor info update thread
+        if dom_thermal_info_update is not None:
+            if dom_thermal_info_update.is_alive():
+                dom_thermal_info_update.join()
+
         # Stop the sfp state info update thread
         if sfp_state_update.is_alive():
             sfp_state_update.raise_exception()
@@ -1209,9 +1227,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
     parser.add_argument('--enable_sff_mgr', action='store_true')
+    parser.add_argument('--dom_temperature_poll_interval', default=None, type=int)
 
     args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
+                        args.dom_temperature_poll_interval)
     xcvrd.run()
 
 
