@@ -105,6 +105,14 @@ class MockModule(MockDevice):
     def set_presence(self, presence):
         self.presence = presence
 
+    def set_admin_state_using_graceful_shutdown(self, admin_state):
+        """Mock implementation of graceful shutdown method"""
+        return self.set_admin_state(admin_state)
+
+    def set_module_state_transition(self, v2_connector, module_name, transition_type):
+        """Mock implementation of state transition method"""
+        return True
+
 class MockChassis:
     def __init__(self):
         self.module_list = []
