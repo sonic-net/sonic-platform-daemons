@@ -1496,7 +1496,7 @@ def test_set_initial_dpu_admin_state_down():
         # Verify DPU state was updated with 'down' since operational state is OFFLINE
         mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
 
-        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is OFFLINE
+        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not ONLINE
         mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)
 
 
@@ -1598,7 +1598,7 @@ def test_set_initial_dpu_admin_state_empty():
         # Verify DPU state was updated with 'down' since operational state is PRESENT (not ONLINE)
         mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
 
-        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not OFFLINE
+        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not ONLINE
         mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)
 
 
