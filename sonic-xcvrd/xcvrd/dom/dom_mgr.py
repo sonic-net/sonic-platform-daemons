@@ -150,7 +150,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, helper_logger)
+        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, self.helper_logger)
         self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.db_utils = self.dom_db_utils
         self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
