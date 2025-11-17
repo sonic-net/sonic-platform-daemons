@@ -1357,14 +1357,15 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}' - ignoring...".format(SIGNALS_TO_NAMES_DICT[sig]))
 
     def submit_dpu_callback(self, module_index, admin_state):
+        module = self.module_updater.chassis.get_module(module_index)
+
         # This is only valid on platforms which have pci_detach and sensord changes required. If it is not implemented,
         # there are no actions taken during this function execution.
         if admin_state == MODULE_PRE_SHUTDOWN:
-            try_get(self.module_updater.chassis.get_module(module_index).module_pre_shutdown, default=False)
+            try_get(module.module_pre_shutdown, default=False)
         # Set admin_state change in progress using the centralized method
         if admin_state == MODULE_ADMIN_DOWN:
-            try_get(self.module_updater.chassis.get_module(module_index).set_admin_state_gracefully,
-                    admin_state, default=False)
+            try_get(module.set_admin_state_gracefully, admin_state, default=False)
 
     def set_initial_dpu_admin_state(self):
         """Send admin_state trigger once to modules those are powered up"""
@@ -1373,8 +1374,9 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             module_name = self.platform_chassis.get_module(module_index).get_name()
 
             # Clear any existing state transition flags
-            self.module_updater.chassis.get_module(module_index).clear_module_state_transition(module_name)
-            self.module_updater.chassis.get_module(module_index).clear_module_gnoi_halt_in_progress()
+            module = self.module_updater.chassis.get_module(module_index)
+            module.clear_module_state_transition(module_name)
+            module.clear_module_gnoi_halt_in_progress()
 
             # Get operational state of DPU
             op = None
