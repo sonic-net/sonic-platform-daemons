@@ -34,6 +34,7 @@ load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
 # Mock __del__ at module level to prevent issues during garbage collection
+original_DaemonPsud_del = psud.DaemonPsud.__del__
 psud.DaemonPsud.__del__ = mock.MagicMock()
 
 class TestDaemonPsud(object):
@@ -186,6 +187,14 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_data(1, psu1)
         daemon_psud.psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
         assert not daemon_psud.psu_status_dict[1].check_psu_power_threshold
+
+        # Test exception handling when updating PSU data to Redis
+        daemon_psud.psu_tbl.set.reset_mock()
+        daemon_psud.psu_tbl.set.side_effect = Exception("Redis write error")
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud._update_single_psu_data(1, psu1)
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while updating PSU data for PSU 1 to Redis" in daemon_psud.log_error.call_args[0][0]
 
     @mock.patch('psud.daemon_base.db_connect', mock.MagicMock())
     def test_power_threshold(self):
@@ -434,6 +443,17 @@ class TestDaemonPsud(object):
         assert daemon_psud._update_psu_fan_led_status.call_count == 1
         daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
 
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # Test exception handling when writing PSU LED status to Redis
+        mock_psu.get_status_led = mock.Mock(return_value=MockPsu.STATUS_LED_COLOR_GREEN)
+        daemon_psud.psu_tbl.set.side_effect = Exception("Redis write error")
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud._update_led_color()
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while writing PSU LED status to Redis" in daemon_psud.log_error.call_args[0][0]
+
     def test_update_psu_fan_led_status(self):
         mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
         mock_psu = MockPsu("PSU 1", 0, True, True)
@@ -466,6 +486,17 @@ class TestDaemonPsud(object):
         daemon_psud._update_psu_fan_led_status(mock_psu, 1)
         assert daemon_psud.fan_tbl.set.call_count == 1
         daemon_psud.fan_tbl.set.assert_called_with("PSU 1 FAN 1", expected_fvp)
+
+        daemon_psud.fan_tbl.set.reset_mock()
+
+        # Test exception handling when writing PSU fan LED status to Redis
+        mock_fan.get_status_led = mock.Mock(return_value=MockFan.STATUS_LED_COLOR_OFF)
+        # mock_fan.get_name = mock.Mock(return_value="PSU 1 Test Fan 1")
+        daemon_psud.fan_tbl.set.side_effect = Exception("Redis write error")
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud._update_psu_fan_led_status(mock_psu, 1)
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while writing PSU fan LED status to Redis" in daemon_psud.log_error.call_args[0][0]
 
     @mock.patch('psud.PsuChassisInfo', mock.MagicMock())
     def test_update_psu_chassis_info(self):
@@ -533,6 +564,14 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_entity_info(3, mock_psu1)
         daemon_psud.phy_entity_tbl.set.assert_called_with('PSU 3', expected_fvp)
 
+        # Test exception handling when writing PSU entity info to Redis
+        daemon_psud.phy_entity_tbl.set.reset_mock()
+        daemon_psud.phy_entity_tbl.set.side_effect = Exception("Redis write error")
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud._update_single_psu_entity_info(3, mock_psu1)
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while writing PSU entity info to Redis" in daemon_psud.log_error.call_args[0][0]
+
     @mock.patch('psud.datetime')
     def test_update_psu_fan_data(self, mock_datetime):
         fake_time = datetime.datetime(2021, 1, 1, 12, 34, 56)
@@ -561,3 +600,73 @@ class TestDaemonPsud(object):
         daemon_psud.fan_tbl.set.assert_called_with("PSU 1 Test Fan 1", expected_fvp)
 
         daemon_psud.fan_tbl.set.reset_mock()
+
+        # Test exception handling when writing PSU fan info to Redis
+        daemon_psud.fan_tbl.set.side_effect = Exception("Redis write error")
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud._update_psu_fan_data(mock_psu1, 1)
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while writing PSU fan info to Redis" in daemon_psud.log_error.call_args[0][0]
+
+    def test_del_db_exceptions(self):
+        # Save and restore the real __del__ method for this test
+        # The module-level mock prevents GC issues but we need the real method here
+        psud.DaemonPsud.__del__ = original_DaemonPsud_del
+        psud.platform_chassis = MockChassis()
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.num_psus = 1
+        daemon_psud.psu_tbl = mock.MagicMock()
+        daemon_psud.chassis_tbl = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Test exception when deleting PSU tables
+        daemon_psud.psu_tbl._del.side_effect = Exception("Redis delete error")
+        daemon_psud.__del__()
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while deleting tables in Redis" in daemon_psud.log_error.call_args[0][0]
+
+        # Reset
+        daemon_psud.log_error.reset_mock()
+        daemon_psud.psu_tbl._del.side_effect = None
+
+        # Test exception when deleting chassis tables
+        daemon_psud.chassis_tbl._del.side_effect = Exception("Redis delete error")
+        daemon_psud.__del__()
+        assert daemon_psud.log_error.call_count == 1
+        assert "Exception occurred while deleting tables in Redis" in daemon_psud.log_error.call_args[0][0]
+
+        psud.DaemonPsud.__del__ = mock.MagicMock()  # Restore the module-level mock to avoid GC issues
+
+    @mock.patch('psud.sys.exit')
+    @mock.patch('psud.swsscommon.Table')
+    def test_init_db_exceptions(self, mock_table, mock_sys_exit):
+        psud.platform_chassis = MockChassis()
+
+        with mock.patch.object(psud.DaemonPsud, 'log_error') as mock_log_error:
+            mock_table.side_effect = Exception("DB connection error")
+            mock_sys_exit.side_effect = SystemExit
+
+            # Trigger the exception during __init__ by creating a new instance
+            with pytest.raises(SystemExit):
+                daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+            mock_sys_exit.assert_called_once_with(2)
+            assert mock_log_error.call_count == 1
+            assert "Failed to connect to STATE_DB or Redis Tables" in mock_log_error.call_args[0][0]
+
+        # Reset
+        mock_table.reset_mock()
+        mock_table.side_effect = None
+        mock_sys_exit.reset_mock()
+        mock_sys_exit.side_effect = None
+
+        with mock.patch.object(psud.DaemonPsud, 'log_error') as mock_log_error:
+            mock_table_instance = mock.MagicMock()
+            mock_table_instance.set.side_effect = Exception("Redis write error")
+            mock_table.return_value = mock_table_instance
+
+            # Trigger the chassis_tbl.set call during __init__ by creating a new instance
+            daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+            assert mock_log_error.call_count == 1
+            assert "Exception occurred while writing PSU number info to Redis" in mock_log_error.call_args[0][0]
