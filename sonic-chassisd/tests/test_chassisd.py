@@ -1449,57 +1449,6 @@ def test_daemon_run_smartswitch():
         with patch.object(module_updater, 'num_modules', 1):
             daemon_chassisd.run()
 
-def test_set_initial_dpu_admin_state_down():
-    """Test set_initial_dpu_admin_state when admin state is down"""
-    chassis = MockSmartSwitchChassis()
-   
-    # DPU0 details
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-    module.set_midplane_ip()
-
-    # Set initial state for DPU0 - OFFLINE
-    status = ModuleBase.MODULE_STATUS_OFFLINE
-    module.set_oper_status(status)
-    chassis.module_list.append(module)
-
-    # Supervisor ModuleUpdater
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    module_updater.module_db_update()
-    module_updater.modules_num_update()
-
-    # ChassisdDaemon setup
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
-    daemon_chassisd.module_updater = module_updater
-    daemon_chassisd.platform_chassis = chassis
-    daemon_chassisd.smartswitch = True
-
-    # Mock the necessary methods - admin state is EMPTY (not 'down')
-    with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
-         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
-         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
-         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
-         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
-
-        # Run the function
-        daemon_chassisd.set_initial_dpu_admin_state()
-
-        # Verify state transition flags were cleared
-        mock_clear_transition.assert_called_once()
-        mock_clear_gnoi.assert_called_once()
-
-        # Verify DPU state was updated with 'down' since operational state is OFFLINE
-        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
-
-        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not ONLINE
-        mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)
-
-
 def test_set_initial_dpu_admin_state_up():
     """Test set_initial_dpu_admin_state when admin state is up"""
     chassis = MockSmartSwitchChassis()
@@ -1594,9 +1543,6 @@ def test_set_initial_dpu_admin_state_empty():
         # Verify state transition flags were cleared
         mock_clear_transition.assert_called_once()
         mock_clear_gnoi.assert_called_once()
-
-        # Verify DPU state was updated with 'down' since operational state is PRESENT (not ONLINE)
-        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
 
         # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not ONLINE
         mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)

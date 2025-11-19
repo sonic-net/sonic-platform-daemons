@@ -1390,9 +1390,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
                         # DPU is online and needs full shutdown
                         op = MODULE_ADMIN_DOWN
-                elif admin_state == 'down':
-                    # Admin state is explicitly set to down - issue shutdown
-                    op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
                 dpu_state_key = "DPU_STATE|" + module_name
