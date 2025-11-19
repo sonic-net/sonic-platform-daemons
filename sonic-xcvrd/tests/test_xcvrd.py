@@ -2172,6 +2172,47 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.helper_logger')
     @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.sff_mgr.PortChangeObserver')
+    def test_SffManagerTask_xcvr_api_none_in_task_worker(self, mock_observer, mock_chassis, mock_logger):
+        """Test the full task_worker flow when xcvr API is None"""
+        mock_observer_instance = MagicMock()
+        mock_observer_instance.handle_port_update_event = MagicMock(side_effect=[True, False])
+        mock_observer.return_value = mock_observer_instance
+
+        # Setup mock SFP that returns None for get_xcvr_api
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=None)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                          threading.Event(),
+                                          mock_chassis,
+                                          mock_logger)
+
+        # Setup port_dict with necessary data
+        sff_manager_task.port_dict['Ethernet0'] = {
+            'index': 1,
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': ['1', '2', '3', '4'],
+            'host_tx_ready': 'true',
+            'admin_status': 'up',
+            'asic_id': 0
+        }
+
+        # Mock task_stopping_event to stop after processing once
+        sff_manager_task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+
+        # Run task_worker - it should handle the None API gracefully
+        sff_manager_task.task_worker()
+
+        # Verify error was logged
+        assert any("skipping sff_mgr since no xcvr api!" in str(call)
+                   for call in mock_logger.log_error.call_args_list)
+
+    @patch('xcvrd.xcvrd.helper_logger')
+    @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     def test_SffManagerTask_task_worker(self, mock_chassis, mock_logger):
         mock_xcvr_api = MagicMock()
