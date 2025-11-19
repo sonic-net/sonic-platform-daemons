@@ -863,34 +863,39 @@ class CmisManagerTask(threading.Thread):
                                     "{}".format(lport, decomm_status_str))
                     return
 
-                if self.port_dict[lport]['host_tx_ready'] != 'true' or \
-                        self.port_dict[lport]['admin_status'] != 'up':
-                    if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
-                        self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
-                    else:
-                        self.log_notice("{} Forcing Tx laser OFF".format(lport))
-                        # Force DataPath re-init
-                        api.tx_disable_channel(media_lanes_mask, True)
-                        self.port_dict[lport]['forced_tx_disabled'] = True
-                        txoff_duration = self.get_cmis_dp_tx_turnoff_duration_secs(api)
-                        self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
-                        self.update_cmis_state_expiration_time(lport, txoff_duration)
-                        self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
-                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
-                    return
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
-            if state == CMIS_STATE_DP_PRE_INIT_CHECK:
-                if self.port_dict[lport].get('forced_tx_disabled', False):
-                    # Ensure that Tx is OFF
-                    # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
-                    # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
-                    if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
-                        if self.is_timer_expired(expired):
-                            self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
-                            self.force_cmis_reinit(lport, retries + 1)
-                        return
-                    self.port_dict[lport]['forced_tx_disabled'] = False
-                    self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
+                        if self.port_dict[lport]['host_tx_ready'] != 'true' or \
+                                self.port_dict[lport]['admin_status'] != 'up':
+                           if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
+                               self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
+                           else:
+                               self.log_notice("{} Forcing Tx laser OFF".format(lport))
+                               # Force DataPath re-init
+                               api.tx_disable_channel(media_lanes_mask, True)
+                               self.port_dict[lport]['forced_tx_disabled'] = True
+                               txoff_duration = self.get_cmis_dp_tx_turnoff_duration_secs(api)
+                               self.port_dict[lport]['txoff_duration'] = txoff_duration
+                               self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
+                               self.update_cmis_state_expiration_time(lport, txoff_duration)
+                               self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
+                           self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
+                           return
+                        # Arm timer for CMIS_STATE_DP_PRE_INIT_CHECK state
+                        if self.port_dict[lport].get('forced_tx_disabled', False):
+                            txoff_duration = self.port_dict[lport].get('txoff_duration', 0)
+                            self.update_cmis_state_expiration_time(lport, txoff_duration)
+                        self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_PRE_INIT_CHECK)
+                    if state == CMIS_STATE_DP_PRE_INIT_CHECK:
+                        if self.port_dict[lport].get('forced_tx_disabled', False):
+                            # Ensure that Tx is OFF
+                            # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
+                            # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
+                            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
+                                if self.is_timer_expired(expired):
+                                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
+                                    self.force_cmis_reinit(lport, retries + 1)
+                                continue
+                            self.port_dict[lport]['forced_tx_disabled'] = False
+                            self.log_notice("{}: Tx laser is successfully turned OFF".format(lport))
 
                 # Configure the target output power if ZR module
                 if api.is_coherent_module():
