@@ -107,6 +107,16 @@ class TestDaemonPsud(object):
         daemon_psud.run()
         assert daemon_psud.first_run is False
 
+        # Test Redis pipeline flush exception scenario
+        daemon_psud.statedb_redisPipeline.flush = mock.MagicMock(side_effect=Exception("Flush error"))
+        daemon_psud.log_error = mock.MagicMock()
+
+        result = daemon_psud.run()
+        assert result is True
+        assert daemon_psud.first_run is False
+        daemon_psud.log_error.assert_called_once()
+        assert "Exception occurred while flushing Redis pipeline" in daemon_psud.log_error.call_args[0][0]
+
     def test_update_psu_data(self):
         mock_psu1 = MockPsu("PSU 1", 0, True, True)
         mock_psu2 = MockPsu("PSU 2", 1, True, True)
