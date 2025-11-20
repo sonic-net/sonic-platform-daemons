@@ -1500,8 +1500,8 @@ def test_set_initial_dpu_admin_state_up():
         mock_submit_callback.assert_not_called()
 
 
-def test_set_initial_dpu_admin_state_empty():
-    """Test set_initial_dpu_admin_state when admin state is empty"""
+def test_set_initial_dpu_admin_state_empty_offline():
+    """Test set_initial_dpu_admin_state when admin state is empty and operational state is offline"""
     chassis = MockSmartSwitchChassis()
    
     # DPU0 details
@@ -1514,8 +1514,8 @@ def test_set_initial_dpu_admin_state_empty():
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
 
-    # Set initial state for DPU0 - PRESENT
-    status = ModuleBase.MODULE_STATUS_PRESENT
+    # Set initial state for DPU0 - OFFLINE
+    status = ModuleBase.MODULE_STATUS_OFFLINE
     module.set_oper_status(status)
     chassis.module_list.append(module)
    
@@ -1530,7 +1530,7 @@ def test_set_initial_dpu_admin_state_empty():
     daemon_chassisd.platform_chassis = chassis
     daemon_chassisd.smartswitch = True
 
-    # Mock the necessary methods - admin state is EMPTY
+    # Mock the necessary methods - admin state is EMPTY, operational state is OFFLINE
     with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
          patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
          patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
@@ -1544,8 +1544,62 @@ def test_set_initial_dpu_admin_state_empty():
         mock_clear_transition.assert_called_once()
         mock_clear_gnoi.assert_called_once()
 
-        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is not ONLINE
+        # Verify DPU state was updated with 'down' since operational state is OFFLINE
+        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
+
+        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is OFFLINE
         mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)
+
+
+def test_set_initial_dpu_admin_state_empty_not_offline():
+    """Test set_initial_dpu_admin_state when admin state is empty but operational state is not offline"""
+    chassis = MockSmartSwitchChassis()
+
+    # DPU0 details
+    index = 0
+    name = "DPU0"
+    desc = "DPU Module 0"
+    slot = 0
+    serial = "DPU0-0000"
+    module_type = ModuleBase.MODULE_TYPE_DPU
+    module = MockModule(index, name, desc, module_type, slot, serial)
+    module.set_midplane_ip()
+
+    # Set initial state for DPU0 - PRESENT (not OFFLINE)
+    status = ModuleBase.MODULE_STATUS_PRESENT
+    module.set_oper_status(status)
+    chassis.module_list.append(module)
+
+    # Supervisor ModuleUpdater
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.module_db_update()
+    module_updater.modules_num_update()
+
+    # ChassisdDaemon setup
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = True
+
+    # Mock the necessary methods - admin state is EMPTY, operational state is PRESENT
+    with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
+         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
+         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi:
+
+        # Run the function
+        daemon_chassisd.set_initial_dpu_admin_state()
+
+        # Verify state transition flags were cleared
+        mock_clear_transition.assert_called_once()
+        mock_clear_gnoi.assert_called_once()
+
+        # Verify DPU state was updated with 'down' since operational state is not ONLINE
+        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
+
+        # Verify callback was submitted with MODULE_ADMIN_DOWN since admin state is EMPTY and oper state is not OFFLINE
+        mock_submit_callback.assert_called_once_with(0, MODULE_ADMIN_DOWN)
 
 
 def test_set_initial_dpu_admin_state_exception():
@@ -1595,7 +1649,9 @@ def test_set_initial_dpu_admin_state_exception():
         mock_log_error.assert_called_once()
         assert "Error in run: Test error" in str(mock_log_error.call_args)
 
-    # Test the chassisd run
+
+def test_set_initial_dpu_admin_state_threading():
+    """Test that set_initial_dpu_admin_state creates and waits for threads correctly"""
     chassis = MockSmartSwitchChassis()
 
     # DPU0 details
@@ -1603,13 +1659,12 @@ def test_set_initial_dpu_admin_state_exception():
     name = "DPU0"
     desc = "DPU Module 0"
     slot = 0
-    sup_slot = 0
     serial = "DPU0-0000"
     module_type = ModuleBase.MODULE_TYPE_DPU
     module = MockModule(index, name, desc, module_type, slot, serial)
     module.set_midplane_ip()
 
-    # Set initial state for DPU0
+    # Set initial state for DPU0 - PRESENT
     status = ModuleBase.MODULE_STATUS_PRESENT
     module.set_oper_status(status)
     chassis.module_list.append(module)
@@ -1622,66 +1677,35 @@ def test_set_initial_dpu_admin_state_exception():
     # ChassisdDaemon setup
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     daemon_chassisd.module_updater = module_updater
-    daemon_chassisd.stop = MagicMock()
-    daemon_chassisd.stop.wait.return_value = True
+    daemon_chassisd.platform_chassis = chassis
     daemon_chassisd.smartswitch = True
 
-    # Import platform and use chassis as platform_chassis
-    import sonic_platform.platform
-    platform_chassis = chassis
+    # Mock thread
+    mock_thread = MagicMock()
 
-    # Mock objects
-    mock_chassis = MagicMock()
-    mock_module_updater = MagicMock()
+    # Mock the necessary methods
+    with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
+         patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
+         patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
+         patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
+         patch.object(module, 'clear_module_gnoi_halt_in_progress') as mock_clear_gnoi, \
+         patch('threading.Thread', return_value=mock_thread) as mock_thread_class:
 
-    # Mock the module (DPU0)
-    mock_module = MagicMock()
-    mock_module.get_name.return_value = "DPU0"
+        # Run the function
+        daemon_chassisd.set_initial_dpu_admin_state()
 
-    # Mock chassis.get_module to return the mock_module for DPU0
-    def mock_get_module(index):
-        if index == 0:  # For DPU0
-            return mock_module
-        return None  # No other modules available in this test case
+        # Verify thread was created with correct arguments
+        mock_thread_class.assert_called_once()
+        call_args = mock_thread_class.call_args
+        assert call_args[1]['target'] == daemon_chassisd.submit_dpu_callback
+        assert call_args[1]['args'] == (0, MODULE_ADMIN_DOWN)
 
-    # Apply the side effect for chassis.get_module
-    mock_chassis.get_module.side_effect = mock_get_module
+        # Verify thread was started and joined
+        mock_thread.start.assert_called_once()
+        mock_thread.join.assert_called_once()
 
-    # Mock state_db
-    mock_state_db = MagicMock()
-    # fvs_mock = [True, {CHASSIS_MIDPLANE_INFO_ACCESS_FIELD: 'True'}]
-    # mock_state_db.get.return_value = fvs_mock
-
-    # Mock db_connect
-    mock_db_connect = MagicMock()
-    mock_db_connect.return_value = mock_state_db
-
-    # Mock admin_status
-    # mock_module_updater.get_module_admin_status.return_value = 'up'
-
-    # Set access of DPU0 up
-    midplane_table = module_updater.midplane_table
-    module.set_midplane_reachable(False)
-    module_updater.check_midplane_reachability()
-    fvs = midplane_table.get(name)
-    assert fvs != None
-    if isinstance(fvs, list):
-        fvs = dict(fvs[-1])
-    assert module.get_midplane_ip() == fvs[CHASSIS_MIDPLANE_INFO_IP_FIELD]
-    assert str(module.is_midplane_reachable()) == fvs[CHASSIS_MIDPLANE_INFO_ACCESS_FIELD]
-
-    # Patching platform's Chassis object to return the mocked module
-    with patch.object(sonic_platform.platform.Chassis, 'is_smartswitch') as mock_is_smartswitch, \
-         patch.object(sonic_platform.platform.Chassis, 'get_module', side_effect=mock_get_module):
-
-        # Simulate that the system is a SmartSwitch
-        mock_is_smartswitch.return_value = True
-
-        # Patch num_modules for the updater
-        with patch.object(daemon_chassisd.module_updater, 'num_modules', 1), \
-             patch.object(daemon_chassisd.module_updater, 'get_module_admin_status', return_value='up'):
-            # Now run the function that sets the initial admin state
-            daemon_chassisd.set_initial_dpu_admin_state()
+        # Verify daemon flag was set
+        assert mock_thread.daemon == True
 
 
 def test_daemon_run_supervisor_invalid_slot():

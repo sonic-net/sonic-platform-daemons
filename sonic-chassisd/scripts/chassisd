@@ -1387,8 +1387,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 admin_state = self.module_updater.get_module_admin_status(module_name)
                 if admin_state == ModuleBase.MODULE_STATUS_EMPTY:
                     op = MODULE_PRE_SHUTDOWN
-                    if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
-                        # DPU is online and needs full shutdown
+                    if operational_state != ModuleBase.MODULE_STATUS_OFFLINE:
+                        # shutdown DPU
                         op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
