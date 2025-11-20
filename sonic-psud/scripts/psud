@@ -296,6 +296,7 @@ class PsuStatus(object):
         self.check_psu_power_threshold = False
         self.power_exceeded_threshold = False
         self.logger = logger
+        self.led_status = NOT_AVAILABLE
 
     def set_presence(self, presence):
         """
@@ -356,6 +357,18 @@ class PsuStatus(object):
             return False
 
         self.power_exceeded_threshold = power_exceeded_threshold
+        return True
+
+    def set_led_status(self, led_status):
+        """
+        Set and cache PSU LED status
+        :param led_status: PSU LED status
+        :return: True if status changed else False
+        """
+        if led_status == self.led_status:
+            return False
+
+        self.led_status = led_status
         return True
 
     def is_ok(self):
@@ -670,10 +683,13 @@ class DaemonPsud(daemon_base.DaemonBase):
             return
 
         for index, psu_status in self.psu_status_dict.items():
-            fvs = swsscommon.FieldValuePairs([
-                ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
-            ])
-            self.psu_tbl.set(get_psu_key(index), fvs)
+            led_status = try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)
+            led_status_changed = psu_status.set_led_status(led_status)
+            if led_status_changed:
+                fvs = swsscommon.FieldValuePairs([
+                    ('led_status', str(led_status))
+                ])
+                self.psu_tbl.set(get_psu_key(index), fvs)
             self._update_psu_fan_led_status(psu_status.psu, index)
 
     def _update_psu_fan_led_status(self, psu, psu_index):
