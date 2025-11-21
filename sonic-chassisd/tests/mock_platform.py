@@ -78,6 +78,18 @@ class MockModule(MockDevice):
     def module_post_startup(self):
         pass
 
+    def set_admin_state_gracefully(self, up):
+        """Mock implementation of set_admin_state_gracefully"""
+        return self.set_admin_state(up)
+
+    def clear_module_state_transition(self, module_name):
+        """Mock implementation of clear_module_state_transition"""
+        return True
+
+    def clear_module_gnoi_halt_in_progress(self):
+        """Mock implementation of clear_module_gnoi_halt_in_progress"""
+        return True
+
     def is_midplane_reachable(self):
         return self.midplane_access
 
