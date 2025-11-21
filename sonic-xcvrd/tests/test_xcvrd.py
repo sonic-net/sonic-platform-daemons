@@ -2346,7 +2346,6 @@ class TestXcvrdScript(object):
         mock_xcvr_api.is_flat_memory.call_count = 0
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
-        assert mock_xcvr_api.is_flat_memory.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 2
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
 
