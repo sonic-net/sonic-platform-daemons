@@ -542,6 +542,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         power_exceeded_threshold = psu_status.power_exceeded_threshold
         power_warning_suppress_threshold = try_get(psu.get_psu_power_warning_suppress_threshold, NOT_AVAILABLE)
         power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
+        power_exceeded_changed = False
         if psu_status.check_psu_power_threshold:
             # Calculate total power
             system_power = float(power)
@@ -568,7 +569,8 @@ class DaemonPsud(daemon_base.DaemonBase):
                     # Raise alarm
                     power_exceeded_threshold = True
 
-            if psu_status.set_power_exceed_threshold(power_exceeded_threshold) and not self.psu_threshold_exceeded_logged:
+            power_exceeded_changed = psu_status.set_power_exceed_threshold(power_exceeded_threshold)
+            if power_exceeded_changed and not self.psu_threshold_exceeded_logged:
                 # Since this is a system level PSU power exceeding check, we do not need to log it for each PSU
                 log_on_status_changed(self, not psu_status.power_exceeded_threshold,
                                       'PSU power warning cleared: system power {} is back to normal, below the warning suppress threshold {}.'.format(system_power, power_warning_suppress_threshold),
@@ -594,27 +596,33 @@ class DaemonPsud(daemon_base.DaemonBase):
         if set_led:
             self._set_psu_led(psu, psu_status)
 
-        fvs = swsscommon.FieldValuePairs(
-            [(PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))),
-             (PSU_INFO_SERIAL_FIELD, str(try_get(psu.get_serial, NOT_AVAILABLE))),
-             (PSU_INFO_REV_FIELD, str(try_get(psu.get_revision, NOT_AVAILABLE))),
-             (PSU_INFO_TEMP_FIELD, str(temperature)),
-             (PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)),
-             (PSU_INFO_VOLTAGE_FIELD, str(voltage)),
-             (PSU_INFO_VOLTAGE_MIN_TH_FIELD, str(voltage_low_threshold)),
-             (PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)),
-             (PSU_INFO_CURRENT_FIELD, str(current)),
-             (PSU_INFO_POWER_FIELD, str(power)),
-             (PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD, str(power_warning_suppress_threshold)),
-             (PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)),
-             (PSU_INFO_POWER_OVERLOAD, str(power_exceeded_threshold)),
-             (PSU_INFO_FRU_FIELD, str(is_replaceable)),
-             (PSU_INFO_IN_CURRENT_FIELD, str(in_current)),
-             (PSU_INFO_IN_VOLTAGE_FIELD, str(in_voltage)),
-             (PSU_INFO_POWER_MAX_FIELD, str(max_power)),
-             (PSU_INFO_PRESENCE_FIELD, 'true' if _wrapper_get_psu_presence(index) else 'false'),
-             (PSU_INFO_STATUS_FIELD, 'true' if _wrapper_get_psu_status(index) else 'false'),
-             ])
+        # Only add rarely-changing fields if changed or first run
+        fvs = swsscommon.FieldValuePairs()
+        if presence_changed or self.first_run:
+            fvs.append((PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_SERIAL_FIELD, str(try_get(psu.get_serial, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_REV_FIELD, str(try_get(psu.get_revision, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_PRESENCE_FIELD, 'true' if presence else 'false'))
+            fvs.append((PSU_INFO_FRU_FIELD, str(is_replaceable)))
+            fvs.append((PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)))
+            fvs.append((PSU_INFO_VOLTAGE_MIN_TH_FIELD, str(voltage_low_threshold)))
+            fvs.append((PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)))
+        if power_good_changed or self.first_run:
+            fvs.append((PSU_INFO_STATUS_FIELD, 'true' if power_good else 'false'))
+        if power_exceeded_changed or self.first_run:
+            fvs.append((PSU_INFO_POWER_OVERLOAD, str(power_exceeded_threshold)))
+
+        # Always adding the frequently-changing fields
+        fvs.append((PSU_INFO_TEMP_FIELD, str(temperature)))
+        fvs.append((PSU_INFO_VOLTAGE_FIELD, str(voltage)))
+        fvs.append((PSU_INFO_CURRENT_FIELD, str(current)))
+        fvs.append((PSU_INFO_POWER_FIELD, str(power)))
+        fvs.append((PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD, str(power_warning_suppress_threshold)))
+        fvs.append((PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)))
+        fvs.append((PSU_INFO_IN_CURRENT_FIELD, str(in_current)))
+        fvs.append((PSU_INFO_IN_VOLTAGE_FIELD, str(in_voltage)))
+        fvs.append((PSU_INFO_POWER_MAX_FIELD, str(max_power)))
+
         self.psu_tbl.set(name, fvs)
 
     def _update_psu_entity_info(self):
