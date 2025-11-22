@@ -251,7 +251,10 @@ class PsuChassisInfo(logger.Logger):
         # Record in state DB in chassis table
         fvs[dict_index] = (CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD, str(self.total_supplied_power))
         fvs[dict_index + 1] = (CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD, str(self.total_consumed_power))
-        chassis_tbl.set(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), fvs)
+        try:
+            chassis_tbl.set(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), fvs)
+        except Exception as e:
+            self.log_error(f"Exception occurred while writing chassis power info to Redis : {type(e).__name__} : {e}")
 
     def update_master_status(self):
         set_led = self.first_run
@@ -296,6 +299,7 @@ class PsuStatus(object):
         self.check_psu_power_threshold = False
         self.power_exceeded_threshold = False
         self.logger = logger
+        self.led_status = NOT_AVAILABLE
 
     def set_presence(self, presence):
         """
@@ -358,6 +362,18 @@ class PsuStatus(object):
         self.power_exceeded_threshold = power_exceeded_threshold
         return True
 
+    def set_led_status(self, led_status):
+        """
+        Set and cache PSU LED status
+        :param led_status: PSU LED status
+        :return: True if status changed else False
+        """
+        if led_status == self.led_status:
+            return False
+
+        self.led_status = led_status
+        return True
+
     def is_ok(self):
         return self.presence and self.power_good and self.voltage_good and self.temperature_good
 
@@ -401,25 +417,36 @@ class DaemonPsud(daemon_base.DaemonBase):
                 self.log_error("Failed to load psuutil: %s" % (str(e)), True)
                 sys.exit(PSUUTIL_LOAD_ERROR)
 
-        # Connect to STATE_DB and create psu/chassis info tables
-        state_db = daemon_base.db_connect("STATE_DB")
-        self.chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        self.psu_tbl = swsscommon.Table(state_db, PSU_INFO_TABLE)
-        self.fan_tbl = swsscommon.Table(state_db, FAN_INFO_TABLE)
-        self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        try:
+            # Connect to STATE_DB and create psu/chassis info tables
+            state_db = daemon_base.db_connect("STATE_DB")
+            self.statedb_redisPipeline = swsscommon.RedisPipeline(state_db, 10)
+            self.chassis_tbl = swsscommon.Table(self.statedb_redisPipeline, CHASSIS_INFO_TABLE, True)
+            self.psu_tbl = swsscommon.Table(self.statedb_redisPipeline, PSU_INFO_TABLE, True)
+            self.fan_tbl = swsscommon.Table(self.statedb_redisPipeline, FAN_INFO_TABLE, True)
+            self.phy_entity_tbl = swsscommon.Table(self.statedb_redisPipeline, PHYSICAL_ENTITY_INFO_TABLE, True)
+        except Exception as e:
+            self.log_error(f"Failed to connect to STATE_DB or create RedisPipeline : {type(e).__name__} : {e}", True)
+            sys.exit(exit_code+2)
 
         # Post psu number info to STATE_DB
         self.num_psus = _wrapper_get_num_psus()
         fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_PSU_NUM_FIELD, str(self.num_psus))])
-        self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
+        try:
+            self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
+        except Exception as e:
+            self.log_error(f"Exception occurred while writing PSU number info to Redis : {type(e).__name__} : {e}")
 
     def __del__(self):
         # Delete all the information from DB and then exit
-        for psu_index in range(1, self.num_psus + 1):
-            self.psu_tbl._del(get_psu_key(psu_index))
+        try:
+            for psu_index in range(1, self.num_psus + 1):
+                self.psu_tbl._del(get_psu_key(psu_index))
 
-        self.chassis_tbl._del(CHASSIS_INFO_KEY)
-        self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+            self.chassis_tbl._del(CHASSIS_INFO_KEY)
+            self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        except Exception as e:
+            self.log_error(f"Exception occurred while deleting tables in Redis : {type(e).__name__} : {e}")
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -459,6 +486,11 @@ class DaemonPsud(daemon_base.DaemonBase):
         if self.first_run:
             self.first_run = False
 
+        # flush any remaining requests on the pipeline to STAT_DB at end of every cycle
+        try:
+            self.statedb_redisPipeline.flush()
+        except Exception as e:
+            self.log_error(f"Exception occurred while flushing Redis pipeline : {type(e).__name__} : {e}")
         return True
 
     def update_psu_data(self):
@@ -542,6 +574,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         power_exceeded_threshold = psu_status.power_exceeded_threshold
         power_warning_suppress_threshold = try_get(psu.get_psu_power_warning_suppress_threshold, NOT_AVAILABLE)
         power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
+        power_exceeded_changed = False
         if psu_status.check_psu_power_threshold:
             # Calculate total power
             system_power = float(power)
@@ -568,7 +601,8 @@ class DaemonPsud(daemon_base.DaemonBase):
                     # Raise alarm
                     power_exceeded_threshold = True
 
-            if psu_status.set_power_exceed_threshold(power_exceeded_threshold) and not self.psu_threshold_exceeded_logged:
+            power_exceeded_changed = psu_status.set_power_exceed_threshold(power_exceeded_threshold)
+            if power_exceeded_changed and not self.psu_threshold_exceeded_logged:
                 # Since this is a system level PSU power exceeding check, we do not need to log it for each PSU
                 log_on_status_changed(self, not psu_status.power_exceeded_threshold,
                                       'PSU power warning cleared: system power {} is back to normal, below the warning suppress threshold {}.'.format(system_power, power_warning_suppress_threshold),
@@ -594,28 +628,36 @@ class DaemonPsud(daemon_base.DaemonBase):
         if set_led:
             self._set_psu_led(psu, psu_status)
 
-        fvs = swsscommon.FieldValuePairs(
-            [(PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))),
-             (PSU_INFO_SERIAL_FIELD, str(try_get(psu.get_serial, NOT_AVAILABLE))),
-             (PSU_INFO_REV_FIELD, str(try_get(psu.get_revision, NOT_AVAILABLE))),
-             (PSU_INFO_TEMP_FIELD, str(temperature)),
-             (PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)),
-             (PSU_INFO_VOLTAGE_FIELD, str(voltage)),
-             (PSU_INFO_VOLTAGE_MIN_TH_FIELD, str(voltage_low_threshold)),
-             (PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)),
-             (PSU_INFO_CURRENT_FIELD, str(current)),
-             (PSU_INFO_POWER_FIELD, str(power)),
-             (PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD, str(power_warning_suppress_threshold)),
-             (PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)),
-             (PSU_INFO_POWER_OVERLOAD, str(power_exceeded_threshold)),
-             (PSU_INFO_FRU_FIELD, str(is_replaceable)),
-             (PSU_INFO_IN_CURRENT_FIELD, str(in_current)),
-             (PSU_INFO_IN_VOLTAGE_FIELD, str(in_voltage)),
-             (PSU_INFO_POWER_MAX_FIELD, str(max_power)),
-             (PSU_INFO_PRESENCE_FIELD, 'true' if _wrapper_get_psu_presence(index) else 'false'),
-             (PSU_INFO_STATUS_FIELD, 'true' if _wrapper_get_psu_status(index) else 'false'),
-             ])
-        self.psu_tbl.set(name, fvs)
+        # Only add rarely-changing fields if changed or first run while always adding the frequently-changing fields
+        fvs = swsscommon.FieldValuePairs()
+        if presence_changed or self.first_run:
+            fvs.append((PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_SERIAL_FIELD, str(try_get(psu.get_serial, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_REV_FIELD, str(try_get(psu.get_revision, NOT_AVAILABLE))))
+            fvs.append((PSU_INFO_PRESENCE_FIELD, 'true' if presence else 'false'))
+            fvs.append((PSU_INFO_FRU_FIELD, str(is_replaceable)))
+            fvs.append((PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)))
+            fvs.append((PSU_INFO_VOLTAGE_MIN_TH_FIELD, str(voltage_low_threshold)))
+            fvs.append((PSU_INFO_VOLTAGE_MAX_TH_FIELD, str(voltage_high_threshold)))
+        if power_good_changed or self.first_run:
+            fvs.append((PSU_INFO_STATUS_FIELD, 'true' if power_good else 'false'))
+        if power_exceeded_changed or self.first_run:
+            fvs.append((PSU_INFO_POWER_OVERLOAD, str(power_exceeded_threshold)))
+
+        fvs.append((PSU_INFO_TEMP_FIELD, str(temperature)))
+        fvs.append((PSU_INFO_VOLTAGE_FIELD, str(voltage)))
+        fvs.append((PSU_INFO_CURRENT_FIELD, str(current)))
+        fvs.append((PSU_INFO_POWER_FIELD, str(power)))
+        fvs.append((PSU_INFO_POWER_WARNING_SUPPRESS_THRESHOLD, str(power_warning_suppress_threshold)))
+        fvs.append((PSU_INFO_POWER_CRITICAL_THRESHOLD, str(power_critical_threshold)))
+        fvs.append((PSU_INFO_IN_CURRENT_FIELD, str(in_current)))
+        fvs.append((PSU_INFO_IN_VOLTAGE_FIELD, str(in_voltage)))
+        fvs.append((PSU_INFO_POWER_MAX_FIELD, str(max_power)))
+
+        try:
+            self.psu_tbl.set(name, fvs)
+        except Exception as e:
+            self.log_error(f"Exception occurred while updating PSU data for {name} to Redis : {type(e).__name__} : {e}")
 
     def _update_psu_entity_info(self):
         if not platform_chassis:
@@ -633,7 +675,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             [('position_in_parent', str(position)),
              ('parent_name', CHASSIS_INFO_KEY),
              ])
-        self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
+        try:
+            self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
+        except Exception as e:
+            self.log_error(f"Exception occurred while writing PSU entity info to Redis : {type(e).__name__} : {e}")
 
     def _update_psu_fan_data(self, psu, psu_index):
         """
@@ -656,7 +701,10 @@ class DaemonPsud(daemon_base.DaemonBase):
                  (FAN_INFO_SPEED_FIELD, str(speed)),
                  (FAN_INFO_TIMESTAMP_FIELD, datetime.now().strftime('%Y%m%d %H:%M:%S'))
                  ])
-            self.fan_tbl.set(fan_name, fvs)
+            try:
+                self.fan_tbl.set(fan_name, fvs)
+            except Exception as e:
+                self.log_error(f"Exception occurred while writing PSU fan info to Redis : {type(e).__name__} : {e}")
 
     def _set_psu_led(self, psu, psu_status):
         try:
@@ -670,10 +718,15 @@ class DaemonPsud(daemon_base.DaemonBase):
             return
 
         for index, psu_status in self.psu_status_dict.items():
-            fvs = swsscommon.FieldValuePairs([
-                ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
-            ])
-            self.psu_tbl.set(get_psu_key(index), fvs)
+            led_status = try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)
+            if psu_status.set_led_status(led_status):
+                fvs = swsscommon.FieldValuePairs([
+                    ('led_status', str(led_status))
+                ])
+                try:
+                    self.psu_tbl.set(get_psu_key(index), fvs)
+                except Exception as e:
+                    self.log_error(f"Exception occurred while writing PSU LED status to Redis : {type(e).__name__} : {e}")
             self._update_psu_fan_led_status(psu_status.psu, index)
 
     def _update_psu_fan_led_status(self, psu, psu_index):
@@ -684,7 +737,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             fvs = swsscommon.FieldValuePairs([
                 (FAN_INFO_LED_STATUS_FIELD, str(try_get(fan.get_status_led, NOT_AVAILABLE)))
             ])
-            self.fan_tbl.set(fan_name, fvs)
+            try:
+                self.fan_tbl.set(fan_name, fvs)
+            except Exception as e:
+                self.log_error(f"Exception occurred while writing PSU fan LED status to Redis : {type(e).__name__} : {e}")
 
     def update_psu_chassis_info(self):
         if not platform_chassis:
