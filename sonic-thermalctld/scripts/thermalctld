@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+import argparse
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger
@@ -437,6 +438,90 @@ class FanUpdater(logger.Logger):
                 ])
             self.drawer_table.set(drawer_name, fvs)
 
+class LiquidCoolingUpdater(threading.Thread, logger.Logger):
+
+    LIQUID_COOLING_INFO_TABLE_NAME = 'LIQUID_COOLING_INFO'
+
+    def __init__(self, chassis, liquid_cooling_update_interval):
+        """
+        Constructor for LiquidCoolingUpdater
+        :param chassis: Object representing a platform chassis
+        """
+        threading.Thread.__init__(self)
+        logger.Logger.__init__(self)
+        self.name = "LiquidCoolingUpdater"
+        self.exc = None
+        self.task_stopping_event = threading.Event()
+        self.chassis = chassis
+        self.liquid_cooling = self.chassis.get_liquid_cooling()
+        self.leaking_sensors = []
+        self.interval = liquid_cooling_update_interval
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        self.table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
+
+    def __del__(self):
+        if self.table:
+            table_keys = self.table.getKeys()
+            for tk in table_keys:
+                self.table._del(tk)
+
+    def _refresh_leak_status(self):
+        for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
+            sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
+            sensor_leak_status = sensor.is_leak()
+            status_msg = "N/A"
+
+            if sensor_leak_status is True:
+                status_msg = "Yes"
+                if sensor_name not in self.leaking_sensors:
+                    self.leaking_sensors.append(sensor_name)
+                    self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
+            elif sensor_leak_status is False:
+                status_msg = "No"
+                if sensor_name in self.leaking_sensors:
+                    self.leaking_sensors.remove(sensor_name)
+                    self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
+
+            fvs = swsscommon.FieldValuePairs([('leak_status', status_msg)])
+            self.table.set(sensor_name, fvs)
+
+    def update(self):
+        self._refresh_leak_status()
+
+    def task_worker(self, stopping_event):
+        """
+        Update all liquid cooling information to database
+        :return:
+        """
+        while not stopping_event.is_set():
+            self.log_debug("Start liquid cooling updating")
+
+            self.update()
+
+            self.log_debug("End liquid cooling updating")
+
+            if self.task_stopping_event.is_set():
+                return
+
+            time.sleep(self.interval)
+
+    def join(self):
+        self.task_stopping_event.set()
+        super().join()
+        if self.exc:
+            raise self.exc
+
+    def run(self):
+        self.thread_id = threading.current_thread().ident
+        if self.task_stopping_event.is_set():
+            return
+        try:
+            self.task_worker(self.task_stopping_event)
+        except Exception as e:
+            self.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
+            self.exc = e
+            self.task_stopping_event.set()
 
 class TemperatureStatus(logger.Logger):
     TEMPERATURE_DIFF_THRESHOLD = 10
@@ -812,9 +897,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     def __init__(
         self,
-        thermal_monitor_initial_interval,
-        thermal_monitor_update_interval,
-        thermal_monitor_update_elapsed_threshold,
+        thermal_monitor_initial_interval=5,
+        thermal_monitor_update_interval=60,
+        thermal_monitor_update_elapsed_threshold=30,
+        enable_liquid_cooling=False,
+        liquid_cooling_update_interval=0.5
     ):
         """
         Initializer of ThermalControlDaemon
@@ -856,6 +943,12 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         except Exception as e:
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
 
+        self.liquid_cooling_updater = LiquidCoolingUpdater(self.chassis, liquid_cooling_update_interval) if enable_liquid_cooling else None
+
+        if self.liquid_cooling_updater is not None:
+            self.liquid_cooling_updater.start()
+            self.log_notice("Started thread for liquid cooling updater")
+
     def deinit(self):
         """
         Deinitializer of ThermalControlDaemon
@@ -867,6 +960,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while destroying thermal manager - {}'.format(repr(e)))
 
         self.thermal_monitor.task_stop()
+
+        if self.liquid_cooling_updater is not None:
+            if self.liquid_cooling_updater.is_alive():
+                self.liquid_cooling_updater.join()
+                self.log_notice("Joined thread for liquid cooling updater")
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -932,12 +1030,17 @@ def main():
     parser.add_argument('--thermal-monitor-initial-interval', type=int, default=5)
     parser.add_argument('--thermal-monitor-update-interval', type=int, default=60)
     parser.add_argument('--thermal-monitor-update-elapsed-threshold', type=int, default=30)
+    parser.add_argument('--enable_liquid_cooling', action='store_true', default=False)
+    parser.add_argument('--liquid_cooling_update_interval', type=float, default=0.5)
+
     args = parser.parse_args()
 
     thermal_control = ThermalControlDaemon(
         args.thermal_monitor_initial_interval,
         args.thermal_monitor_update_interval,
-        args.thermal_monitor_update_elapsed_threshold
+        args.thermal_monitor_update_elapsed_threshold,
+        args.enable_liquid_cooling,
+        args.liquid_cooling_update_interval
     )
 
     thermal_control.log_info("Starting up...")

@@ -5,6 +5,7 @@ from sonic_platform_base import module_base
 from sonic_platform_base import psu_base
 from sonic_platform_base import sfp_base
 from sonic_platform_base import thermal_base
+from sonic_platform_base import liquid_cooling_base
 from sonic_platform_base.sonic_thermal_control import thermal_manager_base
 
 
@@ -188,6 +189,47 @@ class MockPsu(psu_base.PsuBase):
     def is_replaceable(self):
         return self._replaceable
 
+class MockLiquidCoolingSensor(liquid_cooling_base.LeakageSensorBase):
+    def __init__(self, name="leakage1"):
+        super(MockLiquidCoolingSensor, self).__init__(name)
+        self._name = name
+        self._presence = True
+        self._model = 'Liquid Cooling Sensor Model'
+        self._serial = 'Liquid Cooling Sensor Serial'
+        self._status = True
+        self._position_in_parent = 1
+        self._replaceable = True
+        self._is_leak = False
+
+    def get_name(self):
+        return self._name
+
+    def is_leak(self):
+        return self._is_leak
+
+    def set_leak(self, leak_status):
+        """Helper method for testing"""
+        self._is_leak = leak_status
+
+class MockLiquidCooling(liquid_cooling_base.LiquidCoolingBase):
+    def __init__(self, num_sensors=2):
+        sensors = [MockLiquidCoolingSensor(f"leakage{i+1}") for i in range(num_sensors)]
+        super(MockLiquidCooling, self).__init__(num_sensors, sensors)
+        self._name = None
+        self._presence = True
+        self._model = 'Liquid Cooling Model'
+        self._serial = 'Liquid Cooling Serial'
+        self.leakage_sensors = sensors
+
+    def make_sensor_leak(self, sensor_index):
+        """Helper method for testing - make a specific sensor report leak"""
+        if 0 <= sensor_index < len(self.leakage_sensors):
+            self.leakage_sensors[sensor_index].set_leak(True)
+
+    def make_sensor_no_leak(self, sensor_index):
+        """Helper method for testing - make a specific sensor report no leak"""
+        if 0 <= sensor_index < len(self.leakage_sensors):
+            self.leakage_sensors[sensor_index].set_leak(False)
 
 class MockSfp(sfp_base.SfpBase):
     def __init__(self):
@@ -340,6 +382,7 @@ class MockChassis(chassis_base.ChassisBase):
         self._my_slot = module_base.ModuleBase.MODULE_INVALID_SLOT
         self._dpu_id = None
         self._thermal_manager = MockThermalManager()
+        self._liquid_cooling = MockLiquidCooling()
 
     def make_absent_fan(self):
         fan = MockFan()
@@ -406,6 +449,9 @@ class MockChassis(chassis_base.ChassisBase):
         module._psu_list.append(psu)
         module._fan_list.append(fan)
         module._thermal_list.append(MockThermal())
+
+    def get_liquid_cooling(self):
+        return self._liquid_cooling
 
     def is_modular_chassis(self):
         return self._is_chassis_system
