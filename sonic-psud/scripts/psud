@@ -403,10 +403,11 @@ class DaemonPsud(daemon_base.DaemonBase):
 
         # Connect to STATE_DB and create psu/chassis info tables
         state_db = daemon_base.db_connect("STATE_DB")
-        self.chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        self.psu_tbl = swsscommon.Table(state_db, PSU_INFO_TABLE)
-        self.fan_tbl = swsscommon.Table(state_db, FAN_INFO_TABLE)
-        self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        self.statedb_redisPipeline = swsscommon.RedisPipeline(state_db, 10)
+        self.chassis_tbl = swsscommon.Table(self.statedb_redisPipeline, CHASSIS_INFO_TABLE, True)
+        self.psu_tbl = swsscommon.Table(self.statedb_redisPipeline, PSU_INFO_TABLE, True)
+        self.fan_tbl = swsscommon.Table(self.statedb_redisPipeline, FAN_INFO_TABLE, True)
+        self.phy_entity_tbl = swsscommon.Table(self.statedb_redisPipeline, PHYSICAL_ENTITY_INFO_TABLE, True)
 
         # Post psu number info to STATE_DB
         self.num_psus = _wrapper_get_num_psus()
@@ -459,6 +460,11 @@ class DaemonPsud(daemon_base.DaemonBase):
         if self.first_run:
             self.first_run = False
 
+        # flush any remaining requests on the pipeline to STAT_DB at end of every cycle
+        try:
+            self.statedb_redisPipeline.flush()
+        except Exception as e:
+            self.log_error(f"Exception occurred while flushing Redis pipeline : {type(e).__name__} : {e}")
         return True
 
     def update_psu_data(self):
