@@ -338,3 +338,20 @@ class TestPsuChassisInfo(object):
 
         ret = psud.try_get(callback3, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
+
+    def test_run_power_budget_db_exception(self):
+        chassis = MockChassis()
+        psu1 = MockPsu("PSU 1", 0, True, True)
+        psu1.set_maximum_supplied_power(510.0)
+        chassis._psu_list.append(psu1)
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+
+        # Test exception handling when writing chassis power info to Redis
+        chassis_tbl.set = mock.MagicMock(side_effect=Exception("Redis write error"))
+        chassis_info.log_error = mock.MagicMock()
+        chassis_info.run_power_budget(chassis_tbl)
+        assert chassis_info.log_error.call_count == 1
+        assert "Exception occurred while writing chassis power info to Redis" in chassis_info.log_error.call_args[0][0]
