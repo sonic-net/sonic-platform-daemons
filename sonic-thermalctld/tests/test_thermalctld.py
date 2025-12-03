@@ -24,8 +24,8 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
-from .mock_swsscommon import Table
+from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal, MockFanDrawer
+from swsscommon.swsscommon import Table, RedisPipeline
 
 daemon_base.db_connect = mock.MagicMock()
 
@@ -123,6 +123,61 @@ class TestFanStatus(object):
         assert not ret
 
 
+class TestFanDrawerStatus(object):
+    """
+    Test cases to cover functionality in FanDrawerStatus class
+    """
+    def test_set_presence(self):
+        fan_drawer_status = thermalctld.FanDrawerStatus()
+        ret = fan_drawer_status.set_presence(True)
+        assert fan_drawer_status.presence
+        assert not ret
+
+        ret = fan_drawer_status.set_presence(False)
+        assert not fan_drawer_status.presence
+        assert ret
+
+    def test_set_status(self):
+        fan_drawer_status = thermalctld.FanDrawerStatus()
+
+        ret = fan_drawer_status.set_status(True)
+        assert not ret
+
+        ret = fan_drawer_status.set_status(False)
+        assert ret
+        assert not fan_drawer_status.status
+
+        ret = fan_drawer_status.set_status(False)
+        assert not ret
+
+        ret = fan_drawer_status.set_status(True)
+        assert ret
+        assert fan_drawer_status.status
+
+        ret = fan_drawer_status.set_status(True)
+        assert not ret
+
+    def test_set_led_status(self):
+        fan_drawer_status = thermalctld.FanDrawerStatus()
+
+        ret = fan_drawer_status.set_led_status(thermalctld.NOT_AVAILABLE)
+        assert not ret
+
+        ret = fan_drawer_status.set_led_status('green')
+        assert ret
+        assert fan_drawer_status.led_status == 'green'
+
+        ret = fan_drawer_status.set_led_status('green')
+        assert not ret
+
+        ret = fan_drawer_status.set_led_status('red')
+        assert ret
+        assert fan_drawer_status.led_status == 'red'
+
+        ret = fan_drawer_status.set_led_status('red')
+        assert not ret
+
+
 class TestFanUpdater(object):
     """
     Test cases to cover functionality in FanUpdater class
@@ -131,7 +186,7 @@ class TestFanUpdater(object):
     @mock.patch('thermalctld.update_entity_info', mock.MagicMock())
     def test_refresh_fan_drawer_status_fan_drawer_get_name_not_impl(self):
         # Test case where fan_drawer.get_name is not implemented
-        fan_updater = thermalctld.FanUpdater(MockChassis(), threading.Event())
+        fan_updater = thermalctld.FanUpdater(MockChassis(), threading.Event(), RedisPipeline(mock.MagicMock()))
         mock_fan_drawer = mock.MagicMock()
         fan_updater._refresh_fan_drawer_status(mock_fan_drawer, 1)
         assert thermalctld.update_entity_info.call_count == 0
@@ -145,7 +200,7 @@ class TestFanUpdater(object):
         fan.make_over_speed()
         chassis.get_all_fans().append(fan)
 
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         fan_updater.update()
         assert fan.get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
@@ -162,7 +217,7 @@ class TestFanUpdater(object):
         mock_fan = MockFan()
         mock_fan.set_status_led = mock.MagicMock(side_effect=NotImplementedError)
 
-        fan_updater = thermalctld.FanUpdater(MockChassis(), threading.Event())
+        fan_updater = thermalctld.FanUpdater(MockChassis(), threading.Event(), RedisPipeline(mock.MagicMock()))
         fan_updater._set_fan_led(mock_fan_drawer, mock_fan, 'Test Fan', fan_status)
         assert fan_updater.log_warning.call_count == 1
         fan_updater.log_warning.assert_called_with('Failed to set status LED for fan Test Fan, set_status_led not implemented')
@@ -170,8 +225,16 @@ class TestFanUpdater(object):
     def test_fan_absent(self):
         chassis = MockChassis()
         chassis.make_absent_fan()
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table = mock.MagicMock()
+        fan_updater.drawer_table = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update - all fields should be written
+        assert fan_updater.first_run is True
         fan_updater.update()
+        assert fan_updater.first_run is False
+
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 2
@@ -181,6 +244,32 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_warning.mock_calls == expected_calls
 
+        # Verify all fields written on first run for absent fan
+        assert fan_updater.table.set.call_count == 1
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        # Presence-related fields should be present on first run
+        assert 'presence' in fv_dict
+        assert fv_dict['presence'] == 'False'
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'status' in fv_dict
+        assert 'is_under_speed' in fv_dict
+        assert 'is_over_speed' in fv_dict
+        # Frequently-changing fields should always be present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
+        # Second update - presence changes
+        fan_updater.table.set.reset_mock()
         fan_list[0].set_presence(True)
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
@@ -191,10 +280,38 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
 
+        # Verify presence-related fields are written when presence changes
+        assert fan_updater.table.set.call_count == 1
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        # Presence changed, so these should be written
+        assert 'presence' in fv_dict
+        assert fv_dict['presence'] == 'True'
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'status' not in fv_dict
+        assert 'is_under_speed' not in fv_dict
+        assert 'is_over_speed' not in fv_dict
+        # Always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
     def test_fan_faulty(self):
         chassis = MockChassis()
         chassis.make_faulty_fan()
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table = mock.MagicMock()
+        fan_updater.drawer_table = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
@@ -205,6 +322,31 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_warning.mock_calls == expected_calls
 
+        # Verify status field is written on first run
+        assert fan_updater.table.set.call_count == 1
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'status' in fv_dict
+        assert fv_dict['status'] == 'False'
+        assert 'presence' in fv_dict
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'is_under_speed' in fv_dict
+        assert 'is_over_speed' in fv_dict
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
+        # Second update - status changes
+        fan_updater.table.set.reset_mock()
         fan_list[0].set_status(True)
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
@@ -215,37 +357,170 @@ class TestFanUpdater(object):
         ]
         assert fan_updater.log_notice.mock_calls == expected_calls
 
+        # Verify status field is written when it changes
+        assert fan_updater.table.set.call_count == 1
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'status' in fv_dict
+        assert fv_dict['status'] == 'True'
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'timestamp' in fv_dict
+        # Presence didn't change, so these should NOT be present
+        assert 'presence' not in fv_dict
+        assert 'model' not in fv_dict
+        assert 'serial' not in fv_dict
+        assert 'is_under_speed' not in fv_dict
+        assert 'is_over_speed' not in fv_dict
+
     def test_fan_under_speed(self):
         chassis = MockChassis()
         chassis.make_under_speed_fan()
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table = mock.MagicMock()
+        fan_updater.drawer_table = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
         fan_updater.log_warning.assert_called_with('Fan low speed warning: FanDrawer 0 fan 1 current speed=1, target speed=2')
 
+        # Verify is_under_speed field is written on first run
+        assert fan_updater.table.set.call_count == 1
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'is_under_speed' in fv_dict
+        assert fv_dict['is_under_speed'] == 'True'
+        # Other fields should also be present on first run
+        assert 'presence' in fv_dict
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'status' in fv_dict
+        assert 'is_over_speed' in fv_dict
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
+
+        # Second update - speed changes
+        fan_updater.table.set.reset_mock()
         fan_list[0].make_normal_speed()
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
         fan_updater.log_notice.assert_called_with('Fan low speed warning cleared: FanDrawer 0 fan 1 speed is back to normal')
 
+        # Verify is_under_speed field is written when it changes
+        assert fan_updater.table.set.call_count == 1
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'is_under_speed' in fv_dict
+        assert fv_dict['is_under_speed'] == 'False'
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+        # Presence didn't change
+        assert 'presence' not in fv_dict
+        assert 'model' not in fv_dict
+        assert 'serial' not in fv_dict
+        assert 'status' not in fv_dict
+        assert 'is_over_speed' not in fv_dict
+
     def test_fan_over_speed(self):
         chassis = MockChassis()
         chassis.make_over_speed_fan()
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+
+        # Mock the table.set to track calls
+        fan_updater.table.set = mock.MagicMock()
+        fan_updater.drawer_table.set = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update
         fan_updater.update()
         fan_list = chassis.get_all_fans()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_RED
         assert fan_updater.log_warning.call_count == 1
         fan_updater.log_warning.assert_called_with('Fan high speed warning: FanDrawer 0 fan 1 current speed=2, target speed=1')
 
+        # Verify is_over_speed field is written on first run
+        assert fan_updater.table.set.call_count == 1
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'is_over_speed' in fv_dict
+        assert fv_dict['is_over_speed'] == 'True'
+        # Other fields should also be present on first run
+        assert 'presence' in fv_dict
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'status' in fv_dict
+        assert 'is_under_speed' in fv_dict
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
+        # Second update - speed changes
+        fan_updater.table.set.reset_mock()
         fan_list[0].make_normal_speed()
         fan_updater.update()
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
         fan_updater.log_notice.assert_called_with('Fan high speed warning cleared: FanDrawer 0 fan 1 speed is back to normal')
+
+        # Verify is_over_speed field is written when it changes
+        assert fan_updater.table.set.call_count == 1
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'is_over_speed' in fv_dict
+        assert fv_dict['is_over_speed'] == 'False'
+        # Frequently-changing fields always present
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+        # Presence didn't change
+        assert 'presence' not in fv_dict
+        assert 'model' not in fv_dict
+        assert 'serial' not in fv_dict
+        assert 'status' not in fv_dict
+        assert 'is_under_speed' not in fv_dict
 
     def test_update_psu_fans(self):
         chassis = MockChassis()
@@ -253,7 +528,7 @@ class TestFanUpdater(object):
         mock_fan = MockFan()
         psu._fan_list.append(mock_fan)
         chassis._psu_list.append(psu)
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         fan_updater.update()
         assert fan_updater.log_warning.call_count == 0
 
@@ -274,7 +549,7 @@ class TestFanUpdater(object):
         chassis.set_modular_chassis(True)
         module._fan_list.append(mock_fan)
         chassis._module_list.append(module)
-        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         fan_updater.update()
         assert fan_updater.log_warning.call_count == 0
 
@@ -287,6 +562,183 @@ class TestFanUpdater(object):
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message')")
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
+
+    def test_fan_conditional_write_no_change(self):
+        """Test that only frequently-changing fields are written when nothing changes"""
+        chassis = MockChassis()
+        mock_fan = MockFan()
+        fan_drawer = MockFanDrawer(len(chassis._fan_drawer_list))
+        fan_drawer._fan_list.append(mock_fan)
+        chassis._fan_list.append(mock_fan)
+        chassis._fan_drawer_list.append(fan_drawer)
+
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table = mock.MagicMock()
+        fan_updater.drawer_table = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update
+        fan_updater.update()
+
+        # Reset mock to track subsequent calls
+        fan_updater.table.set.reset_mock()
+
+        # Second update - no changes to fan state
+        fan_updater.update()
+
+        # Should still write (for frequently-changing fields)
+        assert fan_updater.table.set.call_count == 1
+
+        # Verify that only frequently-changing fields are written
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+
+        # These fields should always be present (frequently-changing)
+        assert 'speed' in fv_dict
+        assert 'direction' in fv_dict
+        assert 'timestamp' in fv_dict
+
+        # These fields should NOT be present (rarely-changing, no change)
+        assert 'presence' not in fv_dict
+        assert 'model' not in fv_dict
+        assert 'serial' not in fv_dict
+        assert 'status' not in fv_dict
+        assert 'is_under_speed' not in fv_dict
+        assert 'is_over_speed' not in fv_dict
+
+    def test_fan_drawer_conditional_write(self):
+        """Test fan drawer conditional write on first run and when status changes"""
+        chassis = MockChassis()
+        mock_fan = MockFan()
+        fan_drawer = MockFanDrawer(len(chassis._fan_drawer_list))
+        fan_drawer._fan_list.append(mock_fan)
+        chassis._fan_list.append(mock_fan)
+        chassis._fan_drawer_list.append(fan_drawer)
+
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table = mock.MagicMock()
+        fan_updater.drawer_table = mock.MagicMock()
+        fan_updater._update_led_color = mock.MagicMock()
+
+        # First update - all drawer fields should be written
+        fan_updater.update()
+
+        # Check that drawer_table.set was called
+        assert fan_updater.drawer_table.set.call_count == 1
+
+        # Get the first call and verify all fields present
+        drawer_name = 'FanDrawer 0'
+        matching_call = None
+        for call in fan_updater.drawer_table.set.call_args_list:
+            if call[0][0] == drawer_name:
+                matching_call = call
+                break
+
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'presence' in fv_dict
+        assert 'model' in fv_dict
+        assert 'serial' in fv_dict
+        assert 'is_replaceable' in fv_dict
+        assert 'status' in fv_dict
+
+
+        # Second update - no changes, should not write anything
+        fan_updater.drawer_table.set.reset_mock()
+        fan_updater.update()
+        assert fan_updater.drawer_table.set.call_count == 0
+
+
+        # Third update - status changes
+        drawer_list = chassis.get_all_fan_drawers()
+        drawer_list[0].set_status(False)
+        fan_updater.update()
+
+        # Should write status field
+        assert fan_updater.drawer_table.set.call_count == 1
+
+        matching_call = None
+        for call in fan_updater.drawer_table.set.call_args_list:
+            if call[0][0] == drawer_name:
+                matching_call = call
+                break
+
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        fv_dict = fvs.fv_dict
+        assert 'status' in fv_dict
+        # Other fields should NOT be written (not changed)
+        assert 'presence' not in fv_dict
+        assert 'model' not in fv_dict
+        assert 'serial' not in fv_dict
+
+    def test_update_led_color_conditional_write(self):
+        """Test LED color conditional write"""
+        chassis = MockChassis()
+        mock_fan = MockFan()
+        fan_drawer = MockFanDrawer(len(chassis._fan_drawer_list))
+        fan_drawer._fan_list.append(mock_fan)
+        chassis._fan_list.append(mock_fan)
+        chassis._fan_drawer_list.append(fan_drawer)
+
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+        fan_updater.table.set = mock.MagicMock()
+        fan_updater.drawer_table.set = mock.MagicMock()
+
+        # First update and LED update
+        fan_updater.update()
+        fan_updater.table.set.reset_mock()
+        fan_updater.drawer_table.set.reset_mock()
+        fan_updater.first_run = True
+        fan_updater._update_led_color()
+
+        # Should write LED status on first run
+        assert fan_updater.table.set.call_count == 1
+        fan_name = 'FanDrawer 0 fan 1'
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        assert 'led_status' in fvs.fv_dict
+
+        # Second LED update - no change
+        fan_updater.table.set.reset_mock()
+        fan_updater.drawer_table.set.reset_mock()
+        fan_updater.first_run = False
+        fan_updater._update_led_color()
+
+        # Should NOT write (no change)
+        assert fan_updater.table.set.call_count == 0
+        assert fan_updater.drawer_table.set.call_count == 0
+
+        # Third update - LED changes
+        fan_list = chassis.get_all_fans()
+        fan_list[0].set_status_led(MockFan.STATUS_LED_COLOR_RED)
+        fan_updater._update_led_color()
+
+        # Should write LED status (changed)
+        assert fan_updater.table.set.call_count == 1
+        matching_call = None
+        for call in fan_updater.table.set.call_args_list:
+            if call[0][0] == fan_name:
+                matching_call = call
+                break
+        assert matching_call is not None
+        fvs = matching_call[0][1]
+        assert 'led_status' in fvs.fv_dict
+        assert fvs.fv_dict['led_status'] == MockFan.STATUS_LED_COLOR_RED
 
 class TestThermalMonitor(object):
     """
@@ -321,7 +773,12 @@ def test_insufficient_fan_number():
     chassis = MockChassis()
     chassis.make_absent_fan()
     chassis.make_faulty_fan()
-    fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+    fan_updater = thermalctld.FanUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
+    fan_updater.table = mock.MagicMock()
+    fan_updater.drawer_table = mock.MagicMock()
+    fan_updater._update_led_color = mock.MagicMock()
+
+    # First update
     fan_updater.update()
     assert fan_updater.log_warning.call_count == 3
     expected_calls = [
@@ -331,12 +788,80 @@ def test_insufficient_fan_number():
     ]
     assert fan_updater.log_warning.mock_calls == expected_calls
 
+    # Verify both fans' data written on first run
+    fan0_name = 'FanDrawer 0 fan 1'
+    fan1_name = 'FanDrawer 1 fan 1'
+
+    # Check fan 0 (absent)
+    assert fan_updater.table.set.call_count == 2
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan0_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'presence' in fv_dict
+    assert fv_dict['presence'] == 'False'
+
+    # Check fan 1 (faulty)
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan1_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'status' in fv_dict
+    assert fv_dict['status'] == 'False'
+
+    # Second update - fan 0 presence changes
+    fan_updater.table.set.reset_mock()
     fan_list = chassis.get_all_fans()
     fan_list[0].set_presence(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 1
     fan_updater.log_warning.assert_called_with('Insufficient number of working fans warning: 1 fan is not working')
+    assert fan_updater.table.set.call_count == 2
 
+    # Verify fan 0 has presence fields written (changed)
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan0_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'presence' in fv_dict
+    assert fv_dict['presence'] == 'True'
+    assert 'model' in fv_dict
+    assert 'serial' in fv_dict
+    assert 'status' not in fv_dict  # status didn't change
+    assert 'is_under_speed' not in fv_dict  # is_under_speed didn't change
+    assert 'is_over_speed' not in fv_dict  # is_over_speed didn't change
+
+    # Verify fan 1 has only frequently-changing fields (no change)
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan1_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'speed' in fv_dict
+    assert 'timestamp' in fv_dict
+    assert 'presence' not in fv_dict
+    assert 'model' not in fv_dict
+    assert 'status' not in fv_dict  # status didn't change
+    assert 'is_under_speed' not in fv_dict  # is_under_speed didn't change
+    assert 'is_over_speed' not in fv_dict  # is_over_speed didn't change
+
+    # Third update - fan 1 status changes
+    fan_updater.table.set.reset_mock()
     fan_list[1].set_status(True)
     fan_updater.update()
     assert fan_updater.log_notice.call_count == 3
@@ -346,6 +871,41 @@ def test_insufficient_fan_number():
         mock.call('Insufficient number of working fans warning cleared: all fans are back to normal')
     ]
     assert fan_updater.log_notice.mock_calls == expected_calls
+    assert fan_updater.table.set.call_count == 2
+
+    # Verify fan 0 has only frequently-changing fields (no change)
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan0_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'speed' in fv_dict
+    assert 'timestamp' in fv_dict
+    assert 'presence' not in fv_dict
+    assert 'model' not in fv_dict
+    assert 'status' not in fv_dict
+    assert 'is_under_speed' not in fv_dict
+    assert 'is_over_speed' not in fv_dict
+
+    # Verify fan 1 has status field written (changed)
+    matching_call = None
+    for call in fan_updater.table.set.call_args_list:
+        if call[0][0] == fan1_name:
+            matching_call = call
+            break
+    assert matching_call is not None
+    fvs = matching_call[0][1]
+    fv_dict = fvs.fv_dict
+    assert 'status' in fv_dict
+    # Presence didn't change
+    assert 'presence' not in fv_dict
+    assert 'model' not in fv_dict
+    assert 'serial' not in fv_dict
+    assert 'is_under_speed' not in fv_dict
+    assert 'is_over_speed' not in fv_dict
 
 
 def test_temperature_status_set_over_temper():
@@ -405,7 +965,7 @@ class TestTemperatureUpdater(object):
     """
     def test_deinit(self):
         chassis = MockChassis()
-        temp_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temp_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
         temp_updater.table = Table("STATE_DB", "xtable")
         temp_updater.table._del = mock.MagicMock()
@@ -427,7 +987,7 @@ class TestTemperatureUpdater(object):
 
     def test_deinit_exception(self):
         chassis = MockChassis()
-        temp_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temp_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temp_updater.temperature_status_dict = {'key1': 'value1', 'key2': 'value2'}
         temp_updater.table = Table("STATE_DB", "xtable")
         temp_updater.table._del = mock.MagicMock()
@@ -443,15 +1003,14 @@ class TestTemperatureUpdater(object):
 
         temp_updater.__del__()
         assert temp_updater.table.getKeys.call_count == 1
-        assert temp_updater.table._del.call_count == 2
-        expected_calls = [mock.call('key1'), mock.call('key2')]
+        assert temp_updater.table._del.call_count == 1
+        expected_calls = [mock.call('key1')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
-        assert temp_updater.chassis_table is None
 
     def test_over_temper(self):
         chassis = MockChassis()
         chassis.make_over_temper_thermal()
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -465,7 +1024,7 @@ class TestTemperatureUpdater(object):
     def test_under_temper(self):
         chassis = MockChassis()
         chassis.make_under_temper_thermal()
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -482,7 +1041,7 @@ class TestTemperatureUpdater(object):
         mock_thermal = MockThermal()
         psu._thermal_list.append(mock_thermal)
         chassis._psu_list.append(psu)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -502,7 +1061,7 @@ class TestTemperatureUpdater(object):
         mock_thermal = MockThermal()
         sfp._thermal_list.append(mock_thermal)
         chassis._sfp_list.append(sfp)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -523,7 +1082,7 @@ class TestTemperatureUpdater(object):
         thermal.make_over_temper()
         chassis.get_all_thermals().append(thermal)
 
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 2
 
@@ -544,7 +1103,7 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         chassis.make_module_thermal()
         chassis.set_modular_chassis(True)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 3
 
@@ -559,21 +1118,21 @@ def test_dpu_chassis_thermals():
     # Modular chassis (Not a dpu chassis) No Change in TemperatureUpdater Behaviour
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table
     # DPU chassis TemperatureUpdater without is_smartswitch False return - No update to CHASSIS_STATE_DB
     chassis.set_modular_chassis(False)
     chassis.set_dpu(True)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert not temperature_updater.chassis_table
     # DPU chassis TemperatureUpdater without get_dpu_id implmenetation- No update to CHASSIS_STATE_DB
     chassis.set_smartswitch(True)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert not temperature_updater.chassis_table
     # DPU chassis TemperatureUpdater with get_dpu_id implemented - Update data to CHASSIS_STATE_DB
     dpu_id = 1
     chassis.set_dpu_id(dpu_id)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table
     # Table name in chassis state db = TEMPERATURE_INFO_0 for dpu_id 0
     assert temperature_updater.chassis_table.table_name == f"{TEMPER_INFO_TABLE_NAME}_{dpu_id}"
@@ -588,7 +1147,7 @@ def test_dpu_chassis_state_deinit():
     chassis.set_modular_chassis(False)
     chassis.set_dpu(True)
     chassis.set_dpu_id(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table
     temperature_updater.table = Table("STATE_DB", "xtable")
     temperature_updater.phy_entity_table = None
@@ -611,7 +1170,7 @@ def test_updater_dpu_thermal_check_chassis_table():
     chassis.set_dpu(True)
     chassis.set_smartswitch(True)
     chassis.set_dpu_id(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     temperature_updater.update()
     assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
 
@@ -628,17 +1187,17 @@ def test_updater_thermal_check_modular_chassis():
     chassis = MockChassis()
     assert chassis.is_modular_chassis() == False
 
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table == None
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(-1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table == None
 
     my_slot = 1
     chassis.set_my_slot(my_slot)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
     assert temperature_updater.chassis_table != None
     assert temperature_updater.chassis_table.table_name == '{}_{}'.format(TEMPER_INFO_TABLE_NAME, str(my_slot))
 
@@ -651,7 +1210,7 @@ def test_updater_thermal_check_chassis_table():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
 
     temperature_updater.update()
     assert temperature_updater.chassis_table.get_size() == chassis.get_num_thermals()
@@ -670,7 +1229,7 @@ def test_updater_thermal_check_min_max():
 
     chassis.set_modular_chassis(True)
     chassis.set_my_slot(1)
-    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+    temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event(), RedisPipeline(mock.MagicMock()))
 
     temperature_updater.update()
     slot_dict = temperature_updater.chassis_table.get(thermal.get_name())
