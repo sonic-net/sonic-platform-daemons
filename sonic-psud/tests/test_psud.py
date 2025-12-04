@@ -26,6 +26,8 @@ sys.path.insert(0, modules_path)
 load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
+# Mock __del__ at module level to prevent issues during garbage collection
+psud.DaemonPsud.__del__ = mock.MagicMock()
 
 daemon_base.db_connect = mock.MagicMock()
 
