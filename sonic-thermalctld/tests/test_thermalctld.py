@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
 
 # TODO: Clean this up once we no longer need to support Python 2
@@ -287,6 +288,216 @@ class TestFanUpdater(object):
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message')")
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
+
+class TestLiquidCoolingUpdater(object):
+    def test_update(self):
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater._refresh_leak_status = mock.MagicMock()
+
+        liquid_cooling_updater.update()
+
+        assert liquid_cooling_updater._refresh_leak_status.call_count == 1
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_no_leak(self, mock_try_get):
+        """Test _refresh_leak_status when no sensors are leaking"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = []
+        
+        mock_try_get.side_effect = lambda func, default: func()
+        
+        liquid_cooling_updater._refresh_leak_status()
+        
+        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.log_error.call_count == 0
+        assert liquid_cooling_updater.log_notice.call_count == 0
+        assert len(liquid_cooling_updater.leaking_sensors) == 0
+        
+        calls = liquid_cooling_updater.table.set.call_args_list
+        for call in calls:
+            sensor_name, fvp = call[0]
+            assert sensor_name in ["leakage1", "leakage2"]
+            assert fvp.fv_dict['leak_status'] == 'No'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_with_leak(self, mock_try_get):
+        """Test _refresh_leak_status when one sensor is leaking"""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = []
+        
+        mock_try_get.side_effect = lambda func, default: func()
+        
+        liquid_cooling_updater._refresh_leak_status()
+        
+        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.log_error.call_count == 1  
+        assert len(liquid_cooling_updater.leaking_sensors) == 1  
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors  
+        
+        liquid_cooling_updater.log_error.assert_called_with(
+            'Liquid cooling leakage sensor leakage1 reported leaking'
+        )
+        
+        calls = liquid_cooling_updater.table.set.call_args_list
+        leak_statuses = {}
+        for call in calls:
+            sensor_name, fvp = call[0]
+            leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
+        
+        assert leak_statuses["leakage1"] == "Yes"  
+        assert leak_statuses["leakage2"] == "No"   
+
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_leak_recovery(self, mock_try_get):
+        """Test _refresh_leak_status when a sensor recovers from leak"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = ["leakage1"]
+        
+        mock_try_get.side_effect = lambda func, default: func()
+        
+        liquid_cooling_updater._refresh_leak_status()
+        
+        assert liquid_cooling_updater.table.set.call_count == 2
+        assert len(liquid_cooling_updater.leaking_sensors) == 0
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_sensor_unavailable(self, mock_try_get):
+        """Test _refresh_leak_status when sensor returns None/N/A"""
+        mock_chassis = MockChassis()
+
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak = mock.MagicMock(return_value=None)
+        
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = []
+        
+        mock_try_get.side_effect = lambda func, default: func()
+        
+        liquid_cooling_updater._refresh_leak_status()
+        
+        assert liquid_cooling_updater.table.set.call_count == 2
+        
+        calls = liquid_cooling_updater.table.set.call_args_list
+        leak_statuses = {}
+        for call in calls:
+            sensor_name, fvp = call[0]
+            leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
+        
+        assert leak_statuses["leakage1"] == "N/A"  
+        assert leak_statuses["leakage2"] == "No"   
+
+    def test_run(self):
+        """Test run method normal execution"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.task_worker = mock.MagicMock()
+        
+        liquid_cooling_updater.run()
+        
+        assert liquid_cooling_updater.thread_id is not None
+        assert liquid_cooling_updater.task_worker.call_count == 1
+        assert liquid_cooling_updater.exc is None
+        assert not liquid_cooling_updater.task_stopping_event.is_set()
+
+    def test_run_with_exception(self):
+        """Test run method exception handling"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        test_exception = Exception("Test exception for liquid cooling")
+        
+        liquid_cooling_updater.task_worker = mock.MagicMock(side_effect=test_exception)
+        
+        liquid_cooling_updater.run()
+        
+        assert liquid_cooling_updater.thread_id is not None
+        assert liquid_cooling_updater.task_worker.call_count == 1
+        assert liquid_cooling_updater.exc is test_exception
+        assert liquid_cooling_updater.task_stopping_event.is_set()
+
+    @mock.patch('time.sleep')
+    def test_task_worker(self, mock_sleep):
+        """Test task_worker method logic"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_debug = mock.MagicMock()
+        liquid_cooling_updater.update = mock.MagicMock()
+        
+        stopping_event = threading.Event()
+        
+        def side_effect_sleep(interval):
+            stopping_event.set()
+        
+        mock_sleep.side_effect = side_effect_sleep
+        
+        liquid_cooling_updater.task_worker(stopping_event)
+        
+        assert liquid_cooling_updater.log_debug.call_count == 2
+        expected_calls = [
+            mock.call("Start liquid cooling updating"),
+            mock.call("End liquid cooling updating")
+        ]
+        liquid_cooling_updater.log_debug.assert_has_calls(expected_calls)
+        
+        assert liquid_cooling_updater.update.call_count == 1
+        
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_with(0.5)
+
+    @mock.patch('time.sleep')
+    def test_task_worker_early_stop(self, mock_sleep):
+        """Test task_worker method stops when task_stopping_event is set"""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        
+        liquid_cooling_updater.log_debug = mock.MagicMock()
+        liquid_cooling_updater.update = mock.MagicMock()
+        
+        stopping_event = threading.Event()
+        
+        def side_effect_update():
+            liquid_cooling_updater.task_stopping_event.set()
+        
+        liquid_cooling_updater.update.side_effect = side_effect_update
+        
+        liquid_cooling_updater.task_worker(stopping_event)
+        
+        assert liquid_cooling_updater.log_debug.call_count == 2
+        expected_calls = [
+            mock.call("Start liquid cooling updating"),
+            mock.call("End liquid cooling updating")
+        ]
+        liquid_cooling_updater.log_debug.assert_has_calls(expected_calls)
+        
+        assert liquid_cooling_updater.update.call_count == 1
+        
+        assert mock_sleep.call_count == 0
+
 
 class TestThermalMonitor(object):
     """
@@ -793,6 +1004,8 @@ def test_update_entity_info():
 @mock.patch('thermalctld.ThermalControlDaemon.run')
 def test_main(mock_run):
     mock_run.return_value = False
+
+    sys.argv = ['thermalctld']
 
     ret = thermalctld.main()
     assert mock_run.call_count == 1
