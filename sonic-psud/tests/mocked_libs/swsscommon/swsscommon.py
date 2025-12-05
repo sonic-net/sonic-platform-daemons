@@ -15,11 +15,10 @@ class RedisPipeline:
     def flush(self):
         # Mock flush operation - just clear the queue
         self.queue.clear()
-        pass
 
 class Table:
-    def __init__(self,  db_or_pipeline, table_name, buffered=False):
-        # Mock to support both both constructors (db, table_name) and (pipeline, table_name, buffered)
+    def __init__(self, db_or_pipeline, table_name, buffered=False):
+        # Mock to support both constructors (db, table_name) and (pipeline, table_name, buffered)
         self.table_name = table_name
         self.mock_dict = {}
 

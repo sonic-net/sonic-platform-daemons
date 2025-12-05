@@ -460,7 +460,7 @@ class DaemonPsud(daemon_base.DaemonBase):
         if self.first_run:
             self.first_run = False
 
-        # flush any remaining requests on the pipeline to STAT_DB at end of every cycle
+        # flush any remaining requests on the pipeline to STATE_DB at end of every cycle
         try:
             self.statedb_redisPipeline.flush()
         except Exception as e:
