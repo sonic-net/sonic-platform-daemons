@@ -491,7 +491,6 @@ class TestDaemonPsud(object):
 
         # Test exception handling when writing PSU fan LED status to Redis
         mock_fan.get_status_led = mock.Mock(return_value=MockFan.STATUS_LED_COLOR_OFF)
-        # mock_fan.get_name = mock.Mock(return_value="PSU 1 Test Fan 1")
         daemon_psud.fan_tbl.set.side_effect = Exception("Redis write error")
         daemon_psud.log_error = mock.MagicMock()
         daemon_psud._update_psu_fan_led_status(mock_psu, 1)
@@ -648,9 +647,9 @@ class TestDaemonPsud(object):
 
             # Trigger the exception during __init__ by creating a new instance
             with pytest.raises(SystemExit):
-                daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+                psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
-            mock_sys_exit.assert_called_once_with(2)
+            mock_sys_exit.assert_called_once_with(psud.PSU_DB_CONNECT_ERROR)
             assert mock_log_error.call_count == 1
             assert "Failed to connect to STATE_DB or Redis Tables" in mock_log_error.call_args[0][0]
 
@@ -666,7 +665,7 @@ class TestDaemonPsud(object):
             mock_table.return_value = mock_table_instance
 
             # Trigger the chassis_tbl.set call during __init__ by creating a new instance
-            daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+            psud.DaemonPsud(SYSLOG_IDENTIFIER)
 
             assert mock_log_error.call_count == 1
             assert "Exception occurred while writing PSU number info to Redis" in mock_log_error.call_args[0][0]

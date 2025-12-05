@@ -81,6 +81,7 @@ UPDATING_STATUS = 'Updating'
 PSU_INFO_UPDATE_PERIOD_SECS = 3
 
 PSUUTIL_LOAD_ERROR = 1
+PSU_DB_CONNECT_ERROR = 2
 
 platform_psuutil = None
 platform_chassis = None
@@ -413,7 +414,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         except Exception as e:
             self.log_error(f"Failed to connect to STATE_DB or Redis Tables : {type(e).__name__} : {e}", True)
-            sys.exit(exit_code+2)
+            sys.exit(PSU_DB_CONNECT_ERROR)
 
         # Post psu number info to STATE_DB
         self.num_psus = _wrapper_get_num_psus()
