@@ -1504,8 +1504,8 @@ class TestXcvrdScript(object):
     @pytest.mark.parametrize("media_dict, lane_count, subport_num, expected", [
         (
             {
-                'CUSTOM:XYZ': {'lane0': '0xa', 'lane1': '0xb', 'lane2': '0xc', 'lane3': '0xd'},
-                'CUSTOM:ABC': {'lane0': '0x1', 'lane1': '0x2', 'lane2': '0x3', 'lane3': '0x4'},
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
                 'main':       {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
             },
             2, 2,
@@ -1516,12 +1516,12 @@ class TestXcvrdScript(object):
         ),
         (
             {
-                'CUSTOM:XYZ': {'lane0': '10', 'lane1': '11', 'lane2': '12', 'lane3': '13'},
-                'CUSTOM:ABC': {'lane0': '1', 'lane1': '2', 'lane2': '3', 'lane3': '4'},
+                'CUSTOM:XYZ': {'lane0': 'ADAPTIVE', 'lane1': 'ADAPTIVE', 'lane2': 'ADAPTIVE', 'lane3': 'ADAPTIVE'},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
             },
             2, 2,
             {
-                'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
+                'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":["ADAPTIVE","ADAPTIVE"]}},{"ABC":{"value":[3,4]}}]}',
             },
         ),
         (
@@ -1533,20 +1533,6 @@ class TestXcvrdScript(object):
             {
                 'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
             },
-        ),
-        (
-            {
-                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 17592186044415, 'lane3': 'x11'},
-            },
-            2, 2,
-            {},
-        ),
-        (
-            {
-                'CUSTOM:XYZ': {'lane0': '0x10', 'lane1': '0x11', 'lane2': '0xFFFFFFFFFFF', 'lane3': '0x13x'},
-            },
-            2, 2,
-            {},
         ),
         (
             {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
