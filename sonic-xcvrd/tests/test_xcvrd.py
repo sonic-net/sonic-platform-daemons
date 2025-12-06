@@ -1599,6 +1599,48 @@ class TestXcvrdScript(object):
         assert found == expected_found
         assert result_dict == expected_value
 
+    @pytest.mark.parametrize("media_dict, lane_count, subport_num, expected", [
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+                'main':       {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
+            },
+            2, 2,
+            {
+                'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
+                'main':                {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
+            },
+        ),
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 'ADAPTIVE', 'lane1': 'ADAPTIVE', 'lane2': 'ADAPTIVE', 'lane3': 'ADAPTIVE'},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+            },
+            2, 2,
+            {
+                'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":["ADAPTIVE","ADAPTIVE"]}},{"ABC":{"value":[3,4]}}]}',
+            },
+        ),
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+            },
+            2, 2,
+            {
+                'custom_serdes_attrs': '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
+            },
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            2, 2,
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+        ),
+    ])
+    def test_handle_custom_serdes_attrs(self, media_dict, lane_count, subport_num, expected):
+        assert expected == media_settings_parser.handle_custom_serdes_attrs(media_dict, lane_count, subport_num)
+
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     def test_fetch_optics_si_setting(self):
