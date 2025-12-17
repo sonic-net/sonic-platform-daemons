@@ -706,76 +706,16 @@ class CmisManagerTask(threading.Thread):
 
         return expired_time <= current_time
 
-    def process_single_lport(self, lport, info, gearbox_lanes_dict):
-        is_fast_reboot = common.is_fast_reboot_enabled()
-
+    def process_cmis_state_machine(self, lport):
+        port_info = self.port_dict[lport]
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
-        if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
-            if state != CMIS_STATE_READY:
-                self.port_dict[lport]['appl'] = 0
-                self.port_dict[lport]['host_lanes_mask'] = 0
-            return
-
-        # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
-        # was updated or this is the first run so reconcile the above two attributes
-        if 'host_tx_ready' not in self.port_dict[lport]:
-            self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
-
-        if 'admin_status' not in self.port_dict[lport]:
-            self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
-
-        pport = int(info.get('index', "-1"))
-        speed = int(info.get('speed', "0"))
-        lanes = info.get('lanes', "").strip()
-        subport = info.get('subport', 0)
-        if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
-            return
-
-        # Desired port speed on the host side
-        host_speed = speed
-        host_lane_count = self.get_host_lane_count(lport, lanes, gearbox_lanes_dict)
-
-        # double-check the HW presence before moving forward
-        sfp = self.platform_chassis.get_sfp(pport)
-        if not sfp.get_presence():
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
-            return
-
-        try:
-            # Skip if XcvrApi is not supported
-            api = sfp.get_xcvr_api()
-            if api is None:
-                self.log_error("{}: skipping CMIS state machine since no xcvr api!!!".format(lport))
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
-                return
-
-            # Skip if it's not a paged memory device
-            if api.is_flat_memory():
-                self.log_notice("{}: skipping CMIS state machine for flat memory xcvr".format(lport))
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
-                return
-
-            # Skip if it's not a CMIS module
-            type = api.get_module_type_abbreviation()
-            if (type is None) or (type not in self.CMIS_MODULE_TYPES):
-                self.log_notice("{}: skipping CMIS state machine for non-CMIS module with type {}".format(lport, type))
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
-                return
-
-            if api.is_coherent_module():
-                if 'tx_power' not in self.port_dict[lport]:
-                    self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
-                if 'laser_freq' not in self.port_dict[lport]:
-                    self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
-        except AttributeError:
-            # Skip if these essential routines are not available
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
-            return
-        except Exception as e:
-            self.log_error("{}: Exception in xcvr api: {}".format(lport, e))
-            common.log_exception_traceback()
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
-            return
+        speed = port_info.get('speed')
+        api = port_info.get('api')
+        host_lane_count = port_info.get('host_lane_count')
+        subport = port_info.get('subport')
+        pport = port_info.get('pport')
+        sfp = port_info.get('sfp')
+        is_fast_reboot = common.is_fast_reboot_enabled()
 
         # CMIS expiration and retries
         #
@@ -806,10 +746,10 @@ class CmisManagerTask(threading.Thread):
         try:
             # CMIS state transitions
             if state == CMIS_STATE_INSERTED:
-                self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, host_speed)
+                self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, speed)
                 if self.port_dict[lport]['appl'] is None:
                     self.log_error("{}: no suitable app for the port appl {} host_lane_count {} "
-                                    "host_speed {}".format(lport, appl, host_lane_count, host_speed))
+                                    "host_speed {}".format(lport, appl, host_lane_count, speed))
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
                     return
                 appl = self.port_dict[lport]['appl']
@@ -1085,6 +1025,83 @@ class CmisManagerTask(threading.Thread):
             common.log_exception_traceback()
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
+    def process_single_lport(self, lport, info, gearbox_lanes_dict):
+        state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
+        if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
+            if state != CMIS_STATE_READY:
+                self.port_dict[lport]['appl'] = 0
+                self.port_dict[lport]['host_lanes_mask'] = 0
+            return
+
+        # Handle the case when Xcvrd was NOT running when 'host_tx_ready' or 'admin_status'
+        # was updated or this is the first run so reconcile the above two attributes
+        if 'host_tx_ready' not in self.port_dict[lport]:
+            self.port_dict[lport]['host_tx_ready'] = self.get_host_tx_status(lport)
+
+        if 'admin_status' not in self.port_dict[lport]:
+            self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)
+
+        pport = int(info.get('index', "-1"))
+        speed = int(info.get('speed', "0"))
+        lanes = info.get('lanes', "").strip()
+        subport = info.get('subport', 0)
+        if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
+            return
+
+        host_lane_count = self.get_host_lane_count(lport, lanes, gearbox_lanes_dict)
+
+        # double-check the HW presence before moving forward
+        sfp = self.platform_chassis.get_sfp(pport)
+        if not sfp.get_presence():
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+            return
+
+        try:
+            # Skip if XcvrApi is not supported
+            api = sfp.get_xcvr_api()
+            if api is None:
+                self.log_error("{}: skipping CMIS state machine since no xcvr api!!!".format(lport))
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
+                return
+
+            # Skip if it's not a paged memory device
+            if api.is_flat_memory():
+                self.log_notice("{}: skipping CMIS state machine for flat memory xcvr".format(lport))
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
+                return
+
+            # Skip if it's not a CMIS module
+            type = api.get_module_type_abbreviation()
+            if (type is None) or (type not in self.CMIS_MODULE_TYPES):
+                self.log_notice("{}: skipping CMIS state machine for non-CMIS module with type {}".format(lport, type))
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
+                return
+
+            if api.is_coherent_module():
+                if 'tx_power' not in self.port_dict[lport]:
+                    self.port_dict[lport]['tx_power'] = self.get_configured_tx_power_from_db(lport)
+                if 'laser_freq' not in self.port_dict[lport]:
+                    self.port_dict[lport]['laser_freq'] = self.get_configured_laser_freq_from_db(lport)
+
+            # Store port information in port_dict for use by process_cmis_state_machine
+            self.port_dict[lport]['pport'] = pport
+            self.port_dict[lport]['speed'] = speed
+            self.port_dict[lport]['subport'] = subport
+            self.port_dict[lport]['host_lane_count'] = host_lane_count
+            self.port_dict[lport]['api'] = api
+            self.port_dict[lport]['sfp'] = sfp
+        except AttributeError:
+            # Skip if these essential routines are not available
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
+            return
+        except Exception as e:
+            self.log_error("{}: Exception in xcvr api: {}".format(lport, e))
+            common.log_exception_traceback()
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
+            return
+
+        self.process_cmis_state_machine(lport)
+
     def task_worker(self):
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
@@ -1108,7 +1125,6 @@ class CmisManagerTask(threading.Thread):
                 self.process_single_lport(lport, info, gearbox_lanes_dict)
 
         self.log_notice("Stopped")
-
 
     def run(self):
         if self.platform_chassis is None:
