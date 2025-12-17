@@ -7,6 +7,7 @@ import os
 import ast
 import re
 from natsort import natsorted
+from copy import deepcopy
 
 from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
@@ -24,6 +25,10 @@ MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
+CUSTOM_SERDES_ATTR_PREFIX = 'CUSTOM:'
+CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY = 'attributes'
+CUSTOM_SERDES_ATTRS_KEY_IN_DB = 'custom_serdes_attrs'
+
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
@@ -164,9 +169,35 @@ def is_si_per_speed_supported(media_dict):
     return LANE_SPEED_KEY_PREFIX in list(media_dict.keys())[0]
 
 
-def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
+def get_serdes_si_setting_val(val_dict, lane_count, subport_num=0):
     """
     Get ASIC side SerDes SI settings for the given logical port (subport)
+
+    Args:
+        val_dict: dictionary containing SerDes settings for all lanes of the port
+                  e.g. {'lane0': '0x1f', 'lane1': '0x1f', 'lane2': '0x1f', 'lane3': '0x1f'}
+        lane_count: number of lanes for this subport
+        subport_num: subport number (1-based), 0 for non-breakout case
+
+    Returns:
+        list containing SerDes settings for the given subport
+        e.g. ['0x1f', '0x1f', '0x1f', '0x1f']
+    """
+    start_lane_idx = (subport_num - 1) * lane_count if subport_num else 0
+    if start_lane_idx + lane_count > len(val_dict):
+        helper_logger.log_notice(
+            "start_lane_idx + lane_count ({}) is beyond length of {}, "
+            "default start_lane_idx to 0 as a best effort".format(start_lane_idx + lane_count, val_dict)
+        )
+        start_lane_idx = 0
+    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
+    # If subport_num ('subport') is not specified in config_db, return values for first lane_count number of lanes
+    return val_list[start_lane_idx:start_lane_idx + lane_count]
+
+
+def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
+    """
+    Get ASIC side SerDes SI settings string for the given logical port (subport)
 
     Args:
         val_dict: dictionary containing SerDes settings for all lanes of the port
@@ -178,16 +209,7 @@ def get_serdes_si_setting_val_str(val_dict, lane_count, subport_num=0):
         string containing SerDes settings for the given subport, separated by comma
         e.g. '0x1f,0x1f,0x1f,0x1f'
     """
-    start_lane_idx = (subport_num - 1) * lane_count if subport_num else 0
-    if start_lane_idx + lane_count > len(val_dict):
-        helper_logger.log_notice(
-            "start_lane_idx + lane_count ({}) is beyond length of {}, "
-            "default start_lane_idx to 0 as a best effort".format(start_lane_idx + lane_count, val_dict)
-        )
-        start_lane_idx = 0
-    val_list = [val_dict[lane_key] for lane_key in natsorted(val_dict)]
-    # If subport_num ('subport') is not specified in config_db, return values for first lane_count number of lanes
-    return ','.join(val_list[start_lane_idx:start_lane_idx + lane_count])
+    return ','.join(get_serdes_si_setting_val(val_dict, lane_count, subport_num))
 
 
 def get_media_settings_for_speed(settings_dict, lane_speed_key):
@@ -316,6 +338,49 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
+def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
+    """
+    Handle custom SerDes attributes in the media_dict and convert them to JSON.
+
+    Args:
+        media_dict: dictionary containing SerDes settings for all lanes of the port
+        lane_count: number of lanes for this subport
+        subport_num: subport number (1-based), 0 for non-breakout case
+
+    Returns:
+        media_dict: updated media_dict with custom SerDes attributes converted to JSON
+    """
+    # Perform a deepcopy to avoid modifying the original media_dict, which may be a reference to the global 'g_dict'.
+    # Modifying g_dict would affect subsequent lookups and cause incorrect behavior.
+    media_dict = deepcopy(media_dict)
+    attrs_list = []
+
+    for key, value in list(media_dict.items()):
+        if not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
+            continue
+
+        attr_dict = {
+            key[len(CUSTOM_SERDES_ATTR_PREFIX):]: {
+                'value': get_serdes_si_setting_val(value, lane_count, subport_num)
+            }
+        }
+        attrs_list.append(attr_dict)
+
+        # Remove the key from media_dict to avoid duplication
+        media_dict.pop(key)
+
+    if not attrs_list:
+        return media_dict
+
+    # Combine all the custom serdes attributes to a single element,
+    # and put it back into the media_dict to be published in APP DB
+    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
+        {CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
+        separators=(',', ':')  # remove whitespace for optimal payload
+    )
+    return media_dict
+
+
 def notify_media_setting(logical_port_name, transceiver_dict,
                          xcvr_table_helper, port_mapping):
 
@@ -366,6 +431,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         if len(media_dict) == 0:
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
+
+        media_dict = handle_custom_serdes_attrs(media_dict, lane_count, subport_num)
 
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
