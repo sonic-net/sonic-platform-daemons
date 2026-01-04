@@ -57,6 +57,10 @@ media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
 
+port_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
+port_media_settings = port_settings_with_comma_dict['PORT_MEDIA_SETTINGS'].pop('33')
+port_settings_with_comma_dict['PORT_MEDIA_SETTINGS']['33'] = port_media_settings
+
 media_settings_with_regular_expression_dict = copy.deepcopy(media_settings_dict)
 media_settings_with_regular_expression_dict['GLOBAL_MEDIA_SETTINGS']['1-32'] = {}
 # Generate regular expression patterns for QSFP28-40GBASE-CR4-xxM and QSFP+-40GBASE-CR4-xxM that have the same pre-emphasis value
@@ -1389,18 +1393,21 @@ class TestXcvrdScript(object):
                 'cable_type': 'Length Cable Assembly(m)',
                 'cable_length': '255',
                 'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
-                'type_abbrv_name': 'QSFP+'
+                'type_abbrv_name': 'QSFP+',
+                'media_type_key': 'fiber'
             }
         }
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50', 'media_type_key': 'fiber'}
+
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
+        xcvr_info_dict[0]['media_type_key'] = 'copper'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50', 'media_type_key': 'copper'}
         # TODO: Ensure that error message was logged
 
         xcvr_info_dict_for_qsfp28 = {
@@ -1422,6 +1429,7 @@ class TestXcvrdScript(object):
                 "vendor_date": "2020-11-11",
                 "vendor_oui": "00-77-7a",
                 "application_advertisement": "N/A",
+                "media_type_key": 'copper',
             }
         }
         result = media_settings_parser.get_media_settings_key(
@@ -1432,6 +1440,7 @@ class TestXcvrdScript(object):
             "media_key": "QSFP28-100GBASE-SR4 or 25GBASE-SR-50.0M",
             "lane_speed_key": "speed:25G",
             "medium_lane_speed_key": "COPPER25",
+            'media_type_key': 'copper',
         }
 
         mock_is_cmis_api.return_value = True
@@ -1442,7 +1451,8 @@ class TestXcvrdScript(object):
                 'cable_type': 'Length Cable Assembly(m)',
                 'cable_length': '255',
                 'specification_compliance': "sm_media_interface",
-                'type_abbrv_name': 'QSFP-DD'
+                'type_abbrv_name': 'QSFP-DD',
+                "media_type_key": 'copper'
             }
         }
 
@@ -1459,7 +1469,7 @@ class TestXcvrdScript(object):
 
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'medium_lane_speed_key': 'COPPER50' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'medium_lane_speed_key': 'COPPER50','media_type_key': 'copper'}
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], (400000, 8, 0)),
@@ -1563,7 +1573,8 @@ class TestXcvrdScript(object):
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-2M', 'lane_speed_key': 'UNKOWN','medium_lane_speed_key': 'COPPER50'}, {'preemphasis': {'lane0': '0x18420A', 'lane1': '0x18420A', 'lane2': '0x18420A', 'lane3': '0x18420A'}}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'COPPER50'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}}),
     (media_settings_global_medium_lane_key, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}),
-   (media_settings_port_medium_lane_key, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x0000000f', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}),
+    (media_settings_port_medium_lane_key, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x0000000f', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}),
+    (port_settings_with_comma_dict, 33, {'vendor_key': 'UNKOWN', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER25', 'media_type_key': 'fiber'}, {'preemphasis': {'lane0': '0x144808', 'lane1': '0x144808', 'lane2': '0x144808', 'lane3': '0x144808'}})
     ])
     def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
