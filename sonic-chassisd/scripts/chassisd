@@ -1334,6 +1334,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         super(ChassisdDaemon, self).__init__(log_identifier)
 
         self.stop = threading.Event()
+        self.loop_interval = CHASSIS_INFO_UPDATE_PERIOD_SECS
 
         self.platform_chassis = chassis
 
@@ -1438,13 +1439,13 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         try:
             # Start configuration manager task
             if self.smartswitch:
-                config_manager = SmartSwitchConfigManagerTask()
-                config_manager.task_run()
+                self.config_manager = SmartSwitchConfigManagerTask()
+                self.config_manager.task_run()
             elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
-                config_manager = ConfigManagerTask()
-                config_manager.task_run()
+                self.config_manager = ConfigManagerTask()
+                self.config_manager.task_run()
             else:
-                config_manager = None
+                self.config_manager = None
 
             # Start main loop
             self.log_info("Start daemon main loop")
@@ -1453,7 +1454,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             if self.smartswitch:
                 self.set_initial_dpu_admin_state()
 
-            while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
+            while not self.stop.wait(self.loop_interval):
                 self.module_updater.module_db_update()
                 self.module_updater.check_midplane_reachability()
                 self.module_updater.module_down_chassis_db_cleanup()
@@ -1464,8 +1465,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             # If we don't cleanup the config_manager process the chassisd process
             # won't die when an exception occurs.
             # https://github.com/sonic-net/sonic-buildimage/issues/24775
-            if config_manager is not None:
-                config_manager.task_stop()
+            if self.config_manager is not None:
+                self.config_manager.task_stop()
 
         # Delete all the information from DB and then exit
         self.module_updater.deinit()
@@ -1561,7 +1562,7 @@ class DpuChassisdDaemon(ChassisdDaemon):
         # Start main loop
         self.log_info("Start daemon main loop")
 
-        while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
+        while not self.stop.wait(self.loop_interval):
             if poll_dpu_state:
                 dpu_updater.update_state()
 
