@@ -107,15 +107,87 @@ class TestDaemonStorage(object):
             assert stormon_daemon.fsio_json_file_loaded == False
     
     @patch('sonic_py_common.daemon_base.db_connect')
-    def testget_configdb_intervals(self, mock_daemon_base):
+    def testget_configdb_intervals(self, mock_db_connect):
+        # Test that get_configdb_intervals() reuses the connection from __init__
+        # and does not create a new connection
+        mock_db = MagicMock()
+        mock_db.hgetall = MagicMock(return_value={})
+        mock_db_connect.return_value = mock_db
 
-        mock_daemon_base = MagicMock()
-
+        # Connection should be made once in __init__
         stormon_daemon = stormond.DaemonStorage(log_identifier)
+        initial_call_count = mock_db_connect.call_count
+        
+        # get_configdb_intervals() should NOT create a new connection
         stormon_daemon.get_configdb_intervals()
+        
+        # Verify no additional connection was made
+        assert mock_db_connect.call_count == initial_call_count
 
-        assert mock_daemon_base.call_count == 0
+    @patch('sonic_py_common.daemon_base.db_connect')
+    def test_configdb_connection_established_in_init(self, mock_db_connect):
+        # Test that CONFIG_DB connection is established during initialization
+        mock_config_db = MagicMock()
+        mock_state_db = MagicMock()
+        
+        # First call returns STATE_DB, second call returns CONFIG_DB
+        mock_db_connect.side_effect = [mock_state_db, mock_config_db]
+        
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        
+        # Verify db_connect was called twice (once for STATE_DB, once for CONFIG_DB)
+        assert mock_db_connect.call_count == 2
+        # Verify CONFIG_DB connection is stored
+        assert stormon_daemon.config_db is not None
 
+    @patch('sonic_py_common.daemon_base.db_connect')
+    def test_configdb_connection_failure_in_init(self, mock_db_connect):
+        # Test that daemon continues even if CONFIG_DB connection fails
+        mock_state_db = MagicMock()
+        
+        # First call returns STATE_DB successfully, second call fails for CONFIG_DB
+        def side_effect_fn(db_name):
+            if db_name == "STATE_DB":
+                return mock_state_db
+            elif db_name == "CONFIG_DB":
+                raise Exception("Connection failed")
+        
+        mock_db_connect.side_effect = side_effect_fn
+        
+        # Daemon should initialize successfully even if CONFIG_DB fails
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        
+        # Verify CONFIG_DB connection is None after failure
+        assert stormon_daemon.config_db is None
+        # Verify daemon still has STATE_DB connection
+        assert stormon_daemon.state_db is not None
+
+    @patch('sonic_py_common.daemon_base.db_connect')
+    def test_get_configdb_intervals_with_no_connection(self, mock_db_connect):
+        # Test that get_configdb_intervals() handles missing CONFIG_DB connection gracefully
+        mock_state_db = MagicMock()
+        
+        # Only STATE_DB connection succeeds, CONFIG_DB fails
+        def side_effect_fn(db_name):
+            if db_name == "STATE_DB":
+                return mock_state_db
+            elif db_name == "CONFIG_DB":
+                raise Exception("Connection failed")
+        
+        mock_db_connect.side_effect = side_effect_fn
+        
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        
+        # Store original timeout values
+        original_timeout = stormon_daemon.timeout
+        original_sync_interval = stormon_daemon.fsstats_sync_interval
+        
+        # Call get_configdb_intervals() with no CONFIG_DB connection
+        stormon_daemon.get_configdb_intervals()
+        
+        # Verify default values are retained
+        assert stormon_daemon.timeout == original_timeout
+        assert stormon_daemon.fsstats_sync_interval == original_sync_interval
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_load_fsio_rw_statedb(self):
