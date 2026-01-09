@@ -56,9 +56,21 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.fsstats_sync_interval = STORMOND_SYNC_TO_DISK_SECS
         self.stop_event = threading.Event()
         self.state_db = None
-        self.config_db = None
         self.device_table = None
         self.storage = StorageDevices()
+
+        # Establish a single CONFIG_DB connection at initialization to prevent
+        # resource exhaustion from repeated reconnections during daemon lifetime.
+        # This connection will be reused by get_configdb_intervals() and any other
+        # methods that need to access CONFIG_DB.
+        self.config_db = None
+        try:
+            self.config_db = daemon_base.db_connect("CONFIG_DB")
+            self.log.log_notice("CONFIG_DB connection established successfully")
+        except Exception as e:
+            self.log.log_error("Failed to establish CONFIG_DB connection: {}".format(str(e)))
+            # Continue initialization even if CONFIG_DB connection fails
+            # The daemon will use default intervals if CONFIG_DB is unavailable
 
         # These booleans are for FSIO RW information reconciliation
         self.fsio_json_file_loaded = False
@@ -108,16 +120,26 @@ class DaemonStorage(daemon_base.DaemonBase):
     def get_formatted_time(self, time_since_epoch):
         return datetime.fromtimestamp(time_since_epoch).strftime(self.time_format_string)
 
-    # This function is used to configure the polling and sync intervals for the daemon
+    # This function is used to configure the polling and sync intervals for the daemon.
+    # Uses the CONFIG_DB connection established once during initialization to avoid
+    # creating redundant connections that could lead to resource leaks.
     def get_configdb_intervals(self):
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
-        config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
-        self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_PERIODIC_STATEDB_SYNC_SECS))
-        self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
+        # Use the shared CONFIG_DB connection established in __init__
+        if self.config_db is None:
+            self.log.log_warning("CONFIG_DB connection not available, using default intervals")
+            return
+            
+        try:
+            config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
+            self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_PERIODIC_STATEDB_SYNC_SECS))
+            self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
 
-        self.log.log_notice("Polling Interval set to {} seconds".format(self.timeout))
-        self.log.log_notice("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
-        
+            self.log.log_notice("Polling Interval set to {} seconds".format(self.timeout))
+            self.log.log_notice("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
+        except Exception as e:
+            self.log.log_error("Failed to retrieve CONFIG_DB intervals: {}".format(str(e)))
+            self.log.log_notice("Using default intervals: polling={}, fsstats_sync={}".format(
+                STORMOND_PERIODIC_STATEDB_SYNC_SECS, STORMOND_SYNC_TO_DISK_SECS))
 
     # Get the total and latest FSIO reads and writes from JSON file
     def _load_fsio_rw_json(self):
