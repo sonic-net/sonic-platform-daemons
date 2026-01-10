@@ -347,15 +347,23 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
         subport_num: subport number (1-based), 0 for non-breakout case
 
     Returns:
-        media_dict: updated media_dict with custom SerDes attributes converted to JSON
+        media_dict: updated media_dict with custom SerDes attributes converted to JSON,
+                    or the original media_dict unchanged if no custom attributes present
     """
+    # Keep the custom-SerDes-attributes feature fully opt-in.
+    # If there are no "CUSTOM:" keys in the resolved media_dict, do not run any of the
+    # new conversion logic (and avoid deepcopy). This minimizes blast radius for
+    # existing platforms/vendors that don't define custom SerDes attributes.
+    if not any(isinstance(k, str) and k.startswith(CUSTOM_SERDES_ATTR_PREFIX) for k in media_dict):
+        return media_dict
+
     # Perform a deepcopy to avoid modifying the original media_dict, which may be a reference to the global 'g_dict'.
     # Modifying g_dict would affect subsequent lookups and cause incorrect behavior.
-    media_dict = deepcopy(media_dict)
+    output_media_dict = deepcopy(media_dict)
     attrs_list = []
 
-    for key, value in list(media_dict.items()):
-        if not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
+    for key, value in media_dict.items():
+        if not isinstance(key, str) or not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
             continue
 
         attr_dict = {
@@ -365,19 +373,19 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
         }
         attrs_list.append(attr_dict)
 
-        # Remove the key from media_dict to avoid duplication
-        media_dict.pop(key)
+        # Remove the key from output_media_dict to avoid duplication
+        output_media_dict.pop(key)
 
     if not attrs_list:
         return media_dict
 
     # Combine all the custom serdes attributes to a single element,
-    # and put it back into the media_dict to be published in APP DB
-    media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
+    # and put it back into the output_media_dict to be published in APP DB
+    output_media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
         {CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
         separators=(',', ':')  # remove whitespace for optimal payload
     )
-    return media_dict
+    return output_media_dict
 
 
 def notify_media_setting(logical_port_name, transceiver_dict,
