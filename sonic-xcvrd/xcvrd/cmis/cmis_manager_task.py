@@ -45,7 +45,6 @@ class CmisManagerTask(threading.Thread):
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
-    ALL_LANES_MASK = 0xff
 
     def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False, platform_chassis=None):
         threading.Thread.__init__(self)
@@ -210,6 +209,15 @@ class CmisManagerTask(threading.Thread):
         host_lane_count = len(port_config_lanes.split(','))
         self.log_debug("{}: Using port config lanes count: {}".format(lport, host_lane_count))
         return host_lane_count
+
+    def get_cmis_max_host_lanes_mask(self, api):
+        """
+        Get maximum host lanes mask based on module type
+        """
+        module_type = api.get_module_type_abbreviation()
+        
+        # QSFP+C has 4 lanes, all others have 8
+        return 0x0f if module_type == 'QSFP+C' else 0xff
 
     def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
         """
@@ -815,6 +823,7 @@ class CmisManagerTask(threading.Thread):
                 appl = self.port_dict[lport]['appl']
                 self.log_notice("{}: Setting appl={}".format(lport, appl))
 
+                self.port_dict[lport]['max_host_lanes_mask'] = self.get_cmis_max_host_lanes_mask(api)
                 self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
                                                                 appl, host_lane_count, subport)
                 if self.port_dict[lport]['host_lanes_mask'] <= 0:
@@ -846,10 +855,10 @@ class CmisManagerTask(threading.Thread):
                 if self.is_decomm_lead_lport(lport):
                     # Set all the DP lanes AppSel to unused(0) when non default app code needs to be configured
                     self.port_dict[lport]['appl'] = appl = 0
-                    self.port_dict[lport]['host_lanes_mask'] = self.ALL_LANES_MASK
-                    self.port_dict[lport]['media_lanes_mask'] = self.ALL_LANES_MASK
+                    self.port_dict[lport]['host_lanes_mask'] = self.port_dict[lport]['max_host_lanes_mask']
+                    self.port_dict[lport]['media_lanes_mask'] = self.port_dict[lport]['max_host_lanes_mask']
                     self.log_notice("{}: DECOMMISSION: setting appl={} and "
-                                    "host_lanes_mask/media_lanes_mask={:#x}".format(lport, appl, self.ALL_LANES_MASK))
+                                    "host_lanes_mask/media_lanes_mask={:#x}".format(lport, appl, self.port_dict[lport]['max_host_lanes_mask']))
                     # Skip rest of the deinit/pre-init when this is the lead logical port for decommission
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
                     return
