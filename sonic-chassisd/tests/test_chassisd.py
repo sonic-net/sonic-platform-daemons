@@ -2062,7 +2062,8 @@ def test_submit_dpu_callback():
         mock_set_admin_state_gracefully.assert_not_called()
 
 def test_chassis_daemon_assertion():
-    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER)
+    chassis = MockChassis()
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
     # Reduce wait time from 10s to 1s to speed up test
     daemon_chassisd.loop_interval=1
 
