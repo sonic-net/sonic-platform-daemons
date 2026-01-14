@@ -2063,7 +2063,15 @@ def test_submit_dpu_callback():
 
 def test_chassis_daemon_assertion():
     chassis = MockChassis()
+
+    # Needs to be supervisor slot for config_manager thread to be spawned
+    chassis.get_supervisor_slot = Mock()
+    chassis.get_supervisor_slot.return_value = 0
+    chassis.get_my_slot = Mock()
+    chassis.get_my_slot.return_value = 0
+
     daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+
     # Reduce wait time from 10s to 1s to speed up test
     daemon_chassisd.loop_interval=1
 
