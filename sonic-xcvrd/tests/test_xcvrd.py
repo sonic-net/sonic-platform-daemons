@@ -561,7 +561,7 @@ class TestXcvrdScript(object):
             restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
         )
 
-        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
             assert is_syncd_warm_restore_complete() == expected
 
     def test_is_syncd_warm_restore_complete_invalid_restore_count(self):
@@ -571,9 +571,32 @@ class TestXcvrdScript(object):
             "abc" if "WARM_RESTART_TABLE|syncd" in table else None
         )
 
-        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
             result = is_syncd_warm_restore_complete()
             assert result is False
+
+    @pytest.mark.parametrize(
+        "namespace, restore_count, expected",
+        [
+            ('', 1, True),              # Default namespace
+            ('asic0', 1, True),         # Multi-ASIC namespace asic0
+            ('asic1', 1, True),         # Multi-ASIC namespace asic1
+            ('asic0', 0, False),        # No warm restore for asic0
+            ('asic1', 0, False),        # No warm restore for asic1
+        ]
+    )
+    def test_is_syncd_warm_restore_complete_with_namespace(self, namespace, restore_count, expected):
+        """Test is_syncd_warm_restore_complete with different namespaces for multi-ASIC support"""
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            restore_count if "WARM_RESTART_TABLE|syncd" in table else None
+        )
+
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db) as mock_connect:
+            result = is_syncd_warm_restore_complete(namespace)
+            assert result == expected
+            # Verify db_connect was called with the correct namespace
+            mock_connect.assert_called_with("STATE_DB", namespace=namespace)
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
