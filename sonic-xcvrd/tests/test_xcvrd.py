@@ -75,6 +75,8 @@ optics_si_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['0-5,6,7-20,21-31'] 
 with open(os.path.join(test_path, 'media_settings_extended_format.json'), 'r') as f:
     media_settings_extended_format_dict = json.load(f)
 
+with open(os.path.join(test_path, 'gearbox_media_settings.json'), 'r') as f:
+    gearbox_media_settings_dict = json.load(f)
 
 # Define some example keys/values of media_settings.json for testing purposes
 asic_serdes_si_value_dict = {'lane' + str(i): '0x0000000d' for i in range(4)}
@@ -1569,6 +1571,90 @@ class TestXcvrdScript(object):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
             result = media_settings_parser.get_media_settings_value(port, key)
             assert result == expected
+
+    @pytest.mark.parametrize("port, key, gearbox_side, expected", [
+        # Ensure that we pick the global settings for OPTICAL100 over port specific settings since port settings are only configured
+        # for the Default key for the line-side of the gearbox
+        (
+            2,
+            {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'},
+            'line',
+            {"pre3":{"lane0":"0x3","lane1":"0x3","lane2":"0x3","lane3":"0x3"},"pre2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2"},"pre1":{"lane0":"0x00","lane1":"0x00","lane2":"0x00","lane3":"0x00"},"main":{"lane0":"0x7","lane1":"0x7","lane2":"0x7","lane3":"0x7"},"post1":{"lane0":"0x5","lane1":"0x5","lane2":"0x5","lane3":"0x5"},"post2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2"}}
+        ),
+        # Ensure that we successfully fall back to the default key in port-specific settings for the line-side of the gearbox
+        (
+            2,
+            {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'},
+            'line',
+            {"pre3":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"},"pre2":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"},"pre1":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"},"main":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"},"post1":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"},"post2":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50"}}
+        ),
+        # Ensure that we pick the global settings for OPTICAL100 over port specific settings since port settings are only configured
+        # for the Default key for the system-side of the gearbox
+        (
+            2,
+            {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'},
+            'system',
+            {"pre3":{"lane0":"0x3","lane1":"0x3","lane2":"0x3","lane3":"0x3","lane4":"0x3","lane5":"0x3","lane6":"0x3","lane7":"0x3"},"pre2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2","lane4":"0x2","lane5":"0x2","lane6":"0x2","lane7":"0x2"},"pre1":{"lane0":"0x00","lane1":"0x00","lane2":"0x00","lane3":"0x00","lane4":"0x00","lane5":"0x00","lane6":"0x00","lane7":"0x00"},"main":{"lane0":"0x7","lane1":"0x7","lane2":"0x7","lane3":"0x7","lane4":"0x7","lane5":"0x7","lane6":"0x7","lane7":"0x7"},"post1":{"lane0":"0x5","lane1":"0x5","lane2":"0x5","lane3":"0x5","lane4":"0x5","lane5":"0x5","lane6":"0x5","lane7":"0x5"},"post2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2","lane4":"0x2","lane5":"0x2","lane6":"0x2","lane7":"0x2"}}
+        ),
+        # Ensure that we successfully fall back to the default key in port-specific settings for the system-side of the gearbox
+        (
+            2,
+            {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'},
+            'system',
+            {"pre3":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50","lane4":"0x50","lane5":"0x50","lane6":"0x50","lane7":"0x50"},"pre2":{"lane0":"0x25","lane1":"0x25","lane2":"0x25","lane3":"0x25","lane4":"0x25","lane5":"0x25","lane6":"0x25","lane7":"0x25"},"pre1":{"lane0":"0x00","lane1":"0x00","lane2":"0x00","lane3":"0x00","lane4":"0x00","lane5":"0x00","lane6":"0x00","lane7":"0x00"},"main":{"lane0":"0x75","lane1":"0x75","lane2":"0x75","lane3":"0x75","lane4":"0x75","lane5":"0x75","lane6":"0x75","lane7":"0x75"},"post1":{"lane0":"0x50","lane1":"0x50","lane2":"0x50","lane3":"0x50","lane4":"0x50","lane5":"0x50","lane6":"0x50","lane7":"0x50"},"post2":{"lane0":"0x25","lane1":"0x25","lane2":"0x25","lane3":"0x25","lane4":"0x25","lane5":"0x25","lane6":"0x25","lane7":"0x25"}}
+        ),
+    ])
+    def test_get_media_settings_value_for_gearbox(self, port, key, gearbox_side, expected):
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict):
+            result = media_settings_parser.get_media_settings_value(port, key, gearbox_side)
+            assert result == expected
+
+    def test_get_media_settings_for_gearbox_favours_global_settings_over_port_settings(self):
+        """
+        Test that global settings take precedence over port settings.
+        """
+        expected_line_side = {"pre3":{"lane0":"0x3","lane1":"0x3","lane2":"0x3","lane3":"0x3"},"pre2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2"},"pre1":{"lane0":"0x00","lane1":"0x00","lane2":"0x00","lane3":"0x00"},"main":{"lane0":"0x7","lane1":"0x7","lane2":"0x7","lane3":"0x7"},"post1":{"lane0":"0x5","lane1":"0x5","lane2":"0x5","lane3":"0x5"},"post2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2"}}
+        expected_system_side = {"pre3":{"lane0":"0x3","lane1":"0x3","lane2":"0x3","lane3":"0x3","lane4":"0x3","lane5":"0x3","lane6":"0x3","lane7":"0x3"},"pre2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2","lane4":"0x2","lane5":"0x2","lane6":"0x2","lane7":"0x2"},"pre1":{"lane0":"0x00","lane1":"0x00","lane2":"0x00","lane3":"0x00","lane4":"0x00","lane5":"0x00","lane6":"0x00","lane7":"0x00"},"main":{"lane0":"0x7","lane1":"0x7","lane2":"0x7","lane3":"0x7","lane4":"0x7","lane5":"0x7","lane6":"0x7","lane7":"0x7"},"post1":{"lane0":"0x5","lane1":"0x5","lane2":"0x5","lane3":"0x5","lane4":"0x5","lane5":"0x5","lane6":"0x5","lane7":"0x5"},"post2":{"lane0":"0x2","lane1":"0x2","lane2":"0x2","lane3":"0x2","lane4":"0x2","lane5":"0x2","lane6":"0x2","lane7":"0x2"}}
+
+        # Augment the data from the gearbox_media_settings.json test fixture so that
+        # we match both global and port specific settings
+        for _, settings in gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'].items():
+            settings['line']['OPTICAL100'] = settings['line']['Default']
+            settings['system']['OPTICAL100'] = settings['system']['Default']
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict):
+            for gearbox_side, expected_result in (('system', expected_system_side), ('line', expected_line_side)):
+                result = media_settings_parser.get_media_settings_value(
+                    2,
+                    {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'},
+                    gearbox_side
+                )
+                assert result == expected_result
+
+
+    def test_get_media_settings_for_gearbox_no_system_or_line_side_keys(self):
+        """
+        Test that nothing is returned when line and system side keys are missing
+        """
+        expected = {}
+
+        # Augment the data from the gearbox_media_settings.json test fixture so that
+        # the system-side and line-side gearbox keys are missing.
+        del gearbox_media_settings_dict['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['line']
+        del gearbox_media_settings_dict['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['system']
+        for i in range(1,9):
+            del gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['line']
+            del gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['system']
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict):
+            for gearbox_side in ('system', 'line'):
+                result = media_settings_parser.get_media_settings_value(
+                    2,
+                    {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'},
+                    gearbox_side
+                )
+                assert result == expected
+
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_get_is_copper_exception(self, mock_chassis):
