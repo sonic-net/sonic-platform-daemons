@@ -33,6 +33,10 @@ CHASSIS_INFO_SERIAL_FIELD = 'serial'
 CHASSIS_INFO_MODEL_FIELD = 'model'
 CHASSIS_INFO_REV_FIELD = 'revision'
 
+COMPONENT_INFO_TABLE = 'COMPONENT_INFO'
+COMPONENT_INFO_KEY_TEMPLATE = '{}'
+COMPONENT_INFO_VERSION_FIELD = 'firmware-version'
+
 CHASSIS_LOAD_ERROR = 1
 
 NOT_AVAILABLE = 'N/A'
@@ -78,6 +82,17 @@ def provision_db(platform_chassis, log):
                                         (CHASSIS_INFO_REV_FIELD, try_get(platform_chassis.get_revision))
                                     ])
     chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
+
+    # Populate DB with chassis component current version
+    comps = platform_chassis.get_all_components()
+    component_table = swsscommon.Table(state_db, COMPONENT_INFO_TABLE)
+    for comp in comps:
+        comp_name = comp.get_name()
+        fvs = swsscommon.FieldValuePairs([
+            (COMPONENT_INFO_VERSION_FIELD, try_get(comp.get_firmware_version))
+        ])
+        component_table.set(COMPONENT_INFO_KEY_TEMPLATE.format(comp_name), fvs)
+
     log.log_info("STATE_DB provisioned with chassis info.")
 
     return chassis_table
