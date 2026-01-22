@@ -21,6 +21,7 @@ VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
 MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
+MEDIA_TYPE_KEY = 'media_type_key'
 DEFAULT_KEY = 'Default'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
@@ -147,6 +148,20 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     else:
         media_key += '-' + '*'
 
+    media_type_ex = "fiber"
+    try:
+        if (type(media_len) != int) and (type(media_len) != float):
+            media_len = None
+        for key, value in transceiver_dict[physical_port].items():
+            if type(value) != str:
+                continue
+            if value.lower().find("copper") >=0:
+                media_type_ex = "copper"
+                break
+    except Exception as e:
+        helper_logger.log_error("Invalid value for port {}: {}".format(physical_port, str(e)))
+    helper_logger.log_error("media_type {}".format(media_type_ex))
+
     lane_speed_key = get_lane_speed_key(physical_port, port_speed, lane_count)
     medium = "COPPER" if get_is_copper(physical_port) else "OPTICAL"
     speed = int(int(int(port_speed) /lane_count)/1000)
@@ -156,7 +171,8 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
         LANE_SPEED_KEY: lane_speed_key,
-        MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key
+        MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key,
+        MEDIA_TYPE_KEY: media_type_ex
     }
 
 
@@ -280,6 +296,7 @@ def get_media_settings_value(physical_port, key):
         for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
             if int(keys) == physical_port:
                 media_dict = g_dict[PORT_MEDIA_SETTINGS_KEY][keys]
+                helper_logger.log_notice("port {} media_dict {}".format(physical_port, media_dict))
                 break
 
         if len(media_dict) == 0:
@@ -297,6 +314,14 @@ def get_media_settings_value(physical_port, key):
             return get_media_settings_for_speed(media_dict[DEFAULT_KEY], lane_speed_key)
         elif len(default_dict) != 0:
             return default_dict
+        else:
+            if "copper" in key[MEDIA_TYPE_KEY]:
+                media_dict = media_dict["copper"]
+            else:
+                media_dict = media_dict["fiber"]
+            helper_logger.log_notice("media_settings lane speed {}".format(lane_speed_key))
+            helper_logger.log_notice("port {} media_dict {}".format(physical_port, media_dict))
+            return get_media_settings_for_speed(media_dict, lane_speed_key)
     else:
         if len(default_dict) != 0:
             return default_dict
