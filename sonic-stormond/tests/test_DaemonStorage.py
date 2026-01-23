@@ -189,6 +189,48 @@ class TestDaemonStorage(object):
         assert stormon_daemon.timeout == original_timeout
         assert stormon_daemon.fsstats_sync_interval == original_sync_interval
 
+    @patch('sonic_py_common.daemon_base.db_connect')
+    def test_get_configdb_intervals_exception_logs_previous_values(self, mock_db_connect):
+        # Test that exception handler logs previously set interval values instead of defaults
+        mock_state_db = MagicMock()
+        mock_config_db = MagicMock()
+        
+        # Setup successful connection initially
+        def side_effect_fn(db_name):
+            if db_name == "STATE_DB":
+                return mock_state_db
+            elif db_name == "CONFIG_DB":
+                return mock_config_db
+        
+        mock_db_connect.side_effect = side_effect_fn
+        
+        # Create daemon
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        
+        # Set custom interval values (different from defaults)
+        stormon_daemon.timeout = 7200
+        stormon_daemon.fsstats_sync_interval = 43200
+        
+        # Mock the hgetall to raise an exception
+        mock_config_db.hgetall = MagicMock(side_effect=Exception("Connection error"))
+        
+        # Mock logger to verify log calls
+        stormon_daemon.log.log_error = MagicMock()
+        stormon_daemon.log.log_notice = MagicMock()
+        
+        # Call get_configdb_intervals which should catch exception
+        stormon_daemon.get_configdb_intervals()
+        
+        # Verify error was logged
+        assert stormon_daemon.log.log_error.call_count == 1
+        
+        # Verify the notice log was called with the PREVIOUS values (7200 and 43200)
+        # not the defaults (3600 and 86400)
+        assert stormon_daemon.log.log_notice.call_count == 1
+        log_call_args = stormon_daemon.log.log_notice.call_args[0][0]
+        assert "7200" in log_call_args
+        assert "43200" in log_call_args
+
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_load_fsio_rw_statedb(self):
 
