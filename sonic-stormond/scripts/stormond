@@ -138,7 +138,7 @@ class DaemonStorage(daemon_base.DaemonBase):
             self.log.log_notice("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
         except Exception as e:
             self.log.log_error("Failed to retrieve CONFIG_DB intervals: {}".format(str(e)))
-            self.log.log_notice("Using default intervals: polling={}, fsstats_sync={}".format(
+            self.log.log_notice("Intervals in use: polling={}, fsstats_sync={}".format(
                 STORMOND_PERIODIC_STATEDB_SYNC_SECS, STORMOND_SYNC_TO_DISK_SECS))
 
     # Get the total and latest FSIO reads and writes from JSON file
