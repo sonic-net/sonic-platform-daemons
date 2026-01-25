@@ -2734,6 +2734,29 @@ class TestXcvrdScript(object):
         task.update_port_transceiver_status_table_sw_cmis_state("Ethernet0", CMIS_STATE_INSERTED)
         assert mock_get_status_tbl.set.call_count == 1
 
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic1'))
+    def test_CmisManagerTask_is_fast_reboot_enabled_for_lport(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'asic_id': 1}
+
+        assert task.is_fast_reboot_enabled_for_lport('Ethernet0') is True
+        common.get_namespace_from_asic_id.assert_called_with(1)
+        common.is_fast_reboot_enabled.assert_called_with('asic1')
+
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    def test_CmisManagerTask_is_fast_reboot_enabled_for_lport_default_namespace(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        # Ethernet999 not in port_dict -> asic_id -1 -> namespace ''
+        with patch.object(common, 'get_namespace_from_asic_id', MagicMock()) as mock_get_ns:
+            assert task.is_fast_reboot_enabled_for_lport('Ethernet999') is False
+            mock_get_ns.assert_not_called()
+        common.is_fast_reboot_enabled.assert_called_with('')
+
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     def test_CmisManagerTask_handle_port_change_event(self):
         port_mapping = PortMapping()
@@ -4866,6 +4889,47 @@ class TestXcvrdScript(object):
 
         port_dict = {1, SFP_STATUS_INSERTED}
         assert task._mapping_event_from_change_event(True, port_dict) == NORMAL_EVENT
+
+    @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic2'))
+    @patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=True))
+    def test_SfpStateUpdateTask_is_warm_fast_reboot_for_lport(self):
+        port_mapping = PortMapping()
+        port_mapping.logical_to_asic = {'Ethernet0': 2}
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+
+        assert task.is_warm_fast_reboot_for_lport('Ethernet0') is True
+        common.get_namespace_from_asic_id.assert_called_with(2)
+        common.is_syncd_warm_restore_complete.assert_called_with('asic2')
+        common.is_fast_reboot_enabled.assert_called_with('asic2')
+
+    def test_SfpStateUpdateTask_is_warm_fast_reboot_for_lport_invalid_asic(self):
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
+
+        assert task.is_warm_fast_reboot_for_lport('Ethernet0') is False
+
+    def test_SfpStateUpdateTask_should_notify_media_settings(self):
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+
+        task.is_warm_fast_reboot_for_lport = MagicMock(return_value=True)
+        assert task.should_notify_media_settings('Ethernet0') is False
+        task.is_warm_fast_reboot_for_lport.assert_called_with('Ethernet0')
+
+        task.is_warm_fast_reboot_for_lport = MagicMock(return_value=False)
+        assert task.should_notify_media_settings('Ethernet0') is True
+        task.is_warm_fast_reboot_for_lport.assert_called_with('Ethernet0')
 
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
