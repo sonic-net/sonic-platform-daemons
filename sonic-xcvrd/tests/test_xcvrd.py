@@ -183,6 +183,38 @@ media_settings_port_media_key_si = copy.deepcopy(media_settings_port_media_key_l
 media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"].pop("speed:400GAUI-8")
 media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"].pop("speed:100GAUI-2")
 
+# Test data for vendor key prioritization over medium lane speed key
+# Test that vendor-specific settings take priority over generic medium lane speed settings
+media_settings_vendor_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['VENDOR1-MODEL1'] = {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}
+media_settings_vendor_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['OPTICAL100'] = {'idriver': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'pre1': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'ob_m2lp': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}}
+
+media_settings_vendor_priority_over_medium_lane_port = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_priority_over_medium_lane_port['PORT_MEDIA_SETTINGS'] = {
+    '7': {
+        'VENDOR2-MODEL2': {'idriver': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'pre1': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'ob_m2lp': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}},
+        'COPPER50': {'idriver': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'pre1': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'ob_m2lp': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}}
+    }
+}
+
+# Test data for vendor name (without model) prioritization over medium lane speed key
+media_settings_vendor_name_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_name_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['VENDOR3'] = {'idriver': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'pre1': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'ob_m2lp': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}}
+media_settings_vendor_name_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER25'] = {'idriver': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'pre1': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'ob_m2lp': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}}
+
+# Test data for media key prioritization over medium lane speed key
+media_settings_media_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_media_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP28-100GBASE-SR4'] = {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}}
+media_settings_media_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['OPTICAL25'] = {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}}
+
+media_settings_media_priority_over_medium_lane_port = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_media_priority_over_medium_lane_port['PORT_MEDIA_SETTINGS'] = {
+    '7': {
+        'QSFP-DD-400GBASE-DR4': {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}},
+        'COPPER100': {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}
+    }
+}
+
 media_settings_port_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-sm_media_interface')
 media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['GENERIC_VENDOR'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-active_cable_media_interface')
@@ -1603,7 +1635,25 @@ class TestXcvrdScript(object):
     # Test 11: Regex pattern COPPER(25|50|100) should NOT match COPPER200
     (media_settings_global_medium_lane_regex_speed_range, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER200'}, {}),
     # Test 12: Check that we return the settings for the first key we match against
-    (media_settings_global_medium_lane_regex_multiple, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}})
+    (media_settings_global_medium_lane_regex_multiple, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}}),
+    # Test cases for vendor key prioritization over medium lane speed key
+    # Test 13: Vendor key should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR1-MODEL1', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'}, {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}),
+    # Test 14: Medium lane speed key should match when vendor key doesn't match in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'}, {'idriver': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'pre1': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'ob_m2lp': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}}),
+    # Test 15: Vendor key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR2-MODEL2', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'pre1': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'ob_m2lp': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}}),
+    # Test 16: Medium lane speed key should match when vendor key doesn't match in PORT_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'pre1': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'ob_m2lp': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}}),
+    # Test 17: Vendor name (without model) should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_name_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR3-ANYMODEL', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'pre1': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'ob_m2lp': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}}),
+    # Test 18: Medium lane speed key should match when vendor name doesn't match in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_name_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH-MODEL', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'pre1': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'ob_m2lp': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}}),
+    # Test cases for media key prioritization over medium lane speed key
+    # Test 19: Media key should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_media_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP28-100GBASE-SR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL25'}, {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}}),
+    # Test 20: Media key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
+    (media_settings_media_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP-DD-400GBASE-DR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}})
     ])
     def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
