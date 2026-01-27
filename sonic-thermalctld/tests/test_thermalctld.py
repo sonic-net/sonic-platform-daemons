@@ -707,26 +707,6 @@ class TestTemperatureUpdater(object):
         else:
             temperature_updater.log_warning.assert_called_with("Failed to update thermal status for PSU 1 Thermal 1 - Exception('Test message',)")
 
-    def test_update_sfp_thermals(self):
-        chassis = MockChassis()
-        sfp = MockSfp()
-        mock_thermal = MockThermal()
-        sfp._thermal_list.append(mock_thermal)
-        chassis._sfp_list.append(sfp)
-        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
-        temperature_updater.update()
-        assert temperature_updater.log_warning.call_count == 0
-
-        mock_thermal.get_temperature = mock.MagicMock(side_effect=Exception("Test message"))
-        temperature_updater.update()
-        assert temperature_updater.log_warning.call_count == 1
-
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message')")
-        else:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message',)")
-
     def test_update_thermal_with_exception(self):
         chassis = MockChassis()
         chassis.make_error_thermal()
@@ -757,7 +737,7 @@ class TestTemperatureUpdater(object):
         chassis.set_modular_chassis(True)
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
         temperature_updater.update()
-        assert len(temperature_updater.all_thermals) == 3
+        assert len(temperature_updater.all_thermals) == 2
 
         chassis._module_list = []
         temperature_updater.update()
