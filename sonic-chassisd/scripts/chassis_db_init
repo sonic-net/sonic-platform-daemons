@@ -57,7 +57,8 @@ def try_get(callback, *args, **kwargs):
         ret = callback(*args)
         if ret is None:
             ret = default
-    except NotImplementedError:
+    except (NotImplementedError, TimeoutError) as e:
+        logger.warning(f"Failed to get HW info: {e}")
         ret = default
 
     return ret
