@@ -389,6 +389,7 @@ class TestDaemonPsud(object):
         assert daemon_psud.psu_tbl.set.call_count == 0
         assert daemon_psud._update_psu_fan_led_status.call_count == 0
 
+        # First run: LED status is OFF, should write to DB (initial state)
         psud.platform_chassis = MockChassis()
         daemon_psud.psu_status_dict[1] = psu_status
         expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_OFF)])
@@ -401,6 +402,15 @@ class TestDaemonPsud(object):
         daemon_psud.psu_tbl.reset_mock()
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
+        # Second run: LED status is still OFF, should NOT write to DB (no change)
+        daemon_psud._update_led_color()
+        assert daemon_psud.psu_tbl.set.call_count == 0
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1  # Fan LED status still checked
+
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # LED changes from OFF to GREEN, should write to DB
         mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_GREEN)
         expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_GREEN)])
         daemon_psud._update_led_color()
@@ -412,6 +422,15 @@ class TestDaemonPsud(object):
         daemon_psud.psu_tbl.reset_mock()
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
+        # LED status is still GREEN, should NOT write to DB (no change)
+        daemon_psud._update_led_color()
+        assert daemon_psud.psu_tbl.set.call_count == 0
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # LED changes from GREEN to RED, should write to DB
         mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_RED)
         expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_RED)])
         daemon_psud._update_led_color()
@@ -423,7 +442,26 @@ class TestDaemonPsud(object):
         daemon_psud.psu_tbl.reset_mock()
         daemon_psud._update_psu_fan_led_status.reset_mock()
 
-        # Test exception handling
+        # LED status is still RED, should NOT write to DB (no change)
+        daemon_psud._update_led_color()
+        assert daemon_psud.psu_tbl.set.call_count == 0
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # LED changes back from RED to GREEN, should write to DB
+        mock_psu.set_status_led(MockPsu.STATUS_LED_COLOR_GREEN)
+        expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', MockPsu.STATUS_LED_COLOR_GREEN)])
+        daemon_psud._update_led_color()
+        assert daemon_psud.psu_tbl.set.call_count == 1
+        daemon_psud.psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # Test exception handling - LED status becomes N/A, should write to DB
         mock_psu.get_status_led = mock.Mock(side_effect=NotImplementedError)
         expected_fvp = psud.swsscommon.FieldValuePairs([('led_status', psud.NOT_AVAILABLE)])
         daemon_psud._update_led_color()
@@ -431,6 +469,14 @@ class TestDaemonPsud(object):
         daemon_psud.psu_tbl.set.assert_called_with(psud.PSU_INFO_KEY_TEMPLATE.format(1), expected_fvp)
         assert daemon_psud._update_psu_fan_led_status.call_count == 1
         daemon_psud._update_psu_fan_led_status.assert_called_with(mock_psu, 1)
+
+        daemon_psud.psu_tbl.reset_mock()
+        daemon_psud._update_psu_fan_led_status.reset_mock()
+
+        # LED status is still N/A, should NOT write to DB (no change)
+        daemon_psud._update_led_color()
+        assert daemon_psud.psu_tbl.set.call_count == 0
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
 
     def test_update_psu_fan_led_status(self):
         mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
