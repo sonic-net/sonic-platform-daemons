@@ -38,3 +38,13 @@ def test_provision_db():
     assert serial == fvs[CHASSIS_INFO_SERIAL_FIELD]
     assert model == fvs[CHASSIS_INFO_MODEL_FIELD]
     assert revision == fvs[CHASSIS_INFO_REV_FIELD]
+
+def test_try_get_timeout_error():
+    def raise_timeout():
+        raise TimeoutError("timeout")
+
+    with patch('chassis_db_init.logger.warning', create=True) as warning:
+        result = try_get(raise_timeout)
+
+    assert result == NOT_AVAILABLE
+    warning.assert_called_once()
