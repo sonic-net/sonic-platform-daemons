@@ -43,8 +43,14 @@ def test_try_get_timeout_error():
     def raise_timeout():
         raise TimeoutError("timeout")
 
-    with patch('chassis_db_init.logger.warning', create=True) as warning:
-        result = try_get(raise_timeout)
+    result = try_get(raise_timeout)
 
     assert result == NOT_AVAILABLE
-    warning.assert_called_once()
+
+def test_try_get_not_implemented_error():
+    def raise_not_implemented():
+        raise NotImplementedError("not implemented")
+
+    result = try_get(raise_not_implemented)
+
+    assert result == NOT_AVAILABLE
