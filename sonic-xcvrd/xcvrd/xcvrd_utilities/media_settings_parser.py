@@ -7,7 +7,6 @@ import os
 import ast
 import re
 from natsort import natsorted
-from copy import deepcopy
 
 from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
@@ -22,6 +21,11 @@ MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
 MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
+GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
+PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
+CUSTOM_MEDIA_SETTINGS_KEY = 'CUSTOM_MEDIA_SETTINGS'
+RANGE_SEPARATOR = '-'
+COMMA_SEPARATOR = ','
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
 CUSTOM_SERDES_ATTR_PREFIX = 'CUSTOM:'
@@ -241,25 +245,73 @@ def get_media_settings_for_speed(settings_dict, lane_speed_key):
     # If no match found, return default settings if present (defined as LANE_SPEED_DEFAULT_KEY)
     return settings_dict.get(LANE_SPEED_DEFAULT_KEY, {})
 
+def get_media_settings_for_key(key, media_dict):
+    """
+    Get media settings for the given key from the media_dict.
+
+    Args:
+        key: dictionary containing vendor/media/lane_speed/medium_lane_speed keys.
+        media_dict: dictionary with vendor/media keys mapping to settings dictionaries.
+
+    Returns:
+        dictionary containing the settings for the given key if matched, or None if no match found.
+    """
+    for dict_key in media_dict.keys():
+        if (re.match(dict_key, key[VENDOR_KEY]) or \
+            re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
+            or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
+            return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
+        elif key[MEDIUM_LANE_SPEED_KEY] in media_dict:
+            return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
+    return None
+
+def is_port_selected(port_selector, physical_port):
+    """
+    Return True if the port selector matches the given physical_port.
+
+    Supports:
+      - Single port: "7"
+      - Range: "1-4"
+      - List / list-of-ranges: "1,3-4,8"
+    Whitespace is ignored. Non-string selectors return False.
+
+    Args:
+        port_selector: selector string (single, range, list, list-of-ranges).
+        physical_port: physical port number to test against the selector.
+
+    Returns:
+        True if the selector matches the physical_port, False otherwise.
+    """
+    if not isinstance(port_selector, str):
+        helper_logger.log_notice("Malformed port selector '{}'".format(port_selector))
+        return False
+    for token in port_selector.split(COMMA_SEPARATOR):
+        token = token.strip()
+        if not token:
+            helper_logger.log_notice(
+                "Malformed port selector token '' in '{}'".format(port_selector)
+            )
+            continue
+        if RANGE_SEPARATOR in token:
+            start_str, end_str = token.split(RANGE_SEPARATOR, 1)
+        else:
+            start_str = end_str = token
+        try:
+            start = int(start_str.strip())
+            end = int(end_str.strip())
+        except ValueError:
+            helper_logger.log_notice(
+                "Malformed port selector token '{}' in '{}'".format(token, port_selector)
+            )
+            continue
+        if start <= physical_port <= end:
+            return True
+    return False
 
 def get_media_settings_value(physical_port, key):
-    GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
-    PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
-    RANGE_SEPARATOR = '-'
-    COMMA_SEPARATOR = ','
     media_dict = {}
     default_dict = {}
     lane_speed_key = key[LANE_SPEED_KEY]
-
-    def get_media_settings(key, media_dict):
-        for dict_key in media_dict.keys():
-            if (re.match(dict_key, key[VENDOR_KEY]) or \
-                re.match(dict_key, key[VENDOR_KEY].split('-')[0]) # e.g: 'AMPHENOL-1234'
-                or re.match(dict_key, key[MEDIA_KEY]) ): # e.g: 'QSFP28-40GBASE-CR4-1M'
-                return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
-            elif key[MEDIUM_LANE_SPEED_KEY] in media_dict:
-                return media_dict[key[MEDIUM_LANE_SPEED_KEY]]
-        return None
 
     # Keys under global media settings can be a list or range or list of ranges
     # of physical port numbers. Below are some examples
@@ -286,7 +338,7 @@ def get_media_settings_value(physical_port, key):
 
             # If there is a match in the global profile for a media type,
             # fetch those values
-            media_settings = get_media_settings(key, media_dict)
+            media_settings = get_media_settings_for_key(key, media_dict)
             if media_settings is not None:
                 return media_settings
             # Try to match 'default' key if it does not match any keys
@@ -308,7 +360,7 @@ def get_media_settings_value(physical_port, key):
                 helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
             return {}
 
-        media_settings = get_media_settings(key, media_dict)
+        media_settings = get_media_settings_for_key(key, media_dict)
         if media_settings is not None:
             return media_settings
         # Try to match 'default' key if it does not match any keys
@@ -322,6 +374,36 @@ def get_media_settings_value(physical_port, key):
 
     return {}
 
+def get_custom_media_settings_value(physical_port, key):
+    """
+    Get custom media settings for a given physical port and media key.
+
+    Args:
+        physical_port: physical port number for this logical port.
+        key: media settings key dictionary with vendor/media and lane speed info.
+
+    Returns:
+        dictionary containing custom media settings for the given key, or {} if no match.
+    """
+    custom_settings = g_dict.get(CUSTOM_MEDIA_SETTINGS_KEY)
+    if not isinstance(custom_settings, dict) or not custom_settings:
+        return {}
+
+    default_dict = None
+    lane_speed_key = key[LANE_SPEED_KEY]
+
+    for selector, selector_dict in custom_settings.items():
+        if not is_port_selected(selector, physical_port):
+            continue
+
+        media_settings = get_media_settings_for_key(key, selector_dict)
+        if media_settings is not None:
+            return media_settings
+
+        if DEFAULT_KEY in selector_dict and default_dict is None:
+            default_dict = get_media_settings_for_speed(selector_dict[DEFAULT_KEY], lane_speed_key)
+
+    return default_dict or {}
 
 def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     port_speed, lane_count, subport_num = 0, 0, 0
@@ -337,32 +419,23 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
-def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
+def get_custom_serdes_attrs(custom_media_dict, lane_count, subport_num):
     """
-    Handle custom SerDes attributes in the media_dict and convert them to JSON.
+    Convert custom SerDes attributes to the JSON string used in APP DB.
 
     Args:
-        media_dict: dictionary containing SerDes settings for all lanes of the port
+        custom_media_dict: dictionary containing custom SerDes settings for all lanes of the port
         lane_count: number of lanes for this subport
         subport_num: subport number (1-based), 0 for non-breakout case
 
     Returns:
-        media_dict: updated media_dict with custom SerDes attributes converted to JSON,
-                    or the original media_dict unchanged if no custom attributes present
+        JSON string for custom SerDes attributes, or None if no custom attributes present.
     """
-    # Keep the custom-SerDes-attributes feature fully opt-in.
-    # If there are no "CUSTOM:" keys in the resolved media_dict, do not run any of the
-    # new conversion logic (and avoid deepcopy). This minimizes blast radius for
-    # existing platforms/vendors that don't define custom SerDes attributes.
-    if not any(isinstance(k, str) and k.startswith(CUSTOM_SERDES_ATTR_PREFIX) for k in media_dict):
-        return media_dict
-
-    # Perform a deepcopy to avoid modifying the original media_dict, which may be a reference to the global 'g_dict'.
-    # Modifying g_dict would affect subsequent lookups and cause incorrect behavior.
-    output_media_dict = deepcopy(media_dict)
+    if not custom_media_dict:
+        return None
     attrs_list = []
 
-    for key, value in media_dict.items():
+    for key, value in custom_media_dict.items():
         if not isinstance(key, str) or not key.startswith(CUSTOM_SERDES_ATTR_PREFIX):
             continue
 
@@ -373,19 +446,15 @@ def handle_custom_serdes_attrs(media_dict, lane_count, subport_num):
         }
         attrs_list.append(attr_dict)
 
-        # Remove the key from output_media_dict to avoid duplication
-        output_media_dict.pop(key)
-
     if not attrs_list:
-        return media_dict
+        return None
 
     # Combine all the custom serdes attributes to a single element,
-    # and put it back into the output_media_dict to be published in APP DB
-    output_media_dict[CUSTOM_SERDES_ATTRS_KEY_IN_DB] = json.dumps(
+    # and return it to be published in APP DB
+    return json.dumps(
         {CUSTOM_SERDES_ATTRS_TOP_LEVEL_KEY: attrs_list},
         separators=(',', ':')  # remove whitespace for optimal payload
     )
-    return output_media_dict
 
 
 def notify_media_setting(logical_port_name, transceiver_dict,
@@ -434,14 +503,16 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_notice("Retrieving media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
         media_dict = get_media_settings_value(physical_port, key)
+        custom_media_dict = get_custom_media_settings_value(physical_port, key)
 
-        if len(media_dict) == 0:
+        if not media_dict and not custom_media_dict:
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
 
-        media_dict = handle_custom_serdes_attrs(media_dict, lane_count, subport_num)
+        custom_serdes_attrs = get_custom_serdes_attrs(custom_media_dict, lane_count, subport_num)
+        total_fields = len(media_dict) + (1 if custom_serdes_attrs is not None else 0)
 
-        fvs = swsscommon.FieldValuePairs(len(media_dict))
+        fvs = swsscommon.FieldValuePairs(total_fields)
 
         index = 0
         helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
@@ -452,6 +523,11 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                 val_str = media_dict[media_key]
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
             fvs[index] = (str(media_key), str(val_str))
+            index += 1
+
+        if custom_serdes_attrs is not None:
+            helper_logger.log_notice("{}:({},{}) ".format(index, CUSTOM_SERDES_ATTRS_KEY_IN_DB, custom_serdes_attrs))
+            fvs[index] = (CUSTOM_SERDES_ATTRS_KEY_IN_DB, custom_serdes_attrs)
             index += 1
 
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
