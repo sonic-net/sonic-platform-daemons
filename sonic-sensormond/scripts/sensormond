@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import yaml
+import os
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger, device_info
@@ -21,6 +22,8 @@ SYSLOG_IDENTIFIER = 'sensormond'
 NOT_AVAILABLE     = 'N/A'
 CHASSIS_INFO_KEY  = 'chassis 1'
 INVALID_SLOT      = -1
+
+PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 
@@ -191,16 +194,19 @@ class VoltageUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self):
+    def update(self, stop_event_signal = threading.Event()):
         '''
         Update all voltage information to database
+        :param stop_event_signal: Event object to check if set by signal handler
         :return:
         '''
         self.log_debug("Start voltage update")
 
         sensor_list = self.fs_sensors + self.chassis.get_all_voltage_sensors()
-
         for index, voltage_sensor in enumerate(sensor_list):
+            if(stop_event_signal.is_set()):
+                self.log_info("Stop signal received while running voltage update")
+                return False
             self._refresh_voltage_status(CHASSIS_INFO_KEY, voltage_sensor, index)
 
         if self.is_chassis_system:
@@ -210,6 +216,9 @@ class VoltageUpdater(SensorUpdater):
                 
                 for voltage_sensor_index, voltage_sensor in enumerate(module.get_all_voltage_sensors()):
                     available_voltage_sensors.add((voltage_sensor, module_name, voltage_sensor_index))
+                    if(stop_event_signal.is_set()):
+                        self.log_info("Stop signal received while running voltage update")
+                        return False
                     self._refresh_voltage_status(module_name, voltage_sensor, voltage_sensor_index)
 
             voltage_sensors_to_remove = self.module_voltage_sensors - available_voltage_sensors
@@ -218,6 +227,8 @@ class VoltageUpdater(SensorUpdater):
                 self._remove_voltage_sensor_from_db(voltage_sensor, parent_name, voltage_sensor_index)
                 
         self.log_debug("End Voltage updating")
+        #return true if no stop signal was received
+        return True
 
     def _refresh_voltage_status(self, parent_name, voltage_sensor, voltage_sensor_index):
         '''
@@ -322,9 +333,10 @@ class CurrentUpdater(SensorUpdater):
 
         self.fs_sensors = fs_sensors
 
-    def update(self):
+    def update(self, stop_event_signal = threading.Event()):
         '''
         Update all current information to database
+        :param stop_event_signal: Event object to check if set by signal handler
         :return:
         '''
         self.log_debug("Start current updating")
@@ -332,6 +344,9 @@ class CurrentUpdater(SensorUpdater):
         sensor_list = self.fs_sensors + self.chassis.get_all_current_sensors()
 
         for index, current_sensor in enumerate(sensor_list):
+            if(stop_event_signal.is_set()):
+                self.log_info("Stop signal received while running current update")
+                return False
             self._refresh_current_status(CHASSIS_INFO_KEY, current_sensor, index)
 
         if self.is_chassis_system:
@@ -341,6 +356,9 @@ class CurrentUpdater(SensorUpdater):
                 
                 for current_sensor_index, current_sensor in enumerate(module.get_all_current_sensors()):
                     available_current_sensors.add((current_sensor, module_name, current_sensor_index))
+                    if(stop_event_signal.is_set()):
+                        self.log_info("Stop signal received while running current update")
+                        return False
                     self._refresh_current_status(module_name, current_sensor, current_sensor_index)
 
             current_sensors_to_remove = self.module_current_sensors - available_current_sensors
@@ -349,6 +367,8 @@ class CurrentUpdater(SensorUpdater):
                 self._remove_current_sensor_from_db(current_sensor, parent_name, current_sensor_index)
                 
         self.log_debug("End Current updating")
+        #return true if no stop signal was received
+        return True
 
     def _refresh_current_status(self, parent_name, current_sensor, current_sensor_index):
         '''
@@ -442,7 +462,6 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
     INITIAL_INTERVAL = 5
     # Periodic Update interval 
     UPDATE_INTERVAL = 60
-    # Update time threshold. If update time exceeds this threshold, log warning msg.
     UPDATE_ELAPSED_THRESHOLD = 30
 
     def __init__(self):
@@ -462,6 +481,17 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         self._voltage_sensor_fs = []
         self._current_sensor_fs = []
+
+        if os.path.isfile(PLATFORM_ENV_CONF_FILE):
+            with open(PLATFORM_ENV_CONF_FILE, 'r') as file:
+                for line in file:
+                    content = line.split('=')
+                    if(content[0].strip() == "SENSORMOND_WARNING_TIME"):
+                        try:
+                            self.UPDATE_ELAPSED_THRESHOLD = int(content[1].strip())
+                        except ValueError as e:
+                            self.log_error(f"Failed to load warning time, falling back to default, err: {e}")
+                            break
 
         try:
             self.chassis = sonic_platform.platform.Platform().get_chassis()
@@ -522,8 +552,9 @@ class SensorMonitorDaemon(daemon_base.DaemonBase):
 
         begin = time.time()
 
-        self.voltage_updater.update()
-        self.current_updater.update()
+        if not (self.voltage_updater.update(self.stop_event) and self.current_updater.update(self.stop_event)):
+            # Fatal signal received in the process of reading voltage or current sensors
+            return False
 
         elapsed = time.time() - begin
         if elapsed <  self.interval:

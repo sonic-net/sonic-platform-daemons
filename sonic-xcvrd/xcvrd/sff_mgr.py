@@ -14,6 +14,7 @@ try:
 
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
+    from .xcvrd_utilities import common
     from sonic_platform_base.sonic_xcvr.api.public.sff8472 import Sff8472Api
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -24,6 +25,9 @@ class SffLoggerForPortUpdateEvent:
 
     def __init__(self, logger):
         self.logger = logger
+
+    def log_info(self, message):
+        self.logger.log_info("{}{}".format(self.SFF_LOGGER_PREFIX, message))
 
     def log_notice(self, message):
         self.logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
@@ -381,8 +385,25 @@ class SffManagerTask(threading.Thread):
                     # TRANSCEIVER_INFO table's XCVR_TYPE is not ready, meaning xcvr is not present
                     continue
 
-                # Procced only for QSFP28/QSFP+ transceiver
-                if not (xcvr_type.startswith('QSFP28') or xcvr_type.startswith('QSFP+')):
+                # double-check the HW presence before moving forward
+                sfp = self.platform_chassis.get_sfp(pport)
+                if not sfp.get_presence():
+                    self.log_error("{}: module not present!".format(lport))
+                    del self.port_dict[lport][self.XCVR_TYPE]
+                    continue
+                try:
+                    # Skip if XcvrApi is not supported
+                    api = sfp.get_xcvr_api()
+                    if api is None:
+                        self.log_error(
+                            "{}: skipping sff_mgr since no xcvr api!".format(lport))
+                        continue
+                except (AttributeError, NotImplementedError):
+                    # Skip if these essential routines are not available
+                    continue
+
+                # Proceed only for non-cmis transceiver
+                if common.is_cmis_api(api):
                     continue
 
                 # Handle the case that host_tx_ready value in the local cache hasn't
@@ -436,26 +457,7 @@ class SffManagerTask(threading.Thread):
                     data[self.HOST_TX_READY], host_tx_ready_changed,
                     data[self.ADMIN_STATUS], admin_status_changed))
 
-                # double-check the HW presence before moving forward
-                sfp = self.platform_chassis.get_sfp(pport)
-                if not sfp.get_presence():
-                    self.log_error("{}: module not present!".format(lport))
-                    del self.port_dict[lport][self.XCVR_TYPE]
-                    continue
                 try:
-                    # Skip if XcvrApi is not supported
-                    api = sfp.get_xcvr_api()
-                    if api is None:
-                        self.log_error(
-                            "{}: skipping sff_mgr since no xcvr api!".format(lport))
-                        continue
-
-                    # Skip if it's not a paged memory device
-                    if api.is_flat_memory():
-                        self.log_notice(
-                            "{}: skipping sff_mgr for flat memory xcvr".format(lport))
-                        continue
-
                     # Skip if it's a copper cable
                     if api.is_copper():
                         self.log_notice(
@@ -475,16 +477,17 @@ class SffManagerTask(threading.Thread):
                 if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
                     self.enable_high_power_class(api, lport)
 
-                    set_lp_success = (
-                        sfp.set_lpmode(False) 
-                        if isinstance(api, Sff8472Api) 
-                        else api.set_lpmode(False)
-                    )
-                    if not set_lp_success:
-                        self.log_error(
-                            "{}: Failed to take module out of low power mode.".format(
-                                lport)
+                    if api.get_lpmode_support():
+                        set_lp_success = (
+                            sfp.set_lpmode(False)
+                            if isinstance(api, Sff8472Api)
+                            else api.set_lpmode(False)
                         )
+                        if not set_lp_success:
+                            self.log_error(
+                                "{}: Failed to take module out of low power mode.".format(
+                                    lport)
+                            )
 
                 if active_lanes is None:
                     active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,

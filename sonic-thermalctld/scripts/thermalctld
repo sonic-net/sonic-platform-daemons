@@ -6,15 +6,17 @@
 """
 
 from enum import Enum, auto
+import argparse
 import signal
 import sys
 import threading
 import time
 from datetime import datetime
+import argparse
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger
-from sonic_py_common.task_base import ProcessTaskBase
+from sonic_py_common.task_base import ThreadTaskBase
 from swsscommon import swsscommon
 
 
@@ -30,6 +32,7 @@ PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
+CHASSIS_GET_ERROR = 2
 
 # Thermal control daemon is designed to never exit, it must always
 # return non-zero exit code when exiting and so that supervisord will
@@ -297,7 +300,7 @@ class FanUpdater(logger.Logger):
         """
         drawer_name = NOT_AVAILABLE if fan_type != FanType.DRAWER else str(try_get(parent.get_name))
         if fan_type == FanType.PSU:
-            parent_name = 'PSU {}'.format(parent_index + 1)
+            parent_name = try_get(parent.get_name, default='PSU {}'.format(parent_index + 1))
         elif fan_type == FanType.MODULE:
             parent_name = try_get(parent.get_name, default='Module {}'.format(parent_index + 1))
         else:
@@ -435,6 +438,90 @@ class FanUpdater(logger.Logger):
                 ])
             self.drawer_table.set(drawer_name, fvs)
 
+class LiquidCoolingUpdater(threading.Thread, logger.Logger):
+
+    LIQUID_COOLING_INFO_TABLE_NAME = 'LIQUID_COOLING_INFO'
+
+    def __init__(self, chassis, liquid_cooling_update_interval):
+        """
+        Constructor for LiquidCoolingUpdater
+        :param chassis: Object representing a platform chassis
+        """
+        threading.Thread.__init__(self)
+        logger.Logger.__init__(self)
+        self.name = "LiquidCoolingUpdater"
+        self.exc = None
+        self.task_stopping_event = threading.Event()
+        self.chassis = chassis
+        self.liquid_cooling = self.chassis.get_liquid_cooling()
+        self.leaking_sensors = []
+        self.interval = liquid_cooling_update_interval
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        self.table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
+
+    def __del__(self):
+        if self.table:
+            table_keys = self.table.getKeys()
+            for tk in table_keys:
+                self.table._del(tk)
+
+    def _refresh_leak_status(self):
+        for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
+            sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
+            sensor_leak_status = sensor.is_leak()
+            status_msg = "N/A"
+
+            if sensor_leak_status is True:
+                status_msg = "Yes"
+                if sensor_name not in self.leaking_sensors:
+                    self.leaking_sensors.append(sensor_name)
+                    self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
+            elif sensor_leak_status is False:
+                status_msg = "No"
+                if sensor_name in self.leaking_sensors:
+                    self.leaking_sensors.remove(sensor_name)
+                    self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
+
+            fvs = swsscommon.FieldValuePairs([('leak_status', status_msg)])
+            self.table.set(sensor_name, fvs)
+
+    def update(self):
+        self._refresh_leak_status()
+
+    def task_worker(self, stopping_event):
+        """
+        Update all liquid cooling information to database
+        :return:
+        """
+        while not stopping_event.is_set():
+            self.log_debug("Start liquid cooling updating")
+
+            self.update()
+
+            self.log_debug("End liquid cooling updating")
+
+            if self.task_stopping_event.is_set():
+                return
+
+            time.sleep(self.interval)
+
+    def join(self):
+        self.task_stopping_event.set()
+        super().join()
+        if self.exc:
+            raise self.exc
+
+    def run(self):
+        self.thread_id = threading.current_thread().ident
+        if self.task_stopping_event.is_set():
+            return
+        try:
+            self.task_worker(self.task_stopping_event)
+        except Exception as e:
+            self.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
+            self.exc = e
+            self.task_stopping_event.set()
 
 class TemperatureStatus(logger.Logger):
     TEMPERATURE_DIFF_THRESHOLD = 10
@@ -600,7 +687,7 @@ class TemperatureUpdater(logger.Logger):
             self._refresh_temperature_status(CHASSIS_INFO_KEY, thermal, index)
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
-            parent_name = 'PSU {}'.format(psu_index + 1)
+            parent_name = try_get(psu.get_name, default='PSU {}'.format(psu_index + 1))
             if psu.get_presence():
                 for thermal_index, thermal in enumerate(psu.get_all_thermals()):
                     if self.task_stopping_event.is_set():
@@ -641,7 +728,7 @@ class TemperatureUpdater(logger.Logger):
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
                     if psu.get_presence():
-                        psu_name = '{} PSU {}'.format(module_name, psu_index + 1)
+                        psu_name = try_get(psu.get_name, default='{} PSU {}'.format(module_name, psu_index + 1))
                         for thermal_index, thermal in enumerate(psu.get_all_thermals()):
                             if self.task_stopping_event.is_set():
                                 return
@@ -741,24 +828,24 @@ class TemperatureUpdater(logger.Logger):
             self.chassis_table._del(name)
 
 
-class ThermalMonitor(ProcessTaskBase):
-    # Initial update interval
-    INITIAL_INTERVAL = 5
-
-    # Update interval value
-    UPDATE_INTERVAL = 60
-
-    # Update elapse threshold. If update used time is larger than the value, generate a warning log.
-    UPDATE_ELAPSED_THRESHOLD = 30
-
-    def __init__(self, chassis):
+class ThermalMonitor(ThreadTaskBase):
+    def __init__(
+        self, chassis, initial_interval, update_interval, update_elapsed_threshold
+    ):
         """
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
         """
         super(ThermalMonitor, self).__init__()
 
-        self.wait_time = self.INITIAL_INTERVAL
+        # Initial update interval
+        self.initial_interval = initial_interval
+        # Update interval value
+        self.update_interval = update_interval
+        # Update elapse threshold. If update used time is larger than the value, generate a warning log
+        self.update_elapsed_threshold = update_elapsed_threshold
+
+        self.wait_time = self.initial_interval
 
         # TODO: Refactor to eliminate the need for this Logger instance
         self.logger = logger.Logger(SYSLOG_IDENTIFIER)
@@ -774,12 +861,12 @@ class ThermalMonitor(ProcessTaskBase):
         self.fan_updater.update()
         self.temperature_updater.update()
         elapsed = time.time() - begin
-        if elapsed < self.UPDATE_INTERVAL:
-            self.wait_time = self.UPDATE_INTERVAL - elapsed
+        if elapsed < self.update_interval:
+            self.wait_time = self.update_interval - elapsed
         else:
-            self.wait_time = self.INITIAL_INTERVAL
+            self.wait_time = self.initial_interval
 
-        if elapsed > self.UPDATE_ELAPSED_THRESHOLD:
+        if elapsed > self.update_elapsed_threshold:
             self.logger.log_warning('Update fan and temperature status took {} seconds, '
                                     'there might be performance risk'.format(elapsed))
 
@@ -808,7 +895,14 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
     POLICY_FILE = '/usr/share/sonic/platform/thermal_policy.json'
 
-    def __init__(self):
+    def __init__(
+        self,
+        thermal_monitor_initial_interval=5,
+        thermal_monitor_update_interval=60,
+        thermal_monitor_update_elapsed_threshold=30,
+        enable_liquid_cooling=False,
+        liquid_cooling_update_interval=0.5
+    ):
         """
         Initializer of ThermalControlDaemon
         """
@@ -821,9 +915,18 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         self.wait_time = self.INTERVAL
 
-        self.chassis = sonic_platform.platform.Platform().get_chassis()
+        try:
+            self.chassis = sonic_platform.platform.Platform().get_chassis()
+        except Exception as e:
+            self.log_error("Failed to get chassis due to {}".format(repr(e)))
+            sys.exit(CHASSIS_GET_ERROR)
 
-        self.thermal_monitor = ThermalMonitor(self.chassis)
+        self.thermal_monitor = ThermalMonitor(
+            self.chassis,
+            thermal_monitor_initial_interval,
+            thermal_monitor_update_interval,
+            thermal_monitor_update_elapsed_threshold
+        )
         self.thermal_monitor.task_run()
 
         self.thermal_manager = None
@@ -840,6 +943,12 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         except Exception as e:
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
 
+        self.liquid_cooling_updater = LiquidCoolingUpdater(self.chassis, liquid_cooling_update_interval) if enable_liquid_cooling else None
+
+        if self.liquid_cooling_updater is not None:
+            self.liquid_cooling_updater.start()
+            self.log_notice("Started thread for liquid cooling updater")
+
     def deinit(self):
         """
         Deinitializer of ThermalControlDaemon
@@ -851,6 +960,11 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while destroying thermal manager - {}'.format(repr(e)))
 
         self.thermal_monitor.task_stop()
+
+        if self.liquid_cooling_updater is not None:
+            if self.liquid_cooling_updater.is_alive():
+                self.liquid_cooling_updater.join()
+                self.log_notice("Joined thread for liquid cooling updater")
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -912,7 +1026,22 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 # Main =========================================================================
 #
 def main():
-    thermal_control = ThermalControlDaemon()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--thermal-monitor-initial-interval', type=int, default=5)
+    parser.add_argument('--thermal-monitor-update-interval', type=int, default=60)
+    parser.add_argument('--thermal-monitor-update-elapsed-threshold', type=int, default=30)
+    parser.add_argument('--enable_liquid_cooling', action='store_true', default=False)
+    parser.add_argument('--liquid_cooling_update_interval', type=float, default=0.5)
+
+    args = parser.parse_args()
+
+    thermal_control = ThermalControlDaemon(
+        args.thermal_monitor_initial_interval,
+        args.thermal_monitor_update_interval,
+        args.thermal_monitor_update_elapsed_threshold,
+        args.enable_liquid_cooling,
+        args.liquid_cooling_update_interval
+    )
 
     thermal_control.log_info("Starting up...")
 

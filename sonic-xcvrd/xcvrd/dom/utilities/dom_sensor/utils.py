@@ -7,6 +7,14 @@ class DOMUtils:
         self.sfp_obj_dict = sfp_obj_dict
         self.logger = logger
 
+    def get_transceiver_dom_temperature(self, physical_port):
+        try:
+            return {
+                'temperature': self.sfp_obj_dict[physical_port].get_temperature(),
+            }
+        except (NotImplementedError):
+            return {}
+
     def get_transceiver_dom_sensor_real_value(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_dom_real_value()

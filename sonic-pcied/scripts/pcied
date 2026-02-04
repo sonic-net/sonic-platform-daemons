@@ -46,7 +46,13 @@ exit_code = 0
 # wrapper functions to call the platform api
 def load_platform_pcieutil():
     _platform_pcieutil = None
-    (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+
+    try:
+        (platform_path, _) = device_info.get_paths_to_platform_and_hwsku_dirs()
+    except (OSError, TypeError) as e:
+        log.log_error(f"Unable to get device info from Platform : {type(e).__name__} : {e}")
+        return _platform_pcieutil
+
     try:
         from sonic_platform.pcie import Pcie
         _platform_pcieutil = Pcie(platform_path)
@@ -58,7 +64,7 @@ def load_platform_pcieutil():
         except ImportError as e:
             log.log_error("Failed to load default PcieUtil module. Error : {}".format(str(e)), True)
     if _platform_pcieutil is None:
-        log.log_critical("Failed to load any PCIe utility module. Exiting...", True)
+        log.log_error("Failed to load any PCIe utility module. Exiting...", True)
         raise RuntimeError("Unable to load PCIe utility module.")
     return _platform_pcieutil
 
@@ -84,7 +90,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         self.stop_event = threading.Event()
         self.state_db = None
         self.device_table = None
-        self.table = None
+        self.status_table = None
         self.resultInfo = []
         self.device_name = None
         self.aer_stats = {}
@@ -102,7 +108,7 @@ class DaemonPcied(daemon_base.DaemonBase):
             self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
             self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)
         except Exception as e:
-            log.log_critical("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
+            log.log_error("Failed to connect to STATE_DB or create table. Error: {}".format(str(e)), True)
             sys.exit(PCIEUTIL_CONF_FILE_ERROR)
 
     def __del__(self):
@@ -200,7 +206,7 @@ class DaemonPcied(daemon_base.DaemonBase):
         for result in self.resultInfo:
             if result["result"] == "Failed":
                 # Convert bus, device, and function to a bus_info format like "0000:03:00.0"
-                pcie_dev = "0000:{int(result['bus'], 16):02x}:{int(result['dev'], 16):02x}.{int(result['fn'], 16)}"
+                pcie_dev = "0000:{:02x}:{:02x}.{}".format(int(result["bus"], 16), int(result["dev"], 16), int(result["fn"], 16))
 
                 # Check if the device is in detaching mode
                 if device_info.is_smartswitch() and self.is_dpu_in_detaching_mode(pcie_dev):

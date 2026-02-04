@@ -13,6 +13,7 @@ try:
     import copy
     import sys
     import re
+    import time
 
     from natsort import natsorted
     from sonic_py_common import syslogger
@@ -22,6 +23,7 @@ try:
     from xcvrd.xcvrd_utilities import sfp_status_helper
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
+    from xcvrd.xcvrd_utilities import common
     from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.utils import VDMUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
@@ -32,32 +34,19 @@ except ImportError as e:
 
 SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 
-class DomInfoUpdateTask(threading.Thread):
-    DOM_INFO_UPDATE_PERIOD_SECS = 60
-    DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
-    DOM_PORT_CHG_OBSERVER_TBL_MAP = [
-        {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
-    ]
+class DomInfoUpdateBase(threading.Thread):
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr):
+    name = ''
+
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event):
         threading.Thread.__init__(self)
-        self.name = "DomInfoUpdateTask"
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_DOMINFOUPDATETASK, enable_runtime_config=True)
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
-        self.skip_cmis_mgr = skip_cmis_mgr
         self.sfp_obj_dict = sfp_obj_dict
-        self.link_change_affected_ports = {}
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, helper_logger)
-        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
-        self.db_utils = self.dom_db_utils
-        self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
-        self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
-        self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def log_debug(self, message):
         self.helper_logger.log_debug("{}".format(message))
@@ -73,6 +62,14 @@ class DomInfoUpdateTask(threading.Thread):
 
     def log_error(self, message):
         self.helper_logger.log_error("{}".format(message))
+
+    def on_port_config_change(self, port_change_event):
+        if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:
+            self.on_remove_logical_port(port_change_event)
+        self.port_mapping.handle_port_change_event(port_change_event)
+
+    def on_remove_logical_port(self, port_change_event):
+        pass
 
     def get_dom_polling_from_config_db(self, lport):
         """
@@ -109,6 +106,57 @@ class DomInfoUpdateTask(threading.Thread):
 
         return dom_polling
 
+
+    def is_port_dom_monitoring_disabled(self, logical_port_name):
+        return self.get_dom_polling_from_config_db(logical_port_name) == 'disabled'
+
+    def task_worker(self):
+        pass
+
+    def run(self):
+        if self.task_stopping_event.is_set():
+            return
+        try:
+            self.task_worker()
+        except Exception as e:
+            self.log_error("Exception occurred at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
+            common.log_exception_traceback()
+            self.exc = e
+            self.main_thread_stop_event.set()
+
+    def join(self):
+        self.task_stopping_event.set()
+        threading.Thread.join(self)
+        if self.exc:
+            raise self.exc
+
+    def update_log_level(self):
+        """Call the logger's update log level method.
+        """
+        return self.helper_logger.update_log_level()
+
+
+class DomInfoUpdateTask(DomInfoUpdateBase):
+    name = "DomInfoUpdateTask"
+
+    DOM_INFO_UPDATE_PERIOD_SECS = 60
+    DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
+    DOM_PORT_CHG_OBSERVER_TBL_MAP = [
+        {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
+    ]
+
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr):
+        super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
+        self.skip_cmis_mgr = skip_cmis_mgr
+        self.link_change_affected_ports = {}
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, self.helper_logger)
+        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.db_utils = self.dom_db_utils
+        self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
+        self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+
     """
     Checks if the port is going through CMIS initialization process
     This API assumes CMIS_STATE_UNKNOWN as a transitional state since it is the
@@ -129,8 +177,8 @@ class DomInfoUpdateTask(threading.Thread):
             self.log_warning("Got invalid asic index for {} while checking cmis init status".format(logical_port_name))
             return False
 
-        cmis_state = xcvrd.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
-        if cmis_state not in xcvrd.CMIS_TERMINAL_STATES:
+        cmis_state = common.get_cmis_state_from_state_db(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index))
+        if cmis_state not in common.CMIS_TERMINAL_STATES:
             return True
         else:
             return False
@@ -142,11 +190,11 @@ class DomInfoUpdateTask(threading.Thread):
     # Update port sfp firmware info in db
     def post_port_sfp_firmware_info_to_db(self, logical_port_name, port_mapping, table,
                                 stop_event=threading.Event(), firmware_info_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
+        for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
             if stop_event.is_set():
                 break
 
-            if not xcvrd._wrapper_get_presence(physical_port):
+            if not common._wrapper_get_presence(physical_port):
                 continue
 
             try:
@@ -154,13 +202,19 @@ class DomInfoUpdateTask(threading.Thread):
                     # If cache is enabled and firmware information is in cache, just read from cache, no need read from EEPROM
                     transceiver_firmware_info_dict = firmware_info_cache[physical_port]
                 else:
-                    transceiver_firmware_info_dict = xcvrd._wrapper_get_transceiver_firmware_info(physical_port)
+                    transceiver_firmware_info_dict = common._wrapper_get_transceiver_firmware_info(physical_port)
                     if firmware_info_cache is not None:
                         # If cache is enabled, put firmware information to cache
                         firmware_info_cache[physical_port] = transceiver_firmware_info_dict
                 if transceiver_firmware_info_dict:
                     fvs = swsscommon.FieldValuePairs([(k, v) for k, v in transceiver_firmware_info_dict.items()])
-                    table.set(physical_port_name, fvs)
+                    # For firmware info, we update all logical ports associated with this physical port
+                    logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
+                    if logical_port_list is None:
+                        self.log_warning("Got unknown physical port index {} while updating firmware info".format(physical_port))
+                        continue
+                    for logical_port in logical_port_list:
+                        table.set(logical_port, fvs)
                 else:
                     return xcvrd.SFP_EEPROM_NOT_READY
 
@@ -170,21 +224,21 @@ class DomInfoUpdateTask(threading.Thread):
 
     # Update port pm info in db
     def post_port_pm_info_to_db(self, logical_port_name, port_mapping, table, stop_event=threading.Event(), pm_info_cache=None):
-        for physical_port, physical_port_name in xcvrd.get_physical_port_name_dict(logical_port_name, port_mapping).items():
+        for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
             if stop_event.is_set():
                 break
 
-            if not xcvrd._wrapper_get_presence(physical_port):
+            if not common._wrapper_get_presence(physical_port):
                 continue
 
-            if xcvrd._wrapper_is_flat_memory(physical_port) == True:
+            if common._wrapper_is_flat_memory(physical_port) == True:
                 continue
 
             if pm_info_cache is not None and physical_port in pm_info_cache:
                 # If cache is enabled and pm info is in cache, just read from cache, no need read from EEPROM
                 pm_info_dict = pm_info_cache[physical_port]
             else:
-                pm_info_dict = xcvrd._wrapper_get_transceiver_pm(physical_port)
+                pm_info_dict = common._wrapper_get_transceiver_pm(physical_port)
                 if pm_info_cache is not None:
                     # If cache is enabled, put dom information to cache
                     pm_info_cache[physical_port] = pm_info_dict
@@ -262,7 +316,7 @@ class DomInfoUpdateTask(threading.Thread):
                     continue
 
                 if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-                    if not xcvrd._wrapper_get_presence(physical_port):
+                    if not common._wrapper_get_presence(physical_port):
                         continue
 
                     try:
@@ -297,7 +351,7 @@ class DomInfoUpdateTask(threading.Thread):
                         self.log_warning("Got exception {} while processing transceiver status hw flags for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port) and (not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)):
                         # Freeze VDM stats before reading VDM values
                         with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
                             if not vdm_frozen:
@@ -331,23 +385,6 @@ class DomInfoUpdateTask(threading.Thread):
                 is_periodic_db_update_needed = False
 
         self.log_notice("Stop DOM monitoring loop")
-
-    def run(self):
-        if self.task_stopping_event.is_set():
-            return
-        try:
-            self.task_worker()
-        except Exception as e:
-            self.log_error("Exception occured at {} thread due to {}".format(threading.current_thread().getName(), repr(e)))
-            xcvrd.log_exception_traceback()
-            self.exc = e
-            self.main_thread_stop_event.set()
-
-    def join(self):
-        self.task_stopping_event.set()
-        threading.Thread.join(self)
-        if self.exc:
-            raise self.exc
 
     def on_port_update_event(self, port_change_event):
         """Called when a port change event is received
@@ -420,11 +457,6 @@ class DomInfoUpdateTask(threading.Thread):
                 self.log_warning(f"Update DB diagnostics during link change: Got exception {repr(e)} while processing vdm flags for port {first_logical_port}, ignored")
                 return
 
-    def on_port_config_change(self, port_change_event):
-        if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:
-            self.on_remove_logical_port(port_change_event)
-        self.port_mapping.handle_port_change_event(port_change_event)
-
     def on_remove_logical_port(self, port_change_event):
         """Called when a logical port is removed from CONFIG_DB
 
@@ -434,9 +466,10 @@ class DomInfoUpdateTask(threading.Thread):
         # To avoid race condition, remove the entry TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table.
         # This thread only updates TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table,
         # so we don't have to remove entries from TRANSCEIVER_INFO, TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
-        xcvrd.del_port_sfp_dom_info_from_db(port_change_event.port_name,
+        common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping,
                                       [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_dom_temperature_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
@@ -454,3 +487,59 @@ class DomInfoUpdateTask(threading.Thread):
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
+
+class DomThermalInfoUpdateTask(DomInfoUpdateBase):
+    name = 'DomThermalInfoUpdateTask'
+
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, poll_interval):
+        super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
+        self.poll_interval = poll_interval
+        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+
+    def task_worker(self):
+        self.log_notice("Start DOM thermal monitoring loop")
+
+        # Set the periodic db update time
+        dom_info_update_periodic_secs = self.poll_interval
+
+        # Poll transceiver temperature as soon as possible
+        next_periodic_db_update_time = datetime.datetime.now()
+
+        # Start loop to update dom info in DB periodically and handle port change events
+        while not self.task_stopping_event.is_set():
+            # Check if periodic db update is needed
+            now = datetime.datetime.now()
+            if next_periodic_db_update_time > now:
+               # Sleep for 1 second or less depending on the remaining time
+               time.sleep(max(0, min(1, (next_periodic_db_update_time - now).total_seconds())))
+               continue
+
+            for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
+                # Get the first logical port name since it corresponds to the first subport
+                # of the breakout group
+                logical_port_name = logical_ports[0]
+
+                if self.is_port_dom_monitoring_disabled(logical_port_name):
+                    continue
+
+                # Get the asic to which this port belongs
+                asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
+                if asic_index is None:
+                    self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+                    continue
+
+                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
+                    if not common._wrapper_get_presence(physical_port):
+                        continue
+
+                try:
+                    self.dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+                except (KeyError, TypeError) as e:
+                    #continue to process next port since exception could be raised due to port reset, transceiver removal
+                    self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
+
+            # Set the periodic db update time after all the ports are processed
+            next_periodic_db_update_time = now + datetime.timedelta(seconds=dom_info_update_periodic_secs)
+
+        self.log_notice("Stop DOM thermal monitoring loop")
