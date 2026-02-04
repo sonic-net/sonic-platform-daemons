@@ -57,7 +57,7 @@ def try_get(callback, *args, **kwargs):
         ret = callback(*args)
         if ret is None:
             ret = default
-    except (NotImplementedError, TimeoutError) as e:
+    except (NotImplementedError, TimeoutError):
         ret = default
 
     return ret
