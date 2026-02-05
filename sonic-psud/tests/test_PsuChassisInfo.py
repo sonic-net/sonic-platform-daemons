@@ -299,7 +299,7 @@ class TestPsuChassisInfo(object):
         assert psud.Psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
     def test_get_psu_key(self):
-        
+
         #mock test for psu get_name() nonimplementation
         psud.platform_chassis = None
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
@@ -332,9 +332,24 @@ class TestPsuChassisInfo(object):
         ret = psud.try_get(callback2, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
 
-        # Ensure try_get returns default value if callback returns None
+        # Ensure try_get returns default value if callback raises NotImplementedError
         def callback3():
             raise NotImplementedError
 
         ret = psud.try_get(callback3, default=DEFAULT_VALUE)
+        assert ret == DEFAULT_VALUE
+
+        # Ensure try_get returns default value if callback raises TypeError
+        # This can happen when platform API returns None and code tries int(None)
+        def callback4():
+            raise TypeError("int() argument must be a string, a bytes-like object or a real number, not 'NoneType'")
+
+        ret = psud.try_get(callback4, default=DEFAULT_VALUE)
+        assert ret == DEFAULT_VALUE
+
+        # Ensure try_get returns default value for any other exception
+        def callback5():
+            raise ValueError("Some error")
+
+        ret = psud.try_get(callback5, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
