@@ -81,6 +81,7 @@ UPDATING_STATUS = 'Updating'
 PSU_INFO_UPDATE_PERIOD_SECS = 3
 
 PSUUTIL_LOAD_ERROR = 1
+PSU_DB_CONNECT_ERROR = 2
 
 platform_psuutil = None
 platform_chassis = None
@@ -109,7 +110,7 @@ def _wrapper_get_psu(logger, psu_index):
     :param logger: Logger instance for error/warning messages
     :param psu_index: PSU index (1-based)
     :return: PSU object if available, None otherwise
-    
+
     Note:
         If logger is None, errors and warnings encountered during execution will not be logged.
     """
@@ -260,7 +261,10 @@ class PsuChassisInfo(logger.Logger):
             name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
             presence = try_get(psu.get_presence)
             if not presence:
-                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name))
+                try:
+                    chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name))
+                except RuntimeError as e:
+                    self.log_error("Failed to delete PSU {} power info from DB: {}".format(name, e))
                 continue
 
             power_good = try_get(psu.get_powergood_status)
@@ -279,7 +283,10 @@ class PsuChassisInfo(logger.Logger):
             presence = try_get(power_consumer.get_presence)
             name = try_get(power_consumer.get_name, 'FAN-DRAWER {}'.format(index))
             if not presence:
-                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
+                try:
+                    chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
+                except RuntimeError as e:
+                    self.log_error("Failed to delete fan drawer {} power info from DB: {}".format(name, e))
                 continue
 
             fan_drawer_power = try_get(power_consumer.get_maximum_consumed_power, 0.0)
@@ -291,7 +298,10 @@ class PsuChassisInfo(logger.Logger):
             presence = try_get(power_consumer.get_presence)
             name = try_get(power_consumer.get_name, 'MODULE {}'.format(index))
             if not presence:
-                chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
+                try:
+                    chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_CONSUMER_FIELD.format(name))
+                except RuntimeError as e:
+                    self.log_error("Failed to delete module {} power info from DB: {}".format(name, e))
                 continue
 
             module_power = try_get(power_consumer.get_maximum_consumed_power, 0.0)
@@ -306,7 +316,10 @@ class PsuChassisInfo(logger.Logger):
         # Record in state DB in chassis table
         fvs[dict_index] = (CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD, str(self.total_supplied_power))
         fvs[dict_index + 1] = (CHASSIS_INFO_TOTAL_POWER_CONSUMED_FIELD, str(self.total_consumed_power))
-        chassis_tbl.set(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), fvs)
+        try:
+            chassis_tbl.set(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), fvs)
+        except RuntimeError as e:
+            self.log_error("Failed to update chassis power budget to DB: {}".format(e))
 
     def update_master_status(self):
         set_led = self.first_run
@@ -457,25 +470,41 @@ class DaemonPsud(daemon_base.DaemonBase):
                 sys.exit(PSUUTIL_LOAD_ERROR)
 
         # Connect to STATE_DB and create psu/chassis info tables
-        state_db = daemon_base.db_connect("STATE_DB")
-        self.chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        self.psu_tbl = swsscommon.Table(state_db, PSU_INFO_TABLE)
-        self.fan_tbl = swsscommon.Table(state_db, FAN_INFO_TABLE)
-        self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        try:
+            state_db = daemon_base.db_connect("STATE_DB")
+            self.chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+            self.psu_tbl = swsscommon.Table(state_db, PSU_INFO_TABLE)
+            self.fan_tbl = swsscommon.Table(state_db, FAN_INFO_TABLE)
+            self.phy_entity_tbl = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        except Exception as e:
+            self.log_error("Failed to connect to STATE_DB: {}".format(e))
+            sys.exit(PSU_DB_CONNECT_ERROR)
 
         # Post psu number info to STATE_DB
         self.num_psus = _wrapper_get_num_psus(self)
         fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_PSU_NUM_FIELD, str(self.num_psus))])
-        self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
+        try:
+            self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
+        except RuntimeError as e:
+            self.log_error("Failed to set PSU number to DB: {}".format(e))
 
     def __del__(self):
         # Delete all the information from DB and then exit
         for psu_index in range(1, self.num_psus + 1):
-            self.psu_tbl._del(get_psu_key(psu_index))
+            try:
+                self.psu_tbl._del(get_psu_key(psu_index))
+            except Exception as e:
+                self.log_error("Failed to delete PSU {} info from DB: {}".format(psu_index, e))
 
         if self.chassis_tbl is not None:
-            self.chassis_tbl._del(CHASSIS_INFO_KEY)
-            self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+            try:
+                self.chassis_tbl._del(CHASSIS_INFO_KEY)
+            except Exception as e:
+                self.log_error("Failed to delete chassis info from DB: {}".format(e))
+            try:
+                self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+            except Exception as e:
+                self.log_error("Failed to delete chassis power info from DB: {}".format(e))
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -671,7 +700,10 @@ class DaemonPsud(daemon_base.DaemonBase):
              (PSU_INFO_PRESENCE_FIELD, 'true' if _wrapper_get_psu_presence(self, index) else 'false'),
              (PSU_INFO_STATUS_FIELD, 'true' if _wrapper_get_psu_status(self, index) else 'false'),
              ])
-        self.psu_tbl.set(name, fvs)
+        try:
+            self.psu_tbl.set(name, fvs)
+        except RuntimeError as e:
+            self.log_error("Failed to update PSU {} info to DB: {}".format(name, e))
 
     def _update_psu_entity_info(self):
         if not platform_chassis:
@@ -689,7 +721,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             [('position_in_parent', str(position)),
              ('parent_name', CHASSIS_INFO_KEY),
              ])
-        self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
+        try:
+            self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
+        except RuntimeError as e:
+            self.log_error("Failed to update PSU {} entity info to DB: {}".format(psu_index, e))
 
     def _update_psu_fan_data(self, psu, psu_index):
         """
@@ -712,7 +747,10 @@ class DaemonPsud(daemon_base.DaemonBase):
                  (FAN_INFO_SPEED_FIELD, str(speed)),
                  (FAN_INFO_TIMESTAMP_FIELD, datetime.now().strftime('%Y%m%d %H:%M:%S'))
                  ])
-            self.fan_tbl.set(fan_name, fvs)
+            try:
+                self.fan_tbl.set(fan_name, fvs)
+            except RuntimeError as e:
+                self.log_error("Failed to update fan {} info to DB: {}".format(fan_name, e))
 
     def _set_psu_led(self, psu, psu_status):
         try:
@@ -729,7 +767,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             fvs = swsscommon.FieldValuePairs([
                 ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
             ])
-            self.psu_tbl.set(get_psu_key(index), fvs)
+            try:
+                self.psu_tbl.set(get_psu_key(index), fvs)
+            except RuntimeError as e:
+                self.log_error("Failed to update PSU {} LED status to DB: {}".format(get_psu_key(index), e))
             self._update_psu_fan_led_status(psu_status.psu, index)
 
     def _update_psu_fan_led_status(self, psu, psu_index):
@@ -740,7 +781,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             fvs = swsscommon.FieldValuePairs([
                 (FAN_INFO_LED_STATUS_FIELD, str(try_get(fan.get_status_led, NOT_AVAILABLE)))
             ])
-            self.fan_tbl.set(fan_name, fvs)
+            try:
+                self.fan_tbl.set(fan_name, fvs)
+            except RuntimeError as e:
+                self.log_error("Failed to update fan {} LED status to DB: {}".format(fan_name, e))
 
     def update_psu_chassis_info(self):
         if not platform_chassis:
