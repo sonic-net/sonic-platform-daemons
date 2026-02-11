@@ -305,21 +305,21 @@ class TestLiquidCoolingUpdater(object):
         """Test _refresh_leak_status when no sensors are leaking"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
         liquid_cooling_updater.table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = []
-        
+
         mock_try_get.side_effect = lambda func, default: func()
-        
+
         liquid_cooling_updater._refresh_leak_status()
-        
+
         assert liquid_cooling_updater.table.set.call_count == 2
         assert liquid_cooling_updater.log_error.call_count == 0
         assert liquid_cooling_updater.log_notice.call_count == 0
         assert len(liquid_cooling_updater.leaking_sensors) == 0
-        
+
         calls = liquid_cooling_updater.table.set.call_args_list
         for call in calls:
             sensor_name, fvp = call[0]
@@ -331,35 +331,35 @@ class TestLiquidCoolingUpdater(object):
         """Test _refresh_leak_status when one sensor is leaking"""
         mock_chassis = MockChassis()
         mock_chassis.get_liquid_cooling().make_sensor_leak(0)
-        
+
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
         liquid_cooling_updater.table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = []
-        
+
         mock_try_get.side_effect = lambda func, default: func()
-        
+
         liquid_cooling_updater._refresh_leak_status()
-        
+
         assert liquid_cooling_updater.table.set.call_count == 2
-        assert liquid_cooling_updater.log_error.call_count == 1  
-        assert len(liquid_cooling_updater.leaking_sensors) == 1  
-        assert "leakage1" in liquid_cooling_updater.leaking_sensors  
-        
+        assert liquid_cooling_updater.log_error.call_count == 1
+        assert len(liquid_cooling_updater.leaking_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+
         liquid_cooling_updater.log_error.assert_called_with(
             'Liquid cooling leakage sensor leakage1 reported leaking'
         )
-        
+
         calls = liquid_cooling_updater.table.set.call_args_list
         leak_statuses = {}
         for call in calls:
             sensor_name, fvp = call[0]
             leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
-        
-        assert leak_statuses["leakage1"] == "Yes"  
-        assert leak_statuses["leakage2"] == "No"   
+
+        assert leak_statuses["leakage1"] == "Yes"
+        assert leak_statuses["leakage2"] == "No"
 
 
     @mock.patch('thermalctld.try_get')
@@ -367,16 +367,16 @@ class TestLiquidCoolingUpdater(object):
         """Test _refresh_leak_status when a sensor recovers from leak"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
         liquid_cooling_updater.table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = ["leakage1"]
-        
+
         mock_try_get.side_effect = lambda func, default: func()
-        
+
         liquid_cooling_updater._refresh_leak_status()
-        
+
         assert liquid_cooling_updater.table.set.call_count == 2
         assert len(liquid_cooling_updater.leaking_sensors) == 0
 
@@ -386,38 +386,38 @@ class TestLiquidCoolingUpdater(object):
         mock_chassis = MockChassis()
 
         mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak = mock.MagicMock(return_value=None)
-        
+
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
         liquid_cooling_updater.table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = []
-        
+
         mock_try_get.side_effect = lambda func, default: func()
-        
+
         liquid_cooling_updater._refresh_leak_status()
-        
+
         assert liquid_cooling_updater.table.set.call_count == 2
-        
+
         calls = liquid_cooling_updater.table.set.call_args_list
         leak_statuses = {}
         for call in calls:
             sensor_name, fvp = call[0]
             leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
-        
-        assert leak_statuses["leakage1"] == "N/A"  
-        assert leak_statuses["leakage2"] == "No"   
+
+        assert leak_statuses["leakage1"] == "N/A"
+        assert leak_statuses["leakage2"] == "No"
 
     def test_run(self):
         """Test run method normal execution"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.task_worker = mock.MagicMock()
-        
+
         liquid_cooling_updater.run()
-        
+
         assert liquid_cooling_updater.thread_id is not None
         assert liquid_cooling_updater.task_worker.call_count == 1
         assert liquid_cooling_updater.exc is None
@@ -427,13 +427,13 @@ class TestLiquidCoolingUpdater(object):
         """Test run method exception handling"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         test_exception = Exception("Test exception for liquid cooling")
-        
+
         liquid_cooling_updater.task_worker = mock.MagicMock(side_effect=test_exception)
-        
+
         liquid_cooling_updater.run()
-        
+
         assert liquid_cooling_updater.thread_id is not None
         assert liquid_cooling_updater.task_worker.call_count == 1
         assert liquid_cooling_updater.exc is test_exception
@@ -444,28 +444,28 @@ class TestLiquidCoolingUpdater(object):
         """Test task_worker method logic"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_debug = mock.MagicMock()
         liquid_cooling_updater.update = mock.MagicMock()
-        
+
         stopping_event = threading.Event()
-        
+
         def side_effect_sleep(interval):
             stopping_event.set()
-        
+
         mock_sleep.side_effect = side_effect_sleep
-        
+
         liquid_cooling_updater.task_worker(stopping_event)
-        
+
         assert liquid_cooling_updater.log_debug.call_count == 2
         expected_calls = [
             mock.call("Start liquid cooling updating"),
             mock.call("End liquid cooling updating")
         ]
         liquid_cooling_updater.log_debug.assert_has_calls(expected_calls)
-        
+
         assert liquid_cooling_updater.update.call_count == 1
-        
+
         assert mock_sleep.call_count == 1
         mock_sleep.assert_called_with(0.5)
 
@@ -474,28 +474,28 @@ class TestLiquidCoolingUpdater(object):
         """Test task_worker method stops when task_stopping_event is set"""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
-        
+
         liquid_cooling_updater.log_debug = mock.MagicMock()
         liquid_cooling_updater.update = mock.MagicMock()
-        
+
         stopping_event = threading.Event()
-        
+
         def side_effect_update():
             liquid_cooling_updater.task_stopping_event.set()
-        
+
         liquid_cooling_updater.update.side_effect = side_effect_update
-        
+
         liquid_cooling_updater.task_worker(stopping_event)
-        
+
         assert liquid_cooling_updater.log_debug.call_count == 2
         expected_calls = [
             mock.call("Start liquid cooling updating"),
             mock.call("End liquid cooling updating")
         ]
         liquid_cooling_updater.log_debug.assert_has_calls(expected_calls)
-        
+
         assert liquid_cooling_updater.update.call_count == 1
-        
+
         assert mock_sleep.call_count == 0
 
 
@@ -763,6 +763,145 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0
 
+    def test_sfp_temperature_from_redis(self):
+        """Test reading SFP temperature from Redis tables"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._name = 'Ethernet0'
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper to return correct port mapping
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Mock the Redis tables to return temperature data
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0'),
+            ('templowwarning', '-5.0'),
+            ('temphighalarm', '75.0'),
+            ('templowalarm', '-10.0')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+
+        temperature_updater.update()
+
+        # Verify temperature was read from Redis
+        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
+        temperature_updater.xcvr_dom_threshold_tbl.get.assert_called_with('Ethernet0')
+
+    def test_sfp_temperature_fallback_to_dom_sensor(self):
+        """Test fallback to TRANSCEIVER_DOM_SENSOR table when DOM_TEMPERATURE is not available"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._name = 'Ethernet0'
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Mock DOM_TEMPERATURE table to return no data
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+
+        # Mock DOM_THRESHOLD table to return no data
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+
+        # Mock DOM_SENSOR table to return temperature data (fallback)
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [
+            ('temperature', '60.0'),
+            ('temphighwarning', '75.0'),
+            ('templowwarning', '-5.0'),
+            ('temphighalarm', '80.0'),
+            ('templowalarm', '-10.0')
+        ])
+
+        temperature_updater.update()
+
+        # Verify fallback to DOM_SENSOR table was called
+        temperature_updater.xcvr_dom_sensor_tbl.get.assert_called()
+
+    def test_sfp_temperature_no_sfp_util(self):
+        """Test that SFP temperature is skipped when SfpUtilHelper is not available"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Set sfp_util to None (simulating import failure)
+        temperature_updater.sfp_util = None
+
+        # Should not raise exception
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 0
+
+    def test_get_port_name_by_index(self):
+        """Test _get_port_name_by_index method"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0', 'Ethernet1']
+
+        # Test getting port name for index 0 (physical index 1)
+        port_name = temperature_updater._get_port_name_by_index(0)
+        assert port_name == 'Ethernet0'
+        temperature_updater.sfp_util.get_physical_to_logical.assert_called_with(1)
+
+        # Test with no mapping found
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = None
+        port_name = temperature_updater._get_port_name_by_index(5)
+        assert port_name is None
+
+        # Test with sfp_util not available
+        temperature_updater.sfp_util = None
+        port_name = temperature_updater._get_port_name_by_index(0)
+        assert port_name is None
+
+    def test_get_sfp_temperature_from_db(self):
+        """Test _get_sfp_temperature_from_db method"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the Redis tables
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+
+        # Test reading from DOM_TEMPERATURE table
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 55.5
+
+        # Test fallback to DOM_SENSOR table
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [('temperature', '60.0')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 60.0
+
+        # Test with N/A value
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == thermalctld.NOT_AVAILABLE
+
+        # Test with temperature value containing unit suffix
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 55.5
+
 
 # DPU chassis-related tests
 def test_dpu_chassis_thermals():
@@ -1023,14 +1162,14 @@ class TestThermalControlDaemon(object):
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
-            
+
             # ThermalControlDaemon should raise SystemExit with CHASSIS_GET_ERROR code when chassis initialization fails
             with pytest.raises(SystemExit) as exc_info:
                 daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
-            
+
             # Verify it exits with the correct error code
             assert exc_info.value.code == thermalctld.CHASSIS_GET_ERROR
-            
+
             # Verify chassis initialization failure was logged
             mock_log_error.assert_called()
             expected_msg = "Failed to get chassis due to Exception('Failed to initialize chassis')"
@@ -1048,16 +1187,16 @@ class TestThermalControlDaemon(object):
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.return_value = mock_chassis
             mock_platform_class.return_value = mock_platform_instance
-            
+
             daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
-            
+
             # Verify chassis was set correctly
             assert daemon_thermalctld.chassis is mock_chassis
-            
+
             # Verify no chassis initialization error was logged
             for call_args in mock_log_error.call_args_list:
                 args, _ = call_args
                 assert "Failed to get chassis due to" not in args[0]
-            
+
             # Clean up
             daemon_thermalctld.deinit()
