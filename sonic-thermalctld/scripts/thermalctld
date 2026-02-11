@@ -687,7 +687,7 @@ class TemperatureUpdater(logger.Logger):
         try:
             sfp_util = SfpUtilHelper()
             if multi_asic.is_multi_asic():
-                (platform_path, hwsku_path) = device_info.get_paths_to_platform_and_hwsku_dirs()
+                (_, hwsku_path) = device_info.get_paths_to_platform_and_hwsku_dirs()
                 sfp_util.read_all_porttab_mappings(hwsku_path, multi_asic.get_num_asics())
             else:
                 port_config_file_path = device_info.get_path_to_port_config_file()
