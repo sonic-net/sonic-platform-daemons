@@ -764,7 +764,7 @@ class TestTemperatureUpdater(object):
         assert len(temperature_updater.all_thermals) == 0
 
     def test_sfp_temperature_from_redis(self):
-        """Test reading SFP temperature from Redis tables"""
+        """Test reading SFP temperature from Redis tables and verify TEMPERATURE_INFO is populated correctly"""
         chassis = MockChassis()
         sfp = MockSfp()
         sfp._name = 'Ethernet0'
@@ -790,11 +790,62 @@ class TestTemperatureUpdater(object):
 
         temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
 
+        # Use a real Table object to capture the set() calls
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
         temperature_updater.update()
 
         # Verify temperature was read from Redis
         temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
         temperature_updater.xcvr_dom_threshold_tbl.get.assert_called_with('Ethernet0')
+
+        # Verify TEMPERATURE_INFO table was populated with correct values
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify parsed temperature value
+        assert stored_data['temperature'] == '55.5'
+        # Verify parsed threshold values
+        assert stored_data['high_threshold'] == '70.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '75.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
+        # Verify warning status (should be False since 55.5 is within thresholds)
+        assert stored_data['warning_status'] == 'False'
+        # Verify other expected fields exist
+        assert 'minimum_temperature' in stored_data
+        assert 'maximum_temperature' in stored_data
+        assert 'is_replaceable' in stored_data
+        assert 'timestamp' in stored_data
+
+    def test_sfp_temperature_warning_status(self):
+        """Test that warning_status is True when temperature exceeds high threshold"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Temperature exceeds high threshold (80 > 70)
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '80.0')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0'),
+            ('templowwarning', '-5.0')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+        assert stored_data['temperature'] == '80.0'
+        assert stored_data['warning_status'] == 'True'
 
     def test_sfp_temperature_fallback_to_dom_sensor(self):
         """Test fallback to TRANSCEIVER_DOM_SENSOR table when DOM_TEMPERATURE is not available"""
@@ -827,10 +878,25 @@ class TestTemperatureUpdater(object):
             ('templowalarm', '-10.0')
         ])
 
+        # Use a real Table object to capture the set() calls
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
         temperature_updater.update()
 
         # Verify fallback to DOM_SENSOR table was called
         temperature_updater.xcvr_dom_sensor_tbl.get.assert_called()
+
+        # Verify TEMPERATURE_INFO table was populated with fallback values
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify temperature from DOM_SENSOR fallback
+        assert stored_data['temperature'] == '60.0'
+        # Verify thresholds from DOM_SENSOR fallback
+        assert stored_data['high_threshold'] == '75.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '80.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
 
     def test_sfp_temperature_no_sfp_util(self):
         """Test that SFP temperature is skipped when SfpUtilHelper is not available"""
@@ -901,6 +967,78 @@ class TestTemperatureUpdater(object):
         temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == 55.5
+
+    def test_sfp_temperature_na_value(self):
+        """Test that N/A temperature is stored correctly in TEMPERATURE_INFO"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Return N/A temperature
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify N/A temperature is stored correctly
+        assert stored_data['temperature'] == 'N/A'
+        # Verify thresholds are also N/A when not available
+        assert stored_data['high_threshold'] == 'N/A'
+        assert stored_data['low_threshold'] == 'N/A'
+        # Warning status should be False when temperature is N/A
+        assert stored_data['warning_status'] == 'False'
+
+    def test_sfp_temperature_with_unit_suffix(self):
+        """Test parsing temperature values with unit suffix (e.g., '55.5 C')"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Temperature with unit suffix
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+
+        # Thresholds with unit suffix
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0 C'),
+            ('templowwarning', '-5.0 C'),
+            ('temphighalarm', '75.0 C'),
+            ('templowalarm', '-10.0 C')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify unit suffix is stripped from values
+        assert stored_data['temperature'] == '55.5'
+        assert stored_data['high_threshold'] == '70.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '75.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
 
 
 # DPU chassis-related tests
