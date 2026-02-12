@@ -41,12 +41,12 @@ NOT_AVAILABLE = 'N/A'
 # Helper functions =============================================================
 #
 
-# try get information from platform API and return a default value if caught NotImplementedError
+# try get information from platform API and return a default value if caught NotImplementedError or TimeoutError
 
 
 def try_get(callback, *args, **kwargs):
     """
-    Handy function to invoke the callback and catch NotImplementedError
+    Handy function to invoke the callback and catch NotImplementedError or TimeoutError
     :param callback: Callback to be invoked
     :param args: Arguments to be passed to callback
     :param kwargs: Default return value if exception occur
@@ -57,7 +57,7 @@ def try_get(callback, *args, **kwargs):
         ret = callback(*args)
         if ret is None:
             ret = default
-    except NotImplementedError:
+    except (NotImplementedError, TimeoutError):
         ret = default
 
     return ret
