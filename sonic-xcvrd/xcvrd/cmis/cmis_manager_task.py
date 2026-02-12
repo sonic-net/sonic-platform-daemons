@@ -897,7 +897,7 @@ class CmisManagerTask(threading.Thread):
         port_info = self.port_dict[lport]
         api = port_info.get('api')
         host_lanes_mask = port_info.get('host_lanes_mask', 0)
-        media_lanes_mask = port_info.get('media_lanes_mask', 0)
+        media_lanes_mask = port_info['media_lanes_mask']
         retries = port_info.get('cmis_retries', 0)
 
         # D.2.2 Software Deinitialization
