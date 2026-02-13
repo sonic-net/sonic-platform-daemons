@@ -60,6 +60,7 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.platform_chassis = platform_chassis
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self._is_fast_reboot_enabled = None
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -69,6 +70,12 @@ class CmisManagerTask(threading.Thread):
 
     def log_error(self, message):
         helper_logger.log_error(message)
+
+    def is_fast_reboot_enabled(self):
+        """Check if fast reboot is enabled, caching the result"""
+        if self._is_fast_reboot_enabled is None:
+            self._is_fast_reboot_enabled = common.is_fast_reboot_enabled()
+        return self._is_fast_reboot_enabled
 
     def get_asic_id(self, lport):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
@@ -731,7 +738,7 @@ class CmisManagerTask(threading.Thread):
         speed = port_info.get('speed')
         subport = port_info.get('subport')
         appl = port_info.get('appl', 0)
-        is_fast_reboot = common.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled()
 
         self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, speed)
         if self.port_dict[lport]['appl'] is None:
@@ -927,7 +934,7 @@ class CmisManagerTask(threading.Thread):
         subport = port_info.get('subport')
         pport = port_info.get('pport')
         sfp = port_info.get('sfp')
-        is_fast_reboot = common.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled()
 
         # CMIS expiration and retries
         #
