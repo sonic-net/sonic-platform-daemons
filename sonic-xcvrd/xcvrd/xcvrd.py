@@ -311,7 +311,11 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        is_warm_start = common.is_syncd_warm_restore_complete()
+        # Pre-fetch warm start status for all namespaces/ASICs
+        warm_start_status = {}
+        for namespace in self.namespaces:
+            warm_start_status[namespace] = common.is_syncd_warm_restore_complete(namespace)
+
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -323,6 +327,11 @@ class SfpStateUpdateTask(threading.Thread):
             if asic_index is None:
                 helper_logger.log_warning("Got invalid asic index for {}, ignored while posting SFP info during boot-up".format(logical_port_name))
                 continue
+
+            # Get warm start status for this ASIC's namespace
+            namespace = common.get_namespace_from_asic_id(asic_index)
+            is_warm_start = warm_start_status.get(namespace, False)
+
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
                 if is_warm_start == False:
@@ -1071,7 +1080,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     def deinit(self):
         self.log_info("Start daemon deinit...")
 
-        is_warm_fast_reboot = common.is_syncd_warm_restore_complete() or common.is_fast_reboot_enabled()
+        # Pre-fetch warm/fast reboot status for all namespaces/ASICs
+        is_fast_reboot = common.is_fast_reboot_enabled()
+        warm_fast_reboot_status = {}
+        for namespace in self.namespaces:
+            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or is_fast_reboot
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
@@ -1082,6 +1095,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             if asic_index is None:
                 helper_logger.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
                 continue
+
+            # Get warm/fast reboot status for this ASIC's namespace
+            namespace = common.get_namespace_from_asic_id(asic_index)
+            is_warm_fast_reboot = warm_fast_reboot_status.get(namespace, False)
 
             # Skip deleting intf_tbl for avoiding OA to trigger Tx disable signal
             # due to TRANSCEIVER_INFO table deletion during xcvrd shutdown/crash
