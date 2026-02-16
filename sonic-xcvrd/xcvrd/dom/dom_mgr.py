@@ -351,32 +351,45 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                         self.log_warning("Got exception {} while processing transceiver status hw flags for "
                                          "port {}, ignored".format(repr(e), logical_port_name))
                         continue
-                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port) and (not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)):
-                        # Freeze VDM stats before reading VDM values
-                        with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
-                            if not vdm_frozen:
-                                self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
-                                continue
-                            try:
-                                # Read and post VDM real values to DB
-                                self.vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
-                            except (KeyError, TypeError) as e:
-                                #continue to process next port since execption could be raised due to port reset, transceiver removal
-                                self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
-                                continue
-                            try:
-                                # Read and post VDM flags and metadata to DB
-                                self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
-                            except (KeyError, TypeError) as e:
-                                #continue to process next port since execption could be raised due to port reset, transceiver removal
-                                self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
-                                continue
-                            try:
-                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
-                            except (KeyError, TypeError) as e:
-                                #continue to process next port since execption could be raised due to port reset, transceiver removal
-                                self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
-                                continue
+                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                        # Step (a): If statistic observables are supported or coherent module,
+                        #           and not in LPMODE, freeze VDM, capture statistic
+                        #           observables and PM info, then unfreeze VDM.
+                        vdm_statistic_values = {}
+                        need_freeze = (self.vdm_utils.is_vdm_statistic_supported(physical_port) or
+                                       self.vdm_utils.is_coherent_module(physical_port)) and \
+                                       not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)
+                        if need_freeze:
+                            with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
+                                if not vdm_frozen:
+                                    self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
+                                else:
+                                    try:
+                                        if self.vdm_utils.is_vdm_statistic_supported(physical_port):
+                                            vdm_statistic_values = self.vdm_utils.get_vdm_real_values_statistic(physical_port) or {}
+                                    except (KeyError, TypeError) as e:
+                                        self.log_warning("Got exception {} while processing vdm statistic values for port {}, ignored".format(repr(e), logical_port_name))
+                                    try:
+                                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
+                                    except (KeyError, TypeError) as e:
+                                        self.log_warning("Got exception {} while processing pm info for port {}, ignored".format(repr(e), logical_port_name))
+
+                        # Step (b): Capture basic observables, merge with statistic
+                        #           observables, and post to DB
+                        try:
+                            vdm_basic_values = self.vdm_utils.get_vdm_real_values_basic(physical_port) or {}
+                            vdm_merged_values = {**vdm_basic_values, **vdm_statistic_values}
+                            self.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_merged_values)
+                        except (KeyError, TypeError) as e:
+                            self.log_warning("Got exception {} while processing vdm values for port {}, ignored".format(repr(e), logical_port_name))
+
+                        # Step (c): Update VDM flags to DB.
+                        #           Flags are COR (Clear On Read), so read them last
+                        #           to capture the most recent state.
+                        try:
+                            self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
+                        except (KeyError, TypeError) as e:
+                            self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
 
             # Set the periodic db update time after all the ports are processed
             if is_periodic_db_update_needed:
