@@ -181,6 +181,9 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_tx_turnoff_duration_secs(self, api):
         return api.get_datapath_tx_turnoff_duration()/1000
 
+    def get_cmis_dp_tx_turnon_duration_secs(self, api):
+        return api.get_datapath_tx_turnon_duration()/1000
+
     def get_cmis_module_power_up_duration_secs(self, api):
         return api.get_module_pwr_up_duration()/1000
 
@@ -1058,6 +1061,16 @@ class CmisManagerTask(threading.Thread):
                 media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                 api.tx_disable_channel(media_lanes_mask, False)
                 self.log_notice("{}: Turning ON tx power".format(lport))
+
+                # Arm timer for DP_ACTIVATE state using max(dpInitDuration, dpTxTurnOnDuration)
+                # for backward compatibility with older modules that may not properly
+                # populate DPTxTurnOnDuration
+                dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
+                dpTxTurnOnDuration = self.get_cmis_dp_tx_turnon_duration_secs(api)
+                dpActivateDuration = max(dpInitDuration, dpTxTurnOnDuration)
+                self.log_notice("{}: DpActivate duration {} secs, DpTxTurnOn duration {} secs".format(
+                    lport, dpActivateDuration, dpTxTurnOnDuration))
+                self.update_cmis_state_expiration_time(lport, dpActivateDuration)
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_ACTIVATE)
             elif state == CMIS_STATE_DP_ACTIVATE:
                 # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
