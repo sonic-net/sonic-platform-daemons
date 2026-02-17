@@ -4527,18 +4527,25 @@ class TestXcvrdScript(object):
 
         # Case 4: Module supports both VDM statistics AND is a coherent module
         # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
-        task4 = copy.deepcopy(task3)
-        # Ensure flags reflect support for statistics and coherent module behavior
-        setattr(task4, "is_vdm_statistic_supported", True)
-        setattr(task4, "is_coherent_module", True)
-        # Reconfigure mocks for the new scenario to have independent call counts and return values
+        task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task4.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task4.port_mapping.logical_port_list = ['Ethernet0']
+        task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task4.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task4.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task4.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task4.dom_db_utils = MagicMock()
+        task4.status_db_utils = MagicMock()
+        task4.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task4.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task4.vdm_utils.is_coherent_module = MagicMock(return_value=True)
         task4.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
         task4.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
         task4.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task4.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task4.vdm_db_utils = MagicMock()
-        task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db = MagicMock()
-        task4.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
         task4.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task4.task_worker()
         # Verify: Freeze happened, both basic and statistic values captured, and PM called
