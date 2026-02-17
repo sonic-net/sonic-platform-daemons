@@ -1083,6 +1083,8 @@ class TestXcvrdScript(object):
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         stop_event = threading.Event()
         mock_sfp_obj_dict = {0 : MagicMock()}
+        mock_sfp_obj_dict[0].get_presence.return_value = True
+        mock_sfp_obj_dict[0].get_xcvr_api.return_value.is_flat_memory.return_value = False
 
         vdm_db_utils = VDMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, helper_logger)
         diagnostic_tbl = Table("STATE_DB", TRANSCEIVER_VDM_REAL_VALUE_TABLE)

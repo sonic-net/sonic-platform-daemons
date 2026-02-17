@@ -33,6 +33,11 @@ class VDMDBUtils(DBUtils):
             logical_port_name (str): Logical port name.
             vdm_real_values_dict (dict): Pre-merged VDM real values dictionary.
         """
+        # This function is called mainly to perform basic validation of the port
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check=True)
+        if physical_port is None:
+            return
+
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
             self.logger.log_error(f"Post port vdm real values from dict to db failed for {logical_port_name} "

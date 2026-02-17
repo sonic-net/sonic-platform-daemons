@@ -29,20 +29,20 @@ class VDMUtils:
     def is_coherent_module(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].is_coherent_module()
-        except (NotImplementedError):
+        except (NotImplementedError, AttributeError):
             return False
 
     def get_vdm_real_values_basic(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value_basic()
-        except (NotImplementedError):
+        except (NotImplementedError, AttributeError):
             self.logger.log_error(f"Failed to get VDM basic real values for port {physical_port}")
             return {}
 
     def get_vdm_real_values_statistic(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value_statistic()
-        except (NotImplementedError):
+        except (NotImplementedError, AttributeError):
             self.logger.log_error(f"Failed to get VDM statistic real values for port {physical_port}")
             return {}
 
