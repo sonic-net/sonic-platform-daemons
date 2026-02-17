@@ -4524,7 +4524,32 @@ class TestXcvrdScript(object):
         assert task3.vdm_utils.get_vdm_real_values_basic.call_count == 1
         assert task3.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task3.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
-        assert mock_post_pm_info.call_count == 1  # PM captured for coherent module
+
+        # Case 4: Module supports both VDM statistics AND is a coherent module
+        # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
+        task4 = copy.deepcopy(task3)
+        # Ensure flags reflect support for statistics and coherent module behavior
+        setattr(task4, "is_vdm_statistic_supported", True)
+        setattr(task4, "is_coherent_module", True)
+        # Reconfigure mocks for the new scenario to have independent call counts and return values
+        task4.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task4.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
+        task4.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_db_utils = MagicMock()
+        task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db = MagicMock()
+        task4.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
+        task4.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        task4.task_worker()
+        # Verify: Freeze happened, both basic and statistic values captured, and PM called
+        assert task4.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_statistic.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        # PM should have been captured for both coherent-only and coherent+statistics cases
+        assert mock_post_pm_info.call_count == 2
 
     @pytest.mark.parametrize(
         "physical_port, logical_port_list, asic_index, transceiver_presence, port_in_error_status, vdm_supported, expected_logs",
@@ -5062,7 +5087,7 @@ class TestXcvrdScript(object):
         mock_sfp.is_vdm_statistic_supported.side_effect = NotImplementedError
         assert vdm_utils.is_vdm_statistic_supported(1) == False
 
-       mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
+        mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
         assert vdm_utils.is_vdm_statistic_supported(1) == False
 
     def test_is_coherent_module(self):
