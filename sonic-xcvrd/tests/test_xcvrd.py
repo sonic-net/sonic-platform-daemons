@@ -5101,6 +5101,9 @@ class TestXcvrdScript(object):
         mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = NotImplementedError
         assert vdm_utils.get_vdm_real_values_statistic(1) == {}
 
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
     def test_get_vdm_flags(self):
         mock_sfp = MagicMock()
         vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
