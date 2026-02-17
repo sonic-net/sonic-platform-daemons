@@ -23,7 +23,7 @@ class VDMUtils:
     def is_vdm_statistic_supported(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].is_vdm_statistic_supported()
-        except (NotImplementedError):
+        except (NotImplementedError, AttributeError):
             return False
 
     def is_coherent_module(self, physical_port):

@@ -5062,6 +5062,9 @@ class TestXcvrdScript(object):
         mock_sfp.is_vdm_statistic_supported.side_effect = NotImplementedError
         assert vdm_utils.is_vdm_statistic_supported(1) == False
 
+       mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
+
     def test_is_coherent_module(self):
         mock_sfp = MagicMock()
         vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
@@ -5073,6 +5076,9 @@ class TestXcvrdScript(object):
         assert vdm_utils.is_coherent_module(1) == False
 
         mock_sfp.is_coherent_module.side_effect = NotImplementedError
+        assert vdm_utils.is_coherent_module(1) == False
+
+        mock_sfp.is_coherent_module.side_effect = AttributeError
         assert vdm_utils.is_coherent_module(1) == False
 
     def test_get_vdm_real_values_basic(self):
@@ -5088,6 +5094,9 @@ class TestXcvrdScript(object):
         mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = NotImplementedError
         assert vdm_utils.get_vdm_real_values_basic(1) == {}
 
+        mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
     def test_get_vdm_real_values_statistic(self):
         mock_sfp = MagicMock()
         vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
@@ -5099,6 +5108,9 @@ class TestXcvrdScript(object):
         assert vdm_utils.get_vdm_real_values_statistic(1) == {}
 
         mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = NotImplementedError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = AttributeError
         assert vdm_utils.get_vdm_real_values_statistic(1) == {}
 
         mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = AttributeError
