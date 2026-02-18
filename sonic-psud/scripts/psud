@@ -191,7 +191,13 @@ def get_psu_key(psu_index):
 # try get information from platform API and return a default value if we catch NotImplementedError
 def try_get(callback, default=None):
     """
-    Handy function to invoke the callback and catch NotImplementedError
+    Handy function to invoke the callback and catch any exceptions.
+
+    Note: Exceptions are handled silently to prioritize daemon stability over observability.
+    This function is used for non-critical status reads (e.g., temperature, serial number).
+    For critical operations requiring error visibility, use dedicated wrapper functions
+    like _wrapper_get_psu_presence() which log exceptions before returning defaults.
+
     :param callback: Callback to be invoked
     :param default: Default return value if exception occur
     :return: Default return value if exception occur else return value of the callback
