@@ -1006,65 +1006,53 @@ class TestXcvrdScript(object):
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size_for_key(logical_port_name) == 9
 
-    def test_post_port_vdm_real_values_to_db(self):
-        def mock_get_transceiver_diagnostic_values(physical_port):
-            return {
-                f'laser_temperature_media{i}': 38 if i <= 4 else 'N/A' for i in range(1, 9)
-            } | {
-                f'esnr_media_input{i}': 23.1171875 for i in range(1, 9)
-            }
-
+    def test_post_port_vdm_real_values_from_dict_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         port_mapping.get_logical_to_physical = MagicMock(return_value=[0])
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         stop_event = threading.Event()
         mock_sfp_obj_dict = {0 : MagicMock()}
+        mock_sfp_obj_dict[0].get_presence.return_value = True
+        mock_sfp_obj_dict[0].get_xcvr_api.return_value.is_flat_memory.return_value = False
 
         vdm_db_utils = VDMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, helper_logger)
-        vdm_db_utils.vdm_utils = MagicMock()  # Ensure vdm_utils is a mock object
-        vdm_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=False)
-        vdm_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
         diagnostic_tbl = Table("STATE_DB", TRANSCEIVER_VDM_REAL_VALUE_TABLE)
         vdm_db_utils.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=diagnostic_tbl)
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(return_value=None)
         assert diagnostic_tbl.get_size() == 0
 
-        # Ensure table is empty asic_index is None
+        # Ensure table is empty if asic_index is None
         port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
+        vdm_real_values = {
+            f'laser_temperature_media{i}': 38 if i <= 4 else 'N/A' for i in range(1, 9)
+        } | {
+            f'esnr_media_input{i}': 23.1171875 for i in range(1, 9)
+        }
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values)
         assert diagnostic_tbl.get_size() == 0
 
         # Set asic_index to 0
         port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
 
-        # Ensure table is empty if stop_event is set
-        stop_event.set()
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
-        assert diagnostic_tbl.get_size() == 0
-        stop_event.clear()
-
-        # Ensure table is empty if transceiver is not present
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
-        assert diagnostic_tbl.get_size() == 0
-        vdm_db_utils.return_value = True
-
-        # Ensure table is empty if get_values_func returns None
-        vdm_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=True)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
+        # Ensure table is empty if vdm_real_values_dict is None
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, None)
         assert diagnostic_tbl.get_size() == 0
 
-        # Ensure table is populated if get_values_func returns valid values
-        db_cache = {}
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(side_effect=mock_get_transceiver_diagnostic_values)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache=db_cache)
+        # Ensure table is empty if vdm_real_values_dict is empty
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, {})
+        assert diagnostic_tbl.get_size() == 0
+
+        # Ensure table is populated if vdm_real_values_dict has valid values
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values)
         assert diagnostic_tbl.get_size_for_key(logical_port_name) == 17
 
-        # Ensure db_cache is populated correctly
-        assert db_cache.get(0) is not None
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(return_value=None)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache)
-        assert diagnostic_tbl.get_size_for_key(logical_port_name) == 17
+        # Ensure table is updated with new values
+        vdm_real_values_updated = {
+            'laser_temperature_media1': 40,
+            'esnr_media_input1': 25.0
+        }
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values_updated)
+        assert diagnostic_tbl.get_size_for_key(logical_port_name) == 3
 
     def test_post_port_transceiver_hw_status_to_db(self):
         def mock_get_transceiver_status(physical_port):
@@ -4205,7 +4193,6 @@ class TestXcvrdScript(object):
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.vdm_db_utils = MagicMock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
         assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
@@ -4216,7 +4203,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_flags_to_db.call_count == 0
         assert task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count == 0
         assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count == 0
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 0
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
         assert mock_post_pm_info.call_count == 0
         mock_detect_error.return_value = False
@@ -4231,7 +4218,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_flags_to_db.call_count == 1
         assert task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count == 1
         assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
@@ -4265,21 +4252,26 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_to_db = MagicMock()
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
         task.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=False)
         task.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
-        task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
         task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.task_worker()
+        # Freeze failed, so unfreeze is still called (context manager), no statistic values or PM captured.
+        # But step (b) basic values and step (c) flags still run (no continue on freeze failure).
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
-        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 0
 
         # clear the call count
         task.vdm_utils._freeze_vdm_stats_and_confirm.reset_mock()
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.reset_mock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.reset_mock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.reset_mock()
         task.vdm_db_utils.post_port_vdm_flags_to_db.reset_mock()
         mock_post_pm_info.reset_mock()
 
@@ -4290,27 +4282,159 @@ class TestXcvrdScript(object):
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
         # clear the call count
         task.vdm_utils._freeze_vdm_stats_and_confirm.reset_mock()
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.reset_mock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.reset_mock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.reset_mock()
         task.vdm_db_utils.post_port_vdm_flags_to_db.reset_mock()
         mock_post_pm_info.reset_mock()
 
-        # mock_post_diagnostic_value raises an exception
+        # post_port_vdm_real_values_from_dict_to_db raises an exception in step (b).
+        # Step (c) COR flags still run (no continue), and PM already ran in step (a).
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = True
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.side_effect = TypeError
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.side_effect = TypeError
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 1
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    def test_DomInfoUpdateTask_task_worker_vdm_freeze_conditions(self, mock_post_pm_info):
+        """Test various need_freeze condition combinations"""
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        
+        # Test Case 1: Basic-only VDM module (no statistics, not coherent)
+        # Expected: Skip freeze, only basic + flags, no PM
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.port_mapping.logical_port_list = ['Ethernet0']
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task.dom_db_utils = MagicMock()
+        task.status_db_utils = MagicMock()
+        task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
+        task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task.vdm_db_utils = MagicMock()
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        
+        task.task_worker()
+        
+        # Verify: No freeze, no PM, but basic values + flags posted
+        assert task.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 0
+        
+        # Test Case 2: Module in LPMODE (statistics supported but lpmode=True)
+        # Expected: Skip freeze, only basic + flags, no PM
+        mock_post_pm_info.reset_mock()
+        task2 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task2.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task2.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task2.port_mapping.logical_port_list = ['Ethernet0']
+        task2.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task2.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task2.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task2.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task2.dom_db_utils = MagicMock()
+        task2.status_db_utils = MagicMock()
+        task2.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task2.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task2.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task2.vdm_db_utils = MagicMock()
+        task2.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=True)
+        
+        task2.task_worker()
+        
+        # Verify: No freeze due to lpmode, only basic values + flags posted
+        assert task2.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task2.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task2.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 0
+        
+        # Test Case 3: VDM supported but no statistic support
+        # Expected: No freeze, only basic + flags, no PM
+        mock_post_pm_info.reset_mock()
+        task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task3.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task3.port_mapping.logical_port_list = ['Ethernet0']
+        task3.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task3.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task3.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task3.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task3.dom_db_utils = MagicMock()
+        task3.status_db_utils = MagicMock()
+        task3.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task3.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
+        task3.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task3.vdm_db_utils = MagicMock()
+        task3.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        
+        task3.task_worker()
+        
+        # Verify: No freeze (no statistics support), only basic + flags
+        assert task3.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task3.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task3.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 0
+
+        # Case 4: Module supports both VDM statistics AND is a coherent module
+        # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
+        task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task4.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task4.port_mapping.logical_port_list = ['Ethernet0']
+        task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task4.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task4.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task4.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task4.dom_db_utils = MagicMock()
+        task4.status_db_utils = MagicMock()
+        task4.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task4.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task4.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task4.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
+        task4.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_db_utils = MagicMock()
+        task4.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        task4.task_worker()
+        # Verify: Freeze happened, both basic and statistic values captured, and PM called
+        assert task4.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_statistic.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        # PM should have been captured only for Case 4 (statistics supported)
+        assert mock_post_pm_info.call_count == 1
 
     @pytest.mark.parametrize(
         "physical_port, logical_port_list, asic_index, transceiver_presence, port_in_error_status, vdm_supported, expected_logs",
@@ -4835,18 +4959,53 @@ class TestXcvrdScript(object):
         mock_sfp.get_transceiver_vdm_thresholds.side_effect = NotImplementedError
         assert vdm_utils.get_vdm_thresholds(1) == {}
 
-    def test_get_vdm_real_values(self):
+    def test_is_vdm_statistic_supported(self):
         mock_sfp = MagicMock()
         vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
 
-        mock_sfp.get_transceiver_vdm_real_value.return_value = True
-        assert vdm_utils.get_vdm_real_values(1)
+        mock_sfp.is_vdm_statistic_supported.return_value = True
+        assert vdm_utils.is_vdm_statistic_supported(1) == True
 
-        mock_sfp.get_transceiver_vdm_real_value.return_value = {}
-        assert vdm_utils.get_vdm_real_values(1) == {}
+        mock_sfp.is_vdm_statistic_supported.return_value = False
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
 
-        mock_sfp.get_transceiver_vdm_real_value.side_effect = NotImplementedError
-        assert vdm_utils.get_vdm_real_values(1) == {}
+        mock_sfp.is_vdm_statistic_supported.side_effect = NotImplementedError
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
+
+        mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
+
+    def test_get_vdm_real_values_basic(self):
+        mock_sfp = MagicMock()
+        vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.return_value = {'basic_key': 'basic_value'}
+        assert vdm_utils.get_vdm_real_values_basic(1) == {'basic_key': 'basic_value'}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.return_value = {}
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = NotImplementedError
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+    def test_get_vdm_real_values_statistic(self):
+        mock_sfp = MagicMock()
+        vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.return_value = {'stat_key': 'stat_value'}
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {'stat_key': 'stat_value'}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.return_value = {}
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = NotImplementedError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
 
     def test_get_vdm_flags(self):
         mock_sfp = MagicMock()
