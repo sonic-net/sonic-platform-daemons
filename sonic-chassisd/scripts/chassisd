@@ -1437,6 +1437,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start configuration manager task
         if self.smartswitch:
+            self.set_initial_dpu_admin_state()
             config_manager = SmartSwitchConfigManagerTask()
             config_manager.task_run()
         elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
@@ -1447,10 +1448,6 @@ class ChassisdDaemon(daemon_base.DaemonBase):
 
         # Start main loop
         self.log_info("Start daemon main loop")
-
-        # Set the initial DPU admin state for SmartSwitch
-        if self.smartswitch:
-            self.set_initial_dpu_admin_state()
 
         while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
             self.module_updater.module_db_update()
