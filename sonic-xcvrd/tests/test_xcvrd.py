@@ -4365,7 +4365,6 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
-        task.vdm_utils.is_coherent_module = MagicMock(return_value=False)
         task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
         task.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
         task.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=False)
@@ -4449,7 +4448,6 @@ class TestXcvrdScript(object):
         task.status_db_utils = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
-        task.vdm_utils.is_coherent_module = MagicMock(return_value=False)
         task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
         task.vdm_db_utils = MagicMock()
         task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
@@ -4478,7 +4476,6 @@ class TestXcvrdScript(object):
         task2.status_db_utils = MagicMock()
         task2.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task2.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
-        task2.vdm_utils.is_coherent_module = MagicMock(return_value=False)
         task2.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
         task2.vdm_db_utils = MagicMock()
         task2.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=True)
@@ -4491,8 +4488,8 @@ class TestXcvrdScript(object):
         assert task2.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 0
         
-        # Test Case 3: Coherent module without statistic support
-        # Expected: Freeze happens, PM captured, but vdm_statistic_values empty
+        # Test Case 3: VDM supported but no statistic support
+        # Expected: No freeze, only basic + flags, no PM
         mock_post_pm_info.reset_mock()
         task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
@@ -4507,23 +4504,17 @@ class TestXcvrdScript(object):
         task3.status_db_utils = MagicMock()
         task3.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task3.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
-        task3.vdm_utils.is_coherent_module = MagicMock(return_value=True)
         task3.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
-        task3.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={})
-        task3.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
-        task3.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
         task3.vdm_db_utils = MagicMock()
         task3.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         
         task3.task_worker()
         
-        # Verify: Freeze happened, PM called, but no statistic values captured
-        assert task3.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
-        assert task3.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task3.vdm_utils.get_vdm_real_values_statistic.call_count == 0  # Not called because is_vdm_statistic_supported=False
+        # Verify: No freeze (no statistics support), only basic + flags
         assert task3.vdm_utils.get_vdm_real_values_basic.call_count == 1
         assert task3.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task3.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 0
 
         # Case 4: Module supports both VDM statistics AND is a coherent module
         # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
@@ -4540,7 +4531,6 @@ class TestXcvrdScript(object):
         task4.status_db_utils = MagicMock()
         task4.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task4.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
-        task4.vdm_utils.is_coherent_module = MagicMock(return_value=True)
         task4.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
         task4.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
         task4.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
@@ -4555,8 +4545,8 @@ class TestXcvrdScript(object):
         assert task4.vdm_utils.get_vdm_real_values_statistic.call_count == 1
         assert task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task4.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
-        # PM should have been captured for both coherent-only and coherent+statistics cases
-        assert mock_post_pm_info.call_count == 2
+        # PM should have been captured only for Case 4 (statistics supported)
+        assert mock_post_pm_info.call_count == 1
 
     @pytest.mark.parametrize(
         "physical_port, logical_port_list, asic_index, transceiver_presence, port_in_error_status, vdm_supported, expected_logs",
@@ -5096,22 +5086,6 @@ class TestXcvrdScript(object):
 
         mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
         assert vdm_utils.is_vdm_statistic_supported(1) == False
-
-    def test_is_coherent_module(self):
-        mock_sfp = MagicMock()
-        vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
-
-        mock_sfp.is_coherent_module.return_value = True
-        assert vdm_utils.is_coherent_module(1) == True
-
-        mock_sfp.is_coherent_module.return_value = False
-        assert vdm_utils.is_coherent_module(1) == False
-
-        mock_sfp.is_coherent_module.side_effect = NotImplementedError
-        assert vdm_utils.is_coherent_module(1) == False
-
-        mock_sfp.is_coherent_module.side_effect = AttributeError
-        assert vdm_utils.is_coherent_module(1) == False
 
     def test_get_vdm_real_values_basic(self):
         mock_sfp = MagicMock()

@@ -26,12 +26,6 @@ class VDMUtils:
         except (NotImplementedError, AttributeError):
             return False
 
-    def is_coherent_module(self, physical_port):
-        try:
-            return self.sfp_obj_dict[physical_port].is_coherent_module()
-        except (NotImplementedError, AttributeError):
-            return False
-
     def get_vdm_real_values_basic(self, physical_port):
         try:
             return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value_basic()
