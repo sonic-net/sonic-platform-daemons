@@ -60,6 +60,7 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.platform_chassis = platform_chassis
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self._is_fast_reboot_enabled = None
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -69,6 +70,12 @@ class CmisManagerTask(threading.Thread):
 
     def log_error(self, message):
         helper_logger.log_error(message)
+
+    def is_fast_reboot_enabled(self):
+        """Check if fast reboot is enabled, caching the result"""
+        if self._is_fast_reboot_enabled is None:
+            self._is_fast_reboot_enabled = common.is_fast_reboot_enabled()
+        return self._is_fast_reboot_enabled
 
     def get_asic_id(self, lport):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
@@ -731,7 +738,7 @@ class CmisManagerTask(threading.Thread):
         speed = port_info.get('speed')
         subport = port_info.get('subport')
         appl = port_info.get('appl', 0)
-        is_fast_reboot = common.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled()
 
         self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, speed)
         if self.port_dict[lport]['appl'] is None:
@@ -883,6 +890,41 @@ class CmisManagerTask(threading.Thread):
         self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT)
         return True
 
+    def handle_cmis_dp_deinit_state(self, lport):
+        """
+        Handle the CMIS_STATE_DP_DEINIT state for a logical port.
+
+        Args:
+            lport: Logical port name
+
+        Returns:
+            Boolean: True if state machine should continue to next state,
+                     False if processing should stop (return from caller)
+        """
+        port_info = self.port_dict[lport]
+        api = port_info.get('api')
+        host_lanes_mask = port_info.get('host_lanes_mask', 0)
+        media_lanes_mask = port_info['media_lanes_mask']
+        retries = port_info.get('cmis_retries', 0)
+
+        # D.2.2 Software Deinitialization
+        api.set_datapath_deinit(host_lanes_mask)
+
+        # D.1.3 Software Configuration and Initialization
+        if not api.tx_disable_channel(media_lanes_mask, True):
+            self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
+            self.port_dict[lport]['cmis_retries'] = retries + 1
+            return False
+
+        # Sets module to high power mode and doesn't impact datapath if module is already in high power mode
+        api.set_lpmode(False, wait_state_change=False)
+        self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_AP_CONF)
+        dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
+        modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
+        self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
+        self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
+        return True
+
     def process_cmis_state_machine(self, lport):
         port_info = self.port_dict[lport]
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
@@ -892,7 +934,7 @@ class CmisManagerTask(threading.Thread):
         subport = port_info.get('subport')
         pport = port_info.get('pport')
         sfp = port_info.get('sfp')
-        is_fast_reboot = common.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled()
 
         # CMIS expiration and retries
         #
@@ -929,24 +971,8 @@ class CmisManagerTask(threading.Thread):
                 if not self.handle_cmis_dp_pre_init_check_state(lport):
                     return
             elif state == CMIS_STATE_DP_DEINIT:
-                # D.2.2 Software Deinitialization
-                api.set_datapath_deinit(host_lanes_mask)
-
-                # D.1.3 Software Configuration and Initialization
-                media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
-                if not api.tx_disable_channel(media_lanes_mask, True):
-                    self.log_notice("{}: unable to turn off tx power with host_lanes_mask {}".format(lport, host_lanes_mask))
-                    self.port_dict[lport]['cmis_retries'] = retries + 1
+                if not self.handle_cmis_dp_deinit_state(lport):
                     return
-
-                #Sets module to high power mode and doesn't impact datapath if module is already in high power mode
-                api.set_lpmode(False, wait_state_change = False)
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_AP_CONF)
-                dpDeinitDuration = self.get_cmis_dp_deinit_duration_secs(api)
-                modulePwrUpDuration = self.get_cmis_module_power_up_duration_secs(api)
-                self.log_notice("{}: DpDeinit duration {} secs, modulePwrUp duration {} secs".format(lport, dpDeinitDuration, modulePwrUpDuration))
-                self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
-
             elif state == CMIS_STATE_AP_CONF:
                 # Explicit control bit to apply custom Host SI settings. 
                 # It will be set to 1 and applied via set_application if 
