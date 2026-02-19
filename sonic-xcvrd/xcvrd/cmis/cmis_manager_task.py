@@ -1064,7 +1064,7 @@ class CmisManagerTask(threading.Thread):
 
                 # Arm timer for DP_ACTIVATE state using max(dpInitDuration, dpTxTurnOnDuration)
                 # for backward compatibility with older modules that may not properly
-                # populate DPTxTurnOnDuration
+                # populate DPTxTurnOnDuration and break with new sonic
                 dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
                 dpTxTurnOnDuration = self.get_cmis_dp_tx_turnon_duration_secs(api)
                 dpActivateDuration = max(dpInitDuration, dpTxTurnOnDuration)
@@ -1073,10 +1073,6 @@ class CmisManagerTask(threading.Thread):
                 self.update_cmis_state_expiration_time(lport, dpActivateDuration)
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_ACTIVATE)
             elif state == CMIS_STATE_DP_ACTIVATE:
-                # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
-                # some modules rely on dpInitDuration to turn on the Tx signal.
-                # This behavior deviates from the CMIS spec but is honored
-                # to prevent old modules from breaking with new sonic
                 if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
