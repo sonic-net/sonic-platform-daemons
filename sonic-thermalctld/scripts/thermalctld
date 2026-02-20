@@ -907,10 +907,16 @@ class TemperatureUpdater(logger.Logger):
 
     def _remove_thermal_from_db(self, thermal, parent_name, thermal_index):
         name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
-        self.table._del(name)
+        try:
+            self.table._del(name)
+        except Exception:
+            pass
 
         if self.chassis_table is not None:
-            self.chassis_table._del(name)
+            try:
+                self.chassis_table._del(name)
+            except Exception:
+                pass
 
     def _get_sfp_temperature_from_db(self, port_name):
         """

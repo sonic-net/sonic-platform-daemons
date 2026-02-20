@@ -663,6 +663,7 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         chassis.make_over_temper_thermal()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -677,6 +678,7 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         chassis.make_under_temper_thermal()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -694,6 +696,7 @@ class TestTemperatureUpdater(object):
         psu._thermal_list.append(mock_thermal)
         chassis._psu_list.append(psu)
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -708,24 +711,33 @@ class TestTemperatureUpdater(object):
             temperature_updater.log_warning.assert_called_with("Failed to update thermal status for PSU 1 Thermal 1 - Exception('Test message',)")
 
     def test_update_sfp_thermals(self):
+        """Test SFP thermal processing with Redis-based temperature reading"""
         chassis = MockChassis()
         sfp = MockSfp()
         mock_thermal = MockThermal()
         sfp._thermal_list.append(mock_thermal)
         chassis._sfp_list.append(sfp)
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Reset warning count after init (init may log SfpUtilHelper warning)
+        temperature_updater.log_warning.reset_mock()
+
+        # With sfp_util as None (default), no Redis reading happens, no warnings
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
-        mock_thermal.get_temperature = mock.MagicMock(side_effect=Exception("Test message"))
-        temperature_updater.update()
-        assert temperature_updater.log_warning.call_count == 1
+        # With sfp_util mocked and port_name available, Redis reading is attempted
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [])
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
 
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message')")
-        else:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message',)")
+        temperature_updater.update()
+        # Verify Redis table was queried
+        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
 
     def test_update_thermal_with_exception(self):
         chassis = MockChassis()
@@ -735,6 +747,7 @@ class TestTemperatureUpdater(object):
         chassis.get_all_thermals().append(thermal)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 2
 
@@ -909,6 +922,9 @@ class TestTemperatureUpdater(object):
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Reset warning count after init (init may log SfpUtilHelper warning)
+        temperature_updater.log_warning.reset_mock()
 
         # Set sfp_util to None (simulating import failure)
         temperature_updater.sfp_util = None
