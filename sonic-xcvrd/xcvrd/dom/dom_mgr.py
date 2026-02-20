@@ -272,7 +272,8 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
             # Check if periodic db update is needed
-            if next_periodic_db_update_time <= datetime.datetime.now():
+            now = datetime.datetime.now()
+            if next_periodic_db_update_time <= now:
                 is_periodic_db_update_needed = True
 
             # Handle port change event from main thread
@@ -391,8 +392,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
 
             # Set the periodic db update time after all the ports are processed
             if is_periodic_db_update_needed:
-                next_periodic_db_update_time = datetime.datetime.now() + \
-                                               datetime.timedelta(seconds=dom_info_update_periodic_secs)
+                next_periodic_db_update_time = now + datetime.timedelta(seconds=dom_info_update_periodic_secs)
                 is_periodic_db_update_needed = False
 
         self.log_notice("Stop DOM monitoring loop")
