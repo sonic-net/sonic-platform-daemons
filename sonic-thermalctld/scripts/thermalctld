@@ -760,8 +760,9 @@ class TemperatureUpdater(logger.Logger):
                     return
 
                 available_thermals.add((thermal, parent_name, thermal_index))
-                # Read SFP temperature from Redis tables (populated by xcvrd)
-                # Use port index mapping to get logical port name
+                # TODO: This Redis-based approach for reading SFP temperature is temporary.
+                # It will be removed once all platforms migrate to handling optics temperature
+                # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
                 port_name = self._get_port_name_by_index(sfp_index)
                 if port_name:
                     self._refresh_temperature_status(parent_name, sfp, sfp_index, is_sfp=True, port_name=port_name)
@@ -785,7 +786,9 @@ class TemperatureUpdater(logger.Logger):
                             return
 
                         available_thermals.add((thermal, sfp_name, thermal_index))
-                        # Read SFP temperature from Redis tables (populated by xcvrd)
+                        # TODO: This Redis-based approach for reading SFP temperature is temporary.
+                        # It will be removed once all platforms migrate to handling optics temperature
+                        # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
                         port_name = self._get_port_name_by_index(sfp_index)
                         if port_name:
                             self._refresh_temperature_status(sfp_name, sfp, sfp_index, is_sfp=True, port_name=port_name)
