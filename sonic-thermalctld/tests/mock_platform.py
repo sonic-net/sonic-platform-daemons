@@ -440,9 +440,12 @@ class MockChassis(chassis_base.ChassisBase):
     def make_module_thermal(self):
         module = MockModule()
         self._module_list.append(module)
+        sfp = MockSfp()
+        sfp._thermal_list.append(MockThermal())
         psu = MockPsu()
         psu._thermal_list.append(MockThermal())
         fan = MockFan()
+        module._sfp_list.append(sfp)
         module._psu_list.append(psu)
         module._fan_list.append(fan)
         module._thermal_list.append(MockThermal())
