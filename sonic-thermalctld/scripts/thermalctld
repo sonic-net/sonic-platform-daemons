@@ -693,6 +693,9 @@ class TemperatureUpdater(logger.Logger):
                 port_config_file_path = device_info.get_path_to_port_config_file()
                 sfp_util.read_porttab_mappings(port_config_file_path, 0)
             return sfp_util
+        except SystemExit:
+            self.log_warning("Failed to initialize SfpUtilHelper: port config not available")
+            return None
         except Exception as e:
             self.log_warning("Failed to initialize SfpUtilHelper: {}".format(e))
             return None
