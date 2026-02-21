@@ -781,7 +781,9 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         sfp = MockSfp()
         sfp._name = 'Ethernet0'
-        sfp._thermal_list.append(MockThermal())
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
@@ -836,7 +838,9 @@ class TestTemperatureUpdater(object):
         """Test that warning_status is True when temperature exceeds high threshold"""
         chassis = MockChassis()
         sfp = MockSfp()
-        sfp._thermal_list.append(MockThermal())
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
@@ -867,7 +871,9 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         sfp = MockSfp()
         sfp._name = 'Ethernet0'
-        sfp._thermal_list.append(MockThermal())
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
@@ -992,7 +998,9 @@ class TestTemperatureUpdater(object):
         """Test that N/A temperature is stored correctly in TEMPERATURE_INFO"""
         chassis = MockChassis()
         sfp = MockSfp()
-        sfp._thermal_list.append(MockThermal())
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
@@ -1028,7 +1036,9 @@ class TestTemperatureUpdater(object):
         """Test parsing temperature values with unit suffix (e.g., '55.5 C')"""
         chassis = MockChassis()
         sfp = MockSfp()
-        sfp._thermal_list.append(MockThermal())
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
         chassis._sfp_list.append(sfp)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())

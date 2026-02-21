@@ -768,7 +768,7 @@ class TemperatureUpdater(logger.Logger):
                 # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
                 port_name = self._get_port_name_by_index(sfp_index)
                 if port_name:
-                    self._refresh_temperature_status(parent_name, sfp, sfp_index, is_sfp=True, port_name=port_name)
+                    self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
 
         # As there are no modules present in DPU, this IF condition is not updated to consider DPU chassis
         if self.is_chassis_system:
@@ -794,7 +794,7 @@ class TemperatureUpdater(logger.Logger):
                         # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
                         port_name = self._get_port_name_by_index(sfp_index)
                         if port_name:
-                            self._refresh_temperature_status(sfp_name, sfp, sfp_index, is_sfp=True, port_name=port_name)
+                            self._refresh_temperature_status(sfp_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
                     if psu.get_presence():
@@ -819,17 +819,14 @@ class TemperatureUpdater(logger.Logger):
         For SFP thermals (is_sfp=True), reads from Redis tables populated by xcvrd.
 
         :param parent_name: Name of parent device of the thermal object
-        :param thermal: Object representing a platform thermal zone (or SFP object if is_sfp=True)
+        :param thermal: Object representing a platform thermal zone
         :param thermal_index: Index of the thermal object in platform chassis
         :param is_sfp: True if this is an SFP thermal reading from Redis
         :param port_name: Port name for Redis lookup (required if is_sfp=True)
         :return:
         """
         try:
-            if is_sfp:
-                name = 'xSFP module {} Temp'.format(thermal_index + 1)
-            else:
-                name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
+            name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
 
             # Only save entity info for thermals that belong to chassis and PSU
             # for SFP thermal, they don't need save entity info because snmp can deduce the relation from TRANSCEIVER_DOM_SENSOR
