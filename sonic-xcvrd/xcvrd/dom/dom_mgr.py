@@ -33,6 +33,8 @@ except ImportError as e:
     raise ImportError(str(e) + " - required module not found in dom_mgr.py")
 
 SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
+PORT_UPDATE_EVENT_SELECT_TIMEOUT_MSECS = 1000
+PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS = 100
 
 class DomInfoUpdateBase(threading.Thread):
 
@@ -252,6 +254,23 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
+    def check_port_update(self, port_change_observer, timeout):
+        # Process pending link change events and update diagnostic
+        # information in the database. Ensures timely handling of link
+        # change events and avoids duplicate updates in case of breakout ports.
+        port_change_observer.handle_port_update_event(timeout)
+
+        # Process each port in the pending link change set based on the
+        # corresponding time to update the DB after the link change.
+        for link_changed_port in list(self.link_change_affected_ports.keys()):
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during DOM link change event processing")
+                break
+            if self.link_change_affected_ports[link_changed_port] <= datetime.datetime.now():
+                self.log_notice(f"Updating port db diagnostics post link change for port {link_changed_port}")
+                self.update_port_db_diagnostics_on_link_change(link_changed_port)
+                del self.link_change_affected_ports[link_changed_port]
+
     def task_worker(self):
         self.log_notice("Start DOM monitoring loop")
         sel, asic_context = port_event_helper.subscribe_port_config_change(self.namespaces)
@@ -271,36 +290,23 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
 
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
-            # Check if periodic db update is needed
-            if next_periodic_db_update_time <= datetime.datetime.now():
-                is_periodic_db_update_needed = True
-
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
 
+            while not (is_periodic_db_update_needed:= next_periodic_db_update_time <= datetime.datetime.now()):
+                self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_MSECS)
+
+                if self.task_stopping_event.is_set():
+                    self.log_notice("Stop event generated during DOM monitoring loop while checking port update")
+                    break
+
+            dom_loop_start_time = datetime.datetime.now()
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
-                # Process pending link change events and update diagnostic
-                # information in the database. Ensures timely handling of link
-                # change events and avoids duplicate updates in case of breakout ports.
-                port_change_observer.handle_port_update_event()
-                # Process each port in the pending link change set based on the
-                # corresponding time to update the DB after the link change.
-                for link_changed_port in list(self.link_change_affected_ports.keys()):
-                    if self.task_stopping_event.is_set():
-                        self.log_notice("Stop event generated during DOM link change event processing")
-                        break
-                    if self.link_change_affected_ports[link_changed_port] <= datetime.datetime.now():
-                        self.log_notice(f"Updating port db diagnostics post link change for port {link_changed_port}")
-                        self.update_port_db_diagnostics_on_link_change(link_changed_port)
-                        del self.link_change_affected_ports[link_changed_port]
+                self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS)
 
                 if self.task_stopping_event.is_set():
                     self.log_notice("Stop event generated during DOM monitoring loop")
                     break
-
-                if not is_periodic_db_update_needed:
-                    # If periodic db update is not needed, skip the rest of the loop
-                    continue
 
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
@@ -391,8 +397,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
 
             # Set the periodic db update time after all the ports are processed
             if is_periodic_db_update_needed:
-                next_periodic_db_update_time = datetime.datetime.now() + \
-                                               datetime.timedelta(seconds=dom_info_update_periodic_secs)
+                next_periodic_db_update_time = dom_loop_start_time + datetime.timedelta(seconds=dom_info_update_periodic_secs)
                 is_periodic_db_update_needed = False
 
         self.log_notice("Stop DOM monitoring loop")
