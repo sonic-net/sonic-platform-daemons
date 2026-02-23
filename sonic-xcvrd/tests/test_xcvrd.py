@@ -1719,11 +1719,12 @@ class TestXcvrdScript(object):
 
         # Augment the data from the gearbox_media_settings.json test fixture so that
         # we match both global and port specific settings
-        for _, settings in gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'].items():
+        gearbox_settings = copy.deepcopy(gearbox_media_settings_dict)
+        for _, settings in gearbox_settings['GEARBOX_PORT_MEDIA_SETTINGS'].items():
             settings['line']['OPTICAL100'] = settings['line']['Default']
             settings['system']['OPTICAL100'] = settings['system']['Default']
 
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict):
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_settings):
             for gearbox_side, expected_result in (('system', expected_system_side), ('line', expected_line_side)):
                 result = media_settings_parser.get_media_settings_value(
                     2,
@@ -1741,13 +1742,14 @@ class TestXcvrdScript(object):
 
         # Augment the data from the gearbox_media_settings.json test fixture so that
         # the system-side and line-side gearbox keys are missing.
-        del gearbox_media_settings_dict['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['line']
-        del gearbox_media_settings_dict['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['system']
+        gearbox_settings = copy.deepcopy(gearbox_media_settings_dict)
+        del gearbox_settings['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['line']
+        del gearbox_settings['GEARBOX_GLOBAL_MEDIA_SETTINGS']['1-8']['system']
         for i in range(1,9):
-            del gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['line']
-            del gearbox_media_settings_dict['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['system']
+            del gearbox_settings['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['line']
+            del gearbox_settings['GEARBOX_PORT_MEDIA_SETTINGS'][str(i)]['system']
 
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict):
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_settings):
             for gearbox_side in ('system', 'line'):
                 result = media_settings_parser.get_media_settings_value(
                     2,
@@ -1756,6 +1758,87 @@ class TestXcvrdScript(object):
                 )
                 assert result == expected
 
+    def test_publish_si_settings_media_key_prefixes(self):
+        """
+        Test that publish_si_settings correctly prefixes media_key based on gearbox_side parameter:
+        - gearbox_side='line': keys should be prefixed with 'gb_line_'
+        - gearbox_side='system': keys should be prefixed with 'gb_system_'
+        - gearbox_side=None: keys should not be prefixed
+        """
+        # Setup test data
+        logical_port_name = 'Ethernet0'
+        lane_count = 4
+        subport_num = 0
+        asic_index = 0
+        port_name = 'Ethernet0'
+
+        # Create media_dict with sample SI settings
+        media_dict = {
+            'pre1': {'lane0': '0x1', 'lane1': '0x1', 'lane2': '0x1', 'lane3': '0x1'},
+            'main': {'lane0': '0x2', 'lane1': '0x2', 'lane2': '0x2', 'lane3': '0x2'},
+            'post1': {'lane0': '0x3', 'lane1': '0x3', 'lane2': '0x3', 'lane3': '0x3'}
+        }
+
+        # Setup mocks
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
+        state_port_tbl = Table("STATE_DB", 'PORT_TABLE')
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        # Test case 1: gearbox_side='line' - keys should be prefixed with 'gb_line_'
+        media_settings_parser.publish_si_settings(
+            media_dict, logical_port_name, lane_count, subport_num,
+            xcvr_table_helper, asic_index, port_name, gearbox_side='line'
+        )
+        found, result = app_port_tbl.get(port_name)
+        assert found == True
+        result_dict = dict(result)
+        assert 'gb_line_pre1' in result_dict
+        assert 'gb_line_main' in result_dict
+        assert 'gb_line_post1' in result_dict
+        assert result_dict['gb_line_pre1'] == '0x1,0x1,0x1,0x1'
+        assert result_dict['gb_line_main'] == '0x2,0x2,0x2,0x2'
+        assert result_dict['gb_line_post1'] == '0x3,0x3,0x3,0x3'
+
+        # Test case 2: gearbox_side='system' - keys should be prefixed with 'gb_system_'
+        app_port_tbl = Table("APPL_DB", 'PORT_TABLE')  # Reset table
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+
+        media_settings_parser.publish_si_settings(
+            media_dict, logical_port_name, lane_count, subport_num,
+            xcvr_table_helper, asic_index, port_name, gearbox_side='system'
+        )
+        found, result = app_port_tbl.get(port_name)
+        assert found == True
+        result_dict = dict(result)
+        assert 'gb_system_pre1' in result_dict
+        assert 'gb_system_main' in result_dict
+        assert 'gb_system_post1' in result_dict
+        assert result_dict['gb_system_pre1'] == '0x1,0x1,0x1,0x1'
+        assert result_dict['gb_system_main'] == '0x2,0x2,0x2,0x2'
+        assert result_dict['gb_system_post1'] == '0x3,0x3,0x3,0x3'
+
+        # Test case 3: gearbox_side=None - keys should not be prefixed
+        app_port_tbl = Table("APPL_DB", 'PORT_TABLE')  # Reset table
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+
+        media_settings_parser.publish_si_settings(
+            media_dict, logical_port_name, lane_count, subport_num,
+            xcvr_table_helper, asic_index, port_name, gearbox_side=None
+        )
+        found, result = app_port_tbl.get(port_name)
+        assert found == True
+        result_dict = dict(result)
+        assert 'pre1' in result_dict
+        assert 'main' in result_dict
+        assert 'post1' in result_dict
+        # Ensure no gearbox prefixes are present
+        assert 'gb_line_pre1' not in result_dict
+        assert 'gb_system_pre1' not in result_dict
+        assert result_dict['pre1'] == '0x1,0x1,0x1,0x1'
+        assert result_dict['main'] == '0x2,0x2,0x2,0x2'
+        assert result_dict['post1'] == '0x3,0x3,0x3,0x3'
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_get_is_copper_exception(self, mock_chassis):

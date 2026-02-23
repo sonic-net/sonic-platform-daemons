@@ -395,7 +395,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             # We need to recalculate the media settings key for the line-side of the gearbox. Otherwise, the calculation for lane speed will be based
             # on the number of lanes on the system side of the gearbox.
             line_side_key = get_media_settings_key(physical_port, transceiver_dict, port_speed, gearbox_line_lanes[logical_port_name])
-            helper_logger.log_notice("Retrieving gearbox line-side media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, line_side_key))
+            helper_logger.log_notice("Retrieving gearbox line-side media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, gearbox_line_lanes[logical_port_name], line_side_key))
             line_gearbox_media_dict = get_media_settings_value(physical_port, line_side_key, gearbox_side=GEARBOX_LINE_SIDE_KEY)
 
         if len(asic_media_dict) != 0:
@@ -437,5 +437,5 @@ def publish_si_settings(media_dict, logical_port_name, lane_count, subport_num, 
 
     xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
     xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
-    helper_logger.log_notice("Notify media setting: Published ASIC-side SI setting "
-                                "for lport {} in APP_DB".format(logical_port_name))
+    helper_logger.log_notice("Notify media setting: Published {}-side SI setting "
+                                "for lport {} in APP_DB".format(gearbox_side if gearbox_side else "ASIC", logical_port_name))
