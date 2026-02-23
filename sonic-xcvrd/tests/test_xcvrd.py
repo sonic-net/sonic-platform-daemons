@@ -166,9 +166,56 @@ media_settings_port_vendor_key_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-5678'] =
 media_settings_port_medium_lane_key = copy.deepcopy(media_settings_port_vendor_key_lane_speed_si)
 media_settings_port_medium_lane_key['PORT_MEDIA_SETTINGS']['7']['COPPER25'] = {'idriver': {'lane0': '0x0000000f', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}
 
+# Test data for regex matching on MEDIUM_LANE_SPEED_KEY
+# Test data 1: Regex pattern matching any COPPER speed
+media_settings_global_medium_lane_regex_any_copper = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_medium_lane_regex_any_copper['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER[0-9]+'] = {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}}
+# Test data 2: Regex pattern matching COPPER or OPTICAL with specific speed
+media_settings_global_medium_lane_regex_copper_or_optical = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_medium_lane_regex_copper_or_optical['GLOBAL_MEDIA_SETTINGS']['0-31']['(COPPER|OPTICAL)50'] = {'idriver': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'pre1': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'ob_m2lp': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}}
+# Test data 3: Regex pattern matching specific speed ranges
+media_settings_global_medium_lane_regex_speed_range = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_medium_lane_regex_speed_range['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER(25|50|100)'] = {'idriver': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'pre1': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'ob_m2lp': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}}
+# Test data 4: Multiple regex patterns with priority (first match wins)
+media_settings_global_medium_lane_regex_multiple = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_global_medium_lane_regex_multiple['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER50'] = {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}}
+media_settings_global_medium_lane_regex_multiple['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER[0-9]+'] = {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000066', 'lane2': '0x00000066', 'lane3': '0x00000066'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000066', 'lane2': '0x00000066', 'lane3': '0x00000066'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000066', 'lane2': '0x00000066', 'lane3': '0x00000066'}}
+
 media_settings_port_media_key_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-sm_media_interface"].pop("speed:400GAUI-8")
 media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"] = media_settings_port_media_key_si['PORT_MEDIA_SETTINGS']['7']["QSFP-DD-active_cable_media_interface"].pop("speed:100GAUI-2")
+
+# Test data for vendor key prioritization over medium lane speed key
+# Test that vendor-specific settings take priority over generic medium lane speed settings
+media_settings_vendor_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['VENDOR1-MODEL1'] = {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}
+media_settings_vendor_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['OPTICAL100'] = {'idriver': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'pre1': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'ob_m2lp': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}}
+
+media_settings_vendor_priority_over_medium_lane_port = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_priority_over_medium_lane_port['PORT_MEDIA_SETTINGS'] = {
+    '7': {
+        'VENDOR2-MODEL2': {'idriver': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'pre1': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'ob_m2lp': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}},
+        'COPPER50': {'idriver': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'pre1': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'ob_m2lp': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}}
+    }
+}
+
+# Test data for vendor name (without model) prioritization over medium lane speed key
+media_settings_vendor_name_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_vendor_name_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['VENDOR3'] = {'idriver': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'pre1': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'ob_m2lp': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}}
+media_settings_vendor_name_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['COPPER25'] = {'idriver': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'pre1': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'ob_m2lp': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}}
+
+# Test data for media key prioritization over medium lane speed key
+media_settings_media_priority_over_medium_lane_global = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_media_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['QSFP28-100GBASE-SR4'] = {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}}
+media_settings_media_priority_over_medium_lane_global['GLOBAL_MEDIA_SETTINGS']['0-31']['OPTICAL25'] = {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}}
+
+media_settings_media_priority_over_medium_lane_port = copy.deepcopy(media_settings_extended_format_dict)
+media_settings_media_priority_over_medium_lane_port['PORT_MEDIA_SETTINGS'] = {
+    '7': {
+        'QSFP-DD-400GBASE-DR4': {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}},
+        'COPPER100': {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}
+    }
+}
 
 media_settings_port_generic_vendor_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['AMPHANOL-1234'] = media_settings_port_generic_vendor_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7'].pop('QSFP-DD-sm_media_interface')
@@ -563,7 +610,7 @@ class TestXcvrdScript(object):
             restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
         )
 
-        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
             assert is_syncd_warm_restore_complete() == expected
 
     def test_is_syncd_warm_restore_complete_invalid_restore_count(self):
@@ -573,9 +620,32 @@ class TestXcvrdScript(object):
             "abc" if "WARM_RESTART_TABLE|syncd" in table else None
         )
 
-        with patch("xcvrd.xcvrd.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
             result = is_syncd_warm_restore_complete()
             assert result is False
+
+    @pytest.mark.parametrize(
+        "namespace, restore_count, expected",
+        [
+            ('', 1, True),              # Default namespace
+            ('asic0', 1, True),         # Multi-ASIC namespace asic0
+            ('asic1', 1, True),         # Multi-ASIC namespace asic1
+            ('asic0', 0, False),        # No warm restore for asic0
+            ('asic1', 0, False),        # No warm restore for asic1
+        ]
+    )
+    def test_is_syncd_warm_restore_complete_with_namespace(self, namespace, restore_count, expected):
+        """Test is_syncd_warm_restore_complete with different namespaces for multi-ASIC support"""
+        mock_db = MagicMock()
+        mock_db.hget.side_effect = lambda table, key: (
+            restore_count if "WARM_RESTART_TABLE|syncd" in table else None
+        )
+
+        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db) as mock_connect:
+            result = is_syncd_warm_restore_complete(namespace)
+            assert result == expected
+            # Verify db_connect was called with the correct namespace
+            mock_connect.assert_called_with("STATE_DB", namespace=namespace)
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
@@ -1008,65 +1078,53 @@ class TestXcvrdScript(object):
         for t in VDM_THRESHOLD_TYPES:
             assert VDM_THRESHOLD_TABLES[f'vdm_{t}_threshold_tbl'][0].get_size_for_key(logical_port_name) == 9
 
-    def test_post_port_vdm_real_values_to_db(self):
-        def mock_get_transceiver_diagnostic_values(physical_port):
-            return {
-                f'laser_temperature_media{i}': 38 if i <= 4 else 'N/A' for i in range(1, 9)
-            } | {
-                f'esnr_media_input{i}': 23.1171875 for i in range(1, 9)
-            }
-
+    def test_post_port_vdm_real_values_from_dict_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
         port_mapping.get_logical_to_physical = MagicMock(return_value=[0])
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         stop_event = threading.Event()
         mock_sfp_obj_dict = {0 : MagicMock()}
+        mock_sfp_obj_dict[0].get_presence.return_value = True
+        mock_sfp_obj_dict[0].get_xcvr_api.return_value.is_flat_memory.return_value = False
 
         vdm_db_utils = VDMDBUtils(mock_sfp_obj_dict, port_mapping, xcvr_table_helper, stop_event, helper_logger)
-        vdm_db_utils.vdm_utils = MagicMock()  # Ensure vdm_utils is a mock object
-        vdm_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=False)
-        vdm_db_utils.xcvrd_utils.is_transceiver_flat_memory = MagicMock(return_value=False)
         diagnostic_tbl = Table("STATE_DB", TRANSCEIVER_VDM_REAL_VALUE_TABLE)
         vdm_db_utils.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=diagnostic_tbl)
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(return_value=None)
         assert diagnostic_tbl.get_size() == 0
 
-        # Ensure table is empty asic_index is None
+        # Ensure table is empty if asic_index is None
         port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
+        vdm_real_values = {
+            f'laser_temperature_media{i}': 38 if i <= 4 else 'N/A' for i in range(1, 9)
+        } | {
+            f'esnr_media_input{i}': 23.1171875 for i in range(1, 9)
+        }
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values)
         assert diagnostic_tbl.get_size() == 0
 
         # Set asic_index to 0
         port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
 
-        # Ensure table is empty if stop_event is set
-        stop_event.set()
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
-        assert diagnostic_tbl.get_size() == 0
-        stop_event.clear()
-
-        # Ensure table is empty if transceiver is not present
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
-        assert diagnostic_tbl.get_size() == 0
-        vdm_db_utils.return_value = True
-
-        # Ensure table is empty if get_values_func returns None
-        vdm_db_utils.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=True)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name)
+        # Ensure table is empty if vdm_real_values_dict is None
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, None)
         assert diagnostic_tbl.get_size() == 0
 
-        # Ensure table is populated if get_values_func returns valid values
-        db_cache = {}
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(side_effect=mock_get_transceiver_diagnostic_values)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache=db_cache)
+        # Ensure table is empty if vdm_real_values_dict is empty
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, {})
+        assert diagnostic_tbl.get_size() == 0
+
+        # Ensure table is populated if vdm_real_values_dict has valid values
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values)
         assert diagnostic_tbl.get_size_for_key(logical_port_name) == 17
 
-        # Ensure db_cache is populated correctly
-        assert db_cache.get(0) is not None
-        vdm_db_utils.vdm_utils.get_vdm_real_values = MagicMock(return_value=None)
-        vdm_db_utils.post_port_vdm_real_values_to_db(logical_port_name, db_cache)
-        assert diagnostic_tbl.get_size_for_key(logical_port_name) == 17
+        # Ensure table is updated with new values
+        vdm_real_values_updated = {
+            'laser_temperature_media1': 40,
+            'esnr_media_input1': 25.0
+        }
+        vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_real_values_updated)
+        assert diagnostic_tbl.get_size_for_key(logical_port_name) == 3
 
     def test_post_port_transceiver_hw_status_to_db(self):
         def mock_get_transceiver_status(physical_port):
@@ -1566,6 +1624,49 @@ class TestXcvrdScript(object):
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP+-40GBASE-CR4-10M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'COPPER50'}, {'preemphasis': {'lane0': '0x1A400A', 'lane1': '0x1A400A', 'lane2': '0x1A400A', 'lane3': '0x1A400A'}}),
     (media_settings_global_medium_lane_key, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}),
    (media_settings_port_medium_lane_key, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x0000000f', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'pre1': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}, 'ob_m2lp': {'lane0': '0x0000000d', 'lane1': '0x0000000d', 'lane2': '0x0000000d', 'lane3': '0x0000000d'}}),
+    # Test cases for regex matching on MEDIUM_LANE_SPEED_KEY
+    # Test 1: Regex pattern COPPER[0-9]+ should match COPPER50
+    (media_settings_global_medium_lane_regex_any_copper, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}}),
+    # Test 2: Regex pattern COPPER[0-9]+ should match COPPER25
+    (media_settings_global_medium_lane_regex_any_copper, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}}),
+    # Test 3: Regex pattern COPPER[0-9]+ should match COPPER100
+    (media_settings_global_medium_lane_regex_any_copper, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000011', 'lane2': '0x00000011', 'lane3': '0x00000011'}}),
+    # Test 4: Regex pattern COPPER[0-9]+ should NOT match OPTICAL50
+    (media_settings_global_medium_lane_regex_any_copper, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL50'}, {}),
+    # Test 5: Regex pattern (COPPER|OPTICAL)50 should match COPPER50
+    (media_settings_global_medium_lane_regex_copper_or_optical, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'pre1': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'ob_m2lp': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}}),
+    # Test 6: Regex pattern (COPPER|OPTICAL)50 should match OPTICAL50
+    (media_settings_global_medium_lane_regex_copper_or_optical, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL50'}, {'idriver': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'pre1': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}, 'ob_m2lp': {'lane0': '0x00000022', 'lane1': '0x00000022', 'lane2': '0x00000022', 'lane3': '0x00000022'}}),
+    # Test 7: Regex pattern (COPPER|OPTICAL)50 should NOT match COPPER25
+    (media_settings_global_medium_lane_regex_copper_or_optical, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {}),
+    # Test 8: Regex pattern COPPER(25|50|100) should match COPPER25
+    (media_settings_global_medium_lane_regex_speed_range, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'pre1': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'ob_m2lp': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}}),
+    # Test 9: Regex pattern COPPER(25|50|100) should match COPPER50
+    (media_settings_global_medium_lane_regex_speed_range, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'pre1': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'ob_m2lp': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}}),
+    # Test 10: Regex pattern COPPER(25|50|100) should match COPPER100
+    (media_settings_global_medium_lane_regex_speed_range, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'pre1': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}, 'ob_m2lp': {'lane0': '0x00000033', 'lane1': '0x00000033', 'lane2': '0x00000033', 'lane3': '0x00000033'}}),
+    # Test 11: Regex pattern COPPER(25|50|100) should NOT match COPPER200
+    (media_settings_global_medium_lane_regex_speed_range, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER200'}, {}),
+    # Test 12: Check that we return the settings for the first key we match against
+    (media_settings_global_medium_lane_regex_multiple, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'pre1': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}, 'ob_m2lp': {'lane0': '0x00000055', 'lane1': '0x00000055', 'lane2': '0x00000055', 'lane3': '0x00000055'}}),
+    # Test cases for vendor key prioritization over medium lane speed key
+    # Test 13: Vendor key should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR1-MODEL1', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'}, {'idriver': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'pre1': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}, 'ob_m2lp': {'lane0': '0x000000aa', 'lane1': '0x000000aa', 'lane2': '0x000000aa', 'lane3': '0x000000aa'}}),
+    # Test 14: Medium lane speed key should match when vendor key doesn't match in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL100'}, {'idriver': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'pre1': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}, 'ob_m2lp': {'lane0': '0x000000bb', 'lane1': '0x000000bb', 'lane2': '0x000000bb', 'lane3': '0x000000bb'}}),
+    # Test 15: Vendor key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR2-MODEL2', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'pre1': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}, 'ob_m2lp': {'lane0': '0x000000cc', 'lane1': '0x000000cc', 'lane2': '0x000000cc', 'lane3': '0x000000cc'}}),
+    # Test 16: Medium lane speed key should match when vendor key doesn't match in PORT_MEDIA_SETTINGS
+    (media_settings_vendor_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, {'idriver': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'pre1': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}, 'ob_m2lp': {'lane0': '0x000000dd', 'lane1': '0x000000dd', 'lane2': '0x000000dd', 'lane3': '0x000000dd'}}),
+    # Test 17: Vendor name (without model) should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_name_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR3-ANYMODEL', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'pre1': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}, 'ob_m2lp': {'lane0': '0x000000ee', 'lane1': '0x000000ee', 'lane2': '0x000000ee', 'lane3': '0x000000ee'}}),
+    # Test 18: Medium lane speed key should match when vendor name doesn't match in GLOBAL_MEDIA_SETTINGS
+    (media_settings_vendor_name_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH-MODEL', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER25'}, {'idriver': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'pre1': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}, 'ob_m2lp': {'lane0': '0x000000ff', 'lane1': '0x000000ff', 'lane2': '0x000000ff', 'lane3': '0x000000ff'}}),
+    # Test cases for media key prioritization over medium lane speed key
+    # Test 19: Media key should be prioritized over medium lane speed key in GLOBAL_MEDIA_SETTINGS
+    (media_settings_media_priority_over_medium_lane_global, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP28-100GBASE-SR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'OPTICAL25'}, {'idriver': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'pre1': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}, 'ob_m2lp': {'lane0': '0x00000011', 'lane1': '0x00000022', 'lane2': '0x00000033', 'lane3': '0x00000044'}}),
+    # Test 20: Media key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
+    (media_settings_media_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP-DD-400GBASE-DR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}})
     ])
     def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
@@ -4290,7 +4391,6 @@ class TestXcvrdScript(object):
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
         task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.vdm_db_utils = MagicMock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
         task.task_worker()
         assert task.port_mapping.logical_port_list.count('Ethernet0')
         assert task.port_mapping.get_asic_id_for_logical_port('Ethernet0') == 0
@@ -4301,7 +4401,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_flags_to_db.call_count == 0
         assert task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count == 0
         assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count == 0
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 0
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
         assert mock_post_pm_info.call_count == 0
         mock_detect_error.return_value = False
@@ -4316,7 +4416,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_flags_to_db.call_count == 1
         assert task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count == 1
         assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
@@ -4350,21 +4450,26 @@ class TestXcvrdScript(object):
         task.status_db_utils.post_port_transceiver_hw_status_to_db = MagicMock()
         task.status_db_utils.post_port_transceiver_hw_status_flags_to_db = MagicMock()
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
         task.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=False)
         task.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
-        task.vdm_db_utils.post_port_vdm_real_values_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
         task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
         task.task_worker()
+        # Freeze failed, so unfreeze is still called (context manager), no statistic values or PM captured.
+        # But step (b) basic values and step (c) flags still run (no continue on freeze failure).
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 0
-        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 0
 
         # clear the call count
         task.vdm_utils._freeze_vdm_stats_and_confirm.reset_mock()
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.reset_mock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.reset_mock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.reset_mock()
         task.vdm_db_utils.post_port_vdm_flags_to_db.reset_mock()
         mock_post_pm_info.reset_mock()
 
@@ -4375,27 +4480,159 @@ class TestXcvrdScript(object):
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
         # clear the call count
         task.vdm_utils._freeze_vdm_stats_and_confirm.reset_mock()
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.reset_mock()
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.reset_mock()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.reset_mock()
         task.vdm_db_utils.post_port_vdm_flags_to_db.reset_mock()
         mock_post_pm_info.reset_mock()
 
-        # mock_post_diagnostic_value raises an exception
+        # post_port_vdm_real_values_from_dict_to_db raises an exception in step (b).
+        # Step (c) COR flags still run (no continue), and PM already ran in step (a).
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = True
-        task.vdm_db_utils.post_port_vdm_real_values_to_db.side_effect = TypeError
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.side_effect = TypeError
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_real_values_to_db.call_count == 1
-        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 0
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 1
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    def test_DomInfoUpdateTask_task_worker_vdm_freeze_conditions(self, mock_post_pm_info):
+        """Test various need_freeze condition combinations"""
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        
+        # Test Case 1: Basic-only VDM module (no statistics, not coherent)
+        # Expected: Skip freeze, only basic + flags, no PM
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.port_mapping.logical_port_list = ['Ethernet0']
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task.dom_db_utils = MagicMock()
+        task.status_db_utils = MagicMock()
+        task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
+        task.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task.vdm_db_utils = MagicMock()
+        task.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        
+        task.task_worker()
+        
+        # Verify: No freeze, no PM, but basic values + flags posted
+        assert task.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 0
+        
+        # Test Case 2: Module in LPMODE (statistics supported but lpmode=True)
+        # Expected: Skip freeze, only basic + flags, no PM
+        mock_post_pm_info.reset_mock()
+        task2 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task2.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task2.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task2.port_mapping.logical_port_list = ['Ethernet0']
+        task2.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task2.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task2.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task2.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task2.dom_db_utils = MagicMock()
+        task2.status_db_utils = MagicMock()
+        task2.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task2.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task2.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task2.vdm_db_utils = MagicMock()
+        task2.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=True)
+        
+        task2.task_worker()
+        
+        # Verify: No freeze due to lpmode, only basic values + flags posted
+        assert task2.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task2.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task2.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 0
+        
+        # Test Case 3: VDM supported but no statistic support
+        # Expected: No freeze, only basic + flags, no PM
+        mock_post_pm_info.reset_mock()
+        task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task3.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task3.port_mapping.logical_port_list = ['Ethernet0']
+        task3.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task3.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task3.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task3.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task3.dom_db_utils = MagicMock()
+        task3.status_db_utils = MagicMock()
+        task3.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task3.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=False)
+        task3.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task3.vdm_db_utils = MagicMock()
+        task3.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        
+        task3.task_worker()
+        
+        # Verify: No freeze (no statistics support), only basic + flags
+        assert task3.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task3.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task3.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        assert mock_post_pm_info.call_count == 0
+
+        # Case 4: Module supports both VDM statistics AND is a coherent module
+        # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
+        task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task4.DOM_INFO_UPDATE_PERIOD_SECS = 0
+        task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task4.port_mapping.logical_port_list = ['Ethernet0']
+        task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task4.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task4.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task4.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+        task4.dom_db_utils = MagicMock()
+        task4.status_db_utils = MagicMock()
+        task4.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=True)
+        task4.vdm_utils.is_vdm_statistic_supported = MagicMock(return_value=True)
+        task4.vdm_utils.get_vdm_real_values_basic = MagicMock(return_value={'basic_key': 'basic_value'})
+        task4.vdm_utils.get_vdm_real_values_statistic = MagicMock(return_value={'stat_key': 'stat_value'})
+        task4.vdm_utils._freeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_utils._unfreeze_vdm_stats_and_confirm = MagicMock(return_value=True)
+        task4.vdm_db_utils = MagicMock()
+        task4.xcvrd_utils.is_transceiver_lpmode_on = MagicMock(return_value=False)
+        task4.task_worker()
+        # Verify: Freeze happened, both basic and statistic values captured, and PM called
+        assert task4.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_basic.call_count == 1
+        assert task4.vdm_utils.get_vdm_real_values_statistic.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 1
+        assert task4.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
+        # PM should have been captured only for Case 4 (statistics supported)
+        assert mock_post_pm_info.call_count == 1
 
     @pytest.mark.parametrize(
         "physical_port, logical_port_list, asic_index, transceiver_presence, port_in_error_status, vdm_supported, expected_logs",
@@ -4920,18 +5157,53 @@ class TestXcvrdScript(object):
         mock_sfp.get_transceiver_vdm_thresholds.side_effect = NotImplementedError
         assert vdm_utils.get_vdm_thresholds(1) == {}
 
-    def test_get_vdm_real_values(self):
+    def test_is_vdm_statistic_supported(self):
         mock_sfp = MagicMock()
         vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
 
-        mock_sfp.get_transceiver_vdm_real_value.return_value = True
-        assert vdm_utils.get_vdm_real_values(1)
+        mock_sfp.is_vdm_statistic_supported.return_value = True
+        assert vdm_utils.is_vdm_statistic_supported(1) == True
 
-        mock_sfp.get_transceiver_vdm_real_value.return_value = {}
-        assert vdm_utils.get_vdm_real_values(1) == {}
+        mock_sfp.is_vdm_statistic_supported.return_value = False
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
 
-        mock_sfp.get_transceiver_vdm_real_value.side_effect = NotImplementedError
-        assert vdm_utils.get_vdm_real_values(1) == {}
+        mock_sfp.is_vdm_statistic_supported.side_effect = NotImplementedError
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
+
+        mock_sfp.is_vdm_statistic_supported.side_effect = AttributeError
+        assert vdm_utils.is_vdm_statistic_supported(1) == False
+
+    def test_get_vdm_real_values_basic(self):
+        mock_sfp = MagicMock()
+        vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.return_value = {'basic_key': 'basic_value'}
+        assert vdm_utils.get_vdm_real_values_basic(1) == {'basic_key': 'basic_value'}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.return_value = {}
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = NotImplementedError
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_basic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_basic(1) == {}
+
+    def test_get_vdm_real_values_statistic(self):
+        mock_sfp = MagicMock()
+        vdm_utils = VDMUtils({1 : mock_sfp}, helper_logger)
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.return_value = {'stat_key': 'stat_value'}
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {'stat_key': 'stat_value'}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.return_value = {}
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = NotImplementedError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
+
+        mock_sfp.get_transceiver_vdm_real_value_statistic.side_effect = AttributeError
+        assert vdm_utils.get_vdm_real_values_statistic(1) == {}
 
     def test_get_vdm_flags(self):
         mock_sfp = MagicMock()
