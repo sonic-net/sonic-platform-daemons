@@ -14,9 +14,14 @@ import time
 from datetime import datetime
 
 import sonic_platform
-from sonic_py_common import daemon_base, logger
+from sonic_py_common import daemon_base, logger, device_info, multi_asic
 from sonic_py_common.task_base import ThreadTaskBase
 from swsscommon import swsscommon
+
+try:
+    from sonic_platform_base.sonic_sfp.sfputilhelper import SfpUtilHelper
+except ImportError:
+    SfpUtilHelper = None
 
 
 # TODO: Once we no longer support Python 2, we can eliminate this and get the
@@ -28,6 +33,9 @@ SYSLOG_IDENTIFIER = 'thermalctld'
 NOT_AVAILABLE = 'N/A'
 CHASSIS_INFO_KEY = 'chassis 1'
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
+TRANSCEIVER_DOM_TEMPERATURE_TABLE = 'TRANSCEIVER_DOM_TEMPERATURE'
+TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
+TRANSCEIVER_DOM_SENSOR_TABLE = 'TRANSCEIVER_DOM_SENSOR'
 INVALID_SLOT_OR_DPU = -1
 
 ERR_UNKNOWN = 1
@@ -538,8 +546,14 @@ class TemperatureUpdater(logger.Logger):
         state_db = daemon_base.db_connect("STATE_DB")
         self.table = swsscommon.Table(state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
+        self.xcvr_dom_temp_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_TEMPERATURE_TABLE)
+        self.xcvr_dom_threshold_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_THRESHOLD_TABLE)
+        self.xcvr_dom_sensor_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
         self.chassis_table = None
         self.all_thermals = set()
+
+        # Initialize SfpUtilHelper for port index to logical port name mapping
+        self.sfp_util = self._init_sfp_util_helper()
 
         self.is_chassis_system = chassis.is_modular_chassis()
         self.is_smartswitch_dpu = chassis.is_smartswitch() and chassis.is_dpu()
@@ -573,6 +587,52 @@ class TemperatureUpdater(logger.Logger):
             phy_entity_keys = self.phy_entity_table.getKeys()
             for pek in phy_entity_keys:
                 self.phy_entity_table._del(pek)
+
+    def _init_sfp_util_helper(self):
+        """
+        Initialize SfpUtilHelper and read port table mappings.
+        This provides the physical_to_logical mapping for SFP temperature lookup.
+
+        :return: SfpUtilHelper instance or None if initialization fails
+        """
+        if SfpUtilHelper is None:
+            self.log_warning("SfpUtilHelper not available, SFP temperature from Redis disabled")
+            return None
+
+        try:
+            sfp_util = SfpUtilHelper()
+            if multi_asic.is_multi_asic():
+                (_, hwsku_path) = device_info.get_paths_to_platform_and_hwsku_dirs()
+                sfp_util.read_all_porttab_mappings(hwsku_path, multi_asic.get_num_asics())
+            else:
+                port_config_file_path = device_info.get_path_to_port_config_file()
+                sfp_util.read_porttab_mappings(port_config_file_path, 0)
+            return sfp_util
+        except SystemExit:
+            self.log_warning("Failed to initialize SfpUtilHelper: port config not available")
+            return None
+        except Exception as e:
+            self.log_warning("Failed to initialize SfpUtilHelper: {}".format(e))
+            return None
+
+    def _get_port_name_by_index(self, sfp_index):
+        """
+        Get logical port name for a given SFP index (0-based).
+        Uses SfpUtilHelper.get_physical_to_logical() API.
+
+        :param sfp_index: SFP index (0-based)
+        :return: Logical port name or None if not found
+        """
+        if self.sfp_util is None:
+            return None
+
+        # SFP index is 0-based, but physical port index is 1-based
+        physical_index = sfp_index + 1
+        logical_ports = self.sfp_util.get_physical_to_logical(physical_index)
+        if logical_ports and len(logical_ports) > 0:
+            # Return the first logical port (for breakout, this is the primary port with DOM data)
+            return logical_ports[0]
+        return None
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -618,7 +678,12 @@ class TemperatureUpdater(logger.Logger):
                     return
 
                 available_thermals.add((thermal, parent_name, thermal_index))
-                self._refresh_temperature_status(parent_name, thermal, thermal_index)
+                # TODO: This Redis-based approach for reading SFP temperature is temporary.
+                # It will be removed once all platforms migrate to handling optics temperature
+                # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
+                port_name = self._get_port_name_by_index(sfp_index)
+                if port_name:
+                    self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
 
         # As there are no modules present in DPU, this IF condition is not updated to consider DPU chassis
         if self.is_chassis_system:
@@ -639,7 +704,12 @@ class TemperatureUpdater(logger.Logger):
                             return
 
                         available_thermals.add((thermal, sfp_name, thermal_index))
-                        self._refresh_temperature_status(sfp_name, thermal, thermal_index)
+                        # TODO: This Redis-based approach for reading SFP temperature is temporary.
+                        # It will be removed once all platforms migrate to handling optics temperature
+                        # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
+                        port_name = self._get_port_name_by_index(sfp_index)
+                        if port_name:
+                            self._refresh_temperature_status(sfp_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
                     if psu.get_presence():
@@ -657,12 +727,17 @@ class TemperatureUpdater(logger.Logger):
 
         self.log_debug("End temperature updating")
 
-    def _refresh_temperature_status(self, parent_name, thermal, thermal_index):
+    def _refresh_temperature_status(self, parent_name, thermal, thermal_index, is_sfp=False, port_name=None):
         """
-        Get temperature status by platform API and write to database
+        Get temperature status and write to database.
+        For regular thermals, reads from platform API.
+        For SFP thermals (is_sfp=True), reads from Redis tables populated by xcvrd.
+
         :param parent_name: Name of parent device of the thermal object
         :param thermal: Object representing a platform thermal zone
         :param thermal_index: Index of the thermal object in platform chassis
+        :param is_sfp: True if this is an SFP thermal reading from Redis
+        :param port_name: Port name for Redis lookup (required if is_sfp=True)
         :return:
         """
         try:
@@ -672,7 +747,7 @@ class TemperatureUpdater(logger.Logger):
             # for SFP thermal, they don't need save entity info because snmp can deduce the relation from TRANSCEIVER_DOM_SENSOR
             # and as we save logical port in TRANSCEIVER_INFO table, for split cable, a SFP thermal might have multiple parent
             # logical port
-            if 'SFP' not in parent_name:
+            if 'SFP' not in parent_name and not is_sfp:
                 update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
 
             if name not in self.temperature_status_dict:
@@ -686,35 +761,45 @@ class TemperatureUpdater(logger.Logger):
             low_critical_threshold = NOT_AVAILABLE
             maximum_temperature = NOT_AVAILABLE
             minimum_temperature = NOT_AVAILABLE
-            temperature = try_get(thermal.get_temperature)
-            is_replaceable = try_get(thermal.is_replaceable, False)
-            if temperature != NOT_AVAILABLE:
-                temperature_status.set_temperature(name, temperature)
-                minimum_temperature = try_get(thermal.get_minimum_recorded)
-                maximum_temperature = try_get(thermal.get_maximum_recorded)
-                high_threshold = try_get(thermal.get_high_threshold)
-                low_threshold = try_get(thermal.get_low_threshold)
-                high_critical_threshold = try_get(thermal.get_high_critical_threshold)
-                low_critical_threshold = try_get(thermal.get_low_critical_threshold)
+
+            if is_sfp:
+                # Read SFP temperature and thresholds from Redis
+                temperature = self._get_sfp_temperature_from_db(port_name)
+                is_replaceable = try_get(thermal.is_replaceable, True)
+                high_threshold, low_threshold, high_critical_threshold, low_critical_threshold = \
+                    self._get_sfp_thresholds_from_db(port_name)
+            else:
+                # Read from platform API
+                temperature = try_get(thermal.get_temperature)
+                is_replaceable = try_get(thermal.is_replaceable, False)
+                if temperature != NOT_AVAILABLE:
+                    minimum_temperature = try_get(thermal.get_minimum_recorded)
+                    maximum_temperature = try_get(thermal.get_maximum_recorded)
+                    high_threshold = try_get(thermal.get_high_threshold)
+                    low_threshold = try_get(thermal.get_low_threshold)
+                    high_critical_threshold = try_get(thermal.get_high_critical_threshold)
+                    low_critical_threshold = try_get(thermal.get_low_critical_threshold)
 
             warning = False
-            if temperature != NOT_AVAILABLE and temperature_status.set_over_temperature(temperature, high_threshold):
-                self._log_on_status_changed(not temperature_status.over_temperature,
-                                            'High temperature warning cleared: {} temperature restored to {}C, high threshold {}C'.
-                                            format(name, temperature, high_threshold),
-                                            'High temperature warning: {} current temperature {}C, high threshold {}C'.
-                                            format(name, temperature, high_threshold)
-                                            )
-            warning = warning | temperature_status.over_temperature
+            if temperature != NOT_AVAILABLE:
+                temperature_status.set_temperature(name, temperature)
+                if temperature_status.set_over_temperature(temperature, high_threshold):
+                    self._log_on_status_changed(not temperature_status.over_temperature,
+                                                'High temperature warning cleared: {} temperature restored to {}C, high threshold {}C'.
+                                                format(name, temperature, high_threshold),
+                                                'High temperature warning: {} current temperature {}C, high threshold {}C'.
+                                                format(name, temperature, high_threshold)
+                                                )
+                warning = warning | temperature_status.over_temperature
 
-            if temperature != NOT_AVAILABLE and temperature_status.set_under_temperature(temperature, low_threshold):
-                self._log_on_status_changed(not temperature_status.under_temperature,
-                                            'Low temperature warning cleared: {} temperature restored to {}C, low threshold {}C'.
-                                            format(name, temperature, low_threshold),
-                                            'Low temperature warning: {} current temperature {}C, low threshold {}C'.
-                                            format(name, temperature, low_threshold)
-                                            )
-            warning = warning | temperature_status.under_temperature
+                if temperature_status.set_under_temperature(temperature, low_threshold):
+                    self._log_on_status_changed(not temperature_status.under_temperature,
+                                                'Low temperature warning cleared: {} temperature restored to {}C, low threshold {}C'.
+                                                format(name, temperature, low_threshold),
+                                                'Low temperature warning: {} current temperature {}C, low threshold {}C'.
+                                                format(name, temperature, low_threshold)
+                                                )
+                warning = warning | temperature_status.under_temperature
 
             fvs = swsscommon.FieldValuePairs(
                 [('temperature', str(temperature)),
@@ -737,10 +822,91 @@ class TemperatureUpdater(logger.Logger):
 
     def _remove_thermal_from_db(self, thermal, parent_name, thermal_index):
         name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
-        self.table._del(name)
+        try:
+            self.table._del(name)
+        except Exception:
+            pass
 
         if self.chassis_table is not None:
-            self.chassis_table._del(name)
+            try:
+                self.chassis_table._del(name)
+            except Exception:
+                pass
+
+    def _get_sfp_temperature_from_db(self, port_name):
+        """
+        Get SFP temperature from Redis. First tries TRANSCEIVER_DOM_TEMPERATURE table,
+        then falls back to TRANSCEIVER_DOM_SENSOR table. Both are populated by xcvrd daemon.
+
+        :param port_name: Port name (e.g., 'Ethernet0')
+        :return: Temperature value as float, or NOT_AVAILABLE if not found
+        """
+        # First try TRANSCEIVER_DOM_TEMPERATURE table
+        try:
+            status, fvs = self.xcvr_dom_temp_tbl.get(port_name)
+            if status:
+                for field, value in fvs:
+                    if field == 'temperature':
+                        if value and value != 'N/A' and value != 'N/A C':
+                            temp_str = value.split()[0] if ' ' in value else value
+                            return float(temp_str)
+        except Exception as e:
+            self.log_debug("Failed to get SFP temperature for {} from DOM_TEMPERATURE: {}".format(port_name, e))
+
+        # Fallback to TRANSCEIVER_DOM_SENSOR table
+        try:
+            status, fvs = self.xcvr_dom_sensor_tbl.get(port_name)
+            if status:
+                for field, value in fvs:
+                    if field == 'temperature':
+                        if value and value != 'N/A' and value != 'N/A C':
+                            temp_str = value.split()[0] if ' ' in value else value
+                            return float(temp_str)
+                        return NOT_AVAILABLE
+        except Exception as e:
+            self.log_debug("Failed to get SFP temperature for {} from DOM_SENSOR: {}".format(port_name, e))
+        return NOT_AVAILABLE
+
+    def _get_sfp_thresholds_from_db(self, port_name):
+        """
+        Get SFP temperature thresholds from Redis. First tries TRANSCEIVER_DOM_THRESHOLD table,
+        then falls back to TRANSCEIVER_DOM_SENSOR table.
+
+        :param port_name: Port name (e.g., 'Ethernet0')
+        :return: Tuple of (high_threshold, low_threshold, high_critical_threshold, low_critical_threshold)
+        """
+        high_threshold = NOT_AVAILABLE
+        low_threshold = NOT_AVAILABLE
+        high_critical_threshold = NOT_AVAILABLE
+        low_critical_threshold = NOT_AVAILABLE
+
+        fvs_dict = {}
+        try:
+            # First try TRANSCEIVER_DOM_THRESHOLD table
+            status, fvs = self.xcvr_dom_threshold_tbl.get(port_name)
+            if status:
+                fvs_dict = dict(fvs)
+            # Fallback to TRANSCEIVER_DOM_SENSOR table if no thresholds found
+            if not fvs_dict or 'temphighwarning' not in fvs_dict:
+                status, fvs = self.xcvr_dom_sensor_tbl.get(port_name)
+                if status:
+                    fvs_dict = dict(fvs)
+        except Exception as e:
+            self.log_debug("Failed to get SFP thresholds for {} from DB: {}".format(port_name, e))
+
+        try:
+            if 'temphighwarning' in fvs_dict and fvs_dict['temphighwarning'] not in ('N/A', ''):
+                high_threshold = float(fvs_dict['temphighwarning'].split()[0]) if ' ' in fvs_dict['temphighwarning'] else float(fvs_dict['temphighwarning'])
+            if 'templowwarning' in fvs_dict and fvs_dict['templowwarning'] not in ('N/A', ''):
+                low_threshold = float(fvs_dict['templowwarning'].split()[0]) if ' ' in fvs_dict['templowwarning'] else float(fvs_dict['templowwarning'])
+            if 'temphighalarm' in fvs_dict and fvs_dict['temphighalarm'] not in ('N/A', ''):
+                high_critical_threshold = float(fvs_dict['temphighalarm'].split()[0]) if ' ' in fvs_dict['temphighalarm'] else float(fvs_dict['temphighalarm'])
+            if 'templowalarm' in fvs_dict and fvs_dict['templowalarm'] not in ('N/A', ''):
+                low_critical_threshold = float(fvs_dict['templowalarm'].split()[0]) if ' ' in fvs_dict['templowalarm'] else float(fvs_dict['templowalarm'])
+        except Exception as e:
+            self.log_debug("Failed to parse SFP thresholds for {}: {}".format(port_name, e))
+
+        return high_threshold, low_threshold, high_critical_threshold, low_critical_threshold
 
 
 class ThermalMonitor(ThreadTaskBase):

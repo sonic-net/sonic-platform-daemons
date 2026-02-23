@@ -288,6 +288,7 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
+
 class TestThermalMonitor(object):
     """
     Test cases to cover functionality in ThermalMonitor class
@@ -452,6 +453,7 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         chassis.make_over_temper_thermal()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -466,6 +468,7 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         chassis.make_under_temper_thermal()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         thermal_list = chassis.get_all_thermals()
         assert temperature_updater.log_warning.call_count == 1
@@ -483,6 +486,7 @@ class TestTemperatureUpdater(object):
         psu._thermal_list.append(mock_thermal)
         chassis._psu_list.append(psu)
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
@@ -497,24 +501,33 @@ class TestTemperatureUpdater(object):
             temperature_updater.log_warning.assert_called_with("Failed to update thermal status for PSU 1 Thermal 1 - Exception('Test message',)")
 
     def test_update_sfp_thermals(self):
+        """Test SFP thermal processing with Redis-based temperature reading"""
         chassis = MockChassis()
         sfp = MockSfp()
         mock_thermal = MockThermal()
         sfp._thermal_list.append(mock_thermal)
         chassis._sfp_list.append(sfp)
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Reset warning count after init (init may log SfpUtilHelper warning)
+        temperature_updater.log_warning.reset_mock()
+
+        # With sfp_util as None (default), no Redis reading happens, no warnings
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 0
 
-        mock_thermal.get_temperature = mock.MagicMock(side_effect=Exception("Test message"))
-        temperature_updater.update()
-        assert temperature_updater.log_warning.call_count == 1
+        # With sfp_util mocked and port_name available, Redis reading is attempted
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [])
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
 
-        # TODO: Clean this up once we no longer need to support Python 2
-        if sys.version_info.major == 3:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message')")
-        else:
-            temperature_updater.log_warning.assert_called_with("Failed to update thermal status for SFP 1 Thermal 1 - Exception('Test message',)")
+        temperature_updater.update()
+        # Verify Redis table was queried
+        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
 
     def test_update_thermal_with_exception(self):
         chassis = MockChassis()
@@ -524,6 +537,7 @@ class TestTemperatureUpdater(object):
         chassis.get_all_thermals().append(thermal)
 
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.log_warning.reset_mock()
         temperature_updater.update()
         assert temperature_updater.log_warning.call_count == 2
 
@@ -551,6 +565,476 @@ class TestTemperatureUpdater(object):
         chassis._module_list = []
         temperature_updater.update()
         assert len(temperature_updater.all_thermals) == 0
+
+    def test_sfp_temperature_from_redis(self):
+        """Test reading SFP temperature from Redis tables and verify TEMPERATURE_INFO is populated correctly"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._name = 'Ethernet0'
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper to return correct port mapping
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Mock the Redis tables to return temperature data
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0'),
+            ('templowwarning', '-5.0'),
+            ('temphighalarm', '75.0'),
+            ('templowalarm', '-10.0')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+
+        # Use a real Table object to capture the set() calls
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        # Verify temperature was read from Redis
+        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
+        temperature_updater.xcvr_dom_threshold_tbl.get.assert_called_with('Ethernet0')
+
+        # Verify TEMPERATURE_INFO table was populated with correct values
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify parsed temperature value
+        assert stored_data['temperature'] == '55.5'
+        # Verify parsed threshold values
+        assert stored_data['high_threshold'] == '70.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '75.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
+        # Verify warning status (should be False since 55.5 is within thresholds)
+        assert stored_data['warning_status'] == 'False'
+        # Verify other expected fields exist
+        assert 'minimum_temperature' in stored_data
+        assert 'maximum_temperature' in stored_data
+        assert 'is_replaceable' in stored_data
+        assert 'timestamp' in stored_data
+
+    def test_sfp_temperature_warning_status(self):
+        """Test that warning_status is True when temperature exceeds high threshold"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Temperature exceeds high threshold (80 > 70)
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '80.0')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0'),
+            ('templowwarning', '-5.0')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+        assert stored_data['temperature'] == '80.0'
+        assert stored_data['warning_status'] == 'True'
+
+    def test_sfp_temperature_fallback_to_dom_sensor(self):
+        """Test fallback to TRANSCEIVER_DOM_SENSOR table when DOM_TEMPERATURE is not available"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._name = 'Ethernet0'
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Mock DOM_TEMPERATURE table to return no data
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+
+        # Mock DOM_THRESHOLD table to return no data
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+
+        # Mock DOM_SENSOR table to return temperature data (fallback)
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [
+            ('temperature', '60.0'),
+            ('temphighwarning', '75.0'),
+            ('templowwarning', '-5.0'),
+            ('temphighalarm', '80.0'),
+            ('templowalarm', '-10.0')
+        ])
+
+        # Use a real Table object to capture the set() calls
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        # Verify fallback to DOM_SENSOR table was called
+        temperature_updater.xcvr_dom_sensor_tbl.get.assert_called()
+
+        # Verify TEMPERATURE_INFO table was populated with fallback values
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify temperature from DOM_SENSOR fallback
+        assert stored_data['temperature'] == '60.0'
+        # Verify thresholds from DOM_SENSOR fallback
+        assert stored_data['high_threshold'] == '75.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '80.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
+
+    def test_sfp_temperature_no_sfp_util(self):
+        """Test that SFP temperature is skipped when SfpUtilHelper is not available"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._thermal_list.append(MockThermal())
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Reset warning count after init (init may log SfpUtilHelper warning)
+        temperature_updater.log_warning.reset_mock()
+
+        # Set sfp_util to None (simulating import failure)
+        temperature_updater.sfp_util = None
+
+        # Should not raise exception
+        temperature_updater.update()
+        assert temperature_updater.log_warning.call_count == 0
+
+    def test_get_port_name_by_index(self):
+        """Test _get_port_name_by_index method"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the SfpUtilHelper
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0', 'Ethernet1']
+
+        # Test getting port name for index 0 (physical index 1)
+        port_name = temperature_updater._get_port_name_by_index(0)
+        assert port_name == 'Ethernet0'
+        temperature_updater.sfp_util.get_physical_to_logical.assert_called_with(1)
+
+        # Test with no mapping found
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = None
+        port_name = temperature_updater._get_port_name_by_index(5)
+        assert port_name is None
+
+        # Test with sfp_util not available
+        temperature_updater.sfp_util = None
+        port_name = temperature_updater._get_port_name_by_index(0)
+        assert port_name is None
+
+    def test_get_sfp_temperature_from_db(self):
+        """Test _get_sfp_temperature_from_db method"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock the Redis tables
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+
+        # Test reading from DOM_TEMPERATURE table
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 55.5
+
+        # Test fallback to DOM_SENSOR table
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [('temperature', '60.0')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 60.0
+
+        # Test with N/A value
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == thermalctld.NOT_AVAILABLE
+
+        # Test with temperature value containing unit suffix
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 55.5
+
+    def test_sfp_temperature_na_value(self):
+        """Test that N/A temperature is stored correctly in TEMPERATURE_INFO"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Return N/A temperature
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify N/A temperature is stored correctly
+        assert stored_data['temperature'] == 'N/A'
+        # Verify thresholds are also N/A when not available
+        assert stored_data['high_threshold'] == 'N/A'
+        assert stored_data['low_threshold'] == 'N/A'
+        # Warning status should be False when temperature is N/A
+        assert stored_data['warning_status'] == 'False'
+
+    def test_sfp_temperature_with_unit_suffix(self):
+        """Test parsing temperature values with unit suffix (e.g., '55.5 C')"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        thermal = MockThermal()
+        thermal._name = 'xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        chassis._sfp_list.append(sfp)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Temperature with unit suffix
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+
+        # Thresholds with unit suffix
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0 C'),
+            ('templowwarning', '-5.0 C'),
+            ('temphighalarm', '75.0 C'),
+            ('templowalarm', '-10.0 C')
+        ])
+
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        stored_data = temperature_updater.table.mock_dict['xSFP module 1 Temp']
+
+        # Verify unit suffix is stripped from values
+        assert stored_data['temperature'] == '55.5'
+        assert stored_data['high_threshold'] == '70.0'
+        assert stored_data['low_threshold'] == '-5.0'
+        assert stored_data['critical_high_threshold'] == '75.0'
+        assert stored_data['critical_low_threshold'] == '-10.0'
+
+    def test_init_sfp_util_helper_multi_asic(self):
+        """Test _init_sfp_util_helper with multi-asic configuration"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        with mock.patch.object(thermalctld, 'SfpUtilHelper') as mock_sfp_util_class, \
+             mock.patch.object(thermalctld.multi_asic, 'is_multi_asic', return_value=True), \
+             mock.patch.object(thermalctld.multi_asic, 'get_num_asics', return_value=2), \
+             mock.patch.object(thermalctld.device_info, 'get_paths_to_platform_and_hwsku_dirs', return_value=('/platform', '/hwsku')):
+            mock_sfp_util_instance = mock.MagicMock()
+            mock_sfp_util_class.return_value = mock_sfp_util_instance
+
+            result = temperature_updater._init_sfp_util_helper()
+
+            assert result is mock_sfp_util_instance
+            mock_sfp_util_instance.read_all_porttab_mappings.assert_called_once_with('/hwsku', 2)
+
+    def test_init_sfp_util_helper_system_exit(self):
+        """Test _init_sfp_util_helper handles SystemExit from read_porttab_mappings"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        with mock.patch.object(thermalctld, 'SfpUtilHelper') as mock_sfp_util_class, \
+             mock.patch.object(thermalctld.multi_asic, 'is_multi_asic', return_value=False), \
+             mock.patch.object(thermalctld.device_info, 'get_path_to_port_config_file', return_value='/path/to/port_config.ini'):
+            mock_sfp_util_instance = mock.MagicMock()
+            mock_sfp_util_instance.read_porttab_mappings.side_effect = SystemExit(1)
+            mock_sfp_util_class.return_value = mock_sfp_util_instance
+
+            result = temperature_updater._init_sfp_util_helper()
+
+            assert result is None
+            temperature_updater.log_warning.assert_called()
+
+    def test_init_sfp_util_helper_exception(self):
+        """Test _init_sfp_util_helper handles generic Exception"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        with mock.patch.object(thermalctld, 'SfpUtilHelper') as mock_sfp_util_class, \
+             mock.patch.object(thermalctld.multi_asic, 'is_multi_asic', return_value=False), \
+             mock.patch.object(thermalctld.device_info, 'get_path_to_port_config_file', return_value='/path/to/port_config.ini'):
+            mock_sfp_util_instance = mock.MagicMock()
+            mock_sfp_util_instance.read_porttab_mappings.side_effect = Exception("File not found")
+            mock_sfp_util_class.return_value = mock_sfp_util_instance
+
+            result = temperature_updater._init_sfp_util_helper()
+
+            assert result is None
+            temperature_updater.log_warning.assert_called()
+
+    def test_init_sfp_util_helper_not_available(self):
+        """Test _init_sfp_util_helper when SfpUtilHelper import failed"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Save original and set to None
+        original_sfp_util_helper = thermalctld.SfpUtilHelper
+        thermalctld.SfpUtilHelper = None
+
+        try:
+            result = temperature_updater._init_sfp_util_helper()
+            assert result is None
+            temperature_updater.log_warning.assert_called()
+        finally:
+            thermalctld.SfpUtilHelper = original_sfp_util_helper
+
+    def test_modular_chassis_sfp_thermals(self):
+        """Test SFP thermal updates on modular chassis with modules"""
+        chassis = MockChassis()
+        chassis.set_modular_chassis(True)
+        chassis.set_my_slot(1)
+
+        # Create a module with SFP
+        module = MockModule(1)
+        module._name = 'Module 1'
+        sfp = MockSfp()
+        thermal = MockThermal()
+        thermal._name = 'Module 1 xSFP module 1 Temp'
+        sfp._thermal_list.append(thermal)
+        module._sfp_list.append(sfp)
+        chassis._module_list.append(module)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+        temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+
+        # Mock Redis tables
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '45.0')])
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', '70.0'),
+            ('templowwarning', '-5.0'),
+            ('temphighalarm', '75.0'),
+            ('templowalarm', '-10.0')
+        ])
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
+
+        temperature_updater.update()
+
+        # Verify module SFP thermal was updated
+        assert 'Module 1 xSFP module 1 Temp' in temperature_updater.table.mock_dict
+
+    def test_remove_thermal_from_db_exceptions(self):
+        """Test _remove_thermal_from_db handles exceptions gracefully"""
+        chassis = MockChassis()
+        chassis.set_modular_chassis(True)
+        chassis.set_my_slot(1)
+
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        # Mock table to raise exception on _del
+        temperature_updater.table = mock.MagicMock()
+        temperature_updater.table._del.side_effect = Exception("Redis error")
+
+        temperature_updater.chassis_table = mock.MagicMock()
+        temperature_updater.chassis_table._del.side_effect = Exception("Chassis DB error")
+
+        # Create a mock thermal
+        thermal = MockThermal()
+        thermal._name = 'Test Thermal'
+
+        # Should not raise exception
+        temperature_updater._remove_thermal_from_db(thermal, 'Test Parent', 0)
+
+    def test_get_sfp_temperature_from_db_exception_dom_temp(self):
+        """Test _get_sfp_temperature_from_db handles exception from DOM_TEMPERATURE table"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.side_effect = Exception("Redis error")
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [('temperature', '50.0')])
+
+        # Should fallback to DOM_SENSOR
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == 50.0
+
+    def test_get_sfp_temperature_from_db_exception_dom_sensor(self):
+        """Test _get_sfp_temperature_from_db handles exception from DOM_SENSOR table"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.side_effect = Exception("Redis error")
+
+        temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
+        assert temp == thermalctld.NOT_AVAILABLE
+
+    def test_get_sfp_thresholds_from_db_exception(self):
+        """Test _get_sfp_thresholds_from_db handles parsing exceptions"""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+
+        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
+        # Return invalid threshold value that will cause float() to fail
+        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+            ('temphighwarning', 'invalid_float'),
+        ])
+        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+
+        # Should return N/A values without raising exception
+        high, low, high_crit, low_crit = temperature_updater._get_sfp_thresholds_from_db('Ethernet0')
+        assert high == thermalctld.NOT_AVAILABLE
+        assert low == thermalctld.NOT_AVAILABLE
+        assert high_crit == thermalctld.NOT_AVAILABLE
+        assert low_crit == thermalctld.NOT_AVAILABLE
 
 
 # DPU chassis-related tests
@@ -810,14 +1294,14 @@ class TestThermalControlDaemon(object):
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.side_effect = Exception("Failed to initialize chassis")
             mock_platform_class.return_value = mock_platform_instance
-            
+
             # ThermalControlDaemon should raise SystemExit with CHASSIS_GET_ERROR code when chassis initialization fails
             with pytest.raises(SystemExit) as exc_info:
                 daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
-            
+
             # Verify it exits with the correct error code
             assert exc_info.value.code == thermalctld.CHASSIS_GET_ERROR
-            
+
             # Verify chassis initialization failure was logged
             mock_log_error.assert_called()
             expected_msg = "Failed to get chassis due to Exception('Failed to initialize chassis')"
@@ -835,16 +1319,16 @@ class TestThermalControlDaemon(object):
             mock_platform_instance = mock.MagicMock()
             mock_platform_instance.get_chassis.return_value = mock_chassis
             mock_platform_class.return_value = mock_platform_instance
-            
+
             daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
-            
+
             # Verify chassis was set correctly
             assert daemon_thermalctld.chassis is mock_chassis
-            
+
             # Verify no chassis initialization error was logged
             for call_args in mock_log_error.call_args_list:
                 args, _ = call_args
                 assert "Failed to get chassis due to" not in args[0]
-            
+
             # Clean up
             daemon_thermalctld.deinit()

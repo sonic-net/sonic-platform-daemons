@@ -175,7 +175,7 @@ class MockPsu(psu_base.PsuBase):
 
     def get_status(self):
         return self._status
-    
+
     def get_powergood_status(self):
         return self._status
 
@@ -472,5 +472,17 @@ class MockChassis(chassis_base.ChassisBase):
         return self._dpu_id
 
 class MockModule(module_base.ModuleBase):
-    def __init__(self):
+    def __init__(self, index=1):
         super(MockModule, self).__init__()
+        self._name = 'Module {}'.format(index)
+        self._sfp_list = []
+        self._psu_list = []
+
+    def get_name(self):
+        return self._name
+
+    def get_all_sfps(self):
+        return self._sfp_list
+
+    def get_all_psus(self):
+        return self._psu_list
