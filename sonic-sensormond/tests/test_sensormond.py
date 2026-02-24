@@ -113,17 +113,26 @@ class TestVoltageUpdater(object):
         voltage_updater.table._del = mock.MagicMock()
         voltage_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         voltage_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        # Pre-populate physical entity table so .get() returns non-None
+        voltage_updater.phy_entity_table.mock_dict['key1'] = {}
+        voltage_updater.phy_entity_table.mock_dict['key2'] = {}
+        voltage_updater.phy_entity_table.mock_dict['keyredundant'] = {}
         voltage_updater.phy_entity_table._del = mock.MagicMock()
-        voltage_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         voltage_updater.chassis_table = Table("STATE_DB", "ctable")
         voltage_updater.chassis_table._del = mock.MagicMock()
         voltage_updater.is_chassis_system = True
 
         voltage_updater.__del__()
+
+        # Verify voltage table entries are deleted
         assert voltage_updater.table.getKeys.call_count == 1
         assert voltage_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         voltage_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+
+        # Verify only physical entity entries in voltage_status_dict are deleted (not redundant)
+        assert voltage_updater.phy_entity_table._del.call_count == 2
+        voltage_updater.phy_entity_table._del.assert_has_calls(expected_calls, any_order=True)
 
     def test_over_voltage(self):
         chassis = MockChassis()
@@ -228,17 +237,26 @@ class TestCurrentUpdater(object):
         current_updater.table._del = mock.MagicMock()
         current_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         current_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        # Pre-populate physical entity table so .get() returns non-None
+        current_updater.phy_entity_table.mock_dict['key1'] = {}
+        current_updater.phy_entity_table.mock_dict['key2'] = {}
+        current_updater.phy_entity_table.mock_dict['keyredundant'] = {}
         current_updater.phy_entity_table._del = mock.MagicMock()
-        current_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         current_updater.chassis_table = Table("STATE_DB", "ctable")
         current_updater.chassis_table._del = mock.MagicMock()
         current_updater.is_chassis_system = True
 
         current_updater.__del__()
+
+        # Verify current table entries are deleted
         assert current_updater.table.getKeys.call_count == 1
         assert current_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         current_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+
+        # Verify only physical entity entries in current_status_dict are deleted (not redundant)
+        assert current_updater.phy_entity_table._del.call_count == 2
+        current_updater.phy_entity_table._del.assert_has_calls(expected_calls, any_order=True)
 
     def test_over_current(self):
         chassis = MockChassis()

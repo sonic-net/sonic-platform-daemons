@@ -503,6 +503,11 @@ class DaemonPsud(daemon_base.DaemonBase):
                 self.psu_tbl._del(get_psu_key(psu_index))
             except Exception as e:
                 self.log_error("Failed to delete PSU {} info from DB: {}".format(psu_index, e))
+            if self.phy_entity_tbl.get(get_psu_key(psu_index)) is not None:
+                try:
+                    self.phy_entity_tbl._del(get_psu_key(psu_index))
+                except:
+                    self.log_error("Failed to delete physical entity info from DB: {}".format(e))
 
         if self.chassis_tbl is not None:
             try:
