@@ -188,6 +188,9 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_dp_tx_turnoff_duration_secs(self, api):
         return api.get_datapath_tx_turnoff_duration()/1000
 
+    def get_cmis_dp_tx_turnon_duration_secs(self, api):
+        return api.get_datapath_tx_turnon_duration()/1000
+
     def get_cmis_module_power_up_duration_secs(self, api):
         return api.get_module_pwr_up_duration()/1000
 
@@ -1084,12 +1087,18 @@ class CmisManagerTask(threading.Thread):
                 media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
                 api.tx_disable_channel(media_lanes_mask, False)
                 self.log_notice("{}: Turning ON tx power".format(lport))
+
+                # Arm timer for DP_ACTIVATE state using max(dpInitDuration, dpTxTurnOnDuration)
+                # for backward compatibility with older modules that may not properly
+                # populate DPTxTurnOnDuration and break with new sonic
+                dpInitDuration = self.get_cmis_dp_init_duration_secs(api)
+                dpTxTurnOnDuration = self.get_cmis_dp_tx_turnon_duration_secs(api)
+                dpActivateDuration = max(dpInitDuration, dpTxTurnOnDuration)
+                self.log_notice("{}: DpActivate duration {} secs, DpTxTurnOn duration {} secs".format(
+                    lport, dpActivateDuration, dpTxTurnOnDuration))
+                self.update_cmis_state_expiration_time(lport, dpActivateDuration)
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_ACTIVATE)
             elif state == CMIS_STATE_DP_ACTIVATE:
-                # Use dpInitDuration instead of MaxDurationDPTxTurnOn because
-                # some modules rely on dpInitDuration to turn on the Tx signal.
-                # This behavior deviates from the CMIS spec but is honored
-                # to prevent old modules from breaking with new sonic
                 if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
