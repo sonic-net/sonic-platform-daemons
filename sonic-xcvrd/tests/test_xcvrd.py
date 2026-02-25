@@ -228,6 +228,23 @@ port_media_settings_data = {'7': media_settings_global_default_port_media_key_la
 media_settings_global_default_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'Default': asic_serdes_si_settings_example}}
 media_settings_global_default_port_media_key_lane_speed_si['PORT_MEDIA_SETTINGS'] = port_media_settings_data
 
+# Fixture: PORT_MEDIA_SETTINGS vendor match should override GLOBAL_MEDIA_SETTINGS Default
+# for the same port. GLOBAL has only Default; PORT has a specific vendor entry.
+media_settings_port_overrides_global_default = {
+    'GLOBAL_MEDIA_SETTINGS': {
+        '0-31': {
+            'Default': asic_serdes_si_settings_example
+        }
+    },
+    'PORT_MEDIA_SETTINGS': {
+        '7': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example2
+            }
+        }
+    }
+}
+
 media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {
     LANE_SPEED_DEFAULT_KEY: asic_serdes_si_settings_example,
@@ -362,7 +379,7 @@ class TestXcvrdThreadException(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
-                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8', 
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8',
                                              'admin_status':'up', 'host_tx_status':'true'})
 
         # Case 1: get_xcvr_api() raises an exception
@@ -1627,6 +1644,8 @@ class TestXcvrdScript(object):
     (media_settings_port_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
     (media_settings_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
+    (media_settings_port_overrides_global_default, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
+    (media_settings_port_overrides_global_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
     (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'COPPER50'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
@@ -1683,11 +1702,11 @@ class TestXcvrdScript(object):
             result = media_settings_parser.get_media_settings_value(port, key)
             assert result == expected
 
-    @patch('xcvrd.xcvrd.platform_chassis')
-    def test_get_is_copper_exception(self, mock_chassis):
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
+    def test_is_copper_exception(self, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
-        result = media_settings_parser.get_is_copper(0)
+        result = common.is_copper(0)
         assert result == True
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
@@ -2079,7 +2098,7 @@ class TestXcvrdScript(object):
     def test_get_port_mapping(self, mock_swsscommon_table):
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0', 'Ethernet8'])
-        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), 
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )),
                         (True, (('index', 3), )), (True, (('index', 4), ('role', 'Dpc')))])
         mock_swsscommon_table.return_value = mock_table
         port_mapping = get_port_mapping(DEFAULT_NAMESPACE)
@@ -5699,7 +5718,7 @@ class TestOpticSiParser(object):
         """Test load_optics_si_settings when no file exists"""
         from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
 
-        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', 
+        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs',
                 return_value=('/nonexistent/platform', '/nonexistent/hwsku')):
             with patch('os.path.isfile', return_value=False):
                 result = load_optics_si_settings()
