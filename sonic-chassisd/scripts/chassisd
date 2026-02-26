@@ -622,6 +622,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         super(ChassisdDaemon, self).__init__(log_identifier)
 
         self.stop = threading.Event()
+        self.loop_interval = CHASSIS_INFO_UPDATE_PERIOD_SECS
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -663,31 +664,35 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         self.module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, platform_chassis, my_slot, supervisor_slot)
         self.module_updater.modules_num_update()
 
-
         if ((self.module_updater.my_slot == INVALID_SLOT) or
                 (self.module_updater.supervisor_slot == INVALID_SLOT)):
             self.log_error("Chassisd not supported for this platform")
             sys.exit(CHASSIS_NOT_SUPPORTED)
 
-        # Start configuration manager task on supervisor module
-        if self.module_updater.supervisor_slot == self.module_updater.my_slot:
-            config_manager = ConfigManagerTask()
-            config_manager.task_run()
-        else:
-            config_manager = None
+        try:
+            # Start configuration manager task on supervisor module
+            if self.module_updater.supervisor_slot == self.module_updater.my_slot:
+                config_manager = ConfigManagerTask()
+                config_manager.task_run()
+            else:
+                config_manager = None
 
-        # Start main loop
-        self.log_info("Start daemon main loop")
+            # Start main loop
+            self.log_info("Start daemon main loop")
 
-        while not self.stop.wait(CHASSIS_INFO_UPDATE_PERIOD_SECS):
-            self.module_updater.module_db_update()
-            self.module_updater.check_midplane_reachability()
-            self.module_updater.module_down_chassis_db_cleanup()
+            while not self.stop.wait(self.loop_interval):
+                self.module_updater.module_db_update()
+                self.module_updater.check_midplane_reachability()
+                self.module_updater.module_down_chassis_db_cleanup()
 
-        self.log_info("Stop daemon main loop")
+            self.log_info("Stop daemon main loop")
 
-        if config_manager is not None:
-            config_manager.task_stop()
+        finally:
+            # If we don't cleanup the config_manager process the chassisd process
+            # won't die when an exception occurs.
+            # https://github.com/sonic-net/sonic-buildimage/issues/24775
+            if self.config_manager is not None:
+                self.config_manager.task_stop()
 
         # Delete all the information from DB and then exit
         self.module_updater.deinit()
