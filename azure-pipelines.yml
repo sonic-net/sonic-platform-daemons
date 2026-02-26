@@ -115,7 +115,7 @@ jobs:
         sudo dpkg -i libyang_1.0.73_amd64.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Pipeline.Workspace)/target/debs/bookworm/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/bookworm/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -126,7 +126,7 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/bookworm/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/python-wheels/bookworm/
       displayName: 'Install Python dependencies'
 
     - script: |
