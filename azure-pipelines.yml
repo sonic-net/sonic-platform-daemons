@@ -18,7 +18,7 @@ pr:
     include:
       - '*'
 
-pool: sonic-common
+pool: sonictest
 
 resources:
   containers:
@@ -87,6 +87,22 @@ jobs:
         artifact: 'sonic-buildimage.vs'
         runVersion: 'latestFromBranch'
         runBranch: "$(sourceBranch)"
+        path: $(Build.ArtifactStagingDirectory)/download
+        patterns: |
+          target/debs/bullseye/libnl-3-200_*.deb
+          target/debs/bullseye/libnl-genl-3-200_*.deb
+          target/debs/bullseye/libnl-route-3-200_*.deb
+          target/debs/bullseye/libnl-nf-3-200_*.deb
+          target/debs/bullseye/libyang_1.0.73_amd64.deb
+          target/debs/bullseye/libswsscommon_1.0.0_amd64.deb
+          target/debs/bullseye/python3-swsscommon_1.0.0_amd64.deb
+
+          target/python-wheels/bullseye/swsssdk-2.0.1-py3-none-any.whl
+          target/python-wheels/bullseye/sonic_py_common-1.0-py3-none-any.whl
+          target/python-wheels/bullseye/sonic_yang_mgmt-1.0-py3-none-any.whl
+          target/python-wheels/bullseye/sonic_yang_models-1.0-py3-none-any.whl
+          target/python-wheels/bullseye/sonic_config_engine-1.0-py3-none-any.whl
+          target/python-wheels/bullseye/sonic_platform_common-1.0-py3-none-any.whl
       displayName: "Download artifacts from latest sonic-buildimage build"
 
     - script: |
@@ -99,7 +115,7 @@ jobs:
         sudo dpkg -i libyang_1.0.73_amd64.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Pipeline.Workspace)/target/debs/bullseye/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/bullseye/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -110,7 +126,7 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Pipeline.Workspace)/target/python-wheels/bullseye/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/python-wheels/bullseye/
       displayName: 'Install Python dependencies'
 
     - script: |
