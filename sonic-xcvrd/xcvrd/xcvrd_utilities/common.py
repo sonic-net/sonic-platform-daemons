@@ -112,6 +112,15 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_sw_tbl.set(logical_port_name, fvs)
 
+def is_copper(physical_port):
+    """Check if the transceiver on the given physical port is copper"""
+    if platform_chassis:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+        except (NotImplementedError, AttributeError):
+            helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
+    return True
+
 def _wrapper_get_presence(physical_port):
     """Wrapper function to get SFP presence status"""
     if platform_chassis is not None:
