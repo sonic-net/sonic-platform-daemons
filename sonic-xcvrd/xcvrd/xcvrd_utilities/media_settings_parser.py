@@ -103,7 +103,6 @@ class PortMediaSettingsParser(MediaSettingsParserBase):
                 break
 
         if len(media_dict) == 0:
-            helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
             return {}, {}
 
         media_settings = self.get_media_settings(key, media_dict)
