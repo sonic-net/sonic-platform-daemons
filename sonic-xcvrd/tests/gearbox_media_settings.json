@@ -1,0 +1,350 @@
+{
+  "PORT_MEDIA_SETTINGS": {
+    "1": {
+      "COPPER50": {
+        "gb_line_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_pre1": {
+          "lane0": "0xffffffec",
+          "lane1": "0xffffffec",
+          "lane2": "0xffffffec",
+          "lane3": "0xffffffec",
+          "lane4": "0xffffffec",
+          "lane5": "0xffffffec",
+          "lane6": "0xffffffec",
+          "lane7": "0xffffffec"
+        },
+        "gb_line_main": {
+          "lane0": "0x0000008c",
+          "lane1": "0x0000008c",
+          "lane2": "0x0000008c",
+          "lane3": "0x0000008c",
+          "lane4": "0x0000008c",
+          "lane5": "0x0000008c",
+          "lane6": "0x0000008c",
+          "lane7": "0x0000008c"
+        },
+        "gb_line_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_system_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_main": {
+          "lane0": "0x00000080",
+          "lane1": "0x00000080",
+          "lane2": "0x00000080",
+          "lane3": "0x00000080"
+        },
+        "gb_system_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        }
+      },
+      "OPTICAL50": {
+        "gb_line_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_pre1": {
+          "lane0": "0xffffffec",
+          "lane1": "0xffffffec",
+          "lane2": "0xffffffec",
+          "lane3": "0xffffffec",
+          "lane4": "0xffffffec",
+          "lane5": "0xffffffec",
+          "lane6": "0xffffffec",
+          "lane7": "0xffffffec"
+        },
+        "gb_line_main": {
+          "lane0": "0x0000008c",
+          "lane1": "0x0000008c",
+          "lane2": "0x0000008c",
+          "lane3": "0x0000008c",
+          "lane4": "0x0000008c",
+          "lane5": "0x0000008c",
+          "lane6": "0x0000008c",
+          "lane7": "0x0000008c"
+        },
+        "gb_line_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_line_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000",
+          "lane4": "0x00000000",
+          "lane5": "0x00000000",
+          "lane6": "0x00000000",
+          "lane7": "0x00000000"
+        },
+        "gb_system_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_main": {
+          "lane0": "0x00000080",
+          "lane1": "0x00000080",
+          "lane2": "0x00000080",
+          "lane3": "0x00000080"
+        },
+        "gb_system_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        }
+      },
+      "COPPER25": {
+        "gb_line_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_line_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_line_pre1": {
+          "lane0": "0xfffffff6",
+          "lane1": "0xfffffff6",
+          "lane2": "0xfffffff6",
+          "lane3": "0xfffffff6"
+        },
+        "gb_line_main": {
+          "lane0": "0x00000070",
+          "lane1": "0x00000070",
+          "lane2": "0x00000070",
+          "lane3": "0x00000070"
+        },
+        "gb_line_post1": {
+          "lane0": "0xfffffffe",
+          "lane1": "0xfffffffe",
+          "lane2": "0xfffffffe",
+          "lane3": "0xfffffffe"
+        },
+        "gb_line_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_main": {
+          "lane0": "0x00000080",
+          "lane1": "0x00000080",
+          "lane2": "0x00000080",
+          "lane3": "0x00000080"
+        },
+        "gb_system_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        }
+      },
+      "OPTICAL25": {
+        "gb_line_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_line_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_line_pre1": {
+          "lane0": "0xfffffff6",
+          "lane1": "0xfffffff6",
+          "lane2": "0xfffffff6",
+          "lane3": "0xfffffff6"
+        },
+        "gb_line_main": {
+          "lane0": "0x00000070",
+          "lane1": "0x00000070",
+          "lane2": "0x00000070",
+          "lane3": "0x00000070"
+        },
+        "gb_line_post1": {
+          "lane0": "0xfffffffe",
+          "lane1": "0xfffffffe",
+          "lane2": "0xfffffffe",
+          "lane3": "0xfffffffe"
+        },
+        "gb_line_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre3": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_pre1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_main": {
+          "lane0": "0x00000080",
+          "lane1": "0x00000080",
+          "lane2": "0x00000080",
+          "lane3": "0x00000080"
+        },
+        "gb_system_post1": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        },
+        "gb_system_post2": {
+          "lane0": "0x00000000",
+          "lane1": "0x00000000",
+          "lane2": "0x00000000",
+          "lane3": "0x00000000"
+        }
+      },
+    }
+  }
+}
