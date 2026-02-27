@@ -341,6 +341,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
     asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
 
     port_speed, lane_count, subport_num = get_speed_lane_count_and_subport(logical_port_name, xcvr_table_helper.get_cfg_port_tbl(asic_index))
+    gearbox_lanes_dict = xcvr_table_helper.get_gearbox_line_lanes_dict()
 
     ganged_port = False
     ganged_member_num = 1
@@ -365,7 +366,12 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                            ganged_member_num, ganged_port)
         
         ganged_member_num += 1
-        key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
+        # If the port has a gearbox, then we need to calculate the media settings key based on the number of
+        # lanes on the line-side of the gearbox
+        if logical_port_name in gearbox_lanes_dict:
+            key = get_media_settings_key(physical_port, transceiver_dict, port_speed, gearbox_lanes_dict[logical_port_name])
+        else:
+            key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_notice("Retrieving media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
         media_dict = get_media_settings_value(physical_port, key)
 
@@ -376,10 +382,13 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         fvs = swsscommon.FieldValuePairs(len(media_dict))
 
         index = 0
-        helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
+        helper_logger.log_notice("Publishing SI setting for port {} in APP_DB:".format(logical_port_name))
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
-                val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
+                if "gb_line" in media_key:
+                    val_str = get_serdes_si_setting_val_str(media_dict[media_key], gearbox_lanes_dict[logical_port_name], subport_num)
+                else:
+                    val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
             else:
                 val_str = media_dict[media_key]
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
@@ -388,5 +397,5 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
         xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
-        helper_logger.log_notice("Notify media setting: Published ASIC-side SI setting "
+        helper_logger.log_notice("Notify media setting: Published SI setting "
                                  "for lport {} in APP_DB".format(logical_port_name))
