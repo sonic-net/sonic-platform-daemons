@@ -386,9 +386,10 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         for media_key in media_dict:
             if type(media_dict[media_key]) is dict:
                 if "gb_line" in media_key:
-                    val_str = get_serdes_si_setting_val_str(media_dict[media_key], gearbox_lanes_dict[logical_port_name], subport_num)
+                    lane_count_si = gearbox_lanes_dict[logical_port_name]
                 else:
-                    val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
+                    lane_count_si = lane_count
+                val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count_si, subport_num)
             else:
                 val_str = media_dict[media_key]
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
