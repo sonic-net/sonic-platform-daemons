@@ -22,8 +22,6 @@ MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
 MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
 DEFAULT_KEY = 'Default'
-GEARBOX_LINE_SIDE_KEY = 'line'
-GEARBOX_SYSTEM_SIDE_KEY = 'system'
 # This is useful if default value is desired when no match is found for lane speed key
 LANE_SPEED_DEFAULT_KEY = LANE_SPEED_KEY_PREFIX + DEFAULT_KEY
 SYSLOG_IDENTIFIER = "xcvrd"
@@ -223,11 +221,9 @@ def get_media_settings_for_speed(settings_dict, lane_speed_key):
     return settings_dict.get(LANE_SPEED_DEFAULT_KEY, {})
 
 
-def get_media_settings_value(physical_port, key, gearbox_side=None):
+def get_media_settings_value(physical_port, key):
     GLOBAL_MEDIA_SETTINGS_KEY = 'GLOBAL_MEDIA_SETTINGS'
     PORT_MEDIA_SETTINGS_KEY = 'PORT_MEDIA_SETTINGS'
-    GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY = 'GEARBOX_GLOBAL_MEDIA_SETTINGS'
-    GEARBOX_PORT_MEDIA_SETTINGS_KEY = 'GEARBOX_PORT_MEDIA_SETTINGS'
     RANGE_SEPARATOR = '-'
     COMMA_SEPARATOR = ','
     media_dict = {}
@@ -249,35 +245,29 @@ def get_media_settings_value(physical_port, key, gearbox_side=None):
                 return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
 
         return None
+
     # Keys under global media settings can be a list or range or list of ranges
     # of physical port numbers. Below are some examples
     # 1-32
     # 1,2,3,4,5
     # 1-4,9-12
 
-    global_key = GEARBOX_GLOBAL_MEDIA_SETTINGS_KEY if gearbox_side else GLOBAL_MEDIA_SETTINGS_KEY
-
-    if global_key in g_dict:
-        for keys in g_dict[global_key]:
+    if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
+        for keys in g_dict[GLOBAL_MEDIA_SETTINGS_KEY]:
             if COMMA_SEPARATOR in keys:
                 port_list = keys.split(COMMA_SEPARATOR)
                 for port in port_list:
                     if RANGE_SEPARATOR in port:
                         if common.check_port_in_range(port, physical_port):
-                            media_dict = g_dict[global_key][keys]
+                            media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
                             break
                     elif str(physical_port) == port:
-                        media_dict = g_dict[global_key][keys]
+                        media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
                         break
 
             elif RANGE_SEPARATOR in keys:
                 if common.check_port_in_range(keys, physical_port):
-                    media_dict = g_dict[global_key][keys]
-
-            if gearbox_side == GEARBOX_LINE_SIDE_KEY and GEARBOX_LINE_SIDE_KEY in media_dict:
-                media_dict = media_dict[GEARBOX_LINE_SIDE_KEY]
-            elif gearbox_side == GEARBOX_SYSTEM_SIDE_KEY and GEARBOX_SYSTEM_SIDE_KEY in media_dict:
-                media_dict = media_dict[GEARBOX_SYSTEM_SIDE_KEY]
+                    media_dict = g_dict[GLOBAL_MEDIA_SETTINGS_KEY][keys]
 
             # If there is a match in the global profile for a media type,
             # fetch those values
@@ -290,11 +280,10 @@ def get_media_settings_value(physical_port, key, gearbox_side=None):
 
     media_dict = {}
 
-    port_key = GEARBOX_PORT_MEDIA_SETTINGS_KEY if gearbox_side else PORT_MEDIA_SETTINGS_KEY
-    if port_key in g_dict:
-        for keys in g_dict[port_key]:
+    if PORT_MEDIA_SETTINGS_KEY in g_dict:
+        for keys in g_dict[PORT_MEDIA_SETTINGS_KEY]:
             if int(keys) == physical_port:
-                media_dict = g_dict[port_key][keys]
+                media_dict = g_dict[PORT_MEDIA_SETTINGS_KEY][keys]
                 break
 
         if len(media_dict) == 0:
@@ -303,11 +292,6 @@ def get_media_settings_value(physical_port, key, gearbox_side=None):
             else:
                 helper_logger.log_notice("No values for physical port '{}'".format(physical_port))
             return {}
-
-        if gearbox_side == GEARBOX_LINE_SIDE_KEY and GEARBOX_LINE_SIDE_KEY in media_dict:
-            media_dict = media_dict[GEARBOX_LINE_SIDE_KEY]
-        elif gearbox_side == GEARBOX_SYSTEM_SIDE_KEY and GEARBOX_SYSTEM_SIDE_KEY in media_dict:
-            media_dict = media_dict[GEARBOX_SYSTEM_SIDE_KEY]
 
         media_settings = get_media_settings(key, media_dict)
         if media_settings is not None:
@@ -357,7 +341,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
     asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
 
     port_speed, lane_count, subport_num = get_speed_lane_count_and_subport(logical_port_name, xcvr_table_helper.get_cfg_port_tbl(asic_index))
-    gearbox_line_lanes = xcvr_table_helper.get_gearbox_line_lanes_dict()
 
     ganged_port = False
     ganged_member_num = 1
@@ -384,58 +367,26 @@ def notify_media_setting(logical_port_name, transceiver_dict,
         ganged_member_num += 1
         key = get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_count)
         helper_logger.log_notice("Retrieving media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
-        asic_media_dict = get_media_settings_value(physical_port, key)
+        media_dict = get_media_settings_value(physical_port, key)
 
-        # Fetch gearbox related media settings if a gearbox is being used for this port
-        system_gearbox_media_dict = {}
-        line_gearbox_media_dict = {}
-        if logical_port_name in gearbox_line_lanes:
-            helper_logger.log_notice("Retrieving gearbox system-side media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, lane_count, key))
-            system_gearbox_media_dict = get_media_settings_value(physical_port, key, gearbox_side=GEARBOX_SYSTEM_SIDE_KEY)
-            # We need to recalculate the media settings key for the line-side of the gearbox. Otherwise, the calculation for lane speed will be based
-            # on the number of lanes on the system side of the gearbox.
-            line_side_key = get_media_settings_key(physical_port, transceiver_dict, port_speed, gearbox_line_lanes[logical_port_name])
-            helper_logger.log_notice("Retrieving gearbox line-side media settings for port {} speed {} num_lanes {}, using key {}".format(logical_port_name, port_speed, gearbox_line_lanes[logical_port_name], line_side_key))
-            line_gearbox_media_dict = get_media_settings_value(physical_port, line_side_key, gearbox_side=GEARBOX_LINE_SIDE_KEY)
+        if len(media_dict) == 0:
+            helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
+            return
 
-        if len(asic_media_dict) != 0:
-            publish_si_settings(asic_media_dict, logical_port_name, lane_count, subport_num, xcvr_table_helper, asic_index, port_name)
-        else:
-            helper_logger.log_info("No ASIC media setting for {}".format(logical_port_name))
-        if len(line_gearbox_media_dict) != 0:
-            publish_si_settings(line_gearbox_media_dict, logical_port_name, gearbox_line_lanes[logical_port_name], subport_num, xcvr_table_helper, asic_index, port_name, gearbox_side=GEARBOX_LINE_SIDE_KEY)
-        else:
-            helper_logger.log_info("No line-side gearbox media setting found for {}".format(logical_port_name))
-        if len(system_gearbox_media_dict) != 0:
-            publish_si_settings(system_gearbox_media_dict, logical_port_name, lane_count, subport_num, xcvr_table_helper, asic_index, port_name, gearbox_side=GEARBOX_SYSTEM_SIDE_KEY)
-        else:
-            helper_logger.log_info("No system-side gearbox media setting found for {}".format(logical_port_name))
+        fvs = swsscommon.FieldValuePairs(len(media_dict))
 
+        index = 0
+        helper_logger.log_notice("Publishing ASIC-side SI setting for port {} in APP_DB:".format(logical_port_name))
+        for media_key in media_dict:
+            if type(media_dict[media_key]) is dict:
+                val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
+            else:
+                val_str = media_dict[media_key]
+            helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
+            fvs[index] = (str(media_key), str(val_str))
+            index += 1
 
-def publish_si_settings(media_dict, logical_port_name, lane_count, subport_num, xcvr_table_helper, asic_index, port_name, gearbox_side=None):
-    if len(media_dict) == 0:
-        return
-
-    fvs = swsscommon.FieldValuePairs(len(media_dict))
-    index = 0
-    helper_logger.log_notice("Publishing SI settings for port {} in APP_DB:".format(logical_port_name))
-    for media_key in media_dict:
-        if type(media_dict[media_key]) is dict:
-            val_str = get_serdes_si_setting_val_str(media_dict[media_key], lane_count, subport_num)
-        else:
-            val_str = media_dict[media_key]
-
-        # translate media_key to gearbox specific key if we're dealing with gearbox configuration
-        if gearbox_side == GEARBOX_LINE_SIDE_KEY:
-            media_key = "gb_line_" + media_key
-        elif gearbox_side == GEARBOX_SYSTEM_SIDE_KEY:
-            media_key = "gb_system_" + media_key
-        helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
-
-        fvs[index] = (str(media_key), str(val_str))
-        index += 1
-
-    xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
-    xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
-    helper_logger.log_notice("Notify media setting: Published {}-side SI setting "
-                                "for lport {} in APP_DB".format(gearbox_side if gearbox_side else "ASIC", logical_port_name))
+        xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
+        xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
+        helper_logger.log_notice("Notify media setting: Published ASIC-side SI setting "
+                                 "for lport {} in APP_DB".format(logical_port_name))
