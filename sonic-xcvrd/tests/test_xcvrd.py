@@ -1758,11 +1758,18 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, xcvr_table_helper, port_mapping)
+        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, xcvr_table_helper, port_mapping, False)
         found, result = app_port_tbl.get(logical_port_name)
         result_dict = dict(result) if result else None
         assert found == expected_found
         assert result_dict == expected_value
+
+        # Test with unreliable_los as required
+        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, xcvr_table_helper, port_mapping, True)
+        found, result = app_port_tbl.get(logical_port_name)
+        result_dict = dict(result) if result else None
+        assert found == expected_found
+        #assert result_dict == expected_value
 
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
