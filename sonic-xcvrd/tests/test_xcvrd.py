@@ -5895,3 +5895,81 @@ class TestOpticSiParser(object):
             assert result == True
         finally:
             parser.g_optics_si_dict = original_dict
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    def test_DomInfoUpdateTask_check_port_update(self):
+        """Test the check_port_update method with various scenarios"""
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+
+        # Create a mock port_change_observer
+        mock_port_change_observer = MagicMock()
+        mock_port_change_observer.handle_port_update_event = MagicMock()
+
+        # Mock update_port_db_diagnostics_on_link_change
+        task.update_port_db_diagnostics_on_link_change = MagicMock()
+
+        # Test 1: No link change affected ports
+        task.link_change_affected_ports = {}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+
+        # Test 2: Link change affected port with time in the past (should trigger update)
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        past_time = datetime.datetime.now() - datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {'Ethernet0': past_time}
+        task.check_port_update(mock_port_change_observer, 100)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(100)
+        task.update_port_db_diagnostics_on_link_change.assert_called_once_with('Ethernet0')
+        assert 'Ethernet0' not in task.link_change_affected_ports
+
+        # Test 3: Link change affected port with time in the future (should not trigger update)
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        future_time = datetime.datetime.now() + datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {'Ethernet4': future_time}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+        assert 'Ethernet4' in task.link_change_affected_ports
+
+        # Test 4: Multiple link change affected ports, some ready, some not
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        past_time1 = datetime.datetime.now() - datetime.timedelta(seconds=2)
+        past_time2 = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        future_time = datetime.datetime.now() + datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {
+            'Ethernet0': past_time1,
+            'Ethernet8': past_time2,
+            'Ethernet12': future_time
+        }
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 2
+        # Check that the two past ports were processed
+        calls = [call[0][0] for call in task.update_port_db_diagnostics_on_link_change.call_args_list]
+        assert 'Ethernet0' in calls
+        assert 'Ethernet8' in calls
+        # Future port should still be in the dict
+        assert 'Ethernet12' in task.link_change_affected_ports
+        assert 'Ethernet0' not in task.link_change_affected_ports
+        assert 'Ethernet8' not in task.link_change_affected_ports
+
+        # Test 5: Stop event is set during processing
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        task.task_stopping_event.set()
+        past_time = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        task.link_change_affected_ports = {'Ethernet16': past_time}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        # Should break early and not process the port
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+        assert 'Ethernet16' in task.link_change_affected_ports
