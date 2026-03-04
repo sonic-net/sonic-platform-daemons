@@ -201,6 +201,14 @@ class FanUpdater(logger.Logger):
         self.drawer_table = swsscommon.Table(state_db, FanUpdater.FAN_DRAWER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
 
+    def get_psu_key(self, psu_index):
+        if self.chassis is not None:
+            try:
+                return self.chassis.get_psu(psu_index).get_name()
+            except (NotImplementedError, AttributeError):
+                pass
+        return 'PSU {}'.format(psu_index + 1)
+
     def __del__(self):
         if self.table:
             table_keys = self.table.getKeys()
@@ -308,7 +316,7 @@ class FanUpdater(logger.Logger):
         """
         drawer_name = NOT_AVAILABLE if fan_type != FanType.DRAWER else str(try_get(parent.get_name))
         if fan_type == FanType.PSU:
-            parent_name = try_get(parent.get_name, default='PSU {}'.format(parent_index + 1))
+            parent_name = self.get_psu_key(parent_index)
         elif fan_type == FanType.MODULE:
             parent_name = try_get(parent.get_name, default='Module {}'.format(parent_index + 1))
         else:
