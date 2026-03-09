@@ -279,6 +279,98 @@ media_settings_optic_copper_si = {
 
 media_settings_empty = {}
 
+custom_serdes_attrs_xyz_10 = {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13}
+custom_serdes_attrs_xyz_20 = {'lane0': 20, 'lane1': 21, 'lane2': 22, 'lane3': 23}
+custom_serdes_attrs_abc_mode = {'lane0': 'mode_a', 'lane1': 'mode_b', 'lane2': 'mode_c', 'lane3': 'mode_d'}
+
+media_settings_custom_attrs = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '1, 3-4, 8': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                    'CUSTOM:ABC': custom_serdes_attrs_abc_mode,
+                },
+            },
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+        '7-9': {
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_no_space = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '1,3-4,8': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_non_string_selector = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        9: {
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_with_port_and_global = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_custom_attrs_with_port_and_global['CUSTOM_MEDIA_SETTINGS'] = media_settings_custom_attrs['CUSTOM_MEDIA_SETTINGS']
+media_settings_custom_attrs_with_port_and_global['GLOBAL_MEDIA_SETTINGS'] = {
+    '0-31': {
+        'NO_MATCH': {
+            'speed:100GAUI-2': {
+                'pre1': {'lane0': '0x000000ff'},
+            },
+        },
+    },
+}
+
+media_settings_custom_attrs_medium_lane = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '7-9': {
+            'COPPER50': {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_empty_explicit_then_default = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '7-9': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:200GAUI-4': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                },
+            },
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
 def gen_cmis_lanes_dict(key_format_str, value, one_based=True):
     start_idx = 1 if one_based else 0
     lanes_dict = {}
@@ -1688,9 +1780,9 @@ class TestXcvrdScript(object):
     # Test 20: Media key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
     (media_settings_media_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP-DD-400GBASE-DR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}})
     ])
-    def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
+    def test_get_traditional_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
-            result = media_settings_parser.get_media_settings_value(port, key)
+            result = media_settings_parser.get_traditional_media_settings_value(port, key)
             assert result == expected
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
@@ -1759,23 +1851,110 @@ class TestXcvrdScript(object):
         self._check_notify_media_setting(6, True, {'preemphasis': ','.join(['0x124A08'] * 2)})
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_custom_only(self):
+        custom_media_dict = {
+            'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+        }
+        expected = '{"attributes":[{"XYZ":{"value":[10,11]}}]}'
+
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[1])
+
+        transceiver_dict = {
+            1: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+        with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
+                            get_traditional_media_settings_value=MagicMock(return_value={}),
+                            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict)):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        assert app_port_tbl.set.called
+        set_key, fvs = app_port_tbl.set.call_args[0]
+        assert set_key == 'Ethernet0'
+        result_dict = dict(fvs)
+        assert result_dict == {CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected}
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_mixed_settings(self):
+        expected_custom = '{"attributes":[{"XYZ":{"value":[20,21]}}]}'
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[7])
+
+        transceiver_dict = {
+            7: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_with_port_and_global):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        set_key, fvs = app_port_tbl.set.call_args[0]
+        assert set_key == 'Ethernet0'
+        result_dict = dict(fvs)
+        assert result_dict == {
+            'pre1': '0x00000002,0x00000002',
+            'main': '0x00000020,0x00000020',
+            'post1': '0x00000006,0x00000006',
+            'regn_bfm1n': '0x000000aa,0x000000aa',
+            CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected_custom,
+        }
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict)
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(400000, 4, 0)))
     def test_notify_media_setting_with_gearbox(self):
         """
-        Test notify_media_setting() with gearbox media settings.
+        Verify notify_media_setting() preserves gearbox line-side lane widths.
 
-        This test verifies that the notify_media_setting() function correctly handles
-        gearbox-specific media settings from gearbox_media_settings.json. The test covers:
-        - COPPER50 settings with 8 line lanes and 4 system lanes
-        - OPTICAL50 settings with 8 line lanes and 4 system lanes
-        - COPPER25 settings with 4 line lanes and 4 system lanes
-        - OPTICAL25 settings with 4 line lanes and 4 system lanes
+        Args:
+            None
 
-        The gearbox settings include both line-side (gb_line_*) and system-side (gb_system_*)
-        SerDes parameters that need to be correctly extracted and formatted.
+        Returns:
+            None
         """
         # Test COPPER50 with gearbox (8 line lanes, 4 system lanes)
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
@@ -1829,6 +2008,233 @@ class TestXcvrdScript(object):
         assert found == expected_found
         assert result_dict == expected_value
 
+    @pytest.mark.parametrize("media_dict, lane_count, subport_num, expected", [
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+                'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
+            },
+            2, 2,
+            '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
+        ),
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 'ADAPTIVE', 'lane1': 'ADAPTIVE', 'lane2': 'ADAPTIVE', 'lane3': 'ADAPTIVE'},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+            },
+            2, 2,
+            '{"attributes":[{"XYZ":{"value":["ADAPTIVE","ADAPTIVE"]}},{"ABC":{"value":[3,4]}}]}',
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            2, 2,
+            None,
+        ),
+    ])
+    def test_custom_media_settings_to_db_value(self, media_dict, lane_count, subport_num, expected):
+        assert expected == media_settings_parser.CustomMediaSettingsParser.to_db_value(
+            media_dict, lane_count, subport_num)
+
+    def test_custom_media_settings_is_port_selected(self):
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1, 3-4, 8', 8)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,3-4,8', 4)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('01', 1)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1 - 3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,3-4,8', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('   ', 1)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,,3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1-a', 1)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1-2-3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('a', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected(123, 1)
+
+    def test_get_custom_media_settings_value(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'QSFP-DD-active_cable_media_interface',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'UNKNOWN',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs):
+            result = media_settings_parser.get_custom_media_settings_value(8, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                'CUSTOM:ABC': custom_serdes_attrs_abc_mode,
+            }
+
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+            key_no_match = copy.deepcopy(key)
+            key_no_match['media_key'] = 'UNMATCHED_MEDIA'
+            result = media_settings_parser.get_custom_media_settings_value(8, key_no_match)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs_no_space):
+            result = media_settings_parser.get_custom_media_settings_value(4, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+            }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs_non_string_selector):
+            result = media_settings_parser.get_custom_media_settings_value(9, key)
+            assert result == {}
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_empty_explicit_then_default):
+            result = media_settings_parser.get_custom_media_settings_value(8, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    def test_custom_media_settings_mixed_with_port_and_global(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'QSFP-DD-active_cable_media_interface',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'UNKNOWN',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_with_port_and_global):
+            result = media_settings_parser.get_traditional_media_settings_value(7, key)
+            assert result == {
+                'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'},
+                'main': {'lane0': '0x00000020', 'lane1': '0x00000020'},
+                'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'},
+                'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'},
+            }
+
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    def test_custom_media_settings_medium_lane_key(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'UNMATCHED_MEDIA',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'COPPER50',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_medium_lane):
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    @pytest.mark.parametrize("settings", [{}, [], None])
+    def test_custom_media_settings_parser_empty_or_invalid_settings(self, settings):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'UNMATCHED_MEDIA',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'COPPER50',
+        }
+        parser = media_settings_parser.CustomMediaSettingsParser()
+        assert parser.parse(settings, 7, key) == ({}, {})
+
+    @pytest.mark.parametrize("media_dict, lane_count, subport_num, gearbox_line_lane_count, expected", [
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            2, 2, None,
+            {'main': '0x13,0x14'},
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12'}, 'los_thresh': '7'},
+            2, 0, None,
+            {'main': '0x11,0x12', 'los_thresh': '7'},
+        ),
+        (
+            {},
+            2, 2, None,
+            {},
+        ),
+        (
+            {
+                'gb_line_main': {
+                    'lane0': '0x10', 'lane1': '0x11', 'lane2': '0x12', 'lane3': '0x13',
+                    'lane4': '0x14', 'lane5': '0x15', 'lane6': '0x16', 'lane7': '0x17',
+                },
+                'gb_system_main': {
+                    'lane0': '0x20', 'lane1': '0x21', 'lane2': '0x22', 'lane3': '0x23',
+                },
+            },
+            4, 0, 8,
+            {
+                'gb_line_main': '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17',
+                'gb_system_main': '0x20,0x21,0x22,0x23',
+            },
+        ),
+    ])
+    def test_media_settings_to_db_value(self, media_dict, lane_count, subport_num,
+                                        gearbox_line_lane_count, expected):
+        assert expected == media_settings_parser.MediaSettingsParserBase.to_db_value(
+            media_dict, lane_count, subport_num, gearbox_line_lane_count)
+
+    @pytest.mark.parametrize("media_dict, custom_media_dict, lane_count, subport_num, gearbox_line_lane_count, expected", [
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            {},
+            2, 2, None,
+            {'main': '0x13,0x14'},
+        ),
+        (
+            {},
+            {'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13}},
+            2, 2, None,
+            {CUSTOM_SERDES_ATTRS_KEY_IN_DB: '{"attributes":[{"XYZ":{"value":[12,13]}}]}'},
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            {'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}},
+            2, 2, None,
+            {
+                'main': '0x13,0x14',
+                CUSTOM_SERDES_ATTRS_KEY_IN_DB: '{"attributes":[{"ABC":{"value":[3,4]}}]}',
+            },
+        ),
+        (
+            {},
+            {},
+            2, 2, None,
+            {},
+        ),
+        (
+            {
+                'gb_line_main': {
+                    'lane0': '0x10', 'lane1': '0x11', 'lane2': '0x12', 'lane3': '0x13',
+                    'lane4': '0x14', 'lane5': '0x15', 'lane6': '0x16', 'lane7': '0x17',
+                },
+                'gb_system_main': {
+                    'lane0': '0x20', 'lane1': '0x21', 'lane2': '0x22', 'lane3': '0x23',
+                },
+            },
+            {},
+            4, 0, 8,
+            {
+                'gb_line_main': '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17',
+                'gb_system_main': '0x20,0x21,0x22,0x23',
+            },
+        ),
+    ])
+    def test_resolve_media_settings_for_db(self, media_dict, custom_media_dict, lane_count,
+                                           subport_num, gearbox_line_lane_count, expected):
+        with patch.multiple(
+            'xcvrd.xcvrd_utilities.media_settings_parser',
+            get_traditional_media_settings_value=MagicMock(return_value=media_dict),
+            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict),
+        ):
+            result = media_settings_parser.resolve_media_settings_for_db(
+                7, {}, lane_count, subport_num, gearbox_line_lane_count
+            )
+            assert result == expected
+
     def _check_notify_media_setting_with_gearbox(self, index, gearbox_line_lanes, system_lanes, xcvr_info_dict=None):
         """
         Helper method to test notify_media_setting with gearbox configuration.
@@ -1838,6 +2244,9 @@ class TestXcvrdScript(object):
             gearbox_line_lanes: Number of gearbox line lanes
             system_lanes: Number of system lanes
             xcvr_info_dict: Optional transceiver info dictionary
+
+        Returns:
+            None
         """
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         cfg_port_tbl = MagicMock()
@@ -5468,6 +5877,12 @@ class TestXcvrdScript(object):
         subport_num = 2
         media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
         assert media_str == 'c,d'
+        # non-string lane values are coerced defensively for string output
+        lane_dict = {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}
+        lane_count = 2
+        subport_num = 2
+        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        assert media_str == '3,4'
 
     class MockPortMapping:
         logical_port_list = [0, 1, 2]
