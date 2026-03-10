@@ -1549,8 +1549,8 @@ def test_set_initial_dpu_admin_state_empty_offline():
         # Verify DPU state was updated with 'down' since operational state is OFFLINE
         mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
 
-        # Verify callback was submitted with MODULE_PRE_SHUTDOWN since admin state is EMPTY and oper state is OFFLINE
-        mock_submit_callback.assert_called_once_with(0, MODULE_PRE_SHUTDOWN)
+        # Verify callback was submitted with MODULE_ADMIN_DOWN when admin state is EMPTY
+        mock_submit_callback.assert_called_once_with(0, MODULE_ADMIN_DOWN)
 
 
 def test_set_initial_dpu_admin_state_empty_not_offline():
@@ -1600,7 +1600,7 @@ def test_set_initial_dpu_admin_state_empty_not_offline():
         # Verify DPU state was updated with 'down' since operational state is not ONLINE
         mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
 
-        # Verify callback was submitted with MODULE_ADMIN_DOWN since admin state is EMPTY and oper state is not OFFLINE
+        # Verify callback was submitted with MODULE_ADMIN_DOWN when admin state is EMPTY
         mock_submit_callback.assert_called_once_with(0, MODULE_ADMIN_DOWN)
 
 
@@ -2041,25 +2041,10 @@ def test_submit_dpu_callback():
     daemon_chassisd.module_updater = module_updater
     module_updater.module_table.get = MagicMock(return_value=(True, []))
 
-    # Test MODULE_ADMIN_DOWN scenario
-    with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
-         patch.object(module, 'set_admin_state_gracefully') as mock_set_admin_state_gracefully:
+    # Test MODULE_ADMIN_DOWN scenario - set_admin_state_gracefully is called
+    with patch.object(module, 'set_admin_state_gracefully') as mock_set_admin_state_gracefully:
         daemon_chassisd.submit_dpu_callback(index, MODULE_ADMIN_DOWN)
-        # Verify pre_shutdown is not called for admin down
-        mock_pre_shutdown.assert_not_called()
-        # Verify set_admin_state_gracefully is called with MODULE_ADMIN_DOWN
         mock_set_admin_state_gracefully.assert_called_once_with(MODULE_ADMIN_DOWN)
-
-    # Test MODULE_PRE_SHUTDOWN scenario
-    with patch.object(module, 'module_pre_shutdown') as mock_pre_shutdown, \
-         patch.object(module, 'set_admin_state_gracefully') as mock_set_admin_state_gracefully:
-
-        module_updater.module_table.get = MagicMock(return_value=(True, []))
-        daemon_chassisd.submit_dpu_callback(index, MODULE_PRE_SHUTDOWN)
-
-        # Verify only pre_shutdown is called for pre-shutdown state
-        mock_pre_shutdown.assert_called_once()
-        mock_set_admin_state_gracefully.assert_not_called()
 
 def test_chassis_daemon_assertion():
     chassis = MockChassis()
