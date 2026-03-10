@@ -303,6 +303,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                     self.log_notice("Stop event generated during DOM monitoring loop while checking port update")
                     break
 
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during DOM monitoring loop before starting DOM polling cycle")
+                break
             dom_loop_start_time = datetime.datetime.now()
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
                 self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS)
