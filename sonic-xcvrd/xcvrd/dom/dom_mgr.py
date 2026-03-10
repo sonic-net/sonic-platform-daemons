@@ -293,7 +293,10 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
             # Handle port change event from main thread
             port_event_helper.handle_port_config_change(sel, asic_context, self.task_stopping_event, self.port_mapping, self.helper_logger, self.on_port_config_change)
 
-            while not (is_periodic_db_update_needed:= next_periodic_db_update_time <= datetime.datetime.now()):
+            while True:
+                is_periodic_db_update_needed = next_periodic_db_update_time <= datetime.datetime.now()
+                if is_periodic_db_update_needed:
+                    break
                 self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_MSECS)
 
                 if self.task_stopping_event.is_set():
