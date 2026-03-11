@@ -4417,6 +4417,73 @@ class TestXcvrdScript(object):
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
+    @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    def test_DomInfoUpdateTask_task_worker_stop_event_during_port_update_wait(self, mock_post_pm_info):
+        """
+        This test simulates the scenario where task_stopping_event is set
+        while waiting for periodic DB update (during check_port_update loop)
+        """
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = MagicMock()
+
+        # Set DOM_INFO_UPDATE_PERIOD_SECS to a large value so periodic update is not triggered
+        # This ensures we stay in the inner while loop
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 1000
+
+        # Mock check_port_update to track if it's called
+        check_port_update_call_count = [0]
+        original_check_port_update = task.check_port_update
+
+        def mock_check_port_update(port_change_observer, timeout):
+            check_port_update_call_count[0] += 1
+            # Don't actually call the original to avoid complexity
+            pass
+
+        task.check_port_update = mock_check_port_update
+
+        # Mock log_notice to verify the specific log message is generated
+        log_messages = []
+        original_log_notice = task.log_notice
+
+        def mock_log_notice(message):
+            log_messages.append(message)
+            original_log_notice(message)
+
+        task.log_notice = mock_log_notice
+
+        # Set up task_stopping_event to be set after check_port_update is called once
+        # First False: outer loop check
+        # Second False: inner loop check for stopping_event_set
+        # Third True: check after check_port_update
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+
+        task.port_mapping.logical_port_list = ['Ethernet0']
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+
+        # Run task_worker
+        task.task_worker()
+
+        # Verify that check_port_update was called
+        assert check_port_update_call_count[0] >= 1, "check_port_update should have been called at least once"
+
+        # Verify that the specific log message was generated
+        assert any("Stop event generated during DOM monitoring loop while checking port update" in msg for msg in log_messages), \
+            "Expected log message about stop event during port update check was not found"
+
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
