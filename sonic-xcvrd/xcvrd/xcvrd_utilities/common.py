@@ -11,7 +11,7 @@ try:
     import traceback
     import threading
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base
+    from sonic_py_common import syslogger, daemon_base, multi_asic
     from . import sfp_status_helper
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
@@ -82,6 +82,23 @@ def init_globals(chassis, sfputil):
     platform_chassis = chassis
     platform_sfputil = sfputil
 
+def get_namespace_from_asic_id(asic_id):
+    """
+    Get namespace string from ASIC ID.
+    
+    For single-ASIC systems, returns empty string.
+    For multi-ASIC systems, returns 'asicN' where N is the asic_id.
+    
+    Args:
+        asic_id: Integer ASIC ID (e.g., 0, 1, 2)
+    
+    Returns:
+        str: Namespace string ('' for single-ASIC, 'asicN' for multi-ASIC)
+    """
+    if multi_asic.is_multi_asic():
+        return 'asic{}'.format(asic_id)
+    return ''
+
 def log_exception_traceback():
     """Log exception traceback using the helper logger"""
     exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -94,6 +111,15 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     """Update port SFP status table for SW fields on receiving SFP change event"""
     fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_sw_tbl.set(logical_port_name, fvs)
+
+def is_copper(physical_port):
+    """Check if the transceiver on the given physical port is copper"""
+    if platform_chassis:
+        try:
+            return platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+        except (NotImplementedError, AttributeError):
+            helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
+    return True
 
 def _wrapper_get_presence(physical_port):
     """Wrapper function to get SFP presence status"""
@@ -132,12 +158,16 @@ def is_warm_reboot_enabled():
     is_warm_start = warmstart.isWarmStart()
     return is_warm_start
 
-def is_syncd_warm_restore_complete():
+def is_syncd_warm_restore_complete(namespace=''):
     """
     This function determines whether syncd's restore count is not 0, which indicates warm-reboot
     to avoid premature config push by xcvrd that caused port flaps.
+    
+    Args:
+        namespace: The namespace (asic) to check. Empty string for single-ASIC or default namespace.
+                   For multi-ASIC systems, pass the specific namespace (e.g., 'asic0', 'asic1').
     """
-    state_db = daemon_base.db_connect("STATE_DB")
+    state_db = daemon_base.db_connect("STATE_DB", namespace=namespace)
     restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
     system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
     try:
@@ -156,7 +186,7 @@ def is_syncd_warm_restore_complete():
                 return True
 
     except Exception as e:
-        helper_logger.log_warning(f"Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, error={e}")
+        helper_logger.log_warning(f"Unexpected value: restore_count={restore_count}, system_enabled={system_enabled}, namespace={namespace}, error={e}")
         log_exception_traceback()
     return False
 

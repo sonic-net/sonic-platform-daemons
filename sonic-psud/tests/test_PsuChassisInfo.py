@@ -299,7 +299,7 @@ class TestPsuChassisInfo(object):
         assert psud.Psu.get_status_master_led() == MockPsu.STATUS_LED_COLOR_GREEN
 
     def test_get_psu_key(self):
-        
+
         #mock test for psu get_name() nonimplementation
         psud.platform_chassis = None
         assert psud.get_psu_key(0) == psud.PSU_INFO_KEY_TEMPLATE.format(0)
@@ -332,9 +332,74 @@ class TestPsuChassisInfo(object):
         ret = psud.try_get(callback2, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
 
-        # Ensure try_get returns default value if callback returns None
+        # Ensure try_get returns default value if callback raises NotImplementedError
         def callback3():
             raise NotImplementedError
 
         ret = psud.try_get(callback3, default=DEFAULT_VALUE)
         assert ret == DEFAULT_VALUE
+
+        # Ensure try_get returns default value if callback raises TypeError
+        # This can happen when platform API returns None and code tries int(None)
+        def callback4():
+            raise TypeError("int() argument must be a string, a bytes-like object or a real number, not 'NoneType'")
+
+        ret = psud.try_get(callback4, default=DEFAULT_VALUE)
+        assert ret == DEFAULT_VALUE
+
+        # Ensure try_get returns default value for any other exception
+        def callback5():
+            raise ValueError("Some error")
+
+        ret = psud.try_get(callback5, default=DEFAULT_VALUE)
+        assert ret == DEFAULT_VALUE
+
+    def test_run_power_budget_db_error_on_set(self):
+        """Test that RuntimeError from chassis_tbl.set() is handled gracefully"""
+        chassis = MockChassis()
+        psu1 = MockPsu("PSU 1", 0, True, True)
+        psu1.set_maximum_supplied_power(510.0)
+        chassis._psu_list.append(psu1)
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = mock.MagicMock()
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error on set
+        chassis_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error instead
+        chassis_info.run_power_budget(chassis_tbl)
+
+        assert chassis_tbl.set.call_count == 1
+        assert chassis_info.log_error.call_count == 1
+        chassis_info.log_error.assert_called_with(
+            "Failed to update chassis power budget to DB: BUSY Redis is busy running a script"
+        )
+
+    def test_run_power_budget_db_error_on_hdel(self):
+        """Test that RuntimeError from chassis_tbl.hdel() is handled gracefully"""
+        chassis = MockChassis()
+        psu1 = MockPsu("PSU 1", 0, False, True)  # Not present
+        chassis._psu_list.append(psu1)
+
+        fan_drawer1 = MockFanDrawer("FanDrawer 1", 0, False, True)  # Not present
+        chassis._fan_drawer_list.append(fan_drawer1)
+
+        module1 = MockModule("Module 1", 0, False, True)  # Not present
+        chassis._module_list.append(module1)
+
+        chassis_tbl = mock.MagicMock()
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error on hdel
+        chassis_tbl.hdel.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error for each hdel call
+        chassis_info.run_power_budget(chassis_tbl)
+
+        # Should have tried hdel for PSU, fan drawer, and module
+        assert chassis_tbl.hdel.call_count == 3
+        assert chassis_info.log_error.call_count == 3

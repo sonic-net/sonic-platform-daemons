@@ -559,3 +559,188 @@ class TestDaemonPsud(object):
         daemon_psud.fan_tbl.set.assert_called_with("PSU 1 Test Fan 1", expected_fvp)
 
         daemon_psud.fan_tbl.set.reset_mock()
+
+    @mock.patch('psud._wrapper_get_psu_presence', mock.MagicMock(return_value=True))
+    @mock.patch('psud._wrapper_get_psu_status', mock.MagicMock(return_value=True))
+    def test_update_single_psu_data_db_error(self):
+        """Test that RuntimeError from DB operations is handled gracefully"""
+        psu1 = MockPsu('PSU 1', 0, True, 'Fake Model', '12345678', '1234')
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis._psu_list.append(psu1)
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.psu_tbl = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error
+        daemon_psud.psu_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error instead
+        daemon_psud._update_single_psu_data(1, psu1)
+
+        assert daemon_psud.psu_tbl.set.call_count == 1
+        assert daemon_psud.log_error.call_count == 1
+        daemon_psud.log_error.assert_called_with(
+            "Failed to update PSU {} info to DB: BUSY Redis is busy running a script".format('PSU 1')
+        )
+
+    def test_update_led_color_db_error(self):
+        """Test that RuntimeError from DB operations in _update_led_color is handled gracefully"""
+        mock_psu = MockPsu("PSU 1", 0, True, True)
+        mock_logger = mock.MagicMock()
+        psu_status = psud.PsuStatus(mock_logger, mock_psu, 1)
+
+        psud.platform_chassis = MockChassis()
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.psu_tbl = mock.MagicMock()
+        daemon_psud._update_psu_fan_led_status = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+        daemon_psud.psu_status_dict[1] = psu_status
+
+        # Simulate Redis BUSY error
+        daemon_psud.psu_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error and continue to update fan LED status
+        daemon_psud._update_led_color()
+
+        assert daemon_psud.psu_tbl.set.call_count == 1
+        assert daemon_psud.log_error.call_count == 1
+        # Should still call _update_psu_fan_led_status even after DB error
+        assert daemon_psud._update_psu_fan_led_status.call_count == 1
+
+    @mock.patch('psud.datetime')
+    def test_update_psu_fan_data_db_error(self, mock_datetime):
+        """Test that RuntimeError from DB operations in _update_psu_fan_data is handled gracefully"""
+        fake_time = datetime.datetime(2021, 1, 1, 12, 34, 56)
+        mock_datetime.now.return_value = fake_time
+
+        mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
+        mock_psu1._fan_list = [mock_fan]
+
+        psud.platform_chassis = MockChassis()
+        psud.platform_chassis._psu_list = [mock_psu1]
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.fan_tbl = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error
+        daemon_psud.fan_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error instead
+        daemon_psud._update_psu_fan_data(mock_psu1, 1)
+
+        assert daemon_psud.fan_tbl.set.call_count == 1
+        assert daemon_psud.log_error.call_count == 1
+        daemon_psud.log_error.assert_called_with(
+            "Failed to update fan {} info to DB: BUSY Redis is busy running a script".format("PSU 1 Test Fan 1")
+        )
+
+    def test_update_psu_fan_led_status_db_error(self):
+        """Test that RuntimeError from DB operations in _update_psu_fan_led_status is handled gracefully"""
+        mock_fan = MockFan("PSU 1 Test Fan 1", MockFan.FAN_DIRECTION_INTAKE)
+        mock_psu = MockPsu("PSU 1", 0, True, True)
+        mock_psu._fan_list = [mock_fan]
+
+        psud.platform_chassis = MockChassis()
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.fan_tbl = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error
+        daemon_psud.fan_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error instead
+        daemon_psud._update_psu_fan_led_status(mock_psu, 1)
+
+        assert daemon_psud.fan_tbl.set.call_count == 1
+        assert daemon_psud.log_error.call_count == 1
+        daemon_psud.log_error.assert_called_with(
+            "Failed to update fan {} LED status to DB: BUSY Redis is busy running a script".format("PSU 1 Test Fan 1")
+        )
+
+    def test_update_single_psu_entity_info_db_error(self):
+        """Test that RuntimeError from DB operations in _update_single_psu_entity_info is handled gracefully"""
+        mock_psu1 = MockPsu("PSU 1", 0, True, True)
+
+        psud.platform_chassis = MockChassis()
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.phy_entity_tbl = mock.MagicMock()
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Simulate Redis BUSY error
+        daemon_psud.phy_entity_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Should not raise exception, should log error instead
+        daemon_psud._update_single_psu_entity_info(1, mock_psu1)
+
+        assert daemon_psud.phy_entity_tbl.set.call_count == 1
+        assert daemon_psud.log_error.call_count == 1
+        daemon_psud.log_error.assert_called_with(
+            "Failed to update PSU {} entity info to DB: BUSY Redis is busy running a script".format(1)
+        )
+
+    @mock.patch('psud.swsscommon.Table')
+    @mock.patch('psud.daemon_base.db_connect')
+    def test_init_state_db_connect_error(self, mock_db_connect, mock_table):
+        """Test that exception when connecting to STATE_DB leads to sys.exit(PSU_DB_CONNECT_ERROR)"""
+        psud.platform_chassis = MockChassis()
+
+        # Simulate exception when creating Table for STATE_DB
+        mock_table.side_effect = Exception("Connection refused")
+
+        with pytest.raises(SystemExit) as exc_info:
+            psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+        assert exc_info.value.code == psud.PSU_DB_CONNECT_ERROR
+
+    @mock.patch('psud.swsscommon.Table')
+    @mock.patch('psud.daemon_base.db_connect')
+    def test_init_set_psu_number_db_error(self, mock_db_connect, mock_table):
+        """Test that RuntimeError when setting PSU number to DB is handled gracefully"""
+        psud.platform_chassis = MockChassis()
+
+        mock_chassis_tbl = mock.MagicMock()
+        mock_psu_tbl = mock.MagicMock()
+        mock_fan_tbl = mock.MagicMock()
+        mock_phy_entity_tbl = mock.MagicMock()
+
+        # Return different mock tables for each Table() call
+        mock_table.side_effect = [mock_chassis_tbl, mock_psu_tbl, mock_fan_tbl, mock_phy_entity_tbl]
+
+        # Simulate RuntimeError when setting PSU number
+        mock_chassis_tbl.set.side_effect = RuntimeError("BUSY Redis is busy running a script")
+
+        # Patch log_error on the class to capture the error logging during __init__
+        with mock.patch.object(psud.DaemonPsud, 'log_error') as mock_log_error:
+            # Should not raise exception, should just log error
+            daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+
+            # Verify that the error was logged
+            mock_log_error.assert_called_with("Failed to set PSU number to DB: BUSY Redis is busy running a script")
+
+    def test_del_chassis_info_db_error(self):
+        """Test that exception when deleting chassis info from DB in __del__ is handled gracefully"""
+        psud.platform_chassis = MockChassis()
+
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.log_error = mock.MagicMock()
+
+        # Mock the chassis_tbl._del to raise exception
+        daemon_psud.chassis_tbl = mock.MagicMock()
+        daemon_psud.chassis_tbl._del.side_effect = Exception("Failed to delete")
+
+        # Mock psu_tbl to avoid errors when deleting PSU info
+        daemon_psud.psu_tbl = mock.MagicMock()
+
+        # Call __del__ - should not raise exception, should log error instead
+        daemon_psud.__del__()
+
+        # Should have logged error for chassis info deletion failure
+        assert daemon_psud.log_error.call_count >= 1
+        # Check that the chassis info deletion error was logged
+        calls = [str(call) for call in daemon_psud.log_error.call_args_list]
+        assert any("Failed to delete chassis info from DB" in call for call in calls)

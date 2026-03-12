@@ -20,11 +20,24 @@ class VDMUtils:
         except (NotImplementedError):
             return False
 
-    def get_vdm_real_values(self, physical_port):
+    def is_vdm_statistic_supported(self, physical_port):
         try:
-            return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value()
-        except (NotImplementedError):
-            self.logger.log_error(f"Failed to get VDM real values for port {physical_port}")
+            return self.sfp_obj_dict[physical_port].is_vdm_statistic_supported()
+        except (NotImplementedError, AttributeError):
+            return False
+
+    def get_vdm_real_values_basic(self, physical_port):
+        try:
+            return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value_basic()
+        except (NotImplementedError, AttributeError):
+            self.logger.log_error(f"Failed to get VDM basic real values for port {physical_port}")
+            return {}
+
+    def get_vdm_real_values_statistic(self, physical_port):
+        try:
+            return self.sfp_obj_dict[physical_port].get_transceiver_vdm_real_value_statistic()
+        except (NotImplementedError, AttributeError):
+            self.logger.log_error(f"Failed to get VDM statistic real values for port {physical_port}")
             return {}
 
     def get_vdm_flags(self, physical_port):

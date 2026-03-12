@@ -22,18 +22,38 @@ class VDMDBUtils(DBUtils):
         self.vdm_utils = VDMUtils(self.sfp_obj_dict, logger)
         self.logger = logger
 
-    def post_port_vdm_real_values_to_db(self, logical_port_name, db_cache=None):
+    def post_port_vdm_real_values_from_dict_to_db(self, logical_port_name, vdm_real_values_dict):
+        """
+        Posts the pre-merged VDM real values dictionary to the DB.
+        This method is used when the caller has already collected and merged
+        VDM real values (e.g. basic + statistic) and wants to write them
+        to the DB in a single operation with one last_update_time.
+
+        Args:
+            logical_port_name (str): Logical port name.
+            vdm_real_values_dict (dict): Pre-merged VDM real values dictionary.
+        """
+        # This function is called mainly to perform basic validation of the port
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check=True)
+        if physical_port is None:
+            return
+
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
         if asic_index is None:
-            self.logger.log_error(f"Post port vdm real values to db failed for {logical_port_name} "
+            self.logger.log_error(f"Post port vdm real values from dict to db failed for {logical_port_name} "
                                     "as no asic index found")
             return
 
-        return self.post_diagnostic_values_to_db(logical_port_name,
-                                                 self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                 self.vdm_utils.get_vdm_real_values,
-                                                 db_cache=db_cache,
-                                                 enable_flat_memory_check=True)
+        if not vdm_real_values_dict:
+            return
+
+        self.beautify_info_dict(vdm_real_values_dict)
+        fvs = swsscommon.FieldValuePairs(
+            [(k, v) for k, v in vdm_real_values_dict.items()] +
+            [("last_update_time", self.get_current_time())]
+        )
+        table = self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index)
+        table.set(logical_port_name, fvs)
 
     def post_port_vdm_flags_to_db(self, logical_port_name, db_cache=None):
         return self._post_port_vdm_thresholds_or_flags_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_flag_tbl,
