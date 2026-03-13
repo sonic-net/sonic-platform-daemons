@@ -53,6 +53,9 @@ os.environ["XCVRD_UNIT_TESTING"] = "1"
 with open(os.path.join(test_path, 'media_settings.json'), 'r') as f:
     media_settings_dict = json.load(f)
 
+with open(os.path.join(test_path, 'gearbox_media_settings.json'), 'r') as f:
+    gearbox_media_settings_dict = json.load(f)
+
 media_settings_with_comma_dict = copy.deepcopy(media_settings_dict)
 global_media_settings = media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS'].pop('1-32')
 media_settings_with_comma_dict['GLOBAL_MEDIA_SETTINGS']['1-5,6,7-20,21-32'] = global_media_settings
@@ -228,6 +231,23 @@ port_media_settings_data = {'7': media_settings_global_default_port_media_key_la
 media_settings_global_default_port_media_key_lane_speed_si['GLOBAL_MEDIA_SETTINGS'] = {'0-31': {'Default': asic_serdes_si_settings_example}}
 media_settings_global_default_port_media_key_lane_speed_si['PORT_MEDIA_SETTINGS'] = port_media_settings_data
 
+# Fixture: PORT_MEDIA_SETTINGS vendor match should override GLOBAL_MEDIA_SETTINGS Default
+# for the same port. GLOBAL has only Default; PORT has a specific vendor entry.
+media_settings_port_overrides_global_default = {
+    'GLOBAL_MEDIA_SETTINGS': {
+        '0-31': {
+            'Default': asic_serdes_si_settings_example
+        }
+    },
+    'PORT_MEDIA_SETTINGS': {
+        '7': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example2
+            }
+        }
+    }
+}
+
 media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {
     LANE_SPEED_DEFAULT_KEY: asic_serdes_si_settings_example,
@@ -362,7 +382,7 @@ class TestXcvrdThreadException(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
-                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8', 
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8',
                                              'admin_status':'up', 'host_tx_status':'true'})
 
         # Case 1: get_xcvr_api() raises an exception
@@ -1615,6 +1635,8 @@ class TestXcvrdScript(object):
     (media_settings_port_generic_vendor_key_si, 7, {'vendor_key': 'GENERIC_VENDOR-1234', 'media_key': 'UNKOWN', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'}, 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'}, 'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'}, 'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'}}),
     (media_settings_port_default_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
+    (media_settings_port_overrides_global_default, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
+    (media_settings_port_overrides_global_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
     (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'COPPER50'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
@@ -1671,11 +1693,11 @@ class TestXcvrdScript(object):
             result = media_settings_parser.get_media_settings_value(port, key)
             assert result == expected
 
-    @patch('xcvrd.xcvrd.platform_chassis')
-    def test_get_is_copper_exception(self, mock_chassis):
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
+    def test_is_copper_exception(self, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
-        result = media_settings_parser.get_is_copper(0)
+        result = common.is_copper(0)
         assert result == True
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
@@ -1736,6 +1758,49 @@ class TestXcvrdScript(object):
         self._check_notify_media_setting(1, True, {'preemphasis': ','.join(['0x164509'] * 2)})
         self._check_notify_media_setting(6, True, {'preemphasis': ','.join(['0x124A08'] * 2)})
 
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict)
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(400000, 4, 0)))
+    def test_notify_media_setting_with_gearbox(self):
+        """
+        Test notify_media_setting() with gearbox media settings.
+
+        This test verifies that the notify_media_setting() function correctly handles
+        gearbox-specific media settings from gearbox_media_settings.json. The test covers:
+        - COPPER50 settings with 8 line lanes and 4 system lanes
+        - OPTICAL50 settings with 8 line lanes and 4 system lanes
+        - COPPER25 settings with 4 line lanes and 4 system lanes
+        - OPTICAL25 settings with 4 line lanes and 4 system lanes
+
+        The gearbox settings include both line-side (gb_line_*) and system-side (gb_system_*)
+        SerDes parameters that need to be correctly extracted and formatted.
+        """
+        # Test COPPER50 with gearbox (8 line lanes, 4 system lanes)
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+                   MagicMock(return_value={'vendor_key': 'TEST-VENDOR', 'media_key': 'TEST-MEDIA',
+                                          'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50'})):
+            self._check_notify_media_setting_with_gearbox(1, 8, 4)
+
+        # Test OPTICAL50 with gearbox (8 line lanes, 4 system lanes)
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+                   MagicMock(return_value={'vendor_key': 'TEST-VENDOR', 'media_key': 'TEST-MEDIA',
+                                          'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'OPTICAL50'})):
+            self._check_notify_media_setting_with_gearbox(1, 8, 4)
+
+        # Test COPPER25 with gearbox (4 line lanes, 4 system lanes)
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+                   MagicMock(return_value={'vendor_key': 'TEST-VENDOR', 'media_key': 'TEST-MEDIA',
+                                          'lane_speed_key': 'speed:25G', 'medium_lane_speed_key': 'COPPER25'})):
+            self._check_notify_media_setting_with_gearbox(1, 4, 4)
+
+        # Test OPTICAL25 with gearbox (4 line lanes, 4 system lanes)
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+                   MagicMock(return_value={'vendor_key': 'TEST-VENDOR', 'media_key': 'TEST-MEDIA',
+                                          'lane_speed_key': 'speed:25G', 'medium_lane_speed_key': 'OPTICAL25'})):
+            self._check_notify_media_setting_with_gearbox(1, 4, 4)
+
     def _check_notify_media_setting(self, index, expected_found=False, expected_value=None, xcvr_info_dict=None):
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         cfg_port_tbl = MagicMock()
@@ -1763,6 +1828,64 @@ class TestXcvrdScript(object):
         result_dict = dict(result) if result else None
         assert found == expected_found
         assert result_dict == expected_value
+
+    def _check_notify_media_setting_with_gearbox(self, index, gearbox_line_lanes, system_lanes, xcvr_info_dict=None):
+        """
+        Helper method to test notify_media_setting with gearbox configuration.
+
+        Args:
+            index: Physical port index
+            gearbox_line_lanes: Number of gearbox line lanes
+            system_lanes: Number of system lanes
+            xcvr_info_dict: Optional transceiver info dictionary
+        """
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        cfg_port_tbl = MagicMock()
+        mock_cfg_table = xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+
+        logical_port_name = 'Ethernet0'
+        xcvr_info_dict = {
+            index: {
+                'manufacturer': 'TestVendor',
+                'model': 'TestModel',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '1',
+                'specification_compliance': "passive_copper_media_interface",
+                'type_abbrv_name': 'QSFP-DD'
+            }
+        } if xcvr_info_dict is None else xcvr_info_dict
+
+        app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+
+        # Mock gearbox_line_lanes_dict to simulate gearbox configuration
+        gearbox_lanes_dict = {logical_port_name: gearbox_line_lanes}
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value=gearbox_lanes_dict)
+
+        port_mapping = PortMapping()
+        port_change_event = PortChangeEvent(logical_port_name, index, 0, PortChangeEvent.PORT_ADD)
+        port_mapping.handle_port_change_event(port_change_event)
+
+        media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, xcvr_table_helper, port_mapping)
+
+        found, result = app_port_tbl.get(logical_port_name)
+        result_dict = dict(result) if result else None
+
+        # Verify that settings were found
+        assert found == True
+        assert result_dict is not None
+
+        # Verify that gearbox line settings have the correct number of lanes
+        for key in result_dict:
+            if 'gb_line' in key:
+                lane_values = result_dict[key].split(',')
+                assert len(lane_values) == gearbox_line_lanes, \
+                    f"Expected {gearbox_line_lanes} lanes for {key}, got {len(lane_values)}"
+            elif 'gb_system' in key:
+                lane_values = result_dict[key].split(',')
+                assert len(lane_values) == system_lanes, \
+                    f"Expected {system_lanes} lanes for {key}, got {len(lane_values)}"
 
     @patch('xcvrd.xcvrd_utilities.optics_si_parser.g_optics_si_dict', optics_si_settings_dict)
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
@@ -2067,7 +2190,7 @@ class TestXcvrdScript(object):
     def test_get_port_mapping(self, mock_swsscommon_table):
         mock_table = MagicMock()
         mock_table.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet-IB0', 'Ethernet8'])
-        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )), 
+        mock_table.get = MagicMock(side_effect=[(True, (('index', 1), )), (True, (('index', 2), )),
                         (True, (('index', 3), )), (True, (('index', 4), ('role', 'Dpc')))])
         mock_swsscommon_table.return_value = mock_table
         port_mapping = get_port_mapping(DEFAULT_NAMESPACE)
@@ -3340,6 +3463,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_tx_turnon_duration = MagicMock(return_value=5000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
@@ -3620,6 +3744,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_tx_turnoff_duration = MagicMock(return_value=500.0)
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_tx_turnon_duration = MagicMock(return_value=5000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
@@ -3759,6 +3884,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_tx_turnoff_duration = MagicMock(return_value=500.0)
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_tx_turnon_duration = MagicMock(return_value=5000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
@@ -3963,6 +4089,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
         mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
         mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_tx_turnon_duration = MagicMock(return_value=5000.0)
         mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
         mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
         mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
@@ -6130,7 +6257,7 @@ class TestOpticSiParser(object):
         """Test load_optics_si_settings when no file exists"""
         from xcvrd.xcvrd_utilities.optics_si_parser import load_optics_si_settings
 
-        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', 
+        with patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs',
                 return_value=('/nonexistent/platform', '/nonexistent/hwsku')):
             with patch('os.path.isfile', return_value=False):
                 result = load_optics_si_settings()
