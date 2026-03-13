@@ -289,6 +289,37 @@ class TestFanUpdater(object):
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
 
+    def test_get_psu_key_returns_psu_name(self):
+        """Test get_psu_key returns PSU name from platform API"""
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._name = 'PSU0'
+        chassis._psu_list.append(psu)
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        assert fan_updater.get_psu_key(0) == 'PSU0'
+
+    def test_get_psu_key_attribute_error(self):
+        """Test get_psu_key falls back when get_psu returns None (AttributeError on .get_name())"""
+        chassis = MockChassis()
+        # No PSUs added, so get_psu(index) returns None and .get_name() raises AttributeError
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        assert fan_updater.get_psu_key(0) == 'PSU 1'
+        assert fan_updater.get_psu_key(1) == 'PSU 2'
+
+    def test_get_psu_key_not_implemented_error(self):
+        """Test get_psu_key falls back to 1-based 'PSU <index+1>' when get_name raises NotImplementedError"""
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu.get_name = mock.MagicMock(side_effect=NotImplementedError)
+        chassis._psu_list.append(psu)
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        assert fan_updater.get_psu_key(0) == 'PSU 1'
+
+    def test_get_psu_key_chassis_none(self):
+        """Test get_psu_key falls back to 1-based 'PSU <index+1>' when chassis is None"""
+        fan_updater = thermalctld.FanUpdater(None, threading.Event())
+        assert fan_updater.get_psu_key(0) == 'PSU 1'
+
 class TestLiquidCoolingUpdater(object):
     def test_update(self):
         mock_chassis = MockChassis()
