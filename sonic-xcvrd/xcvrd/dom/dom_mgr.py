@@ -145,7 +145,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
     ]
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None):
         super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
