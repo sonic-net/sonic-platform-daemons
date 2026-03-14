@@ -155,10 +155,6 @@ class SensorUpdater(logger.Logger):
                 self.table._del(tk)
                 if self.is_chassis_system and self.chassis_table is not None:
                     self.chassis_table._del(tk)
-        if self.phy_entity_table:
-            phy_entity_keys = self.phy_entity_table.getKeys()
-            for pek in phy_entity_keys:
-                self.phy_entity_table._del(pek)
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         '''
@@ -193,6 +189,14 @@ class VoltageUpdater(SensorUpdater):
             self.module_voltage_sensors = set()
 
         self.fs_sensors = fs_sensors
+
+    def __del__(self):
+        # Call parent destructor to clean up sensor table entries
+        super().__del__()
+        # Delete only the physical entity entries added by this updater
+        if self.phy_entity_table:
+            for sensor_name in self.voltage_status_dict.keys():
+                self.phy_entity_table._del(sensor_name)
 
     def update(self, stop_event_signal = threading.Event()):
         '''
@@ -332,6 +336,14 @@ class CurrentUpdater(SensorUpdater):
             self.module_current_sensors = set()
 
         self.fs_sensors = fs_sensors
+
+    def __del__(self):
+        # Call parent destructor to clean up sensor table entries
+        super().__del__()
+        # Delete only the physical entity entries added by this updater
+        if self.phy_entity_table:
+            for sensor_name in self.current_status_dict.keys():
+                self.phy_entity_table._del(sensor_name)
 
     def update(self, stop_event_signal = threading.Event()):
         '''
