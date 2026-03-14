@@ -158,7 +158,14 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.dom_update_interval = self.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
         if dom_update_interval is not None:
-            self.dom_update_interval = dom_update_interval
+             if dom_update_interval < 0:
+                 self.log_warning(
+                     "Invalid dom_update_interval {} provided; using default {} seconds instead".format(
+                         dom_update_interval, self.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
+                     )
+                 )
+             else:
+                 self.dom_update_interval = dom_update_interval
 
     """
     Checks if the port is going through CMIS initialization process
