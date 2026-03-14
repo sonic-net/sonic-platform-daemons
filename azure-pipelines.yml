@@ -154,7 +154,7 @@ jobs:
                 fi
             fi
             pip3 install ".[testing]"
-            pip3 uninstall --yes sonic-platform-daemons
+            pip3 uninstall --yes $(python3 setup.py --name)
             pytest
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
