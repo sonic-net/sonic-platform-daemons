@@ -22,7 +22,14 @@ class Table:
         pass
 
     def set(self, key, fvs):
-        self.mock_dict[key] = fvs.fv_dict
+        if hasattr(fvs, 'fv_dict'):
+            self.mock_dict[key] = fvs.fv_dict
+        else:
+            # Real swsscommon.FieldValuePairs (C extension): iterable as (field, value) pairs
+            try:
+                self.mock_dict[key] = dict(fvs)
+            except (TypeError, ValueError):
+                self.mock_dict[key] = dict(list(fvs))
         pass
 
     def get(self, key):

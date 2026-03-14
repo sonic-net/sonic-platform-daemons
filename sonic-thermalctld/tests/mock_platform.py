@@ -529,6 +529,9 @@ class MockChassis(chassis_base.ChassisBase):
             raise NotImplementedError
         return self._dpu_id
 
+    def get_all_pdbs(self):
+        return getattr(self, '_pdb_list', [])
+
 class MockModule(module_base.ModuleBase):
     def __init__(self, index=1):
         super(MockModule, self).__init__()
@@ -544,3 +547,6 @@ class MockModule(module_base.ModuleBase):
 
     def get_all_psus(self):
         return self._psu_list
+
+    def get_all_pdbs(self):
+        return getattr(self, '_pdb_list', [])
