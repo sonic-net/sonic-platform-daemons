@@ -268,20 +268,40 @@ class FanUpdater(logger.Logger):
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
 
     def __del__(self):
-        if self.table:
-            table_keys = self.table.getKeys()
-            for tk in table_keys:
-                self.table._del(tk)
-                if self.phy_entity_table:
-                    if self.phy_entity_table.get(tk) is not None:
-                        self.phy_entity_table._del(tk)
-        if self.drawer_table:
-            drawer_keys = self.drawer_table.getKeys()
-            for dtk in drawer_keys:
-                self.drawer_table._del(dtk)
-                if self.phy_entity_table:
-                    if self.phy_entity_table.get(dtk) is not None:
-                        self.phy_entity_table._del(dtk)
+        try:
+            table = getattr(self, 'table', None)
+            drawer_table = getattr(self, 'drawer_table', None)
+            phy_entity_table = getattr(self, 'phy_entity_table', None)
+            if table is not None:
+                get_keys = getattr(table, 'getKeys', None)
+                table_keys = list(get_keys()) if get_keys else []
+                for tk in table_keys:
+                    try:
+                        table._del(tk)
+                    except Exception:
+                        pass
+                    if phy_entity_table is not None:
+                        try:
+                            if phy_entity_table.get(tk) is not None:
+                                phy_entity_table._del(tk)
+                        except Exception:
+                            pass
+            if drawer_table is not None:
+                get_drawer_keys = getattr(drawer_table, 'getKeys', None)
+                drawer_keys = list(get_drawer_keys()) if get_drawer_keys else []
+                for dtk in drawer_keys:
+                    try:
+                        drawer_table._del(dtk)
+                    except Exception:
+                        pass
+                    if phy_entity_table is not None:
+                        try:
+                            if phy_entity_table.get(dtk) is not None:
+                                phy_entity_table._del(dtk)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -540,10 +560,18 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
 
     def __del__(self):
-        if self.table:
-            table_keys = self.table.getKeys()
-            for tk in table_keys:
-                self.table._del(tk)
+        try:
+            table = getattr(self, 'table', None)
+            if table is not None:
+                get_keys = getattr(table, 'getKeys', None)
+                table_keys = list(get_keys()) if get_keys else []
+                for tk in table_keys:
+                    try:
+                        table._del(tk)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _refresh_leak_status(self):
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
@@ -740,21 +768,32 @@ class TemperatureUpdater(logger.Logger):
                     self.chassis_table = None
 
     def __del__(self):
-        if self.table:
-            table_keys = self.table.getKeys()
-            for tk in table_keys:
-                self.table._del(tk)
-                try:
-                    if self.is_chassis_upd_required and self.chassis_table is not None:
-                        self.chassis_table._del(tk)
-                except Exception as e:
-                    # On a chassis system it is possible we may lose connection
-                    # to the supervisor and chassisdb. If this happens then we
-                    # should simply remove our handle to chassisdb.
-                    self.chassis_table = None
-                if self.phy_entity_table:
-                    if self.phy_entity_table.get(tk) is not None:
-                        self.phy_entity_table._del(tk)
+        try:
+            table = getattr(self, 'table', None)
+            if table is not None:
+                get_keys = getattr(table, 'getKeys', None)
+                table_keys = list(get_keys()) if get_keys else []
+                phy_entity_table = getattr(self, 'phy_entity_table', None)
+                for tk in table_keys:
+                    try:
+                        table._del(tk)
+                    except Exception:
+                        pass
+                    try:
+                        if getattr(self, 'is_chassis_upd_required', False) and getattr(self, 'chassis_table', None) is not None:
+                            self.chassis_table._del(tk)
+                    except Exception:
+                        # On a chassis system we may lose connection to the supervisor
+                        # and chassisdb; drop the handle.
+                        self.chassis_table = None
+                    if phy_entity_table is not None:
+                        try:
+                            if phy_entity_table.get(tk) is not None:
+                                phy_entity_table._del(tk)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def _init_sfp_util_helper(self):
         """
@@ -900,6 +939,17 @@ class TemperatureUpdater(logger.Logger):
                 if not self._collect_thermals(available_thermals, parent_name, psu.get_all_thermals(),
                                               refresh=should_update_psu, now=now):
                     return
+
+        # PDB thermals (get_all_pdbs() returns [] on PSU-based platforms, no overhead)
+        try:
+            for pdb_index, pdb in enumerate(self.chassis.get_all_pdbs()):
+                if try_get(pdb.get_presence):
+                    parent_name = try_get(pdb.get_name, default='PDB {}'.format(pdb_index + 1))
+                    if not self._collect_thermals(available_thermals, parent_name, pdb.get_all_thermals(),
+                                                  refresh=should_update_psu, now=now):
+                        return
+        except NotImplementedError:
+            pass
 
         if should_update_psu:
             self._last_psu_thermal_update = now
