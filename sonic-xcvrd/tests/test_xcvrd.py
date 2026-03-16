@@ -5845,6 +5845,506 @@ class TestXcvrdScript(object):
         assert mock_del_dom.call_count == 1
         mock_sfp.remove_xcvr_api.assert_called_once()
 
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_module_ready_timeout(self, mock_logger, mock_chassis, mock_get_status_sw_tbl):
+        """Test timeout for ModuleReady state in handle_cmis_ap_conf_state"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleNotReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathDeactivated',
+            'DP2State': 'DataPathDeactivated',
+            'DP3State': 'DataPathDeactivated',
+            'DP4State': 'DataPathDeactivated',
+            'DP5State': 'DataPathDeactivated',
+            'DP6State': 'DataPathDeactivated',
+            'DP7State': 'DataPathDeactivated',
+            'DP8State': 'DataPathDeactivated'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+
+        # Mock the status table to return AP_CONF state
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        # Set expired time to past to trigger timeout
+        task.port_dict['Ethernet0']['cmis_expired'] = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+
+        task.force_cmis_reinit = MagicMock()
+ 
+        task.process_cmis_state_machine('Ethernet0')
+
+        mock_logger.log_notice.assert_called_with("Ethernet0: timeout for 'ModuleReady'")
+
+        # Verify force_cmis_reinit was called due to timeout
+        assert task.force_cmis_reinit.call_count == 1
+        task.force_cmis_reinit.assert_called_once_with('Ethernet0', 1)
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_datapath_deactivated_timeout(self, mock_logger, mock_chassis, mock_get_status_sw_tbl):
+        """Test timeout for DataPathDeactivated state in handle_cmis_ap_conf_state"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathInitialized',  # Not deactivated
+            'DP2State': 'DataPathInitialized',
+            'DP3State': 'DataPathInitialized',
+            'DP4State': 'DataPathInitialized',
+            'DP5State': 'DataPathInitialized',
+            'DP6State': 'DataPathInitialized',
+            'DP7State': 'DataPathInitialized',
+            'DP8State': 'DataPathInitialized'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        # Set expired time to past to trigger timeout
+        task.port_dict['Ethernet0']['cmis_expired'] = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_cmis_state_machine('Ethernet0')
+
+        mock_logger.log_notice.assert_called_with("Ethernet0: timeout for 'DataPathDeactivated state'")
+
+        # Verify force_cmis_reinit was called due to timeout
+        assert task.force_cmis_reinit.call_count == 1
+        task.force_cmis_reinit.assert_called_once_with('Ethernet0', 1)
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_laser_frequency_failure(self, mock_helper_logger, mock_chassis, mock_get_status_sw_tbl):
+        """Test failed laser frequency configuration in handle_cmis_ap_conf_state
+        Verifies that error is logged when set_laser_freq fails"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathDeactivated',
+            'DP2State': 'DataPathDeactivated',
+            'DP3State': 'DataPathDeactivated',
+            'DP4State': 'DataPathDeactivated',
+            'DP5State': 'DataPathDeactivated',
+            'DP6State': 'DataPathDeactivated',
+            'DP7State': 'DataPathDeactivated',
+            'DP8State': 'DataPathDeactivated'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=True)
+        mock_xcvr_api.get_tuning_in_progress = MagicMock(return_value=False)
+        mock_xcvr_api.set_laser_freq = MagicMock(return_value=-1)  # Simulate failure
+        mock_xcvr_api.set_application = MagicMock()
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        # Mock status_sw_tbl.hget to return proper tuple
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        task.port_dict['Ethernet0']['laser_freq'] = 193100
+        task.port_dict['Ethernet0']['cmis_expired'] = time.time() + 100
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_cmis_state_machine('Ethernet0')
+
+        assert mock_xcvr_api.set_laser_freq.call_count == 1
+
+        # Verify error was logged when laser frequency configuration failed
+        mock_helper_logger.log_error.assert_called_once_with('Ethernet0 failed to configure laser frequency 193100 GHz')
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present')
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting')
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_custom_si_settings_logging(self, mock_logger, mock_chassis, mock_get_status_sw_tbl,
+                                                                        mock_fetch_si, mock_si_present):
+        """Test custom SI settings logging in handle_cmis_ap_conf_state"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathDeactivated',
+            'DP2State': 'DataPathDeactivated',
+            'DP3State': 'DataPathDeactivated',
+            'DP4State': 'DataPathDeactivated',
+            'DP5State': 'DataPathDeactivated',
+            'DP6State': 'DataPathDeactivated',
+            'DP7State': 'DataPathDeactivated',
+            'DP8State': 'DataPathDeactivated'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+        mock_xcvr_api.set_application = MagicMock()
+        mock_xcvr_api.stage_custom_si_settings = MagicMock(return_value=True)
+        mock_xcvr_api.scs_apply_datapath_init = MagicMock(return_value=True)
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='TestVendor')
+        mock_xcvr_api.get_model = MagicMock(return_value='TestPN')
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        # Mock SI settings present and return custom settings (nested dict structure)
+        mock_si_present.return_value = True
+        mock_fetch_si.return_value = {
+            'OutputEqPreCursorTargetRx': {
+                'OutputEqPreCursorTargetRx1': 3,
+                'OutputEqPreCursorTargetRx2': 3
+            },
+            'OutputEqPostCursorTargetRx': {
+                'OutputEqPostCursorTargetRx1': 0,
+                'OutputEqPostCursorTargetRx2': 0
+            }
+        }
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        # Mock status_sw_tbl.hget to return proper tuple
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        task.port_dict['Ethernet0']['cmis_expired'] = time.time() + 100
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+        task.port_dict['Ethernet0']['laser_freq'] = 0
+
+        task.process_cmis_state_machine('Ethernet0')
+
+        # Verify custom SI settings were fetched and logged
+        assert mock_fetch_si.call_count == 1
+        assert mock_xcvr_api.stage_custom_si_settings.call_count == 1
+
+        mock_logger.log_notice.assert_any_call("Ethernet0: Apply Optics SI found for Vendor: TestVendor  PN: TestPN lane speed: 50G")
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present')
+    @patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting')
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_stage_si_settings_failure(self, mock_logger, mock_chassis, mock_get_status_sw_tbl,
+                                                                       mock_fetch_si, mock_si_present):
+        """Test stage_custom_si_settings failure in handle_cmis_ap_conf_state
+        Verifies that error is logged when stage_custom_si_settings fails"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathDeactivated',
+            'DP2State': 'DataPathDeactivated',
+            'DP3State': 'DataPathDeactivated',
+            'DP4State': 'DataPathDeactivated',
+            'DP5State': 'DataPathDeactivated',
+            'DP6State': 'DataPathDeactivated',
+            'DP7State': 'DataPathDeactivated',
+            'DP8State': 'DataPathDeactivated'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+        mock_xcvr_api.set_application = MagicMock()
+        mock_xcvr_api.stage_custom_si_settings = MagicMock(return_value=False)  # Simulate failure
+        mock_xcvr_api.get_manufacturer = MagicMock(return_value='TestVendor')
+        mock_xcvr_api.get_model = MagicMock(return_value='TestPN')
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        # Mock SI settings present and return custom settings (nested dict structure)
+        mock_si_present.return_value = True
+        mock_fetch_si.return_value = {
+            'OutputEqPreCursorTargetRx': {
+                'OutputEqPreCursorTargetRx1': 3,
+                'OutputEqPreCursorTargetRx2': 3
+            },
+            'OutputEqPostCursorTargetRx': {
+                'OutputEqPostCursorTargetRx1': 0,
+                'OutputEqPostCursorTargetRx2': 0
+            }
+        }
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        # Mock status_sw_tbl.hget to return proper tuple
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        task.port_dict['Ethernet0']['cmis_expired'] = time.time() + 100
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+        task.port_dict['Ethernet0']['laser_freq'] = 0
+
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_cmis_state_machine('Ethernet0')
+
+        mock_logger.log_notice.assert_any_call("Ethernet0: unable to stage custom SI settings ")
+        assert task.force_cmis_reinit.call_count == 1
+        task.force_cmis_reinit.assert_called_once_with('Ethernet0', 1)
+        assert mock_xcvr_api.stage_custom_si_settings.call_count == 1
+
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver.handle_port_update_event', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_decommission_required', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.cmis.cmis_manager_task.helper_logger')
+    def test_CmisManagerTask_handle_ap_conf_scs_apply_datapath_init_failure(self, mock_logger, mock_chassis, mock_get_status_sw_tbl):
+        """Test scs_apply_datapath_init failure in handle_cmis_ap_conf_state
+        Verifies that error is logged when scs_apply_datapath_init fails"""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value={
+            'DP1State': 'DataPathDeactivated',
+            'DP2State': 'DataPathDeactivated',
+            'DP3State': 'DataPathDeactivated',
+            'DP4State': 'DataPathDeactivated',
+            'DP5State': 'DataPathDeactivated',
+            'DP6State': 'DataPathDeactivated',
+            'DP7State': 'DataPathDeactivated',
+            'DP8State': 'DataPathDeactivated'
+        })
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value={1: {'host_lane_count': 8}})
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=1)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+        mock_xcvr_api.set_application = MagicMock()
+        mock_xcvr_api.scs_apply_datapath_init = MagicMock(return_value=False)  # Simulate failure
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+
+        # Mock status_sw_tbl.hget to return proper tuple
+        mock_get_status_sw_tbl.hget = MagicMock(return_value=(True, CMIS_STATE_AP_CONF))
+
+        port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
+        task.on_port_update_event(port_change_event)
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_AP_CONF)
+
+        task.port_dict['Ethernet0']['pport'] = 1
+        task.port_dict['Ethernet0']['speed'] = 400000
+        task.port_dict['Ethernet0']['subport'] = 0
+        task.port_dict['Ethernet0']['host_lane_count'] = 8
+        task.port_dict['Ethernet0']['api'] = mock_xcvr_api
+        task.port_dict['Ethernet0']['sfp'] = mock_sfp
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xFF
+
+        task.port_dict['Ethernet0']['cmis_expired'] = time.time() + 100
+        task.port_dict['Ethernet0']['cmis_retries'] = 0
+        task.port_dict['Ethernet0']['laser_freq'] = 0
+
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_cmis_state_machine('Ethernet0')
+
+        mock_logger.log_notice.assert_called_with("Ethernet0: unable to set application and stage DP init")
+
+        assert task.force_cmis_reinit.call_count == 1
+        task.force_cmis_reinit.assert_called_once_with('Ethernet0', 1)
+        assert mock_xcvr_api.scs_apply_datapath_init.call_count == 1
+
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
     while wait_time <= total_wait_time:
