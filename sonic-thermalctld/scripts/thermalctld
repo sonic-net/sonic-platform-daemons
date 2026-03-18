@@ -6,6 +6,7 @@
 """
 
 from enum import Enum, auto
+from math import inf
 import argparse
 import json
 import os
@@ -13,9 +14,11 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Dict
 
 import sonic_platform
+from sonic_platform_base.liquid_cooling_base import LeakSeverity
 from sonic_py_common import daemon_base, logger, device_info, multi_asic
 from sonic_py_common.task_base import ThreadTaskBase
 from swsscommon import swsscommon
@@ -519,7 +522,9 @@ class FanUpdater(logger.Logger):
 
 class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
+    LEAK_PROFILE_TABLE_NAME = 'LEAK_PROFILE'
     LIQUID_COOLING_INFO_TABLE_NAME = 'LIQUID_COOLING_INFO'
+    SYSTEM_LEAK_STATUS_TABLE_NAME = 'SYSTEM_LEAK_STATUS'
 
     def __init__(self, chassis, liquid_cooling_update_interval):
         """
@@ -533,37 +538,104 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.task_stopping_event = threading.Event()
         self.chassis = chassis
         self.liquid_cooling = self.chassis.get_liquid_cooling()
-        self.leaking_sensors = []
+        self.leaking_sensors: Dict[str, datetime] = {}
+        self.faulty_sensors: Dict[str, datetime] = {}
         self.interval = liquid_cooling_update_interval
+        self.last_leak_status = None
 
         state_db = daemon_base.db_connect("STATE_DB")
-        self.table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
+        self.sensor_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
+        self.system_table = swsscommon.Table(state_db, LiquidCoolingUpdater.SYSTEM_LEAK_STATUS_TABLE_NAME)
+
+        # Update the profiles in the state DB. This only needs to be done at startup.
+        self.profile_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LEAK_PROFILE_TABLE_NAME)
+        for profile in self.liquid_cooling.get_all_profiles():
+            fvs = swsscommon.FieldValuePairs([
+                ('type', profile.get_type()),
+                ('max_minor_duration_sec', profile.get_leak_max_minor_duration_sec()),
+            ])
+            self.profile_table.set(profile.get_type(), fvs)
 
     def __del__(self):
-        if self.table:
-            table_keys = self.table.getKeys()
+        if self.system_table:
+            table_keys = self.system_table.getKeys()
             for tk in table_keys:
-                self.table._del(tk)
+                self.system_table._del(tk)
+        if self.sensor_table:
+            table_keys = self.sensor_table.getKeys()
+            for tk in table_keys:
+                self.sensor_table._del(tk)
+        if self.profile_table:
+            table_keys = self.profile_table.getKeys()
+            for tk in table_keys:
+                self.profile_table._del(tk)
 
     def _refresh_leak_status(self):
+        status = None
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
             sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
-            sensor_leak_status = sensor.is_leak()
-            status_msg = "N/A"
+            sensor_is_ok = sensor.is_leak_sensor_ok()
+            sensor_is_leak = sensor.is_leak()
+            sensor_leak_severity = sensor.get_leak_severity()
 
-            if sensor_leak_status is True:
-                status_msg = "Yes"
-                if sensor_name not in self.leaking_sensors:
-                    self.leaking_sensors.append(sensor_name)
-                    self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
-            elif sensor_leak_status is False:
-                status_msg = "No"
-                if sensor_name in self.leaking_sensors:
-                    self.leaking_sensors.remove(sensor_name)
-                    self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
+            now = datetime.now()
 
-            fvs = swsscommon.FieldValuePairs([('leak_status', status_msg)])
-            self.table.set(sensor_name, fvs)
+            if not sensor_is_ok:
+                if sensor_name not in self.faulty_sensors:
+                    self.faulty_sensors[sensor_name] = now
+                    self.log_error('Liquid cooling leakage sensor {} reported faulty'.format(sensor_name))
+            else:
+                if sensor_name in self.faulty_sensors:
+                    del self.faulty_sensors[sensor_name]
+                    self.log_notice('Liquid cooling leaking sensor {} recovered from fault'.format(sensor_name))
+
+            if sensor_is_ok:
+                if sensor_is_leak:
+                    if sensor_name not in self.leaking_sensors:
+                        self.leaking_sensors[sensor_name] = now
+                        self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
+
+                    # Upgrade minor leaks to critical if the time threshold has been exceeded.
+                    if sensor_leak_severity == LeakSeverity.MINOR:
+                        leak_start_time = self.leaking_sensors[sensor_name]
+                        profile = sensor.get_leak_profile()
+                        max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
+                        if max_minor_secs < inf:
+                            max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
+                            if max_minor <= now:
+                                sensor_leak_severity = LeakSeverity.CRITICAL
+
+                    if status is not None:
+                        # Multiple leaks (any severity) are critical.
+                        status = LeakSeverity.CRITICAL
+                    else:
+                        # Else, severity is whatever this sensor's severity is.
+                        status = sensor_leak_severity
+                else:
+                    if sensor_name in self.leaking_sensors:
+                        del self.leaking_sensors[sensor_name]
+                        self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
+
+            # Per-sensor status.
+            leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
+            fvs = swsscommon.FieldValuePairs([
+                ('name', sensor_name),
+                ('leaking', leaking),
+                ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
+                ('type', sensor.get_leak_sensor_type()),
+                ('location', sensor.get_leak_sensor_location()),
+                ('severity', str(sensor_leak_severity)),
+            ])
+            self.sensor_table.set(sensor_name, fvs)
+
+        # Overall system status.
+        self.last_leak_status = status
+        status_str = status.value if status is not None else 'None'
+        fvs = swsscommon.FieldValuePairs([
+            ('device_leak_status', status_str),
+            ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
+        ])
+        self.system_table.set('system', fvs)
 
     def update(self):
         self._refresh_leak_status()
