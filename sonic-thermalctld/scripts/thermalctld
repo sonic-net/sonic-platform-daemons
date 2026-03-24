@@ -7,12 +7,13 @@
 
 from enum import Enum, auto
 import argparse
+import json
+import os
 import signal
 import sys
 import threading
 import time
 from datetime import datetime
-import argparse
 
 import sonic_platform
 from sonic_py_common import daemon_base, logger, device_info, multi_asic
@@ -38,6 +39,7 @@ TRANSCEIVER_DOM_TEMPERATURE_TABLE = 'TRANSCEIVER_DOM_TEMPERATURE'
 TRANSCEIVER_DOM_THRESHOLD_TABLE = 'TRANSCEIVER_DOM_THRESHOLD'
 TRANSCEIVER_DOM_SENSOR_TABLE = 'TRANSCEIVER_DOM_SENSOR'
 INVALID_SLOT_OR_DPU = -1
+PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
 
 ERR_UNKNOWN = 1
 CHASSIS_GET_ERROR = 2
@@ -71,6 +73,70 @@ def update_entity_info(table, parent_name, key, device, device_index):
         [('position_in_parent', str(try_get(device.get_position_in_parent, device_index))),
          ('parent_name', parent_name)])
     table.set(key, fvs)
+
+
+def _parse_platform_json_polling_intervals():
+    """Parse polling_interval values from platform.json for thermalctld components.
+
+    platform.json may contain per-component polling intervals:
+    - fan_drawers[0].polling_interval: interval in seconds for fan updates
+    - psus[0].polling_interval: interval in seconds for PSU updates
+    - thermals[*].polling_interval: per-thermal interval in seconds
+
+    The first entry in fan_drawers/psus without a 'name' key is treated as
+    configuration; subsequent entries with 'name' are actual devices.
+
+    Returns:
+        dict: {'fan_drawer': float|None, 'psu': float|None, 'thermals': {name: float}}
+    """
+    result = {'fan_drawer': None, 'psu': None, 'thermals': {}}
+    try:
+        if not os.path.isfile(PLATFORM_JSON_FILE):
+            return result
+        with open(PLATFORM_JSON_FILE, 'r') as f:
+            platform_data = json.load(f)
+    except Exception:
+        return result
+
+    if not platform_data:
+        return result
+
+    # platform.json nests components under 'chassis'
+    chassis = platform_data.get('chassis', platform_data)
+
+    # fan_drawers: config entry (no 'name') with polling_interval
+    for entry in chassis.get('fan_drawers', []):
+        if 'name' not in entry and 'polling_interval' in entry:
+            val = entry['polling_interval']
+            if val:
+                try:
+                    result['fan_drawer'] = float(val)
+                except (ValueError, TypeError):
+                    pass
+            break
+
+    # psus: config entry (no 'name') with polling_interval
+    for entry in chassis.get('psus', []):
+        if 'name' not in entry and 'polling_interval' in entry:
+            val = entry['polling_interval']
+            if val:
+                try:
+                    result['psu'] = float(val)
+                except (ValueError, TypeError):
+                    pass
+            break
+
+    # thermals: each device entry may have its own polling_interval
+    for entry in chassis.get('thermals', []):
+        name = entry.get('name')
+        val = entry.get('polling_interval', '')
+        if name and val:
+            try:
+                result['thermals'][name] = float(val)
+            except (ValueError, TypeError):
+                pass
+
+    return result
 
 
 class FanType(Enum):
@@ -621,10 +687,16 @@ class TemperatureUpdater(logger.Logger):
     # Temperature information table name in database
     TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
 
-    def __init__(self, chassis, task_stopping_event):
+    def __init__(self, chassis, task_stopping_event, psu_interval=None, thermal_intervals=None,
+                 default_interval=None):
         """
         Initializer of TemperatureUpdater
         :param chassis: Object representing a platform chassis
+        :param psu_interval: Polling interval for PSU thermals (seconds), None for default
+        :param thermal_intervals: Dict of {thermal_name: interval_seconds} for per-thermal polling
+        :param default_interval: Default polling interval for thermals not in thermal_intervals.
+                                 When set, thermals without an explicit interval are throttled to
+                                 this rate instead of updating every cycle.
         """
         super(TemperatureUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
@@ -639,6 +711,13 @@ class TemperatureUpdater(logger.Logger):
         self.xcvr_dom_sensor_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
         self.chassis_table = None
         self.all_thermals = set()
+
+        # Per-component polling intervals from platform.json
+        self._psu_interval = psu_interval
+        self._thermal_intervals = thermal_intervals or {}
+        self._default_interval = default_interval
+        self._last_psu_thermal_update = 0
+        self._last_thermal_update_times = {}
 
         # Initialize SfpUtilHelper for port index to logical port name mapping
         self.sfp_util = self._init_sfp_util_helper()
@@ -735,19 +814,37 @@ class TemperatureUpdater(logger.Logger):
         else:
             self.log_warning(abnormal_log)
 
-    def _collect_thermals(self, available_thermals, parent_name, thermals):
+    def _should_update_thermal(self, name):
+        """Check if a thermal should be updated based on its polling interval."""
+        interval = self._thermal_intervals.get(name, self._default_interval)
+        if interval is None:
+            return True
+        now = time.time()
+        last = self._last_thermal_update_times.get(name, 0)
+        if now - last >= interval:
+            self._last_thermal_update_times[name] = now
+            return True
+        return False
+
+    def _collect_thermals(self, available_thermals, parent_name, thermals, refresh=True):
         """
         Process thermals from a parent device and update DB.
         :param available_thermals: Set to track available thermals
         :param parent_name: Name of the parent device
         :param thermals: Iterable of thermal objects from get_all_thermals()
+        :param refresh: If False, only track thermals and update entity info without refreshing temperature
         :return: False if task_stopping_event is set, True otherwise
         """
         for thermal_index, thermal in enumerate(thermals):
             if self.task_stopping_event.is_set():
                 return False
             available_thermals.add((thermal, parent_name, thermal_index))
-            self._refresh_temperature_status(parent_name, thermal, thermal_index)
+            name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
+            # Always update entity info so PHYSICAL_ENTITY_INFO is populated
+            if 'SFP' not in parent_name:
+                update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
+            if refresh and self._should_update_thermal(name):
+                self._refresh_temperature_status(parent_name, thermal, thermal_index)
         return True
 
     def _collect_sfp_thermals(self, available_thermals, parent_name, sfp_index, thermals):
@@ -782,11 +879,19 @@ class TemperatureUpdater(logger.Logger):
         if not self._collect_thermals(available_thermals, CHASSIS_INFO_KEY, self.chassis.get_all_thermals()):
             return
 
+        now = time.time()
+        should_update_psu = (self._psu_interval is None or
+                             (now - self._last_psu_thermal_update) >= self._psu_interval)
+
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
             if psu.get_presence():
                 parent_name = try_get(psu.get_name, default='PSU {}'.format(psu_index + 1))
-                if not self._collect_thermals(available_thermals, parent_name, psu.get_all_thermals()):
+                if not self._collect_thermals(available_thermals, parent_name, psu.get_all_thermals(),
+                                              refresh=should_update_psu):
                     return
+
+        if should_update_psu:
+            self._last_psu_thermal_update = now
 
         for sfp_index, sfp in enumerate(self.chassis.get_all_sfps()):
             if not self._collect_sfp_thermals(available_thermals, 'SFP {}'.format(sfp_index + 1),
@@ -834,13 +939,6 @@ class TemperatureUpdater(logger.Logger):
         """
         try:
             name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
-
-            # Only save entity info for thermals that belong to chassis and PSU
-            # for SFP thermal, they don't need save entity info because snmp can deduce the relation from TRANSCEIVER_DOM_SENSOR
-            # and as we save logical port in TRANSCEIVER_INFO table, for split cable, a SFP thermal might have multiple parent
-            # logical port
-            if 'SFP' not in parent_name and not is_sfp:
-                update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
 
             if name not in self.temperature_status_dict:
                 self.temperature_status_dict[name] = TemperatureStatus()
@@ -1003,11 +1101,13 @@ class TemperatureUpdater(logger.Logger):
 
 class ThermalMonitor(ThreadTaskBase):
     def __init__(
-        self, chassis, initial_interval, update_interval, update_elapsed_threshold
+        self, chassis, initial_interval, update_interval, update_elapsed_threshold,
+        polling_intervals=None
     ):
         """
         Initializer for ThermalMonitor
         :param chassis: Object representing a platform chassis
+        :param polling_intervals: Dict from _parse_platform_json_polling_intervals()
         """
         super(ThermalMonitor, self).__init__()
 
@@ -1026,12 +1126,51 @@ class ThermalMonitor(ThreadTaskBase):
         # Set minimum logging level to INFO
         self.logger.set_min_log_priority_info()
 
+        polling_intervals = polling_intervals or {}
+        fan_drawer_interval = polling_intervals.get('fan_drawer')
+        psu_interval = polling_intervals.get('psu')
+        thermal_intervals = polling_intervals.get('thermals', {})
+
+        # Fan update interval: minimum of fan_drawer and psu intervals
+        fan_intervals = [i for i in [fan_drawer_interval, psu_interval] if i is not None]
+        self._fan_update_interval = min(fan_intervals) if fan_intervals else None
+        self._last_fan_update = 0
+
         self.fan_updater = FanUpdater(chassis, self.task_stopping_event)
-        self.temperature_updater = TemperatureUpdater(chassis, self.task_stopping_event)
+        # When any custom polling intervals are configured, thermals without an
+        # explicit interval should still run at the original update_interval (60s)
+        # rather than every fast-loop cycle.
+        default_thermal_interval = update_interval if thermal_intervals else None
+        self.temperature_updater = TemperatureUpdater(
+            chassis, self.task_stopping_event,
+            psu_interval=psu_interval,
+            thermal_intervals=thermal_intervals,
+            default_interval=default_thermal_interval
+        )
+
+        # Adjust main loop to accommodate faster polling intervals
+        all_intervals = fan_intervals + list(thermal_intervals.values())
+        if all_intervals:
+            min_interval = min(all_intervals)
+            if min_interval < self.update_interval:
+                self.logger.log_notice(
+                    'Adjusting update interval from {}s to {}s based on platform.json polling intervals'.format(
+                        self.update_interval, min_interval))
+                self.update_interval = min_interval
+
+        if any(v is not None for v in [fan_drawer_interval, psu_interval]) or thermal_intervals:
+            self.logger.log_notice(
+                'Platform polling intervals: fan_drawer={}, psu={}, thermals={}'.format(
+                    fan_drawer_interval, psu_interval,
+                    {k: v for k, v in thermal_intervals.items()} if thermal_intervals else 'default'))
 
     def main(self):
         begin = time.time()
-        self.fan_updater.update()
+
+        if self._fan_update_interval is None or (begin - self._last_fan_update) >= self._fan_update_interval:
+            self.fan_updater.update()
+            self._last_fan_update = begin
+
         self.temperature_updater.update()
         elapsed = time.time() - begin
         if elapsed < self.update_interval:
@@ -1094,11 +1233,15 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error("Failed to get chassis due to {}".format(repr(e)))
             sys.exit(CHASSIS_GET_ERROR)
 
+        # Load per-component polling intervals from platform.json
+        polling_intervals = _parse_platform_json_polling_intervals()
+
         self.thermal_monitor = ThermalMonitor(
             self.chassis,
             thermal_monitor_initial_interval,
             thermal_monitor_update_interval,
-            thermal_monitor_update_elapsed_threshold
+            thermal_monitor_update_elapsed_threshold,
+            polling_intervals=polling_intervals
         )
         self.thermal_monitor.task_run()
 
