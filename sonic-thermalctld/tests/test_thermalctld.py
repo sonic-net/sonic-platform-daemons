@@ -25,7 +25,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
+from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
@@ -288,6 +288,62 @@ class TestFanUpdater(object):
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message')")
         else:
             fan_updater.log_warning.assert_called_with("Failed to update module fan status - Exception('Test message',)")
+
+    def test_collect_fans_returns_true(self):
+        """Test _collect_fans returns True when processing completes normally"""
+        chassis = MockChassis()
+        fan_drawer = MockFanDrawer(0)
+        fan_drawer._fan_list.append(MockFan())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater._refresh_fan_status = mock.MagicMock()
+        result = fan_updater._collect_fans(fan_drawer, 0, thermalctld.FanType.DRAWER)
+        assert result is True
+        assert fan_updater._refresh_fan_status.call_count == 1
+
+    def test_collect_fans_stops_on_event(self):
+        """Test _collect_fans returns False when task_stopping_event is set"""
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()
+        fan_drawer = MockFanDrawer(0)
+        fan_drawer._fan_list.append(MockFan())
+        fan_updater = thermalctld.FanUpdater(chassis, stopping_event)
+        fan_updater._refresh_fan_status = mock.MagicMock()
+        result = fan_updater._collect_fans(fan_drawer, 0, thermalctld.FanType.DRAWER)
+        assert result is False
+        assert fan_updater._refresh_fan_status.call_count == 0
+
+    def test_collect_fans_with_exception(self):
+        """Test _collect_fans logs warning with error_prefix on exception"""
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._fan_list.append(MockFan())
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater._refresh_fan_status = mock.MagicMock(side_effect=Exception("test error"))
+        result = fan_updater._collect_fans(psu, 0, thermalctld.FanType.PSU, 'PSU ')
+        assert result is True
+        assert fan_updater.log_warning.call_count == 1
+        fan_updater.log_warning.assert_called_with("Failed to update PSU fan status - Exception('test error')")
+
+    def test_update_stops_during_drawer_loop(self):
+        """Test update() returns early when task_stopping_event is set during drawer loop"""
+        chassis = MockChassis()
+        chassis.make_absent_fan()  # adds a fan drawer
+        stopping_event = threading.Event()
+        fan_updater = thermalctld.FanUpdater(chassis, stopping_event)
+        stopping_event.set()
+        fan_updater._refresh_fan_drawer_status = mock.MagicMock()
+        fan_updater.update()
+        assert fan_updater._refresh_fan_drawer_status.call_count == 0
+
+    def test_update_stops_during_collect_fans(self):
+        """Test update() returns early when _collect_fans returns False"""
+        chassis = MockChassis()
+        chassis.make_absent_fan()
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater._collect_fans = mock.MagicMock(return_value=False)
+        fan_updater.update()
+        assert fan_updater._collect_fans.call_count == 1
 
 class TestLiquidCoolingUpdater(object):
     def test_update(self):
@@ -1245,6 +1301,107 @@ class TestTemperatureUpdater(object):
         assert low == thermalctld.NOT_AVAILABLE
         assert high_crit == thermalctld.NOT_AVAILABLE
         assert low_crit == thermalctld.NOT_AVAILABLE
+
+    def test_collect_thermals_returns_true(self):
+        """Test _collect_thermals returns True when processing completes normally"""
+        chassis = MockChassis()
+        thermal = MockThermal(1)
+        chassis._thermal_list.append(thermal)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater._refresh_temperature_status = mock.MagicMock()
+        available = set()
+        result = temperature_updater._collect_thermals(available, 'chassis 1', [thermal])
+        assert result is True
+        assert len(available) == 1
+        assert temperature_updater._refresh_temperature_status.call_count == 1
+
+    def test_collect_thermals_stops_on_event(self):
+        """Test _collect_thermals returns False when task_stopping_event is set"""
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()
+        thermal = MockThermal(1)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, stopping_event)
+        temperature_updater._refresh_temperature_status = mock.MagicMock()
+        available = set()
+        result = temperature_updater._collect_thermals(available, 'chassis 1', [thermal])
+        assert result is False
+        assert len(available) == 0
+        assert temperature_updater._refresh_temperature_status.call_count == 0
+
+    def test_collect_sfp_thermals_returns_true(self):
+        """Test _collect_sfp_thermals returns True and calls _refresh_temperature_status with is_sfp=True"""
+        chassis = MockChassis()
+        thermal = MockThermal(1)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater._get_port_name_by_index = mock.MagicMock(return_value='Ethernet0')
+        temperature_updater._refresh_temperature_status = mock.MagicMock()
+        available = set()
+        result = temperature_updater._collect_sfp_thermals(available, 'SFP 1', 0, [thermal])
+        assert result is True
+        assert len(available) == 1
+        temperature_updater._refresh_temperature_status.assert_called_once_with(
+            'SFP 1', thermal, 0, is_sfp=True, port_name='Ethernet0')
+
+    def test_collect_sfp_thermals_stops_on_event(self):
+        """Test _collect_sfp_thermals returns False when task_stopping_event is set"""
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()
+        thermal = MockThermal(1)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, stopping_event)
+        temperature_updater._refresh_temperature_status = mock.MagicMock()
+        available = set()
+        result = temperature_updater._collect_sfp_thermals(available, 'SFP 1', 0, [thermal])
+        assert result is False
+        assert len(available) == 0
+
+    def test_collect_sfp_thermals_no_port_name(self):
+        """Test _collect_sfp_thermals skips refresh when port_name is None"""
+        chassis = MockChassis()
+        thermal = MockThermal(1)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater._get_port_name_by_index = mock.MagicMock(return_value=None)
+        temperature_updater._refresh_temperature_status = mock.MagicMock()
+        available = set()
+        result = temperature_updater._collect_sfp_thermals(available, 'SFP 1', 0, [thermal])
+        assert result is True
+        assert len(available) == 1
+        # _refresh_temperature_status should NOT be called when port_name is None
+        assert temperature_updater._refresh_temperature_status.call_count == 0
+
+    def test_update_stops_during_chassis_thermals(self):
+        """Test update() returns early when _collect_thermals returns False for chassis thermals"""
+        chassis = MockChassis()
+        chassis._thermal_list.append(MockThermal(1))
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater._collect_thermals = mock.MagicMock(return_value=False)
+        temperature_updater.update()
+        assert temperature_updater._collect_thermals.call_count == 1
+
+    def test_update_stops_during_psu_thermals(self):
+        """Test update() returns early when _collect_thermals returns False for PSU thermals"""
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._thermal_list.append(MockThermal(1))
+        chassis._psu_list.append(psu)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        # First call (chassis thermals) succeeds, second (PSU thermals) fails
+        temperature_updater._collect_thermals = mock.MagicMock(side_effect=[True, False])
+        temperature_updater.update()
+        assert temperature_updater._collect_thermals.call_count == 2
+
+    def test_update_stops_during_sfp_thermals(self):
+        """Test update() returns early when _collect_sfp_thermals returns False"""
+        chassis = MockChassis()
+        sfp = MockSfp()
+        sfp._thermal_list.append(MockThermal(1))
+        chassis._sfp_list.append(sfp)
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater._collect_thermals = mock.MagicMock(return_value=True)
+        temperature_updater._collect_sfp_thermals = mock.MagicMock(return_value=False)
+        temperature_updater.update()
+        assert temperature_updater._collect_sfp_thermals.call_count == 1
 
 
 # DPU chassis-related tests
