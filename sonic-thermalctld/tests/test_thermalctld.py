@@ -25,7 +25,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockFan, MockModule, MockPsu, MockSfp, MockThermal
+from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
@@ -1544,3 +1544,337 @@ class TestThermalControlDaemon(object):
 
             # Clean up
             daemon_thermalctld.deinit()
+
+
+class TestParsePollingIntervals(object):
+    """Tests for _parse_platform_json_polling_intervals()"""
+
+    @mock.patch('thermalctld.device_info')
+    def test_returns_defaults_when_no_platform_json(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = None
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result == {'fan_drawer': None, 'psu': None, 'thermals': {}}
+
+    @mock.patch('thermalctld.device_info')
+    def test_returns_defaults_on_exception(self, mock_device_info):
+        mock_device_info.get_platform_json_data.side_effect = Exception("file not found")
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result == {'fan_drawer': None, 'psu': None, 'thermals': {}}
+
+    @mock.patch('thermalctld.device_info')
+    def test_parses_fan_drawer_interval(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'fan_drawers': [{'polling_interval': '10'}]
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['fan_drawer'] == 10.0
+
+    @mock.patch('thermalctld.device_info')
+    def test_parses_psu_interval(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'psus': [{'polling_interval': '30'}]
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['psu'] == 30.0
+
+    @mock.patch('thermalctld.device_info')
+    def test_parses_thermal_intervals(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'thermals': [
+                {'name': 'CPU Temp', 'polling_interval': '5'},
+                {'name': 'GPU Temp', 'polling_interval': '15'},
+            ]
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['thermals'] == {'CPU Temp': 5.0, 'GPU Temp': 15.0}
+
+    @mock.patch('thermalctld.device_info')
+    def test_skips_empty_polling_interval(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'fan_drawers': [{'polling_interval': ''}],
+            'psus': [{'polling_interval': ''}],
+            'thermals': [{'name': 'T1', 'polling_interval': ''}],
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result == {'fan_drawer': None, 'psu': None, 'thermals': {}}
+
+    @mock.patch('thermalctld.device_info')
+    def test_skips_invalid_polling_interval(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'fan_drawers': [{'polling_interval': 'abc'}],
+            'psus': [{'polling_interval': 'xyz'}],
+            'thermals': [{'name': 'T1', 'polling_interval': 'bad'}],
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result == {'fan_drawer': None, 'psu': None, 'thermals': {}}
+
+    @mock.patch('thermalctld.device_info')
+    def test_skips_named_fan_drawer_entries(self, mock_device_info):
+        """Entries with 'name' are devices, not config — should be skipped."""
+        mock_device_info.get_platform_json_data.return_value = {
+            'fan_drawers': [
+                {'name': 'FanDrawer 1', 'polling_interval': '10'},
+            ]
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['fan_drawer'] is None
+
+    @mock.patch('thermalctld.device_info')
+    def test_thermals_without_name_skipped(self, mock_device_info):
+        mock_device_info.get_platform_json_data.return_value = {
+            'thermals': [{'polling_interval': '5'}]
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['thermals'] == {}
+
+    @mock.patch('thermalctld.device_info')
+    def test_parses_chassis_nested_structure(self, mock_device_info):
+        """Real platform.json nests components under a 'chassis' key."""
+        mock_device_info.get_platform_json_data.return_value = {
+            'chassis': {
+                'name': 'TestChassis',
+                'fan_drawers': [{'polling_interval': '10'}, {'name': 'FD1'}],
+                'psus': [{'polling_interval': '30'}, {'name': 'PSU1'}],
+                'thermals': [{'name': 'CPU', 'polling_interval': '5'}],
+            },
+            'interfaces': {}
+        }
+        result = thermalctld._parse_platform_json_polling_intervals()
+        assert result['fan_drawer'] == 10.0
+        assert result['psu'] == 30.0
+        assert result['thermals'] == {'CPU': 5.0}
+
+
+class TestShouldUpdateThermal(object):
+    """Tests for TemperatureUpdater._should_update_thermal()"""
+
+    def test_always_true_when_no_interval_configured(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        assert updater._should_update_thermal('Unknown Thermal') is True
+
+    def test_true_on_first_call(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), thermal_intervals={'CPU Temp': 10})
+        assert updater._should_update_thermal('CPU Temp') is True
+
+    def test_false_before_interval_elapses(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), thermal_intervals={'CPU Temp': 100})
+        updater._should_update_thermal('CPU Temp')  # first call sets timestamp
+        assert updater._should_update_thermal('CPU Temp') is False
+
+    def test_true_after_interval_elapses(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), thermal_intervals={'CPU Temp': 1})
+        updater._should_update_thermal('CPU Temp')
+        # Fake that last update was 2 seconds ago
+        updater._last_thermal_update_times['CPU Temp'] = time.time() - 2
+        assert updater._should_update_thermal('CPU Temp') is True
+
+
+class TestPsuIntervalGating(object):
+    """Tests for PSU thermal polling interval gating in TemperatureUpdater.update()"""
+
+    def test_psu_thermals_skipped_before_interval(self):
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._thermal_list.append(MockThermal())
+        chassis._psu_list.append(psu)
+
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), psu_interval=300)
+        updater._refresh_temperature_status = mock.MagicMock()
+
+        # First update — should refresh PSU thermals (last_psu_thermal_update == 0)
+        updater.update()
+        first_count = updater._refresh_temperature_status.call_count
+        assert first_count > 0
+
+        updater._refresh_temperature_status.reset_mock()
+
+        # Second update — PSU interval not yet elapsed, PSU thermals should be
+        # collected (tracked in available_thermals) but NOT refreshed.
+        # Chassis thermals still refresh.
+        updater.update()
+        # Only chassis thermals refreshed (0 chassis thermals here, so 0 calls)
+        assert updater._refresh_temperature_status.call_count == 0
+
+    def test_psu_thermals_refreshed_after_interval(self):
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._thermal_list.append(MockThermal())
+        chassis._psu_list.append(psu)
+
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), psu_interval=1)
+        updater._refresh_temperature_status = mock.MagicMock()
+
+        updater.update()
+        updater._refresh_temperature_status.reset_mock()
+
+        # Fake that last PSU update was 2 seconds ago
+        updater._last_psu_thermal_update = time.time() - 2
+        updater.update()
+        assert updater._refresh_temperature_status.call_count > 0
+
+    def test_psu_thermals_always_refreshed_when_no_interval(self):
+        chassis = MockChassis()
+        psu = MockPsu()
+        psu._thermal_list.append(MockThermal())
+        chassis._psu_list.append(psu)
+
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        updater._refresh_temperature_status = mock.MagicMock()
+
+        updater.update()
+        first_count = updater._refresh_temperature_status.call_count
+        updater._refresh_temperature_status.reset_mock()
+
+        updater.update()
+        assert updater._refresh_temperature_status.call_count == first_count
+
+
+class TestThermalMonitorPollingIntervals(object):
+    """Tests for ThermalMonitor with polling_intervals parameter"""
+
+    def test_fan_update_interval_from_fan_drawer(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 10, 'psu': None, 'thermals': {}})
+        assert monitor._fan_update_interval == 10
+
+    def test_fan_update_interval_from_min_of_fan_drawer_and_psu(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 20, 'psu': 15, 'thermals': {}})
+        assert monitor._fan_update_interval == 15
+
+    def test_fan_update_interval_none_when_no_intervals(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(chassis, 5, 60, 30)
+        assert monitor._fan_update_interval is None
+
+    def test_update_interval_adjusted_for_fast_polling(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 10, 'psu': None, 'thermals': {}})
+        assert monitor.update_interval == 10
+
+    def test_update_interval_not_adjusted_when_polling_is_slower(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 120, 'psu': None, 'thermals': {}})
+        assert monitor.update_interval == 60
+
+    def test_main_skips_fan_update_before_interval(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 300, 'psu': None, 'thermals': {}})
+        monitor.fan_updater.update = mock.MagicMock()
+        monitor.temperature_updater.update = mock.MagicMock()
+
+        # First call — should update fans (last_fan_update == 0)
+        monitor.main()
+        assert monitor.fan_updater.update.call_count == 1
+
+        monitor.fan_updater.update.reset_mock()
+
+        # Second call immediately — should skip fans
+        monitor.main()
+        assert monitor.fan_updater.update.call_count == 0
+        # Temperature always updates
+        assert monitor.temperature_updater.update.call_count == 2
+
+    def test_main_updates_fans_after_interval(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(
+            chassis, 5, 60, 30,
+            polling_intervals={'fan_drawer': 1, 'psu': None, 'thermals': {}})
+        monitor.fan_updater.update = mock.MagicMock()
+        monitor.temperature_updater.update = mock.MagicMock()
+
+        monitor.main()
+        monitor.fan_updater.update.reset_mock()
+
+        # Fake that last fan update was 2 seconds ago
+        monitor._last_fan_update = time.time() - 2
+        monitor.main()
+        assert monitor.fan_updater.update.call_count == 1
+
+    def test_main_always_updates_fans_when_no_interval(self):
+        chassis = MockChassis()
+        monitor = thermalctld.ThermalMonitor(chassis, 5, 60, 30)
+        monitor.fan_updater.update = mock.MagicMock()
+        monitor.temperature_updater.update = mock.MagicMock()
+
+        monitor.main()
+        monitor.main()
+        assert monitor.fan_updater.update.call_count == 2
+
+
+class TestCollectFansEarlyReturn(object):
+    """Tests for FanUpdater._collect_fans() task_stopping_event handling"""
+
+    def test_collect_fans_returns_false_on_stopping_event(self):
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()  # Pre-set stopping event
+        fan_updater = thermalctld.FanUpdater(chassis, stopping_event)
+        fan_drawer = MockFanDrawer(0)
+        fan_drawer._fan_list.append(MockFan())
+        result = fan_updater._collect_fans(fan_drawer, 0, thermalctld.FanType.DRAWER)
+        assert result is False
+
+    def test_collect_fans_returns_true_normally(self):
+        chassis = MockChassis()
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater._refresh_fan_status = mock.MagicMock()
+        fan_drawer = MockFanDrawer(0)
+        fan_drawer._fan_list.append(MockFan())
+        result = fan_updater._collect_fans(fan_drawer, 0, thermalctld.FanType.DRAWER)
+        assert result is True
+        assert fan_updater._refresh_fan_status.call_count == 1
+
+
+class TestCollectThermalsEarlyReturn(object):
+    """Tests for TemperatureUpdater._collect_thermals() and _collect_sfp_thermals()"""
+
+    def test_collect_thermals_returns_false_on_stopping_event(self):
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()
+        updater = thermalctld.TemperatureUpdater(chassis, stopping_event)
+        available = set()
+        result = updater._collect_thermals(available, 'test', [MockThermal()])
+        assert result is False
+
+    def test_collect_thermals_no_refresh_when_false(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        updater._refresh_temperature_status = mock.MagicMock()
+        updater.phy_entity_table = mock.MagicMock()
+        available = set()
+        result = updater._collect_thermals(available, 'PSU 1', [MockThermal()], refresh=False)
+        assert result is True
+        assert len(available) == 1
+        updater._refresh_temperature_status.assert_not_called()
+        # Entity info should still be updated even without temperature refresh
+        updater.phy_entity_table.set.assert_called()
+
+    def test_collect_sfp_thermals_returns_false_on_stopping_event(self):
+        chassis = MockChassis()
+        stopping_event = threading.Event()
+        stopping_event.set()
+        updater = thermalctld.TemperatureUpdater(chassis, stopping_event)
+        available = set()
+        result = updater._collect_sfp_thermals(available, 'SFP 1', 0, [MockThermal()])
+        assert result is False
