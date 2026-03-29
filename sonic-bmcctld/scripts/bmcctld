@@ -1,0 +1,1077 @@
+#!/usr/bin/env python3
+
+"""
+    bmcctld
+    BMC controller daemon for SONiC
+
+    This daemon runs in the SONiC BMC pmon container and manages the power
+    state of the Switch-Host based on:
+      - System leak detection events from thermalctld (SYSTEM_LEAK_STATUS)
+      - External Rack Manager alerts and commands (RACK_MANAGER_ALERT / RACK_MANAGER_COMMAND)
+      - Admin user power on/off requests (CHASSIS_MODULE)
+
+"""
+
+try:
+    import json
+    import logging
+    import os
+    import queue
+    import signal
+    import subprocess
+    import sys
+    import threading
+    import time
+    from datetime import datetime
+
+    from sonic_py_common import daemon_base, logger
+
+    try:
+        from sonic_py_common import is_liquid_cooled
+    except ImportError:
+        # Fall back to liquid-cooled (safe default — full monitoring enabled)
+        def is_liquid_cooled():
+            return True
+
+    if os.getenv("BMCCTLD_UNIT_TESTING") == "1":
+        from tests import mock_swsscommon as swsscommon
+    else:
+        from swsscommon import swsscommon
+except ImportError as e:
+    raise ImportError(str(e) + " - required module not found")
+
+
+DEFAULT_LOG_FILE = "/var/log/syslog"
+CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
+
+
+# This class could be moved to sonic-py-common, the log file name can be passed as input. 
+class EventLogger(logger.Logger):
+    """
+    Extends sonic_py_common Logger to tee every log call to a local file in
+    addition to syslog.  All bmcctld classes inherit from this so that
+    power-state transitions and event handling are recorded in a dedicated
+    log file that survives syslog rotation and is easy to grep offline.
+    """
+
+    def __init__(self, syslog_identifier, log_file=DEFAULT_LOG_FILE):
+        super(EventLogger, self).__init__(syslog_identifier)
+        # Derive a unique Python logger name per log file so instances writing
+        # to different files do not share handlers.
+        py_name = "{}.{}".format(syslog_identifier,
+                                 os.path.basename(log_file).replace(".", "_"))
+        self._file_logger = logging.getLogger(py_name)
+        if not self._file_logger.handlers and os.getenv("BMCCTLD_UNIT_TESTING") != "1":
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s %(name)s[%(process)d] %(levelname)s: %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S",
+            ))
+            self._file_logger.addHandler(handler)
+            self._file_logger.setLevel(logging.DEBUG)
+
+    def log_debug(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_debug(msg, also_print_to_console)
+        self._file_logger.debug(msg)
+
+    def log_info(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_info(msg, also_print_to_console)
+        self._file_logger.info(msg)
+
+    def log_notice(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_notice(msg, also_print_to_console)
+        self._file_logger.info("NOTICE: " + msg)
+
+    def log_warning(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_warning(msg, also_print_to_console)
+        self._file_logger.warning(msg)
+
+    def log_error(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_error(msg, also_print_to_console)
+        self._file_logger.error(msg)
+
+
+class ActionItem:
+    """
+    Carries a power action from the BmcEventHandler thread to the
+    BmcctldDaemon main thread action loop.
+
+    on_complete(success: bool) is called by the main thread after the
+    action finishes — used by Rack Manager command handlers to write the
+    final CMD_STATUS_DONE / CMD_STATUS_FAILED back to STATE_DB.
+    """
+    def __init__(self, action, event_desc, on_complete=None):
+        self.action = action
+        self.event_desc = event_desc
+        self.on_complete = on_complete
+
+# ============================================================
+# Constants
+# ============================================================
+
+SIGNALS_TO_NAMES_DICT = dict(
+    (getattr(signal, n), n) for n in dir(signal) if n.startswith('SIG') and '_' not in n
+)
+
+SYSLOG_IDENTIFIER = "bmcctld"
+
+# CONFIG_DB tables
+SWITCH_HOST_POWER_ON_DELAY_TABLE = "SWITCH_HOST_POWER_ON_DELAY"
+SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE = "SWITCH_HOST_SHUTDOWN_TIMEOUT"
+LEAK_CONTROL_POLICY_TABLE = "LEAK_CONTROL_POLICY"
+CHASSIS_MODULE_TABLE = "CHASSIS_MODULE"
+
+# STATE_DB tables
+HOST_STATE_TABLE = "HOST_STATE"
+HOST_STATE_KEY = "switch-host"
+SYSTEM_LEAK_STATUS_TABLE = "SYSTEM_LEAK_STATUS"
+SYSTEM_LEAK_STATUS_KEY = "system"
+RACK_MANAGER_COMMAND_TABLE = "RACK_MANAGER_COMMAND"
+RACK_MANAGER_ALERT_TABLE = "RACK_MANAGER_ALERT"
+
+# Field names
+FIELD_BOOT_DELAY = "boot_delay"
+FIELD_SHUTDOWN_DELAY = "shutdown_delay"
+FIELD_DEVICE_POWER_STATE = "device_power_state"
+FIELD_DEVICE_STATUS = "device_status"
+FIELD_LAST_CHANGE_TIMESTAMP = "last_change_timestamp"
+FIELD_COMMAND = "command"
+FIELD_STATUS = "status"
+FIELD_RESULT = "result"
+FIELD_DEVICE_LEAK_STATUS = "device_leak_status"
+FIELD_SEVERITY = "severity"
+FIELD_LEAK = "leak"
+FIELD_ADMIN_STATUS = "admin_status"
+
+# Power state values
+POWER_STATE_ON = "POWER_ON"
+POWER_STATE_OFF = "POWER_OFF"
+POWER_STATE_CYCLE = "POWER_CYCLE"
+
+# Device operational status (stable)
+SWITCH_HOST_ONLINE = "ONLINE"
+SWITCH_HOST_OFFLINE = "OFFLINE"
+
+# Device operational status (transitional — written at the start of a power action)
+SWITCH_HOST_POWERING_ON = "POWERING_ON"
+SWITCH_HOST_POWERING_OFF = "POWERING_OFF"
+SWITCH_HOST_POWER_CYCLING = "POWER_CYCLING"
+
+# Rack Manager command values
+CMD_POWER_ON = "POWER_ON"
+CMD_POWER_OFF = "POWER_OFF"
+CMD_POWER_CYCLE = "POWER_CYCLE"
+
+# Command execution status
+CMD_STATUS_PENDING = "PENDING"
+CMD_STATUS_IN_PROGRESS = "IN_PROGRESS"
+CMD_STATUS_DONE = "DONE"
+CMD_STATUS_FAILED = "FAILED"
+
+# Module admin status values (CHASSIS_MODULE table)
+ADMIN_UP = "up"
+ADMIN_DOWN = "down"
+
+# Leak status values (SYSTEM_LEAK_STATUS table)
+SYSTEM_LEAK_CRITICAL = "CRITICAL_SYSTEM_LEAK"
+SYSTEM_LEAK_MINOR = "MINOR_SYSTEM_LEAK"
+
+# Alert severity values
+ALERT_SEVERITY_CRITICAL = "CRITICAL"
+ALERT_SEVERITY_MAJOR = "MAJOR"
+ALERT_SEVERITY_MINOR = "MINOR"
+ALERT_SEVERITY_NORMAL = "NORMAL"
+
+# Dispatch action values (LEAK_CONTROL_POLICY and queue items)
+ACTION_SYSLOG_ONLY = "syslog_only"
+ACTION_GRACEFUL_SHUTDOWN = "graceful_shutdown"
+ACTION_POWER_OFF = "power_off"
+ACTION_POWER_ON = "power_on"
+ACTION_POWER_CYCLE = "power_cycle"
+
+# Default policy values (LEAK_CONTROL_POLICY)
+DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
+DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION = ACTION_POWER_OFF
+DEFAULT_SYSTEM_MINOR_LEAK_ACTION = ACTION_SYSLOG_ONLY
+DEFAULT_RACK_MGR_LEAK_POLICY = "enabled"
+DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
+DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
+
+# Default timing values (seconds)
+DEFAULT_POWER_ON_DELAY_SECS = 300   # 5 minutes - wait for Rack Manager and liquid flow
+DEFAULT_SHUTDOWN_DELAY_SECS = 120   # 2 minutes - wait for graceful shutdown before force
+
+# Switch-Host module name key in CHASSIS_MODULE table
+SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
+
+# BMC JSON config file locations (in precedence order)
+BMC_JSON_PATHS = [
+    "/usr/share/sonic/platform/bmc.json",
+    "/etc/sonic/bmc.json",
+]
+DEFAULT_SWITCH_HOST_ADDR = "169.254.100.2"
+
+SELECT_TIMEOUT_MSECS = 1000
+GNOI_REQUEST_TIMEOUT_SECS = 30
+SHUTDOWN_POLL_INTERVAL_SECS = 5
+
+# Polling constants for verifying oper_status after power* API calls
+# We can make it a configurable parameter by letting platform decide how much time each platform 
+# takes to bootup in pmon_daemon_control.json and pass as a parameter to bmcctld daemon
+POWER_VERIFY_TIMEOUT_SECS = 60   # max seconds to wait for oper_status to settle
+POWER_VERIFY_POLL_INTERVAL_SECS = 5
+
+NOT_AVAILABLE = "N/A"
+
+# Daemon will return non-zero so supervisord restarts it automatically
+exit_code = 1
+
+CHASSIS_LOAD_ERROR = 1
+
+# Two global logger instances — initialised once and shared across the module.
+# Use _daemon_logger for routine operational messages (DEFAULT_LOG_FILE).
+# Use _event_logger for critical power/leak/alert events (CRITICAL_EVENT_LOG_FILE).
+_daemon_logger = EventLogger(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+_event_logger = EventLogger(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+
+# ============================================================
+# Helper utilities
+# ============================================================
+
+def get_current_timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def try_get(callback, *args, default=NOT_AVAILABLE):
+    """Invoke callback; return default on NotImplementedError or None result."""
+    try:
+        ret = callback(*args)
+        if ret is None:
+            ret = default
+    except NotImplementedError:
+        ret = default
+    return ret
+
+
+def fvs_to_dict(fvs):
+    """Convert swsscommon FieldValuePairs list of (field, value) tuples to dict."""
+    if fvs is None:
+        return {}
+    if isinstance(fvs, dict):
+        return fvs
+    return dict(fvs)
+
+
+# ============================================================
+# SwitchHostController
+# ============================================================
+
+class SwitchHostController(EventLogger):
+    """
+    Wraps platform Module API to power ON/OFF/cycle the Switch-Host and
+    tracks its state in the HOST_STATE STATE_DB table.
+    """
+
+    def __init__(self, chassis):
+        super(SwitchHostController, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+        self.chassis = chassis
+        self._switch_host_module = None
+        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
+
+    def _get_switch_host_module(self):
+        """Return the Switch-Host Module object from the chassis module list."""
+        if self._switch_host_module is not None:
+            return self._switch_host_module
+        try:
+            modules = self.chassis.get_all_modules()
+            for mod in modules:
+                mod_type = try_get(mod.get_type, default="")
+                if mod_type in ("SWITCH_HOST", "switch_host"):
+                    self._switch_host_module = mod
+                    return self._switch_host_module
+            if modules and len(modules) >= 2:
+                self._switch_host_module = modules[1]
+                return self._switch_host_module
+        except Exception as e:
+            self.log_error("Failed to retrieve Switch-Host module: {}".format(repr(e)))
+        return None
+
+    def get_oper_status(self):
+        """Return the current operational status of Switch-Host (ONLINE/OFFLINE)."""
+        mod = self._get_switch_host_module()
+        if mod is None:
+            return NOT_AVAILABLE
+        raw = try_get(mod.get_oper_status, default=NOT_AVAILABLE)
+        # Normalise to uppercase to match HOST_STATE DB schema (ONLINE / OFFLINE)
+        return str(raw).upper() if raw != NOT_AVAILABLE else raw
+
+    def _verify_oper_status(self, expected_status, timeout_secs, context):
+        """
+        Poll get_oper_status() until it matches expected_status or timeout_secs elapses.
+        Returns True when confirmed, False on timeout.
+        """
+        deadline = time.time() + timeout_secs
+        while time.time() < deadline:
+            if self.get_oper_status() == expected_status:
+                self.log_info("{}: oper_status confirmed {}".format(context, expected_status))
+                return True
+            time.sleep(POWER_VERIFY_POLL_INTERVAL_SECS)
+        self.log_error("{}: oper_status did not reach {} within {}s (current: {})".format(
+            context, expected_status, timeout_secs, self.get_oper_status()))
+        return False
+
+    def power_on(self):
+        """Power ON the Switch-Host via module->set_admin_state(True)."""
+        mod = self._get_switch_host_module()
+        if mod is None:
+            self.log_error("Cannot power ON Switch-Host: module not found")
+            return False
+        try:
+            self._update_host_state(POWER_STATE_ON, SWITCH_HOST_POWERING_ON)
+            mod.set_admin_state(True)
+            self.log_notice("Switch-Host power ON issued; verifying oper_status...")
+            verified = self._verify_oper_status(
+                SWITCH_HOST_ONLINE, POWER_VERIFY_TIMEOUT_SECS, "power_on")
+            if not verified:
+                self.log_error("Switch-Host power ON: oper_status did not confirm ONLINE")
+            self._update_host_state(POWER_STATE_ON)
+            return verified
+        except Exception as e:
+            self.log_error("Failed to power ON Switch-Host: {}".format(repr(e)))
+            return False
+
+    def power_off(self):
+        """Power OFF the Switch-Host via module->set_admin_state(False)."""
+        mod = self._get_switch_host_module()
+        if mod is None:
+            self.log_error("Cannot power OFF Switch-Host: module not found")
+            return False
+        try:
+            self._update_host_state(POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF)
+            mod.set_admin_state(False)
+            self.log_notice("Switch-Host power OFF issued; verifying oper_status...")
+            verified = self._verify_oper_status(
+                SWITCH_HOST_OFFLINE, POWER_VERIFY_TIMEOUT_SECS, "power_off")
+            if not verified:
+                self.log_error("Switch-Host power OFF: oper_status did not confirm OFFLINE")
+            self._update_host_state(POWER_STATE_OFF)
+            return verified
+        except Exception as e:
+            self.log_error("Failed to power OFF Switch-Host: {}".format(repr(e)))
+            return False
+
+    def power_cycle(self):
+        """Power cycle the Switch-Host via module->do_power_cycle()."""
+        mod = self._get_switch_host_module()
+        if mod is None:
+            self.log_error("Cannot power cycle Switch-Host: module not found")
+            return False
+        try:
+            self._update_host_state(POWER_STATE_CYCLE, SWITCH_HOST_POWER_CYCLING)
+            try_get(mod.do_power_cycle, default=False)
+            self.log_notice("Switch-Host power cycle issued; verifying oper_status...")
+            # Use 2x timeout: host must go offline then come back online
+            verified = self._verify_oper_status(
+                SWITCH_HOST_ONLINE, POWER_VERIFY_TIMEOUT_SECS * 2, "power_cycle")
+            if not verified:
+                self.log_error("Switch-Host power cycle: oper_status did not confirm ONLINE")
+            self._update_host_state(POWER_STATE_CYCLE)
+            return verified
+        except Exception as e:
+            self.log_error("Failed to power cycle Switch-Host: {}".format(repr(e)))
+            return False
+
+    def _update_host_state(self, power_state, device_status=None):
+        """Write device_power_state and device_status to HOST_STATE STATE_DB.
+
+        When device_status is None the current live oper_status is used (normal
+        completion path).  Pass an explicit transitional constant such as
+        SWITCH_HOST_POWERING_ON before issuing the platform call so external
+        observers can see that a power transition is in progress.
+        """
+        if device_status is None:
+            device_status = self.get_oper_status()
+        fvs = swsscommon.FieldValuePairs([
+            (FIELD_DEVICE_POWER_STATE, power_state),
+            (FIELD_DEVICE_STATUS, str(device_status)),
+            (FIELD_LAST_CHANGE_TIMESTAMP, get_current_timestamp()),
+        ])
+        self.host_state_table.set(HOST_STATE_KEY, fvs)
+
+    def get_db_device_status(self):
+        """Read device_status from HOST_STATE STATE_DB (reflects transitional states)."""
+        result = self.host_state_table.get(HOST_STATE_KEY)
+        if result and result[0]:
+            return fvs_to_dict(result[1]).get(FIELD_DEVICE_STATUS, NOT_AVAILABLE)
+        return NOT_AVAILABLE
+
+    def refresh_host_state(self):
+        """Refresh HOST_STATE with current oper_status, preserving last power state."""
+        result = self.host_state_table.get(HOST_STATE_KEY)
+        cur_power_state = NOT_AVAILABLE
+        if result and result[0]:
+            cur_power_state = fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
+        oper_status = self.get_oper_status()
+        fvs = swsscommon.FieldValuePairs([
+            (FIELD_DEVICE_POWER_STATE, cur_power_state),
+            (FIELD_DEVICE_STATUS, str(oper_status)),
+            (FIELD_LAST_CHANGE_TIMESTAMP, get_current_timestamp()),
+        ])
+        self.host_state_table.set(HOST_STATE_KEY, fvs)
+
+
+# ============================================================
+# PolicyReader
+# ============================================================
+
+class PolicyReader(EventLogger):
+    """Reads bmcctld timing and leak policy configuration from CONFIG_DB."""
+
+    def __init__(self):
+        super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        self.config_db = daemon_base.db_connect("CONFIG_DB")
+
+    def get_power_on_delay(self):
+        """Return boot_delay in seconds from SWITCH_HOST_POWER_ON_DELAY|default."""
+        tbl = swsscommon.Table(self.config_db, SWITCH_HOST_POWER_ON_DELAY_TABLE)
+        result = tbl.get("default")
+        if result and result[0]:
+            try:
+                return float(fvs_to_dict(result[1]).get(FIELD_BOOT_DELAY, DEFAULT_POWER_ON_DELAY_SECS))
+            except (ValueError, TypeError):
+                pass
+        return DEFAULT_POWER_ON_DELAY_SECS
+
+    def get_shutdown_delay(self):
+        """Return shutdown_delay in seconds from SWITCH_HOST_SHUTDOWN_TIMEOUT|default."""
+        tbl = swsscommon.Table(self.config_db, SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
+        result = tbl.get("default")
+        if result and result[0]:
+            try:
+                return float(fvs_to_dict(result[1]).get(FIELD_SHUTDOWN_DELAY, DEFAULT_SHUTDOWN_DELAY_SECS))
+            except (ValueError, TypeError):
+                pass
+        return DEFAULT_SHUTDOWN_DELAY_SECS
+
+    def get_leak_control_policy(self):
+        """Return LEAK_CONTROL_POLICY as a dict with action defaults filled in."""
+        policy = {
+            "system_leak_policy": DEFAULT_SYSTEM_LEAK_POLICY,
+            "system_critical_leak_action": DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION,
+            "system_minor_leak_action": DEFAULT_SYSTEM_MINOR_LEAK_ACTION,
+            "rack_mgr_leak_policy": DEFAULT_RACK_MGR_LEAK_POLICY,
+            "rack_mgr_critical_alert_action": DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION,
+            "rack_mgr_minor_alert_action": DEFAULT_RACK_MGR_MINOR_ALERT_ACTION,
+        }
+        tbl = swsscommon.Table(self.config_db, LEAK_CONTROL_POLICY_TABLE)
+        # LEAK_CONTROL_POLICY is stored as a single-row table keyed by table name or empty string
+        for key in (LEAK_CONTROL_POLICY_TABLE, ""):
+            result = tbl.get(key)
+            if result and result[0]:
+                policy.update({k: v for k, v in fvs_to_dict(result[1]).items() if k in policy})
+                break
+        return policy
+
+
+# ============================================================
+# CriticalEventChecker
+# ============================================================
+
+class CriticalEventChecker(EventLogger):
+    """Checks current system and Rack Manager leak/alert status from STATE_DB."""
+
+    # Alert keys in RACK_MANAGER_ALERT table
+    ALERT_KEYS = [
+        "Inlet_liquid_temperature",
+        "Inlet_liquid_flow_rate",
+        "Inlet_liquid_pressure",
+        "Rack_level_leak",
+    ]
+
+    def __init__(self):
+        super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+        self.state_db = daemon_base.db_connect("STATE_DB")
+
+    def has_critical_system_leak(self):
+        """Return True if SYSTEM_LEAK_STATUS|system shows CRITICAL_SYSTEM_LEAK."""
+        tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
+        result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
+        if result and result[0]:
+            return fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL
+        return False
+
+    def has_critical_rack_mgr_alert(self):
+        """Return True if any RACK_MANAGER_ALERT entry has CRITICAL severity."""
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        for alert_key in self.ALERT_KEYS:
+            result = tbl.get(alert_key)
+            if result and result[0]:
+                d = fvs_to_dict(result[1])
+                # severity field for temperature/flow/pressure; leak field for rack-level leak
+                severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+                if severity == ALERT_SEVERITY_CRITICAL:
+                    return True
+        return False
+
+    def has_any_critical_event(self):
+        """Return True if any critical system or Rack Manager event is active."""
+        return self.has_critical_system_leak() or self.has_critical_rack_mgr_alert()
+
+    def get_system_leak_status(self):
+        """Return device_leak_status string from SYSTEM_LEAK_STATUS table."""
+        tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
+        result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
+        if result and result[0]:
+            return fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS, "")
+        return ""
+
+
+# ============================================================
+# GracefulShutdownHandler
+# ============================================================
+
+class GracefulShutdownHandler(EventLogger):
+    """
+    Issues a GNOI soft shutdown to Switch-Host and waits shutdown_delay
+    seconds for it to go OFFLINE.  Falls back to hard power-off if
+    GNOI fails or the timer expires.
+    """
+
+    def __init__(self, controller, policy_reader):
+        super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+        self.controller = controller
+        self.policy_reader = policy_reader
+
+    def execute(self):
+        """
+        Perform graceful shutdown of Switch-Host.
+        Returns True on success, False on failure.
+        """
+        shutdown_delay = self.policy_reader.get_shutdown_delay()
+        self.log_notice("Initiating graceful shutdown of Switch-Host (timeout={}s)".format(shutdown_delay))
+
+        # Write transitional state immediately so STATE_DB reflects in-progress shutdown
+        self.controller._update_host_state(POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF)
+
+        # shutdown_delay == 0 means skip GNOI and force power-off immediately
+        if shutdown_delay == 0:
+            self.log_notice("shutdown_delay is 0: forcing immediate power OFF")
+            return self.controller.power_off()
+
+        gnoi_ok = self._issue_gnoi_shutdown()
+        if not gnoi_ok:
+            self.log_warning("GNOI shutdown request failed; forcing power OFF immediately")
+            return self.controller.power_off()
+
+        # Wait up to shutdown_delay for Switch-Host to go OFFLINE
+        self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(shutdown_delay))
+        went_offline = self.controller._verify_oper_status(
+            SWITCH_HOST_OFFLINE, shutdown_delay, "graceful_shutdown")
+        if went_offline:
+            self.log_notice("Switch-Host went OFFLINE gracefully")
+            self.controller._update_host_state(POWER_STATE_OFF)
+            return True
+
+        self.log_warning("Graceful shutdown timed out after {}s; forcing power OFF".format(shutdown_delay))
+        return self.controller.power_off()
+
+    def _issue_gnoi_shutdown(self):
+        # TODO: This approach of calling gnoi_client to be replaced by idea in this PR 
+        # https://github.com/sonic-net/sonic-host-services/pull/361
+        """
+        Send a GNOI System.Reboot (COLD/graceful) request to the Switch-Host.
+        Returns True if the request was accepted, False otherwise.
+        Reference: https://github.com/sonic-net/SONiC/blob/master/doc/mgmt/gnmi/gnoi_system_hld.md
+        switch_host_addr = self._get_switch_host_addr()
+        self.log_info("Sending GNOI shutdown to Switch-Host at {}".format(switch_host_addr))
+        try:
+            result = subprocess.run(
+                [
+                    "gnoi_client",
+                    "-target", switch_host_addr,
+                    "-rpc", "System.Reboot",
+                    "-jsonin", '{"method": 1}',  # method 1 = COLD (graceful reboot/shutdown)
+                ],
+                timeout=GNOI_REQUEST_TIMEOUT_SECS,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                self.log_notice("GNOI shutdown request accepted by Switch-Host")
+                return True
+            self.log_warning("GNOI shutdown failed (rc={}): {}".format(result.returncode, result.stderr))
+            return False
+        except subprocess.TimeoutExpired:
+            self.log_warning("GNOI shutdown request timed out after {}s".format(GNOI_REQUEST_TIMEOUT_SECS))
+            return False
+        except FileNotFoundError:
+            self.log_warning("gnoi_client not found; cannot issue graceful shutdown")
+            return False
+        except Exception as e:
+            self.log_warning("GNOI shutdown exception: {}".format(repr(e)))
+            return False
+        """
+
+    def _get_switch_host_addr(self):
+        """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
+        for path in BMC_JSON_PATHS:
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                    addr = data.get("bmc_if_addr")
+                    if addr:
+                        return addr
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                continue
+        return DEFAULT_SWITCH_HOST_ADDR
+
+
+# ============================================================
+# BmcEventHandler
+# ============================================================
+
+class BmcEventHandler(EventLogger):
+    """
+    Runs in a dedicated daemon thread.  Subscribes to RACK_MANAGER_COMMAND,
+    CHASSIS_MODULE, RACK_MANAGER_ALERT, and SYSTEM_LEAK_STATUS tables.
+
+    On each event it decides what action is needed and puts an ActionItem on
+    action_queue.  All blocking power operations are executed by the main
+    daemon thread — this class never blocks.
+    """
+
+    def __init__(self, action_queue, policy_reader, critical_event_checker, stop_event):
+        super(BmcEventHandler, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        self._event_log = _event_logger  # for critical leak / alert events only
+        self.action_queue = action_queue
+        self.policy_reader = policy_reader
+        self.critical_event_checker = critical_event_checker
+        self.stop_event = stop_event
+
+        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.config_db = daemon_base.db_connect("CONFIG_DB")
+
+        # One SubscriberStateTable per watched table
+        self.rack_mgr_cmd_sub = swsscommon.SubscriberStateTable(
+            self.state_db, RACK_MANAGER_COMMAND_TABLE)
+        self.chassis_module_sub = swsscommon.SubscriberStateTable(
+            self.config_db, CHASSIS_MODULE_TABLE)
+        self.rack_mgr_alert_sub = swsscommon.SubscriberStateTable(
+            self.state_db, RACK_MANAGER_ALERT_TABLE)
+        self.system_leak_sub = swsscommon.SubscriberStateTable(
+            self.state_db, SYSTEM_LEAK_STATUS_TABLE)
+
+        # Map each subscriber to its handler
+        self._sub_handlers = {
+            id(self.rack_mgr_cmd_sub): self._handle_rack_mgr_command,
+            id(self.chassis_module_sub): self._handle_chassis_module,
+            id(self.rack_mgr_alert_sub): self._handle_rack_mgr_alert,
+            id(self.system_leak_sub): self._handle_system_leak,
+        }
+
+        self.sel = swsscommon.Select()
+        self.sel.addSelectable(self.rack_mgr_cmd_sub)
+        self.sel.addSelectable(self.chassis_module_sub)
+        self.sel.addSelectable(self.rack_mgr_alert_sub)
+        self.sel.addSelectable(self.system_leak_sub)
+
+    # ---- public ----
+
+    def run_event_loop(self):
+        """Block in select loop until stop_event is set."""
+        self.log_info("Entering event subscription loop")
+        while not self.stop_event.is_set():
+            state, selectable = self.sel.select(SELECT_TIMEOUT_MSECS)
+            if state == swsscommon.Select.TIMEOUT:
+                continue
+            if state != swsscommon.Select.OBJECT:
+                self.log_warning("sel.select() returned unexpected state: {}".format(state))
+                continue
+            key, op, fvs = selectable.pop()
+            if op != "SET":
+                continue
+            handler = self._sub_handlers.get(id(selectable))
+            if handler:
+                handler(key, fvs_to_dict(fvs))
+
+    # ---- internal event handlers ----
+
+    def _handle_rack_mgr_command(self, key, fvs):
+        """Process a RACK_MANAGER_COMMAND entry (POWER_ON / POWER_OFF / POWER_CYCLE)."""
+        command = fvs.get(FIELD_COMMAND, "")
+        cmd_status = fvs.get(FIELD_STATUS, "")
+
+        # Skip already-processed commands
+        if cmd_status not in (CMD_STATUS_PENDING, ""):
+            return
+
+        self.log_notice("Rack Manager command: key={} command={}".format(key, command))
+        self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
+
+        if command == CMD_POWER_ON:
+            if self.critical_event_checker.has_any_critical_event():
+                self.log_warning("POWER_ON blocked: active critical leak or alert")
+                self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
+                return
+
+        elif command not in (CMD_POWER_OFF, CMD_POWER_CYCLE):
+            self.log_warning("Unknown Rack Manager command: {}".format(command))
+            self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
+            return
+
+        action_map = {
+            CMD_POWER_OFF:   ACTION_GRACEFUL_SHUTDOWN,
+            CMD_POWER_ON:    ACTION_POWER_ON,
+            CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
+        }
+
+        def on_complete(success, cmd_key=key):
+            self._set_cmd_status(cmd_key,
+                                 CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
+                                 "SUCCESS" if success else "ERROR")
+
+        self.action_queue.put(ActionItem(action_map[command],
+                                         "RACK_MGR_CMD:{}".format(command),
+                                         on_complete))
+
+    def _handle_chassis_module(self, key, fvs):
+        """Process CHASSIS_MODULE admin_status change (admin up/down from CLI)."""
+        admin_status = fvs.get(FIELD_ADMIN_STATUS, "")
+        self.log_notice("CHASSIS_MODULE change: key={} admin_status={}".format(key, admin_status))
+
+        if admin_status == ADMIN_DOWN:
+            self.log_notice("User CLI admin_down: initiating graceful shutdown of Switch-Host")
+            self.action_queue.put(ActionItem(ACTION_GRACEFUL_SHUTDOWN, "CLI_ADMIN_DOWN"))
+
+        elif admin_status == ADMIN_UP:
+            if self.critical_event_checker.has_any_critical_event():
+                self.log_warning("POWER_ON blocked by CLI admin_up: active critical leak or alert")
+                return
+            self.log_notice("User CLI admin_up: powering ON Switch-Host")
+            self.action_queue.put(ActionItem(ACTION_POWER_ON, "CLI_ADMIN_UP"))
+
+    def _handle_system_leak(self, key, fvs):
+        """Process SYSTEM_LEAK_STATUS change from thermalctld."""
+        if key != SYSTEM_LEAK_STATUS_KEY:
+            return
+
+        leak_status = fvs.get(FIELD_DEVICE_LEAK_STATUS, "")
+        policy = self.policy_reader.get_leak_control_policy()
+
+        if policy.get("system_leak_policy") == "disabled":
+            self.log_info("system_leak_policy disabled; skipping leak event key={}".format(key))
+            return
+
+        if leak_status == SYSTEM_LEAK_CRITICAL:
+            action = policy.get("system_critical_leak_action", DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION)
+            self._event_log.log_notice(
+                "CRITICAL SYSTEM LEAK detected (status={}); action={}".format(leak_status, action))
+            self._dispatch_action(action, "CRITICAL_SYSTEM_LEAK")
+
+        elif leak_status == SYSTEM_LEAK_MINOR:
+            action = policy.get("system_minor_leak_action", DEFAULT_SYSTEM_MINOR_LEAK_ACTION)
+            self._dispatch_action(action, "MINOR_SYSTEM_LEAK")
+
+        else:
+            self.log_notice("System leak cleared (status={}); no automatic power-on".format(leak_status))
+
+    def _handle_rack_mgr_alert(self, key, fvs):
+        """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
+        severity = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+        policy = self.policy_reader.get_leak_control_policy()
+
+        if policy.get("rack_mgr_leak_policy") == "disabled":
+            self.log_info("rack_mgr_leak_policy disabled; skipping alert key={}".format(key))
+            return
+
+        if severity == ALERT_SEVERITY_CRITICAL:
+            action = policy.get("rack_mgr_critical_alert_action", DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION)
+            self._event_log.log_notice(
+                "CRITICAL RACK MGR ALERT (severity={} key={}); action={}".format(severity, key, action))
+            self._dispatch_action(action, "RACK_MGR_CRITICAL_EVENT key={}".format(key))
+
+        elif severity in (ALERT_SEVERITY_MINOR, ALERT_SEVERITY_MAJOR):
+            action = policy.get("rack_mgr_minor_alert_action", DEFAULT_RACK_MGR_MINOR_ALERT_ACTION)
+            self._dispatch_action(action, "RACK_MGR_MINOR_EVENT key={}".format(key))
+
+        else:
+            self.log_info("Rack Manager alert cleared for key={}; no action taken".format(key))
+
+    # ---- dispatch helpers ----
+
+    def _dispatch_action(self, action, event_desc):
+        """
+        Enqueue a power action for the main thread.
+        syslog_only is handled inline; all other actions go on action_queue.
+        """
+        self.log_notice("Event '{}' -> action '{}'".format(event_desc, action))
+        if action == ACTION_SYSLOG_ONLY:
+            return
+        if action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
+            self.action_queue.put(ActionItem(action, event_desc))
+        else:
+            self.log_warning("Unknown action '{}' for event '{}'; defaulting to syslog_only".format(
+                action, event_desc))
+
+    def _set_cmd_status(self, cmd_id, status, result="SUCCESS"):
+        """Update RACK_MANAGER_COMMAND entry with execution status."""
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+        fvs = swsscommon.FieldValuePairs([
+            (FIELD_STATUS, status),
+            (FIELD_RESULT, result),
+            (FIELD_LAST_CHANGE_TIMESTAMP, get_current_timestamp()),
+        ])
+        tbl.set(cmd_id, fvs)
+
+
+# ============================================================
+# BmcctldDaemon
+# ============================================================
+
+class BmcctldDaemon(daemon_base.DaemonBase):
+    """
+    Main daemon class.  Performs the initial Switch-Host power-on sequence
+    and then enters a blocking DB event loop.
+    """
+
+    FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
+    NONFATAL_SIGNALS = [signal.SIGHUP]
+
+    def __init__(self, log_identifier):
+        super(BmcctldDaemon, self).__init__(log_identifier)
+        self.set_min_log_priority_info()
+
+        # Global event logger available to the daemon for critical log entries
+        self._event_log = _event_logger
+
+        self.stop_event = threading.Event()
+
+        # Load platform chassis (Switch-Host + BMC modules exposed here)
+        try:
+            import sonic_platform.platform
+            self.chassis = sonic_platform.platform.Platform().get_chassis()
+        except Exception as e:
+            self.log_error("Failed to load platform chassis: {}".format(repr(e)))
+            sys.exit(CHASSIS_LOAD_ERROR)
+
+        self.controller = SwitchHostController(self.chassis)
+        self.policy_reader = PolicyReader()
+        self.critical_event_checker = CriticalEventChecker()
+        self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
+        self.action_queue = queue.Queue()
+        self.event_handler = BmcEventHandler(
+            self.action_queue,
+            self.policy_reader,
+            self.critical_event_checker,
+            self.stop_event,
+        )
+
+        for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
+            try:
+                signal.signal(signum, self.signal_handler)
+            except Exception as e:
+                self.log_error("Cannot register signal handler for {}: {}".format(signum, e))
+
+    # Override signal handler from DaemonBase
+    def signal_handler(self, sig, frame):
+        global exit_code
+        if sig in self.FATAL_SIGNALS:
+            exit_code = 128 + sig
+            self.log_info("Caught signal '{}' ({}); exiting...".format(
+                SIGNALS_TO_NAMES_DICT.get(sig, sig), exit_code))
+            self.stop_event.set()
+        elif sig in self.NONFATAL_SIGNALS:
+            self.log_info("Caught signal '{}'; ignoring".format(SIGNALS_TO_NAMES_DICT.get(sig, sig)))
+        else:
+            self.log_warning("Caught unhandled signal '{}'; ignoring".format(
+                SIGNALS_TO_NAMES_DICT.get(sig, sig)))
+
+    def _initial_power_on_sequence(self):
+        """
+        BMC startup flow
+          1. Sleep SWITCH_HOST_POWER_ON_DELAY to allow Rack Manager to come up
+             and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
+             While sleeping, keep draining the action_queue so Rack Manager commands
+             (e.g. POWER_OFF) arriving during the delay are acted on immediately.
+          2. Check for CRITICAL leaks/alerts.
+          3. If none found and Switch-Host is OFFLINE, power it ON.
+          4. Update HOST_STATE.
+        """
+        boot_delay = self.policy_reader.get_power_on_delay()
+        self.log_notice(
+            "Waiting {}s before initial Switch-Host power-on check "
+            "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay)
+        )
+
+        # Drain the action queue while we wait so Rack Manager / admin commands
+        # received during the boot delay are processed in real time.
+        deadline = time.time() + boot_delay
+        while time.time() < deadline:
+            if self.stop_event.is_set():
+                return
+            try:
+                item = self.action_queue.get(timeout=1.0)
+                self._execute_action_item(item)
+            except queue.Empty:
+                continue
+
+        if self.critical_event_checker.has_any_critical_event():
+            self.log_warning(
+                "Critical leak or Rack Manager alert detected at startup; "
+                "NOT powering on Switch-Host"
+            )
+            return
+
+        oper_status = self.controller.get_oper_status()
+        self.log_info("Switch-Host oper_status at startup: {}".format(oper_status))
+
+        if str(oper_status).upper() != SWITCH_HOST_ONLINE:
+            self.log_notice("Switch-Host is OFFLINE; powering ON")
+            self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
+            self.controller.power_on()
+        else:
+            self.log_notice("Switch-Host is already ONLINE; refreshing HOST_STATE")
+            self.controller.refresh_host_state()
+
+    def _execute_action_item(self, item):
+        """
+        Execute a single ActionItem on the main thread.
+        Calls item.on_complete(success) when finished if a callback was provided.
+
+        Idempotency: actions are skipped (with success=True) when the host is
+        already in the desired state.  This prevents redundant operations when
+        duplicate events land on the queue (e.g. a Rack Manager POWER_OFF
+        arriving while a SYSTEM_LEAK_CRITICAL power_off is still in flight).
+        ACTION_POWER_CYCLE is never skipped — it is an explicit cycle request.
+        """
+        self.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
+        self._event_log.log_notice("ACTION START: action='{}' trigger='{}'".format(
+            item.action, item.event_desc))
+
+        current_status = self.controller.get_oper_status()
+        db_status = self.controller.get_db_device_status()
+        if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
+            if current_status == SWITCH_HOST_OFFLINE or db_status == SWITCH_HOST_POWERING_OFF:
+                self.log_notice(
+                    "Host already OFFLINE or power-off in progress (db_status={}); "
+                    "skipping '{}' for '{}'".format(db_status, item.action, item.event_desc)
+                )
+                self._event_log.log_notice(
+                    "ACTION SKIPPED: '{}' — host already OFFLINE or POWERING_OFF".format(item.action))
+                if item.on_complete:
+                    item.on_complete(True)
+                return
+        elif item.action == ACTION_POWER_ON:
+            if current_status == SWITCH_HOST_ONLINE or db_status == SWITCH_HOST_POWERING_ON:
+                self.log_notice(
+                    "Host already ONLINE or power-on in progress (db_status={}); "
+                    "skipping '{}' for '{}'".format(db_status, item.action, item.event_desc)
+                )
+                self._event_log.log_notice(
+                    "ACTION SKIPPED: '{}' — host already ONLINE or POWERING_ON".format(item.action))
+                if item.on_complete:
+                    item.on_complete(True)
+                return
+
+        success = False
+        if item.action == ACTION_GRACEFUL_SHUTDOWN:
+            success = self.graceful_shutdown.execute()
+        elif item.action == ACTION_POWER_OFF:
+            success = self.controller.power_off()
+        elif item.action == ACTION_POWER_ON:
+            success = self.controller.power_on()
+        elif item.action == ACTION_POWER_CYCLE:
+            success = self.controller.power_cycle()
+        else:
+            self.log_warning("Unknown action '{}' in queue; skipping".format(item.action))
+            return
+        self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' success={}".format(
+            item.action, item.event_desc, success))
+        if item.on_complete:
+            item.on_complete(success)
+
+    def _run_action_loop(self):
+        """
+        Main thread action processor.  Dequeues and executes ActionItems
+        sequentially until stop_event is set.  Actions are serialised naturally
+        by this single consumer — no extra locking needed.
+        """
+        self.log_info("Entering action processing loop")
+        while not self.stop_event.is_set():
+            try:
+                item = self.action_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            self._execute_action_item(item)
+
+    def run(self):
+        """
+        Called once by the main loop.  Starts BmcEventHandler first so that
+        Rack Manager commands (e.g. POWER_ON) arriving during the boot-delay
+        sleep are queued and not lost.  After the initial power-on sequence
+        completes the main thread enters the action loop to consume the queue.
+
+        For non-liquid-cooled systems, no leak/alert monitoring is needed:
+        Switch-Host is powered on immediately with no boot delay, no
+        CriticalEventChecker, and no BmcEventHandler thread.
+
+        Returns False to terminate the outer while-loop.
+        """
+        self.log_notice("bmcctld starting up")
+        self._event_log.log_notice("bmcctld starting up")
+
+        # Always start the event thread — it handles CLI admin up/down commands
+        # (CHASSIS_MODULE admin_status) regardless of cooling type.
+        event_thread = threading.Thread(
+            target=self.event_handler.run_event_loop,
+            daemon=True,
+            name="bmcctld-events",
+        )
+        event_thread.start()
+
+        if not is_liquid_cooled():
+            self.log_notice(
+                "System is not liquid-cooled; powering on Switch-Host immediately "
+                "(no boot delay, no leak/alert monitoring)"
+            )
+            self._event_log.log_notice(
+                "STARTUP: non-liquid-cooled system — immediate power_on, no additional checks"
+            )
+            self.controller.power_on()
+        else:
+            # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
+            # leaks/alerts, then power on if safe.
+            self._initial_power_on_sequence()
+            if self.stop_event.is_set():
+                event_thread.join(timeout=5)
+                return False
+
+        self._run_action_loop()
+        event_thread.join(timeout=5)
+        return False
+
+    def deinit(self):
+        self.log_info("Deinitializing bmcctld")
+        self.log_notice("bmcctld shutting down")
+        self.stop_event.set()
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main():
+    daemon = BmcctldDaemon(SYSLOG_IDENTIFIER)
+    daemon.log_info("Starting up...")
+
+    while daemon.run():
+        pass
+
+    daemon.log_info("Shutting down with exit code {}...".format(exit_code))
+    daemon.deinit()
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
