@@ -815,8 +815,19 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
 
             # Deferred from Online→Offline: the DPU went down and is now back.
-            # Reboot time was already persisted; unconditionally record the cause.
+            # Reboot time was already persisted.  Skip persisting if this is a
+            # back-to-back reboot with the same cause (is_reboot detection).
             if deferred == 'reboot':
+                if current_cause and stored_cause and stored_time_str:
+                    try:
+                        stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
+                        delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
+                        if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
+                            self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
+                            self.update_dpu_reboot_cause_to_db(key)
+                            return
+                    except Exception as e:
+                        self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
                 self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
                 return
