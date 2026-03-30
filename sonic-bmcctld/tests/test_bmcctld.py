@@ -216,6 +216,33 @@ class TestSwitchHostController:
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
 
+    def test_get_db_power_state(self, chassis, controller):
+        """get_db_power_state returns the value stored by the last _update_host_state call."""
+        controller.power_on()
+        assert controller.get_db_power_state() == bmcctld.POWER_STATE_ON
+
+    def test_power_on_rolls_back_state_on_exception(self, chassis, controller):
+        """If set_admin_state raises, STATE_DB is restored to the pre-call snapshot."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        controller.power_off()  # seed a known prior state (OFFLINE / POWER_OFF)
+        chassis.switch_host.set_admin_state = MagicMock(side_effect=RuntimeError("hw fault"))
+        result = controller.power_on()
+        assert result is False
+        state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
+
+    def test_power_off_rolls_back_state_on_exception(self, chassis, controller):
+        """If set_admin_state raises, STATE_DB is restored to the pre-call snapshot."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.power_on()  # seed a known prior state (ONLINE / POWER_ON)
+        chassis.switch_host.set_admin_state = MagicMock(side_effect=RuntimeError("hw fault"))
+        result = controller.power_off()
+        assert result is False
+        state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
+
     def test_get_switch_host_module_by_type(self, chassis):
         """If a module explicitly returns MODULE_TYPE_SWITCH_HOST it is selected."""
         ctrl = bmcctld.SwitchHostController(chassis)

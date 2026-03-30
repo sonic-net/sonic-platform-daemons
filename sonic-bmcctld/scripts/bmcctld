@@ -321,45 +321,43 @@ class SwitchHostController(EventLogger):
             context, expected_status, timeout_secs, self.get_oper_status()))
         return False
 
-    def power_on(self):
-        """Power ON the Switch-Host via module->set_admin_state(True)."""
+    def _apply_admin_state(self, admin_up, power_state, transitional_status, expected_oper, op_name):
+        """
+        Common implementation for power_on and power_off.
+        Snapshots prior STATE_DB values, writes the transitional status, issues
+        set_admin_state, verifies the result, then writes the final state.
+        Rolls back to the prior STATE_DB snapshot on exception.
+        """
         mod = self._get_switch_host_module()
         if mod is None:
-            self.log_error("Cannot power ON Switch-Host: module not found")
+            self.log_error("Cannot {} Switch-Host: module not found".format(op_name))
             return False
+        prior_power_state = self.get_db_power_state()
+        prior_status = self.get_db_device_status()
         try:
-            self._update_host_state(POWER_STATE_ON, SWITCH_HOST_POWERING_ON)
-            mod.set_admin_state(True)
-            self.log_notice("Switch-Host power ON issued; verifying oper_status...")
-            verified = self._verify_oper_status(
-                SWITCH_HOST_ONLINE, POWER_VERIFY_TIMEOUT_SECS, "power_on")
+            self._update_host_state(power_state, transitional_status)
+            mod.set_admin_state(admin_up)
+            self.log_notice("Switch-Host {} issued; verifying oper_status...".format(op_name))
+            verified = self._verify_oper_status(expected_oper, POWER_VERIFY_TIMEOUT_SECS, op_name)
             if not verified:
-                self.log_error("Switch-Host power ON: oper_status did not confirm ONLINE")
-            self._update_host_state(POWER_STATE_ON)
+                self.log_error("Switch-Host {}: oper_status did not confirm {}".format(
+                    op_name, expected_oper))
+            self._update_host_state(power_state)
             return verified
         except Exception as e:
-            self.log_error("Failed to power ON Switch-Host: {}".format(repr(e)))
+            self.log_error("Failed to {} Switch-Host: {}".format(op_name, repr(e)))
+            self._update_host_state(prior_power_state, prior_status)
             return False
+
+    def power_on(self):
+        """Power ON the Switch-Host via module->set_admin_state(True)."""
+        return self._apply_admin_state(
+            True, POWER_STATE_ON, SWITCH_HOST_POWERING_ON, SWITCH_HOST_ONLINE, "power_on")
 
     def power_off(self):
         """Power OFF the Switch-Host via module->set_admin_state(False)."""
-        mod = self._get_switch_host_module()
-        if mod is None:
-            self.log_error("Cannot power OFF Switch-Host: module not found")
-            return False
-        try:
-            self._update_host_state(POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF)
-            mod.set_admin_state(False)
-            self.log_notice("Switch-Host power OFF issued; verifying oper_status...")
-            verified = self._verify_oper_status(
-                SWITCH_HOST_OFFLINE, POWER_VERIFY_TIMEOUT_SECS, "power_off")
-            if not verified:
-                self.log_error("Switch-Host power OFF: oper_status did not confirm OFFLINE")
-            self._update_host_state(POWER_STATE_OFF)
-            return verified
-        except Exception as e:
-            self.log_error("Failed to power OFF Switch-Host: {}".format(repr(e)))
-            return False
+        return self._apply_admin_state(
+            False, POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF, SWITCH_HOST_OFFLINE, "power_off")
 
     def power_cycle(self):
         """Power cycle the Switch-Host via module->do_power_cycle()."""
@@ -367,6 +365,8 @@ class SwitchHostController(EventLogger):
         if mod is None:
             self.log_error("Cannot power cycle Switch-Host: module not found")
             return False
+        prior_power_state = self.get_db_power_state()
+        prior_status = self.get_db_device_status()
         try:
             self._update_host_state(POWER_STATE_CYCLE, SWITCH_HOST_POWER_CYCLING)
             try_get(mod.do_power_cycle, default=False)
@@ -380,6 +380,7 @@ class SwitchHostController(EventLogger):
             return verified
         except Exception as e:
             self.log_error("Failed to power cycle Switch-Host: {}".format(repr(e)))
+            self._update_host_state(prior_power_state, prior_status)
             return False
 
     def _update_host_state(self, power_state, device_status=None):
@@ -404,6 +405,13 @@ class SwitchHostController(EventLogger):
         result = self.host_state_table.get(HOST_STATE_KEY)
         if result and result[0]:
             return fvs_to_dict(result[1]).get(FIELD_DEVICE_STATUS, NOT_AVAILABLE)
+        return NOT_AVAILABLE
+
+    def get_db_power_state(self):
+        """Read device_power_state from HOST_STATE STATE_DB."""
+        result = self.host_state_table.get(HOST_STATE_KEY)
+        if result and result[0]:
+            return fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
         return NOT_AVAILABLE
 
     def refresh_host_state(self):
@@ -551,6 +559,9 @@ class GracefulShutdownHandler(EventLogger):
         shutdown_delay = self.policy_reader.get_shutdown_delay()
         self.log_notice("Initiating graceful shutdown of Switch-Host (timeout={}s)".format(shutdown_delay))
 
+        prior_power_state = self.controller.get_db_power_state()
+        prior_status = self.controller.get_db_device_status()
+
         # Write transitional state immediately so STATE_DB reflects in-progress shutdown
         self.controller._update_host_state(POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF)
 
@@ -559,7 +570,13 @@ class GracefulShutdownHandler(EventLogger):
             self.log_notice("shutdown_delay is 0: forcing immediate power OFF")
             return self.controller.power_off()
 
-        gnoi_ok = self._issue_gnoi_shutdown()
+        try:
+            gnoi_ok = self._issue_gnoi_shutdown()
+        except Exception as e:
+            self.log_error("Unexpected error during GNOI shutdown: {}".format(repr(e)))
+            self.controller._update_host_state(prior_power_state, prior_status)
+            return False
+
         if not gnoi_ok:
             self.log_warning("GNOI shutdown request failed; forcing power OFF immediately")
             return self.controller.power_off()
