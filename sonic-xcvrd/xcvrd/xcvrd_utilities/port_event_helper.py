@@ -7,7 +7,7 @@ SELECT_TIMEOUT_MSECS = 1000
 DEFAULT_PORT_TBL_MAP = [
     {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
     {'STATE_DB': 'TRANSCEIVER_INFO'},
-    {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
+    {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready', 'host_tx_ready_count']},
 ]
 
 class PortChangeEvent:
@@ -176,10 +176,26 @@ class PortChangeObserver:
                     # Compare current event with last event on this key, to see if
                     # there's really a need to update.
                     diff = set(fvp.items()) - set(self.port_event_cache[key].items())
-                    # Ignore duplicate events
-                    if not diff:
-                       self.port_event_cache[key] = fvp
-                       continue
+
+                    # Special handling for host_tx_ready true->true transition with count change
+                    # Even if host_tx_ready value is the same, if the count changed, we need to process it
+                    old_host_tx_ready = self.port_event_cache[key].get('host_tx_ready', None)
+                    new_host_tx_ready = fvp.get('host_tx_ready', None)
+                    old_count = self.port_event_cache[key].get('host_tx_ready_count', None)
+                    new_count = fvp.get('host_tx_ready_count', None)
+
+                    # If both host_tx_ready are 'true' but count changed, treat it as a real event
+                    if (old_host_tx_ready == 'true' and new_host_tx_ready == 'true' and
+                        old_count is not None and new_count is not None and old_count != new_count):
+                        self.logger.log_notice("$$$ {} Detected host_tx_ready true->true transition with count change ({} -> {})".format(
+                            key[0], old_count, new_count))
+                        # Don't skip this event - let it proceed
+                    elif not diff:
+                        # Ignore duplicate events only if there's no real change
+                        self.port_event_cache[key] = fvp
+                        continue
+                    # else: First event for this key - always process it and populate the cache
+
                 # Update the latest event to the cache
                 self.port_event_cache[key] = fvp
 

@@ -2154,6 +2154,29 @@ class TestXcvrdScript(object):
         }
         assert observer.port_event_cache == expected_cache
 
+        # Test host_tx_ready true->true with count change (create new observer with host_tx_ready in filter):
+        observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event,
+                                     port_change_event_handler.handle_port_change_event,
+                                     [{CONFIG_DB: PORT_TABLE, 'FILTER': ['host_tx_ready', 'host_tx_ready_count']}])
+        mock_selectable.pop.side_effect = iter([
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('host_tx_ready', 'true'), ('host_tx_ready_count', '1'))),
+            (None, None, None)])
+        assert observer.handle_port_update_event()
+        expected_processed_event_count += 1
+
+        # Same count - should not process (duplicate):
+        mock_selectable.pop.side_effect = iter([
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('host_tx_ready', 'true'), ('host_tx_ready_count', '1'))),
+            (None, None, None)])
+        assert not observer.handle_port_update_event()
+
+        # Count incremented - should process:
+        mock_selectable.pop.side_effect = iter([
+            ('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), ('host_tx_ready', 'true'), ('host_tx_ready_count', '2'))),
+            (None, None, None)])
+        assert observer.handle_port_update_event()
+        expected_processed_event_count += 1
+
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
     @patch('swsscommon.swsscommon.SubscriberStateTable')
     @patch('swsscommon.swsscommon.Select.select')
