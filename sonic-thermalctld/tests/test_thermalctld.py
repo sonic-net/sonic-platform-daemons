@@ -23,12 +23,13 @@ import swsscommon
 assert len(swsscommon.__path__) == 1
 assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, 'swsscommon')))
 
-from sonic_py_common import daemon_base
+from sonic_py_common import daemon_base, device_info
 
 from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
+device_info.get_path_to_port_config_file = mock.MagicMock(return_value=None)
 
 # Add path to the file under test so that we can load it
 modules_path = os.path.dirname(tests_path)
