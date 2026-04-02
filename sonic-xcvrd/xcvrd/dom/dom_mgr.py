@@ -139,13 +139,13 @@ class DomInfoUpdateBase(threading.Thread):
 class DomInfoUpdateTask(DomInfoUpdateBase):
     name = "DomInfoUpdateTask"
 
-    DOM_INFO_UPDATE_PERIOD_SECS = 60
+    DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS = 60
     DIAG_DB_UPDATE_TIME_AFTER_LINK_CHANGE = 1
     DOM_PORT_CHG_OBSERVER_TBL_MAP = [
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
     ]
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None):
         super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
@@ -156,6 +156,16 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
         self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.dom_update_interval = self.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
+        if dom_update_interval is not None:
+             if dom_update_interval < 0:
+                 self.log_warning(
+                     "Invalid dom_update_interval {} provided; using default {} seconds instead".format(
+                         dom_update_interval, self.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
+                     )
+                 )
+             else:
+                 self.dom_update_interval = dom_update_interval
 
     """
     Checks if the port is going through CMIS initialization process
@@ -262,7 +272,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                                   port_tbl_map=self.DOM_PORT_CHG_OBSERVER_TBL_MAP)
 
         # Set the periodic db update time
-        dom_info_update_periodic_secs = self.DOM_INFO_UPDATE_PERIOD_SECS
+        dom_info_update_periodic_secs = self.dom_update_interval
 
         # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
         # before starting the periodic update
