@@ -1,15 +1,40 @@
 #!/usr/bin/env python3
 
 """
-    bmcctld
-    BMC controller daemon for SONiC
+    bmcctld — BMC Controller Daemon for SONiC
+    ==========================================
+    Runs in the SONiC BMC pmon container and manages the Switch-Host power
+    lifecycle in response to system events, Rack Manager commands, and
+    operator requests.
 
-    This daemon runs in the SONiC BMC pmon container and manages the power
-    state of the Switch-Host based on:
-      - System leak detection events from thermalctld (SYSTEM_LEAK_STATUS)
-      - External Rack Manager alerts and commands (RACK_MANAGER_ALERT / RACK_MANAGER_COMMAND)
-      - Admin user power on/off requests (CHASSIS_MODULE)
+    Event sources:
+      - System leak detection from thermalctld  (STATE_DB: SYSTEM_LEAK_STATUS)
+      - Rack Manager alerts / commands          (STATE_DB: RACK_MANAGER_ALERT /
+                                                           RACK_MANAGER_COMMAND)
+      - Operator admin up/down                  (STATE_DB: CHASSIS_MODULE)
 
+    Classes:
+      EventLogger            Dual-output logger: syslog + /host/bmc/event.log.
+                             All daemon classes inherit from this.
+      ActionItem             Data class carrying a pending power action from the
+                             event thread to the main thread via action_queue.
+      SwitchHostController   Issues power_on/off/cycle via the platform API and
+                             keeps STATE_DB:HOST_STATE current.  Writes
+                             transitional states (POWERING_ON/OFF/CYCLING)
+                             before each call; rolls back on exception.
+      PolicyReader           Reads boot_delay and shutdown_timeout from CONFIG_DB.
+      CriticalEventChecker   Checks STATE_DB for active critical system leaks or
+                             Rack Manager alerts; gates power-on decisions.
+      GracefulShutdownHandler  Sends gNOI System.Reboot(COLD), waits for OFFLINE,
+                             then always issues power_off() to ensure power is
+                             removed.  Falls back to immediate power_off if gNOI
+                             fails or shutdown_delay is 0.
+      BmcEventHandler        Runs on the "bmcctld-events" thread.  Subscribes to
+                             STATE_DB and enqueues ActionItems for the main thread.
+      BmcctldDaemon          Main daemon.  Starts the event thread, runs the
+                             boot-delay sequence (liquid-cooled) or immediate
+                             power-on (non-liquid-cooled), then processes the
+                             action queue with idempotency enforcement.
 """
 
 try:
@@ -18,7 +43,6 @@ try:
     import os
     import queue
     import signal
-    import subprocess
     import sys
     import threading
     import time
@@ -45,7 +69,7 @@ DEFAULT_LOG_FILE = "/var/log/syslog"
 CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
 
 
-# This class could be moved to sonic-py-common, the log file name can be passed as input. 
+# This class could be moved to sonic-py-common, the log file name can be passed as input.
 class EventLogger(logger.Logger):
     """
     Extends sonic_py_common Logger to tee every log call to a local file in
@@ -105,6 +129,7 @@ class ActionItem:
         self.event_desc = event_desc
         self.on_complete = on_complete
 
+
 # ============================================================
 # Constants
 # ============================================================
@@ -146,6 +171,7 @@ FIELD_ADMIN_STATUS = "admin_status"
 # Power state values
 POWER_STATE_ON = "POWER_ON"
 POWER_STATE_OFF = "POWER_OFF"
+POWER_STATE_GRACEFUL_SHUT = "GRACEFUL_SHUT"
 POWER_STATE_CYCLE = "POWER_CYCLE"
 
 # Device operational status (stable)
@@ -160,6 +186,7 @@ SWITCH_HOST_POWER_CYCLING = "POWER_CYCLING"
 # Rack Manager command values
 CMD_POWER_ON = "POWER_ON"
 CMD_POWER_OFF = "POWER_OFF"
+CMD_GRACEFUL_SHUT = "GRACEFUL_SHUT"
 CMD_POWER_CYCLE = "POWER_CYCLE"
 
 # Command execution status
@@ -216,7 +243,7 @@ GNOI_REQUEST_TIMEOUT_SECS = 30
 SHUTDOWN_POLL_INTERVAL_SECS = 5
 
 # Polling constants for verifying oper_status after power* API calls
-# We can make it a configurable parameter by letting platform decide how much time each platform 
+# We can make it a configurable parameter by letting platform decide how much time each platform
 # takes to bootup in pmon_daemon_control.json and pass as a parameter to bmcctld daemon
 POWER_VERIFY_TIMEOUT_SECS = 60   # max seconds to wait for oper_status to settle
 POWER_VERIFY_POLL_INTERVAL_SECS = 5
@@ -237,6 +264,7 @@ _event_logger = EventLogger(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
 # ============================================================
 # Helper utilities
 # ============================================================
+
 
 def get_current_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -554,6 +582,8 @@ class GracefulShutdownHandler(EventLogger):
     def execute(self):
         """
         Perform graceful shutdown of Switch-Host.
+        Sends gNOI System.Reboot(COLD) and waits for the host to go OFFLINE,
+        then always issues power_off() to ensure power is removed.
         Returns True on success, False on failure.
         """
         shutdown_delay = self.policy_reader.get_shutdown_delay()
@@ -563,7 +593,7 @@ class GracefulShutdownHandler(EventLogger):
         prior_status = self.controller.get_db_device_status()
 
         # Write transitional state immediately so STATE_DB reflects in-progress shutdown
-        self.controller._update_host_state(POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF)
+        self.controller._update_host_state(POWER_STATE_GRACEFUL_SHUT, SWITCH_HOST_POWERING_OFF)
 
         # shutdown_delay == 0 means skip GNOI and force power-off immediately
         if shutdown_delay == 0:
@@ -578,23 +608,22 @@ class GracefulShutdownHandler(EventLogger):
             return False
 
         if not gnoi_ok:
-            self.log_warning("GNOI shutdown request failed; forcing power OFF immediately")
-            return self.controller.power_off()
+            self.log_warning("GNOI shutdown request failed; proceeding with power OFF")
+        else:
+            # Wait up to shutdown_delay for Switch-Host to go OFFLINE gracefully
+            self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(shutdown_delay))
+            went_offline = self.controller._verify_oper_status(
+                SWITCH_HOST_OFFLINE, shutdown_delay, "graceful_shutdown")
+            if went_offline:
+                self.log_notice("Switch-Host went OFFLINE gracefully; issuing power OFF")
+            else:
+                self.log_warning("Graceful shutdown timed out after {}s; issuing power OFF".format(
+                    shutdown_delay))
 
-        # Wait up to shutdown_delay for Switch-Host to go OFFLINE
-        self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(shutdown_delay))
-        went_offline = self.controller._verify_oper_status(
-            SWITCH_HOST_OFFLINE, shutdown_delay, "graceful_shutdown")
-        if went_offline:
-            self.log_notice("Switch-Host went OFFLINE gracefully")
-            self.controller._update_host_state(POWER_STATE_OFF)
-            return True
-
-        self.log_warning("Graceful shutdown timed out after {}s; forcing power OFF".format(shutdown_delay))
         return self.controller.power_off()
 
     def _issue_gnoi_shutdown(self):
-        # TODO: This approach of calling gnoi_client to be replaced by idea in this PR 
+        # TODO: This approach of calling gnoi_client to be replaced by idea in this PR
         # https://github.com/sonic-net/sonic-host-services/pull/361
         """
         Send a GNOI System.Reboot (COLD/graceful) request to the Switch-Host.
@@ -732,13 +761,14 @@ class BmcEventHandler(EventLogger):
                 self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
                 return
 
-        elif command not in (CMD_POWER_OFF, CMD_POWER_CYCLE):
+        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
             self.log_warning("Unknown Rack Manager command: {}".format(command))
             self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
             return
 
         action_map = {
-            CMD_POWER_OFF:   ACTION_GRACEFUL_SHUTDOWN,
+            CMD_POWER_OFF:    ACTION_POWER_OFF,
+            CMD_GRACEFUL_SHUT: ACTION_GRACEFUL_SHUTDOWN,
             CMD_POWER_ON:    ACTION_POWER_ON,
             CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
         }
@@ -782,8 +812,8 @@ class BmcEventHandler(EventLogger):
 
         if leak_status == SYSTEM_LEAK_CRITICAL:
             action = policy.get("system_critical_leak_action", DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION)
-            self._event_log.log_notice(
-                "CRITICAL SYSTEM LEAK detected (status={}); action={}".format(leak_status, action))
+            self._event_log.log_notice("CRITICAL SYSTEM LEAK detected (status={}); "
+                                       "action={}".format(leak_status, action))
             self._dispatch_action(action, "CRITICAL_SYSTEM_LEAK")
 
         elif leak_status == SYSTEM_LEAK_MINOR:
@@ -792,6 +822,36 @@ class BmcEventHandler(EventLogger):
 
         else:
             self.log_notice("System leak cleared (status={}); no automatic power-on".format(leak_status))
+
+    def _log_host_thermal_sensors_above_threshold(self):
+        """Read TEMPERATURE_INFO from STATE_DB and log any sensor in warning state."""
+        try:
+            tbl = swsscommon.Table(self.state_db, "TEMPERATURE_INFO")
+            keys = tbl.getKeys()
+            above = []
+            for sensor_name in keys:
+                result = tbl.get(sensor_name)
+                if not result or not result[0]:
+                    continue
+                d = fvs_to_dict(result[1])
+                if str(d.get("warning", "False")).lower() == "true":
+                    above.append(
+                        "  {} temp={} high_th={} crit_high_th={}".format(
+                            sensor_name,
+                            d.get("temperature", NOT_AVAILABLE),
+                            d.get("high_threshold", NOT_AVAILABLE),
+                            d.get("critical_high_threshold", NOT_AVAILABLE),
+                        )
+                    )
+            if above:
+                self._event_log.log_notice(
+                    "Switch-Host thermal sensors above threshold ({} sensor(s)):\n{}".format(
+                        len(above), "\n".join(above)))
+            else:
+                self._event_log.log_notice(
+                    "Switch-Host: no thermal sensors above threshold at time of alert")
+        except Exception as e:
+            self.log_warning("Failed to read Switch-Host thermal sensors: {}".format(repr(e)))
 
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
@@ -804,8 +864,9 @@ class BmcEventHandler(EventLogger):
 
         if severity == ALERT_SEVERITY_CRITICAL:
             action = policy.get("rack_mgr_critical_alert_action", DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION)
-            self._event_log.log_notice(
-                "CRITICAL RACK MGR ALERT (severity={} key={}); action={}".format(severity, key, action))
+            self._event_log.log_notice("CRITICAL RACK MGR ALERT (severity={} key={}); "
+                                       "action={}".format(severity, key, action))
+            self._log_host_thermal_sensors_above_threshold()
             self._dispatch_action(action, "RACK_MGR_CRITICAL_EVENT key={}".format(key))
 
         elif severity in (ALERT_SEVERITY_MINOR, ALERT_SEVERITY_MAJOR):
@@ -825,7 +886,7 @@ class BmcEventHandler(EventLogger):
         self.log_notice("Event '{}' -> action '{}'".format(event_desc, action))
         if action == ACTION_SYSLOG_ONLY:
             return
-        if action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
+        if action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF, ACTION_POWER_ON):
             self.action_queue.put(ActionItem(action, event_desc))
         else:
             self.log_warning("Unknown action '{}' for event '{}'; defaulting to syslog_only".format(
@@ -916,10 +977,8 @@ class BmcctldDaemon(daemon_base.DaemonBase):
           4. Update HOST_STATE.
         """
         boot_delay = self.policy_reader.get_power_on_delay()
-        self.log_notice(
-            "Waiting {}s before initial Switch-Host power-on check "
-            "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay)
-        )
+        self.log_notice("Waiting {}s before initial Switch-Host power-on check "
+                        "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay))
 
         # Drain the action queue while we wait so Rack Manager / admin commands
         # received during the boot delay are processed in real time.
@@ -934,59 +993,43 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                 continue
 
         if self.critical_event_checker.has_any_critical_event():
-            self.log_warning(
-                "Critical leak or Rack Manager alert detected at startup; "
-                "NOT powering on Switch-Host"
-            )
+            self.log_warning("Critical leak or Rack Manager alert detected at startup; NOT powering on Switch-Host")
             return
 
         oper_status = self.controller.get_oper_status()
         self.log_info("Switch-Host oper_status at startup: {}".format(oper_status))
 
         if str(oper_status).upper() != SWITCH_HOST_ONLINE:
-            self.log_notice("Switch-Host is OFFLINE; powering ON")
             self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
             self.controller.power_on()
         else:
-            self.log_notice("Switch-Host is already ONLINE; refreshing HOST_STATE")
+            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
             self.controller.refresh_host_state()
 
     def _execute_action_item(self, item):
         """
         Execute a single ActionItem on the main thread.
         Calls item.on_complete(success) when finished if a callback was provided.
-
-        Idempotency: actions are skipped (with success=True) when the host is
-        already in the desired state.  This prevents redundant operations when
-        duplicate events land on the queue (e.g. a Rack Manager POWER_OFF
-        arriving while a SYSTEM_LEAK_CRITICAL power_off is still in flight).
-        ACTION_POWER_CYCLE is never skipped — it is an explicit cycle request.
         """
-        self.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
-        self._event_log.log_notice("ACTION START: action='{}' trigger='{}'".format(
-            item.action, item.event_desc))
+        self._event_log.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
 
         current_status = self.controller.get_oper_status()
         db_status = self.controller.get_db_device_status()
         if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
             if current_status == SWITCH_HOST_OFFLINE or db_status == SWITCH_HOST_POWERING_OFF:
-                self.log_notice(
-                    "Host already OFFLINE or power-off in progress (db_status={}); "
-                    "skipping '{}' for '{}'".format(db_status, item.action, item.event_desc)
-                )
                 self._event_log.log_notice(
-                    "ACTION SKIPPED: '{}' — host already OFFLINE or POWERING_OFF".format(item.action))
+                    "ACTION SKIPPED: '{}' trigger='{}' — "
+                    "host already OFFLINE or POWERING_OFF (db_status={})".format(
+                        item.action, item.event_desc, db_status))
                 if item.on_complete:
                     item.on_complete(True)
                 return
         elif item.action == ACTION_POWER_ON:
             if current_status == SWITCH_HOST_ONLINE or db_status == SWITCH_HOST_POWERING_ON:
-                self.log_notice(
-                    "Host already ONLINE or power-on in progress (db_status={}); "
-                    "skipping '{}' for '{}'".format(db_status, item.action, item.event_desc)
-                )
                 self._event_log.log_notice(
-                    "ACTION SKIPPED: '{}' — host already ONLINE or POWERING_ON".format(item.action))
+                    "ACTION SKIPPED: '{}' trigger='{}' — "
+                    "host already ONLINE or POWERING_ON (db_status={})".format(
+                        item.action, item.event_desc, db_status))
                 if item.on_complete:
                     item.on_complete(True)
                 return
@@ -1003,8 +1046,8 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Unknown action '{}' in queue; skipping".format(item.action))
             return
-        self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' success={}".format(
-            item.action, item.event_desc, success))
+        self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' "
+                                   "success={}".format(item.action, item.event_desc, success))
         if item.on_complete:
             item.on_complete(success)
 
@@ -1035,7 +1078,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
 
         Returns False to terminate the outer while-loop.
         """
-        self.log_notice("bmcctld starting up")
         self._event_log.log_notice("bmcctld starting up")
 
         # Always start the event thread — it handles CLI admin up/down commands
@@ -1048,13 +1090,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         event_thread.start()
 
         if not is_liquid_cooled():
-            self.log_notice(
-                "System is not liquid-cooled; powering on Switch-Host immediately "
-                "(no boot delay, no leak/alert monitoring)"
-            )
-            self._event_log.log_notice(
-                "STARTUP: non-liquid-cooled system — immediate power_on, no additional checks"
-            )
+            self._event_log.log_notice("STARTUP: non-liquid-cooled system — immediate power_on, no additional checks")
             self.controller.power_on()
         else:
             # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
@@ -1069,7 +1105,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         return False
 
     def deinit(self):
-        self.log_info("Deinitializing bmcctld")
         self.log_notice("bmcctld shutting down")
         self.stop_event.set()
 

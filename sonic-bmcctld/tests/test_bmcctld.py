@@ -465,14 +465,14 @@ class TestGracefulShutdownHandler:
         graceful_shutdown.execute()
         assert chassis.switch_host.get_admin_state() is False
 
-    def test_gnoi_success_and_host_goes_offline(self, graceful_shutdown, chassis):
+    def test_gnoi_success_and_host_goes_offline_still_calls_power_off(self, graceful_shutdown, chassis):
+        """Even after graceful OFFLINE, power_off is always issued to remove power."""
         graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
-
-        # Simulate Switch-Host going OFFLINE after GNOI
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = graceful_shutdown.execute()
         assert result is True
+        assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_timeout_triggers_power_off(self, graceful_shutdown, chassis):
         graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
@@ -505,10 +505,10 @@ class TestBmcEventHandlerRackMgrCommands:
     def _cmd_fvs(self, command, status=bmcctld.CMD_STATUS_PENDING):
         return {bmcctld.FIELD_COMMAND: command, bmcctld.FIELD_STATUS: status}
 
-    def test_power_off_command_enqueues_graceful_shutdown(self, event_handler):
+    def test_power_off_command_enqueues_power_off(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_OFF))
         item = event_handler.action_queue.get_nowait()
-        assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
+        assert item.action == bmcctld.ACTION_POWER_OFF
         assert item.on_complete is not None
 
     def test_power_on_command_no_leak_enqueues_power_on(self, event_handler):
