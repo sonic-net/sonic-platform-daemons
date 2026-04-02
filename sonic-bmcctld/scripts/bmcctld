@@ -1067,14 +1067,17 @@ class BmcctldDaemon(daemon_base.DaemonBase):
 
     def run(self):
         """
-        Called once by the main loop.  Starts BmcEventHandler first so that
-        Rack Manager commands (e.g. POWER_ON) arriving during the boot-delay
-        sleep are queued and not lost.  After the initial power-on sequence
-        completes the main thread enters the action loop to consume the queue.
+        Called once by the main loop.  Startup flow:
 
-        For non-liquid-cooled systems, no leak/alert monitoring is needed:
-        Switch-Host is powered on immediately with no boot delay, no
-        CriticalEventChecker, and no BmcEventHandler thread.
+          1. If Switch-Host is already ONLINE (daemon restart): skip boot
+             sequence, refresh STATE_DB, enter action loop immediately.
+          2. Non-liquid-cooled: power on immediately, no boot delay or
+             leak/alert checks, then enter action loop.
+          3. Liquid-cooled (normal boot): run _initial_power_on_sequence
+             (boot delay + leak check), then enter action loop.
+
+        The BmcEventHandler thread is always started first so CLI admin
+        commands are captured regardless of the startup path.
 
         Returns False to terminate the outer while-loop.
         """
@@ -1089,8 +1092,15 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         )
         event_thread.start()
 
-        if not is_liquid_cooled():
-            self._event_log.log_notice("STARTUP: non-liquid-cooled system — immediate power_on, no additional checks")
+        # If Switch-Host is already ONLINE (daemon restart), skip the boot
+        # sequence entirely and go straight to the action loop.
+        if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
+            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
+                                       "skipping boot sequence")
+            self.controller.refresh_host_state()
+        elif not is_liquid_cooled():
+            self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
+                                       "immediate power_on, no additional checks")
             self.controller.power_on()
         else:
             # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for

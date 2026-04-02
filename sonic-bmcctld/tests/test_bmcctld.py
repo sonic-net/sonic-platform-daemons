@@ -975,6 +975,7 @@ class TestBmcctldDaemonRun:
 
     def test_run_not_liquid_cooled_powers_on_immediately(self, chassis):
         """Non-liquid-cooled: power_on is called immediately, no boot delay or leak checks."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
@@ -987,6 +988,7 @@ class TestBmcctldDaemonRun:
 
     def test_run_not_liquid_cooled_skips_initial_sequence_but_starts_event_thread(self, chassis):
         """Non-liquid-cooled: event thread starts (for CLI admin cmds), but no boot sequence."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
@@ -997,8 +999,26 @@ class TestBmcctldDaemonRun:
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.event_handler.run_event_loop.assert_called_once()
 
+    def test_run_daemon_restart_skips_boot_sequence(self, chassis):
+        """Daemon restart: Switch-Host already ONLINE — skip boot sequence entirely."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon._initial_power_on_sequence = MagicMock()
+        daemon.controller.power_on = MagicMock()
+        daemon.controller.refresh_host_state = MagicMock()
+        daemon._run_action_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock()
+        with patch('bmcctld.is_liquid_cooled', return_value=True):
+            result = daemon.run()
+        assert result is False
+        daemon._initial_power_on_sequence.assert_not_called()
+        daemon.controller.power_on.assert_not_called()
+        daemon.controller.refresh_host_state.assert_called_once()
+        daemon._run_action_loop.assert_called_once()
+
     def test_run_liquid_cooled_runs_full_sequence(self, chassis):
         """Liquid-cooled: event thread and initial power-on sequence are both invoked."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon._initial_power_on_sequence = MagicMock()
         daemon._run_action_loop = MagicMock()
