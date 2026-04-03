@@ -4416,13 +4416,12 @@ class TestXcvrdScript(object):
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
         mock_detect_error.return_value = True
-        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task.dom_db_utils = MagicMock()
         task.dom_db_utils.post_port_dom_sensor_info_to_db = MagicMock()
         task.dom_db_utils.post_port_dom_flags_to_db.return_value = MagicMock()
@@ -4475,9 +4474,8 @@ class TestXcvrdScript(object):
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -4562,9 +4560,8 @@ class TestXcvrdScript(object):
         
         # Test Case 1: Basic-only VDM module (no statistics, not coherent)
         # Expected: Skip freeze, only basic + flags, no PM
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -4590,9 +4587,8 @@ class TestXcvrdScript(object):
         # Test Case 2: Module in LPMODE (statistics supported but lpmode=True)
         # Expected: Skip freeze, only basic + flags, no PM
         mock_post_pm_info.reset_mock()
-        task2 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task2 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task2.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task2.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task2.port_mapping.logical_port_list = ['Ethernet0']
         task2.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -4618,9 +4614,8 @@ class TestXcvrdScript(object):
         # Test Case 3: VDM supported but no statistic support
         # Expected: No freeze, only basic + flags, no PM
         mock_post_pm_info.reset_mock()
-        task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task3.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task3.port_mapping.logical_port_list = ['Ethernet0']
         task3.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -4645,9 +4640,8 @@ class TestXcvrdScript(object):
 
         # Case 4: Module supports both VDM statistics AND is a coherent module
         # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
-        task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task4.DOM_INFO_UPDATE_PERIOD_SECS = 0
         task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task4.port_mapping.logical_port_list = ['Ethernet0']
         task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -5844,6 +5838,55 @@ class TestXcvrdScript(object):
         assert mock_update_status.call_count == 1
         assert mock_del_dom.call_count == 1
         mock_sfp.remove_xcvr_api.assert_called_once()
+
+    def test_DomInfoUpdateTask_dom_update_interval_parameter(self):
+        """Test that DomInfoUpdateTask correctly handles dom_update_interval parameter"""
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+
+        # Test 1: When dom_update_interval is None, should use DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, None)
+        assert task.dom_update_interval == task.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
+        assert task.dom_update_interval == 60
+
+        # Test 2: When dom_update_interval is 0, should use 0
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
+        assert task.dom_update_interval == 0
+
+        # Test 3: When dom_update_interval is a custom value, should use that value
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 120)
+        assert task.dom_update_interval == 120
+
+        # Test 4: When dom_update_interval is 1000, should use 1000
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 1000)
+        assert task.dom_update_interval == 1000
+
+        # Test 5: Verify that DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS is not modified
+        assert DomInfoUpdateTask.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS == 60
+
+    def test_DaemonXcvrd_dom_update_interval_parameter(self):
+        """Test that DaemonXcvrd correctly handles and passes dom_update_interval parameter"""
+        # Test 1: When dom_update_interval is None
+        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
+                            dom_temperature_poll_interval=None, dom_update_interval=None)
+        assert daemon.dom_update_interval is None
+
+        # Test 2: When dom_update_interval is 0
+        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
+                            dom_temperature_poll_interval=None, dom_update_interval=0)
+        assert daemon.dom_update_interval == 0
+
+        # Test 3: When dom_update_interval is a custom value
+        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
+                            dom_temperature_poll_interval=None, dom_update_interval=120)
+        assert daemon.dom_update_interval == 120
+
+        # Test 4: When dom_update_interval is 1000
+        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
+                            dom_temperature_poll_interval=None, dom_update_interval=1000)
+        assert daemon.dom_update_interval == 1000
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
