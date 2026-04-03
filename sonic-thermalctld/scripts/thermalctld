@@ -814,25 +814,30 @@ class TemperatureUpdater(logger.Logger):
         else:
             self.log_warning(abnormal_log)
 
-    def _should_update_thermal(self, name):
-        """Check if a thermal should be updated based on its polling interval."""
+    def _should_update_thermal(self, name, now=None):
+        """Check if a thermal should be updated based on its polling interval.
+        :param name: Thermal sensor name
+        :param now: Reference timestamp for this cycle (avoids mid-cycle drift)
+        """
         interval = self._thermal_intervals.get(name, self._default_interval)
         if interval is None:
             return True
-        now = time.time()
+        if now is None:
+            now = time.time()
         last = self._last_thermal_update_times.get(name, 0)
         if now - last >= interval:
             self._last_thermal_update_times[name] = now
             return True
         return False
 
-    def _collect_thermals(self, available_thermals, parent_name, thermals, refresh=True):
+    def _collect_thermals(self, available_thermals, parent_name, thermals, refresh=True, now=None):
         """
         Process thermals from a parent device and update DB.
         :param available_thermals: Set to track available thermals
         :param parent_name: Name of the parent device
         :param thermals: Iterable of thermal objects from get_all_thermals()
         :param refresh: If False, only track thermals and update entity info without refreshing temperature
+        :param now: Reference timestamp for this cycle
         :return: False if task_stopping_event is set, True otherwise
         """
         for thermal_index, thermal in enumerate(thermals):
@@ -843,7 +848,7 @@ class TemperatureUpdater(logger.Logger):
             # Always update entity info so PHYSICAL_ENTITY_INFO is populated
             if 'SFP' not in parent_name:
                 update_entity_info(self.phy_entity_table, parent_name, name, thermal, thermal_index + 1)
-            if refresh and self._should_update_thermal(name):
+            if refresh and self._should_update_thermal(name, now=now):
                 self._refresh_temperature_status(parent_name, thermal, thermal_index)
         return True
 
@@ -868,18 +873,20 @@ class TemperatureUpdater(logger.Logger):
                 self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
         return True
 
-    def update(self):
+    def update(self, now=None):
         """
         Update all temperature information to database
+        :param now: Reference timestamp for this cycle (from ThermalMonitor.main begin)
         :return:
         """
         self.log_debug("Start temperature updating")
+        if now is None:
+            now = time.time()
         available_thermals = set()
 
-        if not self._collect_thermals(available_thermals, CHASSIS_INFO_KEY, self.chassis.get_all_thermals()):
+        if not self._collect_thermals(available_thermals, CHASSIS_INFO_KEY, self.chassis.get_all_thermals(), now=now):
             return
 
-        now = time.time()
         should_update_psu = (self._psu_interval is None or
                              (now - self._last_psu_thermal_update) >= self._psu_interval)
 
@@ -887,7 +894,7 @@ class TemperatureUpdater(logger.Logger):
             if psu.get_presence():
                 parent_name = try_get(psu.get_name, default='PSU {}'.format(psu_index + 1))
                 if not self._collect_thermals(available_thermals, parent_name, psu.get_all_thermals(),
-                                              refresh=should_update_psu):
+                                              refresh=should_update_psu, now=now):
                     return
 
         if should_update_psu:
@@ -1171,7 +1178,7 @@ class ThermalMonitor(ThreadTaskBase):
             self.fan_updater.update()
             self._last_fan_update = begin
 
-        self.temperature_updater.update()
+        self.temperature_updater.update(now=begin)
         elapsed = time.time() - begin
         if elapsed < self.update_interval:
             self.wait_time = self.update_interval - elapsed
