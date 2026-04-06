@@ -225,7 +225,7 @@ DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
-DEFAULT_POWER_ON_DELAY_SECS = 300   # 5 minutes - wait for Rack Manager and liquid flow
+DEFAULT_POWER_ON_DELAY_SECS = 0     # 0 seconds - power on Switch-Host immediately by default
 DEFAULT_SHUTDOWN_DELAY_SECS = 120   # 2 minutes - wait for graceful shutdown before force
 
 # Switch-Host module name key in CHASSIS_MODULE table
