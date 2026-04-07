@@ -1991,13 +1991,17 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(400000, 4, 0)))
     def test_notify_media_setting_with_gearbox(self):
         """
-        Verify notify_media_setting() preserves gearbox line-side lane widths.
+        Test notify_media_setting() with gearbox media settings.
 
-        Args:
-            None
+        This test verifies that the notify_media_setting() function correctly handles
+        gearbox-specific media settings from gearbox_media_settings.json. The test covers:
+        - COPPER50 settings with 8 line lanes and 4 system lanes
+        - OPTICAL50 settings with 8 line lanes and 4 system lanes
+        - COPPER25 settings with 4 line lanes and 4 system lanes
+        - OPTICAL25 settings with 4 line lanes and 4 system lanes
 
-        Returns:
-            None
+        The gearbox settings include both line-side (gb_line_*) and system-side (gb_system_*)
+        SerDes parameters that need to be correctly extracted and formatted.
         """
         # Test COPPER50 with gearbox (8 line lanes, 4 system lanes)
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
@@ -2241,9 +2245,6 @@ class TestXcvrdScript(object):
             gearbox_line_lanes: Number of gearbox line lanes
             system_lanes: Number of system lanes
             xcvr_info_dict: Optional transceiver info dictionary
-
-        Returns:
-            None
         """
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         cfg_port_tbl = MagicMock()
