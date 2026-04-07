@@ -11,7 +11,7 @@ try:
     import traceback
     import threading
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base
+    from sonic_py_common import syslogger, daemon_base, device_info
     from . import sfp_status_helper
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
@@ -121,8 +121,7 @@ def _wrapper_get_presence(physical_port):
 
 def is_fast_reboot_enabled():
     """Check if fast reboot is enabled"""
-    fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
-    return "true" in fastboot_enabled
+    return device_info.is_fast_reboot_enabled()
 
 def is_warm_reboot_enabled():
     """Check if warm reboot is enabled"""
