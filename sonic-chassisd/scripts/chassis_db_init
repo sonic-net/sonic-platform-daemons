@@ -71,18 +71,20 @@ def provision_db(platform_chassis, log):
     state_db = daemon_base.db_connect("STATE_DB")
     chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
 
-    # Populate DB with chassis hardware info 
-    fvs = swsscommon.FieldValuePairs([
-                                        (CHASSIS_INFO_SERIAL_FIELD, try_get(platform_chassis.get_serial)),
-                                        (CHASSIS_INFO_MODEL_FIELD, try_get(platform_chassis.get_model)),
-                                        (CHASSIS_INFO_REV_FIELD, try_get(platform_chassis.get_revision))
-                                    ])
+    # Determine switch host serial number
     if platform_chassis.is_bmc():
         # BMC must also populate the switch host serial number
         switch_host_serial = try_get(platform_chassis.get_switch_host_serial)
     else:
         switch_host_serial = NOT_AVAILABLE
-    fvs.append((CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD, switch_host_serial))
+
+    # Populate DB with chassis hardware info
+    fvs = swsscommon.FieldValuePairs([
+                                        (CHASSIS_INFO_SERIAL_FIELD, try_get(platform_chassis.get_serial)),
+                                        (CHASSIS_INFO_MODEL_FIELD, try_get(platform_chassis.get_model)),
+                                        (CHASSIS_INFO_REV_FIELD, try_get(platform_chassis.get_revision)),
+                                        (CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD, switch_host_serial)
+                                    ])
     chassis_table.set(CHASSIS_INFO_KEY_TEMPLATE.format(1), fvs)
     log.log_info("STATE_DB provisioned with chassis info.")
 
