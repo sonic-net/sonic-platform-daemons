@@ -1780,9 +1780,9 @@ class TestXcvrdScript(object):
     # Test 20: Media key should be prioritized over medium lane speed key in PORT_MEDIA_SETTINGS
     (media_settings_media_priority_over_medium_lane_port, 7, {'vendor_key': 'VENDOR_NOMATCH', 'media_key': 'QSFP-DD-400GBASE-DR4', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER100'}, {'idriver': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'pre1': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}, 'ob_m2lp': {'lane0': '0x00000066', 'lane1': '0x00000077', 'lane2': '0x00000088', 'lane3': '0x00000099'}})
     ])
-    def test_get_traditional_media_settings_value(self, media_settings_dict, port, key, expected):
+    def test_get_media_settings_value(self, media_settings_dict, port, key, expected):
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_dict):
-            result = media_settings_parser.get_traditional_media_settings_value(port, key)
+            result = media_settings_parser.get_media_settings_value(port, key)
             assert result == expected
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
@@ -1885,7 +1885,7 @@ class TestXcvrdScript(object):
             }
         }
         with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
-                            get_traditional_media_settings_value=MagicMock(return_value={}),
+                            get_media_settings_value=MagicMock(return_value={}),
                             get_custom_media_settings_value=MagicMock(return_value=custom_media_dict)):
             media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
 
@@ -1893,7 +1893,50 @@ class TestXcvrdScript(object):
         set_key, fvs = app_port_tbl.set.call_args[0]
         assert set_key == 'Ethernet0'
         result_dict = dict(fvs)
-        assert result_dict == {CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected}
+        assert result_dict == {
+            media_settings_parser.CustomMediaSettingsParser.CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected
+        }
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_empty_serialized_payload(self):
+        custom_media_dict = {
+            'NOT_CUSTOM': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+        }
+
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[1])
+
+        transceiver_dict = {
+            1: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+        with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
+                            get_media_settings_value=MagicMock(return_value={}),
+                            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict)):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        assert not app_port_tbl.set.called
+        assert not state_port_tbl.set.called
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
@@ -1938,7 +1981,7 @@ class TestXcvrdScript(object):
             'main': '0x00000020,0x00000020',
             'post1': '0x00000006,0x00000006',
             'regn_bfm1n': '0x000000aa,0x000000aa',
-            CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected_custom,
+            media_settings_parser.CustomMediaSettingsParser.CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected_custom,
         }
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
@@ -2036,6 +2079,18 @@ class TestXcvrdScript(object):
         assert expected == media_settings_parser.CustomMediaSettingsParser.to_db_value(
             media_dict, lane_count, subport_num)
 
+    def test_custom_media_settings_get_lane_values(self):
+        lane_dict = {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}
+        lane_values = media_settings_parser.CustomMediaSettingsParser._get_lane_values(
+            lane_dict, 2, 2
+        )
+        assert lane_values == [3, 4]
+
+        lane_values = media_settings_parser.CustomMediaSettingsParser._get_lane_values(
+            lane_dict, 2, 3
+        )
+        assert lane_values == [1, 2]
+
     def test_custom_media_settings_is_port_selected(self):
         assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1, 3-4, 8', 8)
         assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,3-4,8', 4)
@@ -2101,7 +2156,7 @@ class TestXcvrdScript(object):
         }
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
                    media_settings_custom_attrs_with_port_and_global):
-            result = media_settings_parser.get_traditional_media_settings_value(7, key)
+            result = media_settings_parser.get_media_settings_value(7, key)
             assert result == {
                 'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'},
                 'main': {'lane0': '0x00000020', 'lane1': '0x00000020'},
@@ -2143,17 +2198,17 @@ class TestXcvrdScript(object):
         (
             {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
             2, 2, None,
-            {'main': '0x13,0x14'},
+            [('main', '0x13,0x14')],
         ),
         (
             {'main': {'lane0': '0x11', 'lane1': '0x12'}, 'los_thresh': '7'},
             2, 0, None,
-            {'main': '0x11,0x12', 'los_thresh': '7'},
+            [('main', '0x11,0x12'), ('los_thresh', '7')],
         ),
         (
             {},
             2, 2, None,
-            {},
+            [],
         ),
         (
             {
@@ -2166,74 +2221,16 @@ class TestXcvrdScript(object):
                 },
             },
             4, 0, 8,
-            {
-                'gb_line_main': '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17',
-                'gb_system_main': '0x20,0x21,0x22,0x23',
-            },
+            [
+                ('gb_line_main', '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17'),
+                ('gb_system_main', '0x20,0x21,0x22,0x23'),
+            ],
         ),
     ])
     def test_media_settings_to_db_value(self, media_dict, lane_count, subport_num,
                                         gearbox_line_lane_count, expected):
         assert expected == media_settings_parser.MediaSettingsParserBase.to_db_value(
             media_dict, lane_count, subport_num, gearbox_line_lane_count)
-
-    @pytest.mark.parametrize("media_dict, custom_media_dict, lane_count, subport_num, gearbox_line_lane_count, expected", [
-        (
-            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
-            {},
-            2, 2, None,
-            {'main': '0x13,0x14'},
-        ),
-        (
-            {},
-            {'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13}},
-            2, 2, None,
-            {CUSTOM_SERDES_ATTRS_KEY_IN_DB: '{"attributes":[{"XYZ":{"value":[12,13]}}]}'},
-        ),
-        (
-            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
-            {'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}},
-            2, 2, None,
-            {
-                'main': '0x13,0x14',
-                CUSTOM_SERDES_ATTRS_KEY_IN_DB: '{"attributes":[{"ABC":{"value":[3,4]}}]}',
-            },
-        ),
-        (
-            {},
-            {},
-            2, 2, None,
-            {},
-        ),
-        (
-            {
-                'gb_line_main': {
-                    'lane0': '0x10', 'lane1': '0x11', 'lane2': '0x12', 'lane3': '0x13',
-                    'lane4': '0x14', 'lane5': '0x15', 'lane6': '0x16', 'lane7': '0x17',
-                },
-                'gb_system_main': {
-                    'lane0': '0x20', 'lane1': '0x21', 'lane2': '0x22', 'lane3': '0x23',
-                },
-            },
-            {},
-            4, 0, 8,
-            {
-                'gb_line_main': '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17',
-                'gb_system_main': '0x20,0x21,0x22,0x23',
-            },
-        ),
-    ])
-    def test_resolve_media_settings_for_db(self, media_dict, custom_media_dict, lane_count,
-                                           subport_num, gearbox_line_lane_count, expected):
-        with patch.multiple(
-            'xcvrd.xcvrd_utilities.media_settings_parser',
-            get_traditional_media_settings_value=MagicMock(return_value=media_dict),
-            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict),
-        ):
-            result = media_settings_parser.resolve_media_settings_for_db(
-                7, {}, lane_count, subport_num, gearbox_line_lane_count
-            )
-            assert result == expected
 
     def _check_notify_media_setting_with_gearbox(self, index, gearbox_line_lanes, system_lanes, xcvr_info_dict=None):
         """
@@ -5843,45 +5840,59 @@ class TestXcvrdScript(object):
         physical_port = 33
         assert not common.check_port_in_range(range_str, physical_port)
 
-    def test_get_serdes_si_setting_val_str(self):
+    def test_media_settings_parser_base_get_lane_values_str(self):
         lane_dict = {'lane0': '1', 'lane1': '2', 'lane2': '3', 'lane3': '4'}
         # non-breakout case
         lane_count = 4
         subport_num = 0
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2,3,4'
         # breakout case
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '3,4'
         # breakout case without subport number specified in config
         lane_count = 2
         subport_num = 0
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # breakout case with out-of-range subport number
         lane_count = 2
         subport_num = 3
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # breakout case with smaler lane_dict
         lane_dict = {'lane0': '1', 'lane1': '2'}
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # lane key-value pair inserted in non-asceding order
         lane_dict = {'lane0': 'a', 'lane2': 'c', 'lane1': 'b', 'lane3': 'd'}
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == 'c,d'
         # non-string lane values are coerced defensively for string output
         lane_dict = {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '3,4'
 
     class MockPortMapping:
