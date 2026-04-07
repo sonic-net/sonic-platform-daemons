@@ -31,10 +31,6 @@ from .mock_swsscommon import Table
 daemon_base.db_connect = mock.MagicMock()
 device_info.get_path_to_port_config_file = mock.MagicMock(return_value=None)
 
-import portconfig
-portconfig.db_connect_configdb = mock.MagicMock(return_value=None)
-device_info.get_localhost_info = mock.MagicMock(return_value=None)
-
 # Add path to the file under test so that we can load it
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, 'scripts')
