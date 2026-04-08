@@ -228,6 +228,24 @@ class FanUpdater(logger.Logger):
         else:
             self.log_warning(abnormal_log)
 
+    def _collect_fans(self, parent, parent_index, fan_type, error_prefix=''):
+        """
+        Process fans from a parent device and update DB.
+        :param parent: Parent device object
+        :param parent_index: Index of the parent device
+        :param fan_type: FanType enum value
+        :param error_prefix: Prefix for error log messages
+        :return: False if task_stopping_event is set, True otherwise
+        """
+        for fan_index, fan in enumerate(parent.get_all_fans()):
+            if self.task_stopping_event.is_set():
+                return False
+            try:
+                self._refresh_fan_status(parent, parent_index, fan, fan_index, fan_type)
+            except Exception as e:
+                self.log_warning('Failed to update {}fan status - {}'.format(error_prefix, repr(e)))
+        return True
+
     def update(self):
         """
         Update all Fan information to database
@@ -241,31 +259,16 @@ class FanUpdater(logger.Logger):
             if self.task_stopping_event.is_set():
                 return
             self._refresh_fan_drawer_status(drawer, drawer_index)
-            for fan_index, fan in enumerate(drawer.get_all_fans()):
-                if self.task_stopping_event.is_set():
-                    return
-                try:
-                    self._refresh_fan_status(drawer, drawer_index, fan, fan_index, FanType.DRAWER)
-                except Exception as e:
-                    self.log_warning('Failed to update fan status - {}'.format(repr(e)))
+            if not self._collect_fans(drawer, drawer_index, FanType.DRAWER):
+                return
 
         for module_index, module in enumerate(self.chassis.get_all_modules()):
-            for fan_index, fan in enumerate(module.get_all_fans()):
-                if self.task_stopping_event.is_set():
-                    return
-                try:
-                    self._refresh_fan_status(module, module_index, fan, fan_index, FanType.MODULE)
-                except Exception as e:
-                    self.log_warning('Failed to update module fan status - {}'.format(repr(e)))
+            if not self._collect_fans(module, module_index, FanType.MODULE, 'module '):
+                return
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
-            for fan_index, fan in enumerate(psu.get_all_fans()):
-                if self.task_stopping_event.is_set():
-                    return
-                try:
-                    self._refresh_fan_status(psu, psu_index, fan, fan_index, FanType.PSU)
-                except Exception as e:
-                    self.log_warning('Failed to update PSU fan status - {}'.format(repr(e)))
+            if not self._collect_fans(psu, psu_index, FanType.PSU, 'PSU '):
+                return
 
         self._update_led_color()
 
@@ -732,6 +735,42 @@ class TemperatureUpdater(logger.Logger):
         else:
             self.log_warning(abnormal_log)
 
+    def _collect_thermals(self, available_thermals, parent_name, thermals):
+        """
+        Process thermals from a parent device and update DB.
+        :param available_thermals: Set to track available thermals
+        :param parent_name: Name of the parent device
+        :param thermals: Iterable of thermal objects from get_all_thermals()
+        :return: False if task_stopping_event is set, True otherwise
+        """
+        for thermal_index, thermal in enumerate(thermals):
+            if self.task_stopping_event.is_set():
+                return False
+            available_thermals.add((thermal, parent_name, thermal_index))
+            self._refresh_temperature_status(parent_name, thermal, thermal_index)
+        return True
+
+    def _collect_sfp_thermals(self, available_thermals, parent_name, sfp_index, thermals):
+        """
+        Process SFP thermals, reading temperature from Redis.
+        :param available_thermals: Set to track available thermals
+        :param parent_name: Name of the parent SFP
+        :param sfp_index: SFP index for port name lookup
+        :param thermals: Iterable of thermal objects from get_all_thermals()
+        :return: False if task_stopping_event is set, True otherwise
+        """
+        # TODO: This Redis-based approach for reading SFP temperature is temporary.
+        # It will be removed once all platforms migrate to handling optics temperature
+        # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
+        port_name = self._get_port_name_by_index(sfp_index)
+        for thermal_index, thermal in enumerate(thermals):
+            if self.task_stopping_event.is_set():
+                return False
+            available_thermals.add((thermal, parent_name, thermal_index))
+            if port_name:
+                self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
+        return True
+
     def update(self):
         """
         Update all temperature information to database
@@ -739,71 +778,39 @@ class TemperatureUpdater(logger.Logger):
         """
         self.log_debug("Start temperature updating")
         available_thermals = set()
-        for index, thermal in enumerate(self.chassis.get_all_thermals()):
-            if self.task_stopping_event.is_set():
-                return
 
-            available_thermals.add((thermal, CHASSIS_INFO_KEY, index))
-            self._refresh_temperature_status(CHASSIS_INFO_KEY, thermal, index)
+        if not self._collect_thermals(available_thermals, CHASSIS_INFO_KEY, self.chassis.get_all_thermals()):
+            return
 
         for psu_index, psu in enumerate(self.chassis.get_all_psus()):
-            parent_name = try_get(psu.get_name, default='PSU {}'.format(psu_index + 1))
             if psu.get_presence():
-                for thermal_index, thermal in enumerate(psu.get_all_thermals()):
-                    if self.task_stopping_event.is_set():
-                        return
-
-                    available_thermals.add((thermal, parent_name, thermal_index))
-                    self._refresh_temperature_status(parent_name, thermal, thermal_index)
-
-        for sfp_index, sfp in enumerate(self.chassis.get_all_sfps()):
-            parent_name = 'SFP {}'.format(sfp_index + 1)
-            for thermal_index, thermal in enumerate(sfp.get_all_thermals()):
-                if self.task_stopping_event.is_set():
+                parent_name = try_get(psu.get_name, default='PSU {}'.format(psu_index + 1))
+                if not self._collect_thermals(available_thermals, parent_name, psu.get_all_thermals()):
                     return
 
-                available_thermals.add((thermal, parent_name, thermal_index))
-                # TODO: This Redis-based approach for reading SFP temperature is temporary.
-                # It will be removed once all platforms migrate to handling optics temperature
-                # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
-                port_name = self._get_port_name_by_index(sfp_index)
-                if port_name:
-                    self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
+        for sfp_index, sfp in enumerate(self.chassis.get_all_sfps()):
+            if not self._collect_sfp_thermals(available_thermals, 'SFP {}'.format(sfp_index + 1),
+                                              sfp_index, sfp.get_all_thermals()):
+                return
 
         # As there are no modules present in DPU, this IF condition is not updated to consider DPU chassis
         if self.is_chassis_system:
             for module_index, module in enumerate(self.chassis.get_all_modules()):
                 module_name = try_get(module.get_name, 'Module {}'.format(module_index + 1))
 
-                for thermal_index, thermal in enumerate(module.get_all_thermals()):
-                    if self.task_stopping_event.is_set():
-                        return
-
-                    available_thermals.add((thermal, module_name, thermal_index))
-                    self._refresh_temperature_status(module_name, thermal, thermal_index)
+                if not self._collect_thermals(available_thermals, module_name, module.get_all_thermals()):
+                    return
 
                 for sfp_index, sfp in enumerate(module.get_all_sfps()):
-                    sfp_name = '{} SFP {}'.format(module_name, sfp_index + 1)
-                    for thermal_index, thermal in enumerate(sfp.get_all_thermals()):
-                        if self.task_stopping_event.is_set():
-                            return
-
-                        available_thermals.add((thermal, sfp_name, thermal_index))
-                        # TODO: This Redis-based approach for reading SFP temperature is temporary.
-                        # It will be removed once all platforms migrate to handling optics temperature
-                        # outside of thermalctld (e.g., via xcvrd or platform-specific daemons).
-                        port_name = self._get_port_name_by_index(sfp_index)
-                        if port_name:
-                            self._refresh_temperature_status(sfp_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
+                    if not self._collect_sfp_thermals(available_thermals, '{} SFP {}'.format(module_name, sfp_index + 1),
+                                                      sfp_index, sfp.get_all_thermals()):
+                        return
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
                     if psu.get_presence():
                         psu_name = try_get(psu.get_name, default='{} PSU {}'.format(module_name, psu_index + 1))
-                        for thermal_index, thermal in enumerate(psu.get_all_thermals()):
-                            if self.task_stopping_event.is_set():
-                                return
-                            available_thermals.add((thermal, psu_name, thermal_index))
-                            self._refresh_temperature_status(psu_name, thermal, thermal_index)
+                        if not self._collect_thermals(available_thermals, psu_name, psu.get_all_thermals()):
+                            return
 
         thermals_to_remove = self.all_thermals - available_thermals
         self.all_thermals = available_thermals
