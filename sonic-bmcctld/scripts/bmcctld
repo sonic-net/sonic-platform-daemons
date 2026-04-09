@@ -443,12 +443,18 @@ class SwitchHostController(EventLogger):
         return NOT_AVAILABLE
 
     def refresh_host_state(self):
-        """Refresh HOST_STATE with current oper_status, preserving last power state."""
+        """Refresh HOST_STATE with current oper_status, preserving last power state.
+
+        If no prior power state is recorded (N/A), infer it from oper_status:
+        ONLINE -> POWER_ON, OFFLINE -> POWER_OFF.
+        """
         result = self.host_state_table.get(HOST_STATE_KEY)
         cur_power_state = NOT_AVAILABLE
         if result and result[0]:
             cur_power_state = fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
         oper_status = self.get_oper_status()
+        if cur_power_state == NOT_AVAILABLE:
+            cur_power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
         fvs = swsscommon.FieldValuePairs([
             (FIELD_DEVICE_POWER_STATE, cur_power_state),
             (FIELD_DEVICE_STATUS, str(oper_status)),
@@ -534,7 +540,10 @@ class CriticalEventChecker(EventLogger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            return fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL
+            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
+                _event_logger.log_error("CRITICAL system leak detected in {}: {}={}".format(
+                    SYSTEM_LEAK_STATUS_TABLE, FIELD_DEVICE_LEAK_STATUS, SYSTEM_LEAK_CRITICAL))
+                return True
         return False
 
     def has_critical_rack_mgr_alert(self):
@@ -547,6 +556,8 @@ class CriticalEventChecker(EventLogger):
                 # severity field for temperature/flow/pressure; leak field for rack-level leak
                 severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
                 if severity == ALERT_SEVERITY_CRITICAL:
+                    _event_logger.log_error("CRITICAL Rack Manager alert: key={} severity={}".format(
+                        alert_key, severity))
                     return True
         return False
 
@@ -965,6 +976,25 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}'; ignoring".format(
                 SIGNALS_TO_NAMES_DICT.get(sig, sig)))
 
+    def _rack_mgr_power_cmd_executed(self):
+        """
+        Return True if any RACK_MANAGER_COMMAND entry for POWER_ON or POWER_OFF
+        has status IN_PROGRESS or DONE — indicating the Rack Manager issued an
+        explicit power directive during the boot delay.
+        """
+        tbl = swsscommon.Table(self.event_handler.state_db, RACK_MANAGER_COMMAND_TABLE)
+        for key in tbl.getKeys():
+            result = tbl.get(key)
+            if not (result and result[0]):
+                continue
+            entry = fvs_to_dict(result[1])
+            command = entry.get(FIELD_COMMAND, "")
+            status = entry.get(FIELD_STATUS, "")
+            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
+               status in (CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
+                return True
+        return False
+
     def _initial_power_on_sequence(self):
         """
         BMC startup flow
@@ -972,9 +1002,13 @@ class BmcctldDaemon(daemon_base.DaemonBase):
              and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
              While sleeping, keep draining the action_queue so Rack Manager commands
              (e.g. POWER_OFF) arriving during the delay are acted on immediately.
-          2. Check for CRITICAL leaks/alerts.
-          3. If none found and Switch-Host is OFFLINE, power it ON.
-          4. Update HOST_STATE.
+          2. After the delay, check if Rack Manager issued an explicit POWER_ON or
+             POWER_OFF command (CMD_STATUS_IN_PROGRESS or CMD_STATUS_DONE in
+             RACK_MANAGER_COMMAND table). If so, skip automatic power-on — the Rack
+             Manager has already dictated the desired state.
+          3. Check for CRITICAL leaks/alerts.
+          4. If none found and Switch-Host is OFFLINE, power it ON.
+          5. Update HOST_STATE.
         """
         boot_delay = self.policy_reader.get_power_on_delay()
         self.log_notice("Waiting {}s before initial Switch-Host power-on check "
@@ -991,6 +1025,15 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                 self._execute_action_item(item)
             except queue.Empty:
                 continue
+
+        # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
+        # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
+        # table for any entry whose command is POWER_ON/POWER_OFF and whose status
+        # is IN_PROGRESS or DONE (set by the event handler and on_complete callback).
+        if self._rack_mgr_power_cmd_executed():
+            self.log_notice("STARTUP: Rack Manager POWER_ON/POWER_OFF command executed "
+                            "during boot delay; skipping automatic power-on")
+            return
 
         if self.critical_event_checker.has_any_critical_event():
             self.log_warning("Critical leak or Rack Manager alert detected at startup; NOT powering on Switch-Host")
