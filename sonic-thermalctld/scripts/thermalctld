@@ -852,13 +852,14 @@ class TemperatureUpdater(logger.Logger):
                 self._refresh_temperature_status(parent_name, thermal, thermal_index)
         return True
 
-    def _collect_sfp_thermals(self, available_thermals, parent_name, sfp_index, thermals):
+    def _collect_sfp_thermals(self, available_thermals, parent_name, sfp_index, thermals, now=None):
         """
         Process SFP thermals, reading temperature from Redis.
         :param available_thermals: Set to track available thermals
         :param parent_name: Name of the parent SFP
         :param sfp_index: SFP index for port name lookup
         :param thermals: Iterable of thermal objects from get_all_thermals()
+        :param now: Reference timestamp for this cycle
         :return: False if task_stopping_event is set, True otherwise
         """
         # TODO: This Redis-based approach for reading SFP temperature is temporary.
@@ -870,7 +871,9 @@ class TemperatureUpdater(logger.Logger):
                 return False
             available_thermals.add((thermal, parent_name, thermal_index))
             if port_name:
-                self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
+                name = try_get(thermal.get_name, '{} Thermal {}'.format(parent_name, thermal_index + 1))
+                if self._should_update_thermal(name, now=now):
+                    self._refresh_temperature_status(parent_name, thermal, thermal_index, is_sfp=True, port_name=port_name)
         return True
 
     def update(self, now=None):
@@ -902,7 +905,7 @@ class TemperatureUpdater(logger.Logger):
 
         for sfp_index, sfp in enumerate(self.chassis.get_all_sfps()):
             if not self._collect_sfp_thermals(available_thermals, 'SFP {}'.format(sfp_index + 1),
-                                              sfp_index, sfp.get_all_thermals()):
+                                              sfp_index, sfp.get_all_thermals(), now=now):
                 return
 
         # As there are no modules present in DPU, this IF condition is not updated to consider DPU chassis
@@ -915,7 +918,7 @@ class TemperatureUpdater(logger.Logger):
 
                 for sfp_index, sfp in enumerate(module.get_all_sfps()):
                     if not self._collect_sfp_thermals(available_thermals, '{} SFP {}'.format(module_name, sfp_index + 1),
-                                                      sfp_index, sfp.get_all_thermals()):
+                                                      sfp_index, sfp.get_all_thermals(), now=now):
                         return
 
                 for psu_index, psu in enumerate(module.get_all_psus()):
@@ -1140,7 +1143,7 @@ class ThermalMonitor(ThreadTaskBase):
 
         # Fan update interval: minimum of fan_drawer and psu intervals
         fan_intervals = [i for i in [fan_drawer_interval, psu_interval] if i is not None]
-        self._fan_update_interval = min(fan_intervals) if fan_intervals else None
+        self._fan_update_interval = min(fan_intervals) if fan_intervals else update_interval
         self._last_fan_update = 0
 
         self.fan_updater = FanUpdater(chassis, self.task_stopping_event)

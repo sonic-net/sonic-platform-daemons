@@ -1945,10 +1945,10 @@ class TestThermalMonitorPollingIntervals(object):
             polling_intervals={'fan_drawer': 20, 'psu': 15, 'thermals': {}})
         assert monitor._fan_update_interval == 15
 
-    def test_fan_update_interval_none_when_no_intervals(self):
+    def test_fan_update_interval_defaults_to_update_interval(self):
         chassis = MockChassis()
         monitor = thermalctld.ThermalMonitor(chassis, 5, 60, 30)
-        assert monitor._fan_update_interval is None
+        assert monitor._fan_update_interval == 60
 
     def test_update_interval_adjusted_for_fast_polling(self):
         chassis = MockChassis()
@@ -2000,15 +2000,26 @@ class TestThermalMonitorPollingIntervals(object):
         monitor.main()
         assert monitor.fan_updater.update.call_count == 1
 
-    def test_main_always_updates_fans_when_no_interval(self):
+    def test_main_throttles_fan_update_at_default_interval(self):
         chassis = MockChassis()
         monitor = thermalctld.ThermalMonitor(chassis, 5, 60, 30)
         monitor.fan_updater.update = mock.MagicMock()
         monitor.temperature_updater.update = mock.MagicMock()
 
+        # First call — should update fans (last_fan_update == 0)
         monitor.main()
+        assert monitor.fan_updater.update.call_count == 1
+
+        monitor.fan_updater.update.reset_mock()
+
+        # Second call immediately — should skip fans (default 60s not elapsed)
         monitor.main()
-        assert monitor.fan_updater.update.call_count == 2
+        assert monitor.fan_updater.update.call_count == 0
+
+        # After interval elapses, should update again
+        monitor._last_fan_update = time.time() - 61
+        monitor.main()
+        assert monitor.fan_updater.update.call_count == 1
 
 
 class TestCollectFansEarlyReturn(object):
@@ -2068,3 +2079,24 @@ class TestCollectThermalsEarlyReturn(object):
         available = set()
         result = updater._collect_sfp_thermals(available, 'SFP 1', 0, [MockThermal()])
         assert result is False
+
+    def test_collect_sfp_thermals_throttled_by_default_interval(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(
+            chassis, threading.Event(), default_interval=60)
+        updater._refresh_temperature_status = mock.MagicMock()
+        updater._get_port_name_by_index = mock.MagicMock(return_value='Ethernet0')
+        available = set()
+        now = time.time()
+
+        # First call — should refresh (last update time is 0)
+        result = updater._collect_sfp_thermals(available, 'SFP 1', 0, [MockThermal()], now=now)
+        assert result is True
+        assert updater._refresh_temperature_status.call_count == 1
+
+        updater._refresh_temperature_status.reset_mock()
+
+        # Second call immediately — should skip (60s not elapsed)
+        result = updater._collect_sfp_thermals(available, 'SFP 1', 0, [MockThermal()], now=now + 1)
+        assert result is True
+        assert updater._refresh_temperature_status.call_count == 0
