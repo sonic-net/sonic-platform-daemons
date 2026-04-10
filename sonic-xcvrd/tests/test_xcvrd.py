@@ -2953,20 +2953,143 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    @pytest.mark.parametrize("app_new, lane_appl_code, expected", [
-        (2, {0 : 1, 1 : 1, 2 : 1, 3 : 1, 4 : 2, 5 : 2, 6 : 2, 7 : 2}, True),
-        (0, {0 : 1, 1 : 1, 2 : 1, 3 : 1}, True),
-        (1, {0 : 0, 1 : 0, 2 : 0, 3 : 0, 4 : 0, 5 : 0, 6 : 0, 7 : 0}, False)
+    @pytest.mark.parametrize("current_map, desired_map, expected", [
+        # Lanes 0-3 have app 1 but desired is 2 for all → decommission
+        ([1,1,1,1,2,2,2,2], [2,2,2,2,2,2,2,2], True),
+        # Lanes 0-3 active with app 1, desired is 0 → decommission
+        ([1,1,1,1,0,0,0,0], [0,0,0,0,0,0,0,0], True),
+        # All lanes unused, desired has app 1 → no decommission
+        ([0,0,0,0,0,0,0,0], [1,1,1,1,0,0,0,0], False),
+        # Mixed mode: adding new DPs on unused lanes → no decommission
+        ([3,3,3,3,0,0,0,0], [3,3,3,3,1,1,1,1], False),
+        # Mixed mode steady state: all lanes match → no decommission
+        ([3,3,3,3,1,1,1,1], [3,3,3,3,1,1,1,1], False),
      ])
-    def test_CmisManagerTask_is_decommission_required(self, app_new, lane_appl_code, expected):
+    def test_CmisManagerTask_is_decommission_required(self, current_map, desired_map, expected):
         mock_xcvr_api = MagicMock()
-        def get_application(lane):
-            return lane_appl_code.get(lane, 0)
-        mock_xcvr_api.get_application = MagicMock(side_effect=get_application)
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: current_map[lane])
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
-        assert task.is_decommission_required(mock_xcvr_api, app_new) == expected
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') == expected
+
+    def test_CmisManagerTask_get_desired_app_map(self):
+        """Test get_desired_app_map with mixed mode, skipped siblings, and edge cases"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        # Mock cfg_port_tbl
+        cfg_port_tbl = MagicMock()
+
+        # CONFIG_DB has 5 keys:
+        #   Ethernet0  (index=1, 400G, 8 lanes, subport=0) — non-breakout
+        #   Ethernet8  (index=2, different pport — should be skipped)
+        #   Ethernet16 (index=1, but missing speed — should be skipped)
+        #   Ethernet24 (index not found — should be skipped)
+        #   Ethernet32 (index=1, get returns not found — should be skipped)
+        cfg_port_tbl.getKeys = MagicMock(return_value=[
+            'Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet32'
+        ])
+
+        def hget_side_effect(key, field):
+            data = {
+                'Ethernet0':  {'index': '1'},
+                'Ethernet8':  {'index': '2'},
+                'Ethernet16': {'index': '1'},
+                'Ethernet32': {'index': '1'},
+            }
+            if key in data and field in data[key]:
+                return (True, data[key][field])
+            return (False, None)
+        cfg_port_tbl.hget = MagicMock(side_effect=hget_side_effect)
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0':  (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0'), ('index', '1')]),
+                'Ethernet16': (True, [('lanes', '1,2,3,4'), ('index', '1')]),  # missing speed
+                'Ethernet32': (False, []),
+            }
+            return data.get(key, (False, []))
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+
+        # get_cmis_application_desired returns app code 3 for 8-lane 400G
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', return_value=3):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [3, 3, 3, 3, 3, 3, 3, 3]
+
+    def test_CmisManagerTask_get_desired_app_map_mixed_mode(self):
+        """Test get_desired_app_map with mixed application codes (1x400G + 4x100G)"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet5', 'Ethernet6', 'Ethernet7'])
+
+        def hget_side_effect(key, field):
+            if field == 'index':
+                return (True, '1')
+            return (False, None)
+        cfg_port_tbl.hget = MagicMock(side_effect=hget_side_effect)
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0': (True, [('speed', '400000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]),
+                'Ethernet4': (True, [('speed', '100000'), ('lanes', '5'), ('subport', '5'), ('index', '1')]),
+                'Ethernet5': (True, [('speed', '100000'), ('lanes', '6'), ('subport', '6'), ('index', '1')]),
+                'Ethernet6': (True, [('speed', '100000'), ('lanes', '7'), ('subport', '7'), ('index', '1')]),
+                'Ethernet7': (True, [('speed', '100000'), ('lanes', '8'), ('subport', '8'), ('index', '1')]),
+            }
+            return data.get(key, (False, []))
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+
+        # app=3 for 4-lane 400G, app=1 for 1-lane 100G
+        def get_app_desired(api, lane_count, speed):
+            if lane_count == 4 and speed == 400000:
+                return 3
+            if lane_count == 1 and speed == 100000:
+                return 1
+            return None
+        # host_lane_assignment_option: all lanes assignable
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', side_effect=get_app_desired):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [3, 3, 3, 3, 1, 1, 1, 1]
+
+    def test_CmisManagerTask_get_desired_app_map_no_matching_app(self):
+        """Test get_desired_app_map when get_cmis_application_desired returns None"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
+        cfg_port_tbl.hget = MagicMock(return_value=(True, '1'))
+        cfg_port_tbl.get = MagicMock(return_value=(True, [('speed', '999999'), ('lanes', '1,2,3,4'), ('subport', '0'), ('index', '1')]))
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', return_value=None):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [0, 0, 0, 0, 0, 0, 0, 0]
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',

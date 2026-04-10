@@ -381,24 +381,84 @@ class CmisManagerTask(threading.Thread):
             == CMIS_STATE_FAILED
         )
 
-    def is_decommission_required(self, api, app_new):
+    def get_desired_app_map(self, api, lport):
         """
-        Check if the CMIS decommission (i.e. reset appl code to 0 for all lanes
-        of the entire physical port) is required
+        Build a per-lane desired application code map for all lanes of the
+        physical port that lport belongs to, by reading sibling logical port
+        configurations from the CONFIG_DB PORT table.
 
         Args:
             api:
                 XcvrApi object
-            app_new:
-                Integer, the new desired appl code
+            lport:
+                String, logical port name triggering this check
+
+        Returns:
+            list of CMIS_MAX_HOST_LANES integers, desired app code per lane
+            (0 = unused/unassigned)
+        """
+        desired_map = [0] * self.CMIS_MAX_HOST_LANES
+        pport = self.port_dict[lport].get('index')
+        cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
+
+        for sibling_lport in cfg_port_tbl.getKeys():
+            # Filter by physical port index to ensure sibling logical ports of the same physical port are considered
+            found, idx_str = cfg_port_tbl.hget(sibling_lport, 'index')
+            if not found or int(idx_str) != pport:
+                continue
+
+            found, port_info = cfg_port_tbl.get(sibling_lport)
+            if not found:
+                continue
+            port_info_dict = dict(port_info)
+
+            sibling_speed = int(port_info_dict.get('speed', 0))
+            sibling_lanes = port_info_dict.get('lanes', '')
+            sibling_subport = int(port_info_dict.get('subport', 0))
+
+            if not sibling_speed or not sibling_lanes:
+                continue
+
+            sibling_host_lane_count = len(sibling_lanes.split(','))
+            sibling_appl = common.get_cmis_application_desired(api, sibling_host_lane_count, sibling_speed)
+            if sibling_appl is None:
+                continue
+
+            sibling_mask = self.get_cmis_host_lanes_mask(api, sibling_appl, sibling_host_lane_count, sibling_subport)
+            for lane in range(self.CMIS_MAX_HOST_LANES):
+                if (1 << lane) & sibling_mask:
+                    desired_map[lane] = sibling_appl
+
+        return desired_map
+
+    def is_decommission_required(self, api, lport):
+        """
+        Check if CMIS decommission (reset AppSel to 0 for all lanes of the
+        physical port) is required. Per CMIS spec, a DP's lane width can only
+        be changed while in DPDeactivated state, so decommission is needed when
+        any currently active lane needs a different application code.
+
+        Lanes that are currently unused (AppSel=0) are ignored — adding new DPs
+        on unused lanes does not require decommission.
+
+        Args:
+            api:
+                XcvrApi object
+            lport:
+                String, logical port name triggering the check
         Returns:
             True, if decommission is required
             False, if decommission is not required
         """
+        desired_map = self.get_desired_app_map(api, lport)
+        current_map = [api.get_application(lane) for lane in range(self.CMIS_MAX_HOST_LANES)]
+
+        self.log_notice("{}: current app map {}, desired app map {}".format(lport, current_map, desired_map))
+
         for lane in range(self.CMIS_MAX_HOST_LANES):
-            app_cur = api.get_application(lane)
-            if app_cur != 0 and app_cur != app_new:
+            if current_map[lane] != 0 and current_map[lane] != desired_map[lane]:
                 return True
+
         return False
 
     def is_cmis_application_update_required(self, api, app_new, host_lanes_mask):
@@ -778,7 +838,7 @@ class CmisManagerTask(threading.Thread):
         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
-        if self.is_decommission_required(api, appl):
+        if self.is_decommission_required(api, lport):
             self.set_decomm_pending(lport)
 
         if self.is_decomm_lead_lport(lport):
