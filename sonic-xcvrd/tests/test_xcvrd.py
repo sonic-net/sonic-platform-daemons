@@ -2990,34 +2990,25 @@ class TestXcvrdScript(object):
         #   Ethernet0  (index=1, 400G, 8 lanes, subport=0) — non-breakout
         #   Ethernet8  (index=2, different pport — should be skipped)
         #   Ethernet16 (index=1, but missing speed — should be skipped)
-        #   Ethernet24 (index not found — should be skipped)
-        #   Ethernet32 (index=1, get returns not found — should be skipped)
+        #   Ethernet24 (missing index in full hash — should be skipped)
+        #   Ethernet32 (get returns not found — should be skipped)
         cfg_port_tbl.getKeys = MagicMock(return_value=[
             'Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet32'
         ])
 
-        def hget_side_effect(key, field):
-            data = {
-                'Ethernet0':  {'index': '1'},
-                'Ethernet8':  {'index': '2'},
-                'Ethernet16': {'index': '1'},
-                'Ethernet32': {'index': '1'},
-            }
-            if key in data and field in data[key]:
-                return (True, data[key][field])
-            return (False, None)
-        cfg_port_tbl.hget = MagicMock(side_effect=hget_side_effect)
-
         def get_side_effect(key):
             data = {
                 'Ethernet0':  (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0'), ('index', '1')]),
+                'Ethernet8':  (True, [('speed', '100000'), ('lanes', '9'), ('subport', '1'), ('index', '2')]),
                 'Ethernet16': (True, [('lanes', '1,2,3,4'), ('index', '1')]),  # missing speed
+                'Ethernet24': (True, [('speed', '100000'), ('lanes', '1')]),    # missing index
                 'Ethernet32': (False, []),
             }
             return data.get(key, (False, []))
         cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
 
         task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
 
         # get_cmis_application_desired returns app code 3 for 8-lane 400G
         mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
@@ -3038,12 +3029,6 @@ class TestXcvrdScript(object):
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet5', 'Ethernet6', 'Ethernet7'])
 
-        def hget_side_effect(key, field):
-            if field == 'index':
-                return (True, '1')
-            return (False, None)
-        cfg_port_tbl.hget = MagicMock(side_effect=hget_side_effect)
-
         def get_side_effect(key):
             data = {
                 'Ethernet0': (True, [('speed', '400000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]),
@@ -3056,6 +3041,7 @@ class TestXcvrdScript(object):
         cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
 
         task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
 
         # app=3 for 4-lane 400G, app=1 for 1-lane 100G
         def get_app_desired(api, lane_count, speed):
@@ -3082,14 +3068,43 @@ class TestXcvrdScript(object):
 
         cfg_port_tbl = MagicMock()
         cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
-        cfg_port_tbl.hget = MagicMock(return_value=(True, '1'))
         cfg_port_tbl.get = MagicMock(return_value=(True, [('speed', '999999'), ('lanes', '1,2,3,4'), ('subport', '0'), ('index', '1')]))
         task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
 
         with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', return_value=None):
             result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
 
         assert result == [0, 0, 0, 0, 0, 0, 0, 0]
+
+    def test_CmisManagerTask_get_desired_app_map_uses_gearbox_lane_count(self):
+        """Test get_desired_app_map uses gearbox lane count over PORT table lanes"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
+        # PORT table lanes suggest 4 lanes, but gearbox says 2 for this lport.
+        cfg_port_tbl.get = MagicMock(return_value=(True, [('speed', '200000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]))
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={'Ethernet0': 2})
+
+        # Return app only when lane_count comes from gearbox (2 lanes) for speed 200G.
+        def get_app_desired(api, lane_count, speed):
+            if lane_count == 2 and speed == 200000:
+                return 2
+            return None
+
+        # app=2 with host_lane_count=2 and subport=1 should map lanes 0 and 1.
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', side_effect=get_app_desired):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [2, 2, 0, 0, 0, 0, 0, 0]
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',

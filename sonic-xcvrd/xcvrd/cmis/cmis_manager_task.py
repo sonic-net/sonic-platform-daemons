@@ -400,26 +400,40 @@ class CmisManagerTask(threading.Thread):
         desired_map = [0] * self.CMIS_MAX_HOST_LANES
         pport = self.port_dict[lport].get('index')
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
+        if cfg_port_tbl is None:
+            self.log_error("{}: cfg_port_tbl is None while building desired app map".format(lport))
+            return desired_map
+        gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
         for sibling_lport in cfg_port_tbl.getKeys():
-            # Filter by physical port index to ensure sibling logical ports of the same physical port are considered
-            found, idx_str = cfg_port_tbl.hget(sibling_lport, 'index')
-            if not found or int(idx_str) != pport:
-                continue
-
+            # Single read per key: use full hash and derive index from fields.
             found, port_info = cfg_port_tbl.get(sibling_lport)
             if not found:
                 continue
             port_info_dict = dict(port_info)
 
-            sibling_speed = int(port_info_dict.get('speed', 0))
+            sibling_pport = port_info_dict.get('index')
+            if sibling_pport is None:
+                continue
+
+            try:
+                if int(sibling_pport) != pport:
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+            try:
+                sibling_speed = int(port_info_dict.get('speed', 0))
+                sibling_subport = int(port_info_dict.get('subport', 0))
+            except (TypeError, ValueError):
+                continue
+
             sibling_lanes = port_info_dict.get('lanes', '')
-            sibling_subport = int(port_info_dict.get('subport', 0))
 
             if not sibling_speed or not sibling_lanes:
                 continue
 
-            sibling_host_lane_count = len(sibling_lanes.split(','))
+            sibling_host_lane_count = self.get_host_lane_count(sibling_lport, sibling_lanes, gearbox_lanes_dict)
             sibling_appl = common.get_cmis_application_desired(api, sibling_host_lane_count, sibling_speed)
             if sibling_appl is None:
                 continue
