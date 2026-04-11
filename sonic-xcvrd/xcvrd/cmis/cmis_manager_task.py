@@ -60,6 +60,7 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.platform_chassis = platform_chassis
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.is_fast_reboot_enabled = False
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -715,8 +716,6 @@ class CmisManagerTask(threading.Thread):
         return expired_time <= current_time
 
     def process_single_lport(self, lport, info, gearbox_lanes_dict):
-        is_fast_reboot = common.is_fast_reboot_enabled()
-
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
         if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
             if state != CMIS_STATE_READY:
@@ -874,7 +873,7 @@ class CmisManagerTask(threading.Thread):
 
                 if self.port_dict[lport]['host_tx_ready'] != 'true' or \
                         self.port_dict[lport]['admin_status'] != 'up':
-                    if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
+                    if self.is_fast_reboot_enabled and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                         self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
                     else:
                         self.log_notice("{} Forcing Tx laser OFF".format(lport))
@@ -1106,6 +1105,9 @@ class CmisManagerTask(threading.Thread):
 
             # Cache gearbox line lanes dictionary once per iteration over all ports
             gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+
+            # Cache fast reboot enabled state once per iteration over all ports
+            self.is_fast_reboot_enabled = common.is_fast_reboot_enabled()
 
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():
