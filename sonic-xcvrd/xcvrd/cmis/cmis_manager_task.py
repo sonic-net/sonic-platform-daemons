@@ -381,7 +381,7 @@ class CmisManagerTask(threading.Thread):
             == CMIS_STATE_FAILED
         )
 
-    def get_desired_app_map(self, api, lport):
+    def get_desired_app_map(self, api, lport, gearbox_lanes_dict=None):
         """
         Build a per-lane desired application code map for all lanes of the
         physical port that lport belongs to, by reading sibling logical port
@@ -392,6 +392,9 @@ class CmisManagerTask(threading.Thread):
                 XcvrApi object
             lport:
                 String, logical port name triggering this check
+            gearbox_lanes_dict:
+                Optional dictionary of gearbox line lanes counts keyed by
+                logical port. When omitted, it is fetched from table helper.
 
         Returns:
             list of CMIS_MAX_HOST_LANES integers, desired app code per lane
@@ -403,7 +406,8 @@ class CmisManagerTask(threading.Thread):
         if cfg_port_tbl is None:
             self.log_error("{}: cfg_port_tbl is None while building desired app map".format(lport))
             return desired_map
-        gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+        if gearbox_lanes_dict is None:
+            gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
         for sibling_lport in cfg_port_tbl.getKeys():
             # Single read per key: use full hash and derive index from fields.
@@ -445,7 +449,7 @@ class CmisManagerTask(threading.Thread):
 
         return desired_map
 
-    def is_decommission_required(self, api, lport):
+    def is_decommission_required(self, api, lport, gearbox_lanes_dict=None):
         """
         Check if CMIS decommission (reset AppSel to 0 for all lanes of the
         physical port) is required. Per CMIS spec, a DP's lane width can only
@@ -460,11 +464,14 @@ class CmisManagerTask(threading.Thread):
                 XcvrApi object
             lport:
                 String, logical port name triggering the check
+            gearbox_lanes_dict:
+                Optional dictionary of gearbox line lanes counts keyed by
+                logical port. When omitted, desired app map helper fetches it.
         Returns:
             True, if decommission is required
             False, if decommission is not required
         """
-        desired_map = self.get_desired_app_map(api, lport)
+        desired_map = self.get_desired_app_map(api, lport, gearbox_lanes_dict)
         current_map = [api.get_application(lane) for lane in range(self.CMIS_MAX_HOST_LANES)]
 
         self.log_notice("{}: current app map {}, desired app map {}".format(lport, current_map, desired_map))
@@ -852,7 +859,8 @@ class CmisManagerTask(threading.Thread):
         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
-        if self.is_decommission_required(api, lport):
+        gearbox_lanes_dict = self.port_dict[lport].get('gearbox_lanes_dict')
+        if self.is_decommission_required(api, lport, gearbox_lanes_dict):
             self.set_decomm_pending(lport)
 
         if self.is_decomm_lead_lport(lport):
@@ -1253,6 +1261,7 @@ class CmisManagerTask(threading.Thread):
             self.port_dict[lport]['host_lane_count'] = host_lane_count
             self.port_dict[lport]['api'] = api
             self.port_dict[lport]['sfp'] = sfp
+            self.port_dict[lport]['gearbox_lanes_dict'] = gearbox_lanes_dict
         except AttributeError:
             # Skip if these essential routines are not available
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
