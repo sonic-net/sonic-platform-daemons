@@ -424,12 +424,19 @@ class CmisManagerTask(threading.Thread):
                 if int(sibling_pport) != pport:
                     continue
             except (TypeError, ValueError):
+                self.log_error("{}: invalid index value for sibling port {}: {}".format(
+                    lport, sibling_lport, sibling_pport))
                 continue
 
+            sibling_speed_raw = port_info_dict.get('speed', 0)
+            sibling_subport_raw = port_info_dict.get('subport', 0)
+
             try:
-                sibling_speed = int(port_info_dict.get('speed', 0))
-                sibling_subport = int(port_info_dict.get('subport', 0))
+                sibling_speed = int(sibling_speed_raw)
+                sibling_subport = int(sibling_subport_raw)
             except (TypeError, ValueError):
+                self.log_error("{}: invalid speed or subport value for sibling port {}: speed={}, subport={}".format(
+                    lport, sibling_lport, sibling_speed_raw, sibling_subport_raw))
                 continue
 
             sibling_lanes = port_info_dict.get('lanes', '')
