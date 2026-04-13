@@ -352,19 +352,36 @@ class TestPolicyReader:
 
     def test_get_power_on_delay_custom(self, policy_reader):
         tbl = Table(None, bmcctld.SWITCH_HOST_POWER_ON_DELAY_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_BOOT_DELAY: "60"})
+        _set_table_entry(tbl, "default", {bmcctld.FIELD_POWER_ON_DELAY: "60"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_power_on_delay() == 60.0
 
-    def test_get_shutdown_delay_default(self, policy_reader):
+    def test_get_graceful_shutdown_timeout_default(self, policy_reader):
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
-            assert policy_reader.get_shutdown_delay() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
+            assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
 
-    def test_get_shutdown_delay_zero(self, policy_reader):
+    def test_get_graceful_shutdown_timeout_zero(self, policy_reader):
         tbl = Table(None, bmcctld.SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_SHUTDOWN_DELAY: "0"})
+        _set_table_entry(tbl, "default", {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "0"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
-            assert policy_reader.get_shutdown_delay() == 0.0
+            assert policy_reader.get_graceful_shutdown_timeout() == 0.0
+
+    def test_get_switch_host_admin_status_default(self, policy_reader):
+        """When no CHASSIS_MODULE entry exists, admin_status defaults to 'down'."""
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
+            assert policy_reader.get_switch_host_admin_status() == bmcctld.ADMIN_DOWN
+
+    def test_get_switch_host_admin_status_up(self, policy_reader):
+        tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert policy_reader.get_switch_host_admin_status() == bmcctld.ADMIN_UP
+
+    def test_get_switch_host_admin_status_down(self, policy_reader):
+        tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert policy_reader.get_switch_host_admin_status() == bmcctld.ADMIN_DOWN
 
     def test_get_leak_control_policy_defaults(self, policy_reader):
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
@@ -459,7 +476,7 @@ class TestGracefulShutdownHandler:
 
     def test_powering_off_state_set_before_gnoi(self, graceful_shutdown, chassis):
         """STATE_DB shows POWERING_OFF before gNOI shutdown is issued."""
-        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
         captured = {}
         original = graceful_shutdown.controller._update_host_state
         def capture_first(power_state, device_status=None):
@@ -472,20 +489,20 @@ class TestGracefulShutdownHandler:
         assert captured.get('device_status') == bmcctld.SWITCH_HOST_POWERING_OFF
 
     def test_shutdown_delay_zero_skips_gnoi(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=0)
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=0)
         graceful_shutdown.execute()
         # set_admin_state(False) must be called on the Switch-Host module
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_fails_triggers_power_off(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=False)
         graceful_shutdown.execute()
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_success_and_host_goes_offline_still_calls_power_off(self, graceful_shutdown, chassis):
         """Even after graceful OFFLINE, power_off is always issued to remove power."""
-        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = graceful_shutdown.execute()
@@ -493,7 +510,7 @@ class TestGracefulShutdownHandler:
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_timeout_triggers_power_off(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
         # Simulate timeout: host never goes OFFLINE within shutdown_delay
         with patch.object(graceful_shutdown.controller, '_verify_oper_status', return_value=False):
@@ -928,8 +945,29 @@ class TestBmcctldDaemonInitialSequence:
         with patch('sonic_platform.platform.Platform') as MockPlatform:
             MockPlatform.return_value.get_chassis.return_value = chassis
             daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+            # Default to admin_status=up so tests exercise the power-on logic
+            daemon.policy_reader.get_switch_host_admin_status = MagicMock(return_value=bmcctld.ADMIN_UP)
             daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
         return daemon
+
+    def test_skips_power_on_when_admin_status_down(self, chassis):
+        """When admin_status=down (default), Switch-Host must not be powered on at startup."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_switch_host_admin_status = MagicMock(return_value=bmcctld.ADMIN_DOWN)
+        daemon.controller.power_on = MagicMock()
+        daemon._initial_power_on_sequence()
+        daemon.controller.power_on.assert_not_called()
+
+    def test_skips_power_on_when_admin_status_not_set(self, chassis):
+        """When no CHASSIS_MODULE entry exists, default is down — Switch-Host stays off."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        # Simulate missing entry — get_switch_host_admin_status returns ADMIN_DOWN
+        daemon.policy_reader.get_switch_host_admin_status = MagicMock(return_value=bmcctld.ADMIN_DOWN)
+        daemon.controller.power_on = MagicMock()
+        daemon._initial_power_on_sequence()
+        daemon.controller.power_on.assert_not_called()
 
     def test_powers_on_when_no_leak_and_host_offline(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
