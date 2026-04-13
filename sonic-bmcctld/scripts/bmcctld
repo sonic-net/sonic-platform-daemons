@@ -22,13 +22,13 @@
                              keeps STATE_DB:HOST_STATE current.  Writes
                              transitional states (POWERING_ON/OFF/CYCLING)
                              before each call; rolls back on exception.
-      PolicyReader           Reads power_on_delay and graceful_shutdown_timeout from CONFIG_DB.
+      PolicyReader           Reads boot_delay and shutdown_timeout from CONFIG_DB.
       CriticalEventChecker   Checks STATE_DB for active critical system leaks or
                              Rack Manager alerts; gates power-on decisions.
       GracefulShutdownHandler  Sends gNOI System.Reboot(COLD), waits for OFFLINE,
                              then always issues power_off() to ensure power is
                              removed.  Falls back to immediate power_off if gNOI
-                             fails or graceful_shutdown_timeout is 0.
+                             fails or shutdown_delay is 0.
       BmcEventHandler        Runs on the "bmcctld-events" thread.  Subscribes to
                              STATE_DB and enqueues ActionItems for the main thread.
       BmcctldDaemon          Main daemon.  Starts the event thread, runs the
@@ -155,8 +155,8 @@ RACK_MANAGER_COMMAND_TABLE = "RACK_MANAGER_COMMAND"
 RACK_MANAGER_ALERT_TABLE = "RACK_MANAGER_ALERT"
 
 # Field names
-FIELD_POWER_ON_DELAY = "power_on_delay"
-FIELD_GRACEFUL_SHUTDOWN_TIMEOUT = "graceful_shutdown_timeout"
+FIELD_BOOT_DELAY = "boot_delay"
+FIELD_SHUTDOWN_DELAY = "shutdown_delay"
 FIELD_DEVICE_POWER_STATE = "device_power_state"
 FIELD_DEVICE_STATUS = "device_status"
 FIELD_LAST_CHANGE_TIMESTAMP = "last_change_timestamp"
@@ -225,11 +225,8 @@ DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
-DEFAULT_POWER_ON_DELAY_SECS = -1    # -1 = keep Switch-Host powered off until explicitly configured
+DEFAULT_POWER_ON_DELAY_SECS = 0     # 0 seconds - power on Switch-Host immediately by default
 DEFAULT_SHUTDOWN_DELAY_SECS = 120   # 2 minutes - wait for graceful shutdown before force
-
-# Sentinel value meaning "do not auto-power-on Switch-Host"
-POWER_ON_DELAY_DISABLED = -1
 
 # Switch-Host module name key in CHASSIS_MODULE table
 SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
@@ -478,23 +475,23 @@ class PolicyReader(EventLogger):
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
     def get_power_on_delay(self):
-        """Return power_on_delay in seconds from SWITCH_HOST_POWER_ON_DELAY|default."""
+        """Return boot_delay in seconds from SWITCH_HOST_POWER_ON_DELAY|default."""
         tbl = swsscommon.Table(self.config_db, SWITCH_HOST_POWER_ON_DELAY_TABLE)
         result = tbl.get("default")
         if result and result[0]:
             try:
-                return float(fvs_to_dict(result[1]).get(FIELD_POWER_ON_DELAY, DEFAULT_POWER_ON_DELAY_SECS))
+                return float(fvs_to_dict(result[1]).get(FIELD_BOOT_DELAY, DEFAULT_POWER_ON_DELAY_SECS))
             except (ValueError, TypeError):
                 pass
         return DEFAULT_POWER_ON_DELAY_SECS
 
-    def get_graceful_shutdown_timeout(self):
-        """Return graceful_shutdown_timeout in seconds from SWITCH_HOST_SHUTDOWN_TIMEOUT|default."""
+    def get_shutdown_delay(self):
+        """Return shutdown_delay in seconds from SWITCH_HOST_SHUTDOWN_TIMEOUT|default."""
         tbl = swsscommon.Table(self.config_db, SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
         result = tbl.get("default")
         if result and result[0]:
             try:
-                return float(fvs_to_dict(result[1]).get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, DEFAULT_SHUTDOWN_DELAY_SECS))
+                return float(fvs_to_dict(result[1]).get(FIELD_SHUTDOWN_DELAY, DEFAULT_SHUTDOWN_DELAY_SECS))
             except (ValueError, TypeError):
                 pass
         return DEFAULT_SHUTDOWN_DELAY_SECS
@@ -583,7 +580,7 @@ class CriticalEventChecker(EventLogger):
 
 class GracefulShutdownHandler(EventLogger):
     """
-    Issues a GNOI soft shutdown to Switch-Host and waits graceful_shutdown_timeout
+    Issues a GNOI soft shutdown to Switch-Host and waits shutdown_delay
     seconds for it to go OFFLINE.  Falls back to hard power-off if
     GNOI fails or the timer expires.
     """
@@ -600,8 +597,8 @@ class GracefulShutdownHandler(EventLogger):
         then always issues power_off() to ensure power is removed.
         Returns True on success, False on failure.
         """
-        graceful_shutdown_timeout = self.policy_reader.get_graceful_shutdown_timeout()
-        self.log_notice("Initiating graceful shutdown of Switch-Host (timeout={}s)".format(graceful_shutdown_timeout))
+        shutdown_delay = self.policy_reader.get_shutdown_delay()
+        self.log_notice("Initiating graceful shutdown of Switch-Host (timeout={}s)".format(shutdown_delay))
 
         prior_power_state = self.controller.get_db_power_state()
         prior_status = self.controller.get_db_device_status()
@@ -609,9 +606,9 @@ class GracefulShutdownHandler(EventLogger):
         # Write transitional state immediately so STATE_DB reflects in-progress shutdown
         self.controller._update_host_state(POWER_STATE_GRACEFUL_SHUT, SWITCH_HOST_POWERING_OFF)
 
-        # graceful_shutdown_timeout == 0 means skip GNOI and force power-off immediately
-        if graceful_shutdown_timeout == 0:
-            self.log_notice("graceful_shutdown_timeout is 0: forcing immediate power OFF")
+        # shutdown_delay == 0 means skip GNOI and force power-off immediately
+        if shutdown_delay == 0:
+            self.log_notice("shutdown_delay is 0: forcing immediate power OFF")
             return self.controller.power_off()
 
         try:
@@ -624,15 +621,15 @@ class GracefulShutdownHandler(EventLogger):
         if not gnoi_ok:
             self.log_warning("GNOI shutdown request failed; proceeding with power OFF")
         else:
-            # Wait up to graceful_shutdown_timeout for Switch-Host to go OFFLINE gracefully
-            self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(graceful_shutdown_timeout))
+            # Wait up to shutdown_delay for Switch-Host to go OFFLINE gracefully
+            self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(shutdown_delay))
             went_offline = self.controller._verify_oper_status(
-                SWITCH_HOST_OFFLINE, graceful_shutdown_timeout, "graceful_shutdown")
+                SWITCH_HOST_OFFLINE, shutdown_delay, "graceful_shutdown")
             if went_offline:
                 self.log_notice("Switch-Host went OFFLINE gracefully; issuing power OFF")
             else:
                 self.log_warning("Graceful shutdown timed out after {}s; issuing power OFF".format(
-                    graceful_shutdown_timeout))
+                    shutdown_delay))
 
         return self.controller.power_off()
 
@@ -721,8 +718,6 @@ class BmcEventHandler(EventLogger):
             self.state_db, RACK_MANAGER_ALERT_TABLE)
         self.system_leak_sub = swsscommon.SubscriberStateTable(
             self.state_db, SYSTEM_LEAK_STATUS_TABLE)
-        self.power_on_delay_sub = swsscommon.SubscriberStateTable(
-            self.config_db, SWITCH_HOST_POWER_ON_DELAY_TABLE)
 
         # Map each subscriber to its handler
         self._sub_handlers = {
@@ -730,7 +725,6 @@ class BmcEventHandler(EventLogger):
             id(self.chassis_module_sub): self._handle_chassis_module,
             id(self.rack_mgr_alert_sub): self._handle_rack_mgr_alert,
             id(self.system_leak_sub): self._handle_system_leak,
-            id(self.power_on_delay_sub): self._handle_power_on_delay_change,
         }
 
         self.sel = swsscommon.Select()
@@ -738,7 +732,6 @@ class BmcEventHandler(EventLogger):
         self.sel.addSelectable(self.chassis_module_sub)
         self.sel.addSelectable(self.rack_mgr_alert_sub)
         self.sel.addSelectable(self.system_leak_sub)
-        self.sel.addSelectable(self.power_on_delay_sub)
 
     # ---- public ----
 
@@ -894,43 +887,6 @@ class BmcEventHandler(EventLogger):
         else:
             self.log_info("Rack Manager alert cleared for key={}; no action taken".format(key))
 
-    def _handle_power_on_delay_change(self, key, fvs):
-        """
-        Process SWITCH_HOST_POWER_ON_DELAY CONFIG_DB change.
-
-        If the new power_on_delay is >= 0 and Switch-Host is currently OFFLINE
-        with no critical events, enqueue a POWER_ON action.  A value of -1
-        (POWER_ON_DELAY_DISABLED) is treated as "keep powered off; do nothing".
-        """
-        raw = fvs.get(FIELD_POWER_ON_DELAY, "")
-        self.log_notice("SWITCH_HOST_POWER_ON_DELAY changed: key={} power_on_delay={}".format(key, raw))
-        try:
-            delay = float(raw)
-        except (ValueError, TypeError):
-            self.log_warning("Invalid power_on_delay value '{}'; ignoring".format(raw))
-            return
-
-        if delay == POWER_ON_DELAY_DISABLED:
-            self.log_notice("power_on_delay set to -1; Switch-Host will remain powered off")
-            return
-
-        if self.critical_event_checker.has_any_critical_event():
-            self.log_warning("power_on_delay changed but critical event present; NOT powering on Switch-Host")
-            return
-
-        tbl = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
-        result = tbl.get(HOST_STATE_KEY)
-        oper_status = NOT_AVAILABLE
-        if result and result[0]:
-            oper_status = fvs_to_dict(result[1]).get(FIELD_DEVICE_STATUS, NOT_AVAILABLE)
-
-        if str(oper_status).upper() == SWITCH_HOST_ONLINE:
-            self.log_notice("power_on_delay changed but Switch-Host already ONLINE; no action")
-            return
-
-        self.log_notice("power_on_delay changed to {}s; Switch-Host OFFLINE — issuing POWER_ON".format(delay))
-        self.action_queue.put(ActionItem(ACTION_POWER_ON, "CONFIG_POWER_ON_DELAY_CHANGED"))
-
     # ---- dispatch helpers ----
 
     def _dispatch_action(self, action, event_desc):
@@ -1042,27 +998,19 @@ class BmcctldDaemon(daemon_base.DaemonBase):
     def _initial_power_on_sequence(self):
         """
         BMC startup flow
-          1. If power_on_delay == -1 (POWER_ON_DELAY_DISABLED), keep Switch-Host
-             powered off; exit immediately. Power-on must be triggered explicitly
-             via CLI (admin_up) or Rack Manager command.
-          2. Sleep SWITCH_HOST_POWER_ON_DELAY seconds to allow Rack Manager to come
-             up and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
+          1. Sleep SWITCH_HOST_POWER_ON_DELAY to allow Rack Manager to come up
+             and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
              While sleeping, keep draining the action_queue so Rack Manager commands
              (e.g. POWER_OFF) arriving during the delay are acted on immediately.
-          3. After the delay, check if Rack Manager issued an explicit POWER_ON,
-             POWER_OFF, or GRACEFUL_SHUT command (CMD_STATUS_IN_PROGRESS or DONE in
-             RACK_MANAGER_COMMAND table). If so, skip automatic power-on.
-          4. Check for CRITICAL leaks/alerts.
-          5. If none found and Switch-Host is OFFLINE, power it ON.
-          6. Update HOST_STATE.
+          2. After the delay, check if Rack Manager issued an explicit POWER_ON or
+             POWER_OFF command (CMD_STATUS_IN_PROGRESS or CMD_STATUS_DONE in
+             RACK_MANAGER_COMMAND table). If so, skip automatic power-on — the Rack
+             Manager has already dictated the desired state.
+          3. Check for CRITICAL leaks/alerts.
+          4. If none found and Switch-Host is OFFLINE, power it ON.
+          5. Update HOST_STATE.
         """
         boot_delay = self.policy_reader.get_power_on_delay()
-
-        if boot_delay == POWER_ON_DELAY_DISABLED:
-            self.log_notice("STARTUP: power_on_delay=-1; Switch-Host will remain powered off. "
-                            "Use CLI or Rack Manager to power on.")
-            return
-
         self.log_notice("Waiting {}s before initial Switch-Host power-on check "
                         "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay))
 

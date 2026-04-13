@@ -352,19 +352,19 @@ class TestPolicyReader:
 
     def test_get_power_on_delay_custom(self, policy_reader):
         tbl = Table(None, bmcctld.SWITCH_HOST_POWER_ON_DELAY_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_POWER_ON_DELAY: "60"})
+        _set_table_entry(tbl, "default", {bmcctld.FIELD_BOOT_DELAY: "60"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_power_on_delay() == 60.0
 
-    def test_get_graceful_shutdown_timeout_default(self, policy_reader):
+    def test_get_shutdown_delay_default(self, policy_reader):
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
-            assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
+            assert policy_reader.get_shutdown_delay() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
 
-    def test_get_graceful_shutdown_timeout_zero(self, policy_reader):
+    def test_get_shutdown_delay_zero(self, policy_reader):
         tbl = Table(None, bmcctld.SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "0"})
+        _set_table_entry(tbl, "default", {bmcctld.FIELD_SHUTDOWN_DELAY: "0"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
-            assert policy_reader.get_graceful_shutdown_timeout() == 0.0
+            assert policy_reader.get_shutdown_delay() == 0.0
 
     def test_get_leak_control_policy_defaults(self, policy_reader):
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
@@ -459,7 +459,7 @@ class TestGracefulShutdownHandler:
 
     def test_powering_off_state_set_before_gnoi(self, graceful_shutdown, chassis):
         """STATE_DB shows POWERING_OFF before gNOI shutdown is issued."""
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
         captured = {}
         original = graceful_shutdown.controller._update_host_state
         def capture_first(power_state, device_status=None):
@@ -472,20 +472,20 @@ class TestGracefulShutdownHandler:
         assert captured.get('device_status') == bmcctld.SWITCH_HOST_POWERING_OFF
 
     def test_shutdown_delay_zero_skips_gnoi(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=0)
+        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=0)
         graceful_shutdown.execute()
         # set_admin_state(False) must be called on the Switch-Host module
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_fails_triggers_power_off(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=False)
         graceful_shutdown.execute()
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_success_and_host_goes_offline_still_calls_power_off(self, graceful_shutdown, chassis):
         """Even after graceful OFFLINE, power_off is always issued to remove power."""
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = graceful_shutdown.execute()
@@ -493,9 +493,9 @@ class TestGracefulShutdownHandler:
         assert chassis.switch_host.get_admin_state() is False
 
     def test_gnoi_timeout_triggers_power_off(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
+        graceful_shutdown.policy_reader.get_shutdown_delay = MagicMock(return_value=10)
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
-        # Simulate timeout: host never goes OFFLINE within graceful_shutdown_timeout
+        # Simulate timeout: host never goes OFFLINE within shutdown_delay
         with patch.object(graceful_shutdown.controller, '_verify_oper_status', return_value=False):
             graceful_shutdown.execute()
         assert chassis.switch_host.get_admin_state() is False
