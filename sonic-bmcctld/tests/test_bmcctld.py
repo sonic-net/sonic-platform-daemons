@@ -347,24 +347,39 @@ class TestPolicyReader:
         return tbl
 
     def test_get_power_on_delay_default(self, policy_reader):
+        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, power_on_delay defaults to 0."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
             assert policy_reader.get_power_on_delay() == bmcctld.DEFAULT_POWER_ON_DELAY_SECS
 
     def test_get_power_on_delay_custom(self, policy_reader):
-        tbl = Table(None, bmcctld.SWITCH_HOST_POWER_ON_DELAY_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_POWER_ON_DELAY: "60"})
+        tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_POWER_ON_DELAY: "60"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_power_on_delay() == 60.0
 
     def test_get_graceful_shutdown_timeout_default(self, policy_reader):
+        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 120."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
             assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
 
     def test_get_graceful_shutdown_timeout_zero(self, policy_reader):
-        tbl = Table(None, bmcctld.SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
-        _set_table_entry(tbl, "default", {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "0"})
+        tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "0"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_graceful_shutdown_timeout() == 0.0
+
+    def test_chassis_module_entry_all_fields(self, policy_reader):
+        """All three fields coexist in CHASSIS_MODULE|SWITCH-HOST."""
+        tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {
+            bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP,
+            bmcctld.FIELD_POWER_ON_DELAY: "300",
+            bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "90",
+        })
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert policy_reader.get_switch_host_admin_status() == bmcctld.ADMIN_UP
+            assert policy_reader.get_power_on_delay() == 300.0
+            assert policy_reader.get_graceful_shutdown_timeout() == 90.0
 
     def test_get_switch_host_admin_status_default(self, policy_reader):
         """When no CHASSIS_MODULE entry exists, admin_status defaults to 'down'."""

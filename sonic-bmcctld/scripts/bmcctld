@@ -22,8 +22,8 @@
                              keeps STATE_DB:HOST_STATE current.  Writes
                              transitional states (POWERING_ON/OFF/CYCLING)
                              before each call; rolls back on exception.
-      PolicyReader           Reads power_on_delay, graceful_shutdown_timeout, and
-                             admin_status from CONFIG_DB.
+      PolicyReader           Reads admin_status, power_on_delay, and
+                             graceful_shutdown_timeout from CHASSIS_MODULE|SWITCH-HOST in CONFIG_DB.
       CriticalEventChecker   Checks STATE_DB for active critical system leaks or
                              Rack Manager alerts; gates power-on decisions.
       GracefulShutdownHandler  Sends gNOI System.Reboot(COLD), waits for OFFLINE,
@@ -142,8 +142,6 @@ SIGNALS_TO_NAMES_DICT = dict(
 SYSLOG_IDENTIFIER = "bmcctld"
 
 # CONFIG_DB tables
-SWITCH_HOST_POWER_ON_DELAY_TABLE = "SWITCH_HOST_POWER_ON_DELAY"
-SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE = "SWITCH_HOST_SHUTDOWN_TIMEOUT"
 LEAK_CONTROL_POLICY_TABLE = "LEAK_CONTROL_POLICY"
 CHASSIS_MODULE_TABLE = "CHASSIS_MODULE"
 
@@ -475,35 +473,37 @@ class PolicyReader(EventLogger):
         super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
-    def get_power_on_delay(self):
-        """Return power_on_delay in seconds from SWITCH_HOST_POWER_ON_DELAY|default."""
-        tbl = swsscommon.Table(self.config_db, SWITCH_HOST_POWER_ON_DELAY_TABLE)
-        result = tbl.get("default")
+    def _get_chassis_module_entry(self):
+        """Return the CHASSIS_MODULE|SWITCH-HOST entry as a dict (empty dict if missing)."""
+        tbl = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
+        result = tbl.get(SWITCH_HOST_MODULE_KEY)
         if result and result[0]:
+            return fvs_to_dict(result[1])
+        return {}
+
+    def get_switch_host_admin_status(self):
+        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE|SWITCH-HOST (default: down)."""
+        return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, ADMIN_DOWN)
+
+    def get_power_on_delay(self):
+        """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
+        raw = self._get_chassis_module_entry().get(FIELD_POWER_ON_DELAY)
+        if raw is not None:
             try:
-                return float(fvs_to_dict(result[1]).get(FIELD_POWER_ON_DELAY, DEFAULT_POWER_ON_DELAY_SECS))
+                return float(raw)
             except (ValueError, TypeError):
                 pass
         return DEFAULT_POWER_ON_DELAY_SECS
 
     def get_graceful_shutdown_timeout(self):
-        """Return graceful_shutdown_timeout in seconds from SWITCH_HOST_SHUTDOWN_TIMEOUT|default."""
-        tbl = swsscommon.Table(self.config_db, SWITCH_HOST_SHUTDOWN_TIMEOUT_TABLE)
-        result = tbl.get("default")
-        if result and result[0]:
+        """Return graceful_shutdown_timeout in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 120)."""
+        raw = self._get_chassis_module_entry().get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT)
+        if raw is not None:
             try:
-                return float(fvs_to_dict(result[1]).get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, DEFAULT_SHUTDOWN_DELAY_SECS))
+                return float(raw)
             except (ValueError, TypeError):
                 pass
         return DEFAULT_SHUTDOWN_DELAY_SECS
-
-    def get_switch_host_admin_status(self):
-        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE CONFIG_DB (default: down)."""
-        tbl = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
-        result = tbl.get(SWITCH_HOST_MODULE_KEY)
-        if result and result[0]:
-            return fvs_to_dict(result[1]).get(FIELD_ADMIN_STATUS, ADMIN_DOWN)
-        return ADMIN_DOWN
 
     def get_leak_control_policy(self):
         """Return LEAK_CONTROL_POLICY as a dict with action defaults filled in."""
