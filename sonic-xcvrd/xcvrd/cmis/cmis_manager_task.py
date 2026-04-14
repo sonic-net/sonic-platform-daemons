@@ -479,7 +479,19 @@ class CmisManagerTask(threading.Thread):
             False, if decommission is not required
         """
         desired_map = self.get_desired_app_map(api, lport, gearbox_lanes_dict)
-        current_map = [api.get_application(lane) for lane in range(self.CMIS_MAX_HOST_LANES)]
+        active_apsel = api.get_active_apsel_hostlane()
+        current_map = []
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            lane_key = 'ActiveAppSelLane{}'.format(lane + 1)
+            if lane_key not in active_apsel:
+                self.log_error("{}: missing ActiveAppSel key: {}".format(lport, lane_key))
+                return True
+            lane_value = active_apsel[lane_key]
+            try:
+                current_map.append(int(lane_value))
+            except (TypeError, ValueError):
+                self.log_error("{}: invalid ActiveAppSel value for {}: {}".format(lport, lane_key, lane_value))
+                return True
 
         self.log_notice("{}: current app map {}, desired app map {}".format(lport, current_map, desired_map))
 

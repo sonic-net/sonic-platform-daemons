@@ -2953,7 +2953,7 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    @pytest.mark.parametrize("current_map, desired_map, expected", [
+    @pytest.mark.parametrize("active_map, desired_map, expected", [
         # Lanes 0-3 have app 1 but desired is 2 for all → decommission
         ([1,1,1,1,2,2,2,2], [2,2,2,2,2,2,2,2], True),
         # Lanes 0-3 active with app 1, desired is 0 → decommission
@@ -2965,15 +2965,86 @@ class TestXcvrdScript(object):
         # Mixed mode steady state: all lanes match → no decommission
         ([3,3,3,3,1,1,1,1], [3,3,3,3,1,1,1,1], False),
      ])
-    def test_CmisManagerTask_is_decommission_required(self, current_map, desired_map, expected):
+    def test_CmisManagerTask_is_decommission_required(self, active_map, desired_map, expected):
         mock_xcvr_api = MagicMock()
-        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: current_map[lane])
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane{}'.format(lane + 1): active_map[lane]
+            for lane in range(CmisManagerTask.CMIS_MAX_HOST_LANES)
+        })
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: active_map[lane])
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
         task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
         task.get_desired_app_map = MagicMock(return_value=desired_map)
         assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') == expected
+
+    def test_CmisManagerTask_is_decommission_required_uses_active_appsel_not_staged(self):
+        mock_xcvr_api = MagicMock()
+        # Active app map still old layout, staged app map already matches desired.
+        active_map = [1,1,1,1,1,1,1,1]
+        staged_map = [3,3,3,3,1,1,1,1]
+        desired_map = [3,3,3,3,1,1,1,1]
+
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane{}'.format(lane + 1): active_map[lane]
+            for lane in range(CmisManagerTask.CMIS_MAX_HOST_LANES)
+        })
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: staged_map[lane])
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
+
+    def test_CmisManagerTask_is_decommission_required_invalid_active_appsel(self):
+        mock_xcvr_api = MagicMock()
+        desired_map = [2,2,2,2,2,2,2,2]
+
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane1': 'N/A',
+            'ActiveAppSelLane2': 1,
+            'ActiveAppSelLane3': 1,
+            'ActiveAppSelLane4': 1,
+            'ActiveAppSelLane5': 2,
+            'ActiveAppSelLane6': 2,
+            'ActiveAppSelLane7': 2,
+            'ActiveAppSelLane8': 2,
+        })
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
+
+    def test_CmisManagerTask_is_decommission_required_missing_active_appsel_lane(self):
+        mock_xcvr_api = MagicMock()
+        desired_map = [2,2,2,2,2,2,2,2]
+
+        # Missing ActiveAppSelLane8 should trigger fail-safe decommission.
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane1': 1,
+            'ActiveAppSelLane2': 1,
+            'ActiveAppSelLane3': 1,
+            'ActiveAppSelLane4': 1,
+            'ActiveAppSelLane5': 2,
+            'ActiveAppSelLane6': 2,
+            'ActiveAppSelLane7': 2,
+        })
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
 
     def test_CmisManagerTask_get_desired_app_map(self):
         """Test get_desired_app_map with mixed mode, skipped siblings, and edge cases"""
