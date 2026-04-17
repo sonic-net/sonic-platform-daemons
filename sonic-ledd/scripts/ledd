@@ -40,7 +40,7 @@ MAX_FRONT_PANEL_PORTS = 256
 class Port():
     PORT_UP = "up" # All subports are up
     PORT_DOWN = "down" # All subports are down
-    PORT_OP_FIELD = "netdev_oper_status"
+    PORT_OP_FIELD = "oper_status"
 
     def __init__(self, name, index, state, subport, role):
         self._name = name
@@ -132,12 +132,12 @@ class PortStateObserver:
 
     def subscribePortTable(self, namespaces):
         for namespace in namespaces:
-            self.subscribeDbTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
- 
+            self.subscribeDbTable("APPL_DB", swsscommon.APP_PORT_TABLE_NAME, namespace)
+
     def connectDB(self, dbname, namespace):
         db = daemon_base.db_connect(dbname, namespace=namespace)
         return db
-    
+
     def getDatabaseTable(self, dbname, tblname, namespace):
         db = self.connectDB(dbname, namespace)
         table = swsscommon.Table(db, tblname)
@@ -205,7 +205,7 @@ class DaemonLedd(daemon_base.DaemonBase):
         # {port-index, total subports oper UP}
         fp_port_up_subports = [0] * MAX_FRONT_PANEL_PORTS
         logical_port_mapping = {}
-        
+
         for namespace in namespaces:
             port_cfg_table = self.portObserver.getDatabaseTable("CONFIG_DB", swsscommon.CFG_PORT_TABLE_NAME, namespace)
             port_st_table = self.portObserver.getDatabaseTable("STATE_DB", swsscommon.STATE_PORT_TABLE_NAME, namespace)
