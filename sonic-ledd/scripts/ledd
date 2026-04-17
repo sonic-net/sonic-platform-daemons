@@ -126,7 +126,7 @@ class FrontPanelPorts:
 
 class PortStateObserver:
     def __init__(self):
-       # Subscribe to PORT table notifications in the STATE DB
+       # Subscribe to PORT table notifications in the APPL DB
         self.tables = {}
         self.sel = swsscommon.Select()
 
