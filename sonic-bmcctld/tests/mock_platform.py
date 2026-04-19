@@ -13,7 +13,7 @@ class MockModule:
     MODULE_STATUS_ONLINE = "Online"
     MODULE_STATUS_OFFLINE = "Offline"
     MODULE_TYPE_BMC = "BMC"
-    MODULE_TYPE_SWITCH_HOST = "SWITCH_HOST"
+    MODULE_TYPE_SWITCH_HOST = "SWITCH-HOST"
 
     def __init__(self, index, name, module_type, oper_status=MODULE_STATUS_ONLINE):
         self.index = index

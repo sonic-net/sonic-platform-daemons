@@ -115,6 +115,9 @@ class Select:
 
 class SubscriberStateTable(Table):
 
+    def getFd(self):
+        return id(self)
+
     def pop(self):
         return '', '', []
 

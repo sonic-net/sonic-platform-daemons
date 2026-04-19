@@ -167,7 +167,7 @@ class TestSwitchHostController:
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
 
     def test_power_on_writes_transitional_status(self, chassis, controller):
-        """STATE_DB shows POWERING_ON before the platform set_admin_state call."""
+        """STATE_DB device_power_state shows POWERING_ON before the platform set_admin_state call."""
         captured = {}
         original = chassis.switch_host.set_admin_state
         def interceptor(up):
@@ -177,14 +177,15 @@ class TestSwitchHostController:
             original(up)
         chassis.switch_host.set_admin_state = interceptor
         controller.power_on()
-        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) == bmcctld.SWITCH_HOST_POWERING_ON
-        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.POWER_STATE_ON
-        # Final entry must reflect confirmed ONLINE
+        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWERING_ON
+        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
+        # Final entry must reflect POWER_ON and confirmed ONLINE
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
 
     def test_power_off_writes_transitional_status(self, chassis, controller):
-        """STATE_DB shows POWERING_OFF before the platform set_admin_state call."""
+        """STATE_DB device_power_state shows POWERING_OFF before the platform set_admin_state call."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         captured = {}
         original = chassis.switch_host.set_admin_state
@@ -195,13 +196,15 @@ class TestSwitchHostController:
             original(up)
         chassis.switch_host.set_admin_state = interceptor
         controller.power_off()
-        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) == bmcctld.SWITCH_HOST_POWERING_OFF
-        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.POWER_STATE_OFF
+        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWERING_OFF
+        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
+        # Final entry must reflect POWER_OFF and confirmed OFFLINE
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
 
     def test_power_cycle_writes_transitional_status(self, chassis, controller):
-        """STATE_DB shows POWER_CYCLING before the platform do_power_cycle call."""
+        """STATE_DB device_power_state shows POWER_CYCLING before the platform do_power_cycle call."""
         captured = {}
         original = chassis.switch_host.do_power_cycle
         def interceptor():
@@ -211,9 +214,11 @@ class TestSwitchHostController:
             original()
         chassis.switch_host.do_power_cycle = interceptor
         controller.power_cycle()
-        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) == bmcctld.SWITCH_HOST_POWER_CYCLING
-        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.POWER_STATE_CYCLE
+        assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWER_CYCLING
+        assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
+        # Final entry must reflect POWER_CYCLE and confirmed ONLINE
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_CYCLE
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
 
     def test_get_db_power_state(self, chassis, controller):
@@ -250,7 +255,7 @@ class TestSwitchHostController:
         assert mod is chassis.switch_host
 
     def test_get_switch_host_module_fallback_index_1(self):
-        """Without a SWITCH_HOST type, fall back to module at index 1."""
+        """Without a SWITCH-HOST type, fall back to module at index 1."""
         ch = MockChassis()
         # Change types so type-based lookup fails
         ch._module_list[1].module_type = "UNKNOWN"
@@ -355,7 +360,7 @@ class TestPolicyReader:
         tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
         _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_POWER_ON_DELAY: "60"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
-            assert policy_reader.get_power_on_delay() == 60.0
+            assert policy_reader.get_power_on_delay() == 60
 
     def test_get_graceful_shutdown_timeout_default(self, policy_reader):
         """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 120."""
@@ -366,7 +371,7 @@ class TestPolicyReader:
         tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
         _set_table_entry(tbl, bmcctld.SWITCH_HOST_MODULE_KEY, {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "0"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
-            assert policy_reader.get_graceful_shutdown_timeout() == 0.0
+            assert policy_reader.get_graceful_shutdown_timeout() == 0
 
     def test_chassis_module_entry_all_fields(self, policy_reader):
         """All three fields coexist in CHASSIS_MODULE|SWITCH-HOST."""
@@ -378,8 +383,8 @@ class TestPolicyReader:
         })
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_switch_host_admin_status() == bmcctld.ADMIN_UP
-            assert policy_reader.get_power_on_delay() == 300.0
-            assert policy_reader.get_graceful_shutdown_timeout() == 90.0
+            assert policy_reader.get_power_on_delay() == 300
+            assert policy_reader.get_graceful_shutdown_timeout() == 90
 
     def test_get_switch_host_admin_status_default(self, policy_reader):
         """When no CHASSIS_MODULE entry exists, admin_status defaults to 'down'."""
@@ -490,18 +495,18 @@ class TestCriticalEventChecker:
 class TestGracefulShutdownHandler:
 
     def test_powering_off_state_set_before_gnoi(self, graceful_shutdown, chassis):
-        """STATE_DB shows POWERING_OFF before gNOI shutdown is issued."""
+        """STATE_DB device_power_state shows POWERING_OFF before gNOI shutdown is issued."""
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
         captured = {}
         original = graceful_shutdown.controller._update_host_state
         def capture_first(power_state, device_status=None):
             if not captured:
-                captured['device_status'] = device_status
+                captured['power_state'] = power_state
             return original(power_state, device_status)
         graceful_shutdown.controller._update_host_state = capture_first
         graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=False)
         graceful_shutdown.execute()
-        assert captured.get('device_status') == bmcctld.SWITCH_HOST_POWERING_OFF
+        assert captured.get('power_state') == bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN
 
     def test_shutdown_delay_zero_skips_gnoi(self, graceful_shutdown, chassis):
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=0)
@@ -912,11 +917,11 @@ class TestBmcctldDaemonActionLoop:
         daemon.controller.power_cycle.assert_called_once()
 
     def test_execute_power_off_skipped_when_powering_off_in_progress(self, chassis):
-        """power_off is skipped when STATE_DB shows POWERING_OFF (already in progress)."""
+        """power_off is skipped when STATE_DB device_power_state shows POWERING_OFF (already in progress)."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        # Simulate a power_off already in progress by writing transitional state to DB
-        daemon.controller._update_host_state(bmcctld.POWER_STATE_OFF, bmcctld.SWITCH_HOST_POWERING_OFF)
+        # Simulate a power_off already in progress by writing transitional power state to DB
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
         daemon.controller.power_off = MagicMock(return_value=True)
         callback = MagicMock()
         item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "dup-leak-event", on_complete=callback)
@@ -925,10 +930,10 @@ class TestBmcctldDaemonActionLoop:
         callback.assert_called_once_with(True)
 
     def test_execute_graceful_shutdown_skipped_when_powering_off_in_progress(self, chassis):
-        """graceful_shutdown is skipped when STATE_DB shows POWERING_OFF."""
+        """graceful_shutdown is skipped when STATE_DB device_power_state shows POWERING_OFF."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        daemon.controller._update_host_state(bmcctld.POWER_STATE_OFF, bmcctld.SWITCH_HOST_POWERING_OFF)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
         daemon.graceful_shutdown.execute = MagicMock(return_value=True)
         callback = MagicMock()
         item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-cmd", on_complete=callback)
@@ -936,12 +941,24 @@ class TestBmcctldDaemonActionLoop:
         daemon.graceful_shutdown.execute.assert_not_called()
         callback.assert_called_once_with(True)
 
+    def test_execute_graceful_shutdown_skipped_when_graceful_shutting_down_in_progress(self, chassis):
+        """graceful_shutdown is skipped when STATE_DB device_power_state shows GRACEFUL_SHUTTING_DOWN."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
+        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        callback = MagicMock()
+        item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-grace-event", on_complete=callback)
+        daemon._execute_action_item(item)
+        daemon.graceful_shutdown.execute.assert_not_called()
+        callback.assert_called_once_with(True)
+
     def test_execute_power_on_skipped_when_powering_on_in_progress(self, chassis):
-        """power_on is skipped when STATE_DB shows POWERING_ON (already in progress)."""
+        """power_on is skipped when STATE_DB device_power_state shows POWERING_ON (already in progress)."""
         # Host is OFFLINE on platform but DB shows POWERING_ON (race: just started)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
-        daemon.controller._update_host_state(bmcctld.POWER_STATE_ON, bmcctld.SWITCH_HOST_POWERING_ON)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_ON)
         daemon.controller.power_on = MagicMock(return_value=True)
         callback = MagicMock()
         item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "dup-on-event", on_complete=callback)
@@ -1023,8 +1040,8 @@ class TestBmcctldDaemonInitialSequence:
         """Action items queued by the event thread during the boot delay are executed."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        # Use a tiny non-zero delay so the queue-drain loop runs at least once
-        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0.1)
+        # Use a small non-zero delay so the queue-drain loop runs at least once
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_off = MagicMock(return_value=True)
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay

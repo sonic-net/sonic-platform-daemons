@@ -167,20 +167,23 @@ FIELD_SEVERITY = "severity"
 FIELD_LEAK = "leak"
 FIELD_ADMIN_STATUS = "admin_status"
 
-# Power state values
-POWER_STATE_ON = "POWER_ON"
-POWER_STATE_OFF = "POWER_OFF"
-POWER_STATE_GRACEFUL_SHUT = "GRACEFUL_SHUT"
+# FIELD_DEVICE_POWER_STATE: Power state values - What POWER action taken on device
+# Stable (final) states — written after the platform call completes
+POWER_STATE_ON = "POWERED_ON"
+POWER_STATE_OFF = "POWERED_OFF"
+POWER_STATE_GRACEFUL_SHUT = "GRACEFUL_SHUTDOWN"
 POWER_STATE_CYCLE = "POWER_CYCLE"
 
-# Device operational status (stable)
-SWITCH_HOST_ONLINE = "ONLINE"
-SWITCH_HOST_OFFLINE = "OFFLINE"
-
-# Device operational status (transitional — written at the start of a power action)
+# Transitional states — written immediately before the platform call so observers
+# can see a power transition is in progress; replaced by the stable state above once done
 SWITCH_HOST_POWERING_ON = "POWERING_ON"
 SWITCH_HOST_POWERING_OFF = "POWERING_OFF"
+SWITCH_HOST_GRACEFUL_SHUTTING_DOWN = "GRACEFUL_SHUTTING_DOWN"
 SWITCH_HOST_POWER_CYCLING = "POWER_CYCLING"
+
+# FIELD_DEVICE_STATUS: Current oper status of Switch-Host from module->get_oper_status()
+SWITCH_HOST_ONLINE = "ONLINE"
+SWITCH_HOST_OFFLINE = "OFFLINE"
 
 # Rack Manager command values
 CMD_POWER_ON = "POWER_ON"
@@ -312,10 +315,10 @@ class SwitchHostController(EventLogger):
             return self._switch_host_module
         try:
             modules = self.chassis.get_all_modules()
-            for mod in modules:
-                mod_type = try_get(mod.get_type, default="")
-                if mod_type in ("SWITCH_HOST", "switch_host"):
-                    self._switch_host_module = mod
+            for module in modules:
+                module_type = try_get(module.get_type, default="")
+                if module_type == "SWITCH-HOST":
+                    self._switch_host_module = module
                     return self._switch_host_module
             if modules and len(modules) >= 2:
                 self._switch_host_module = modules[1]
@@ -326,10 +329,11 @@ class SwitchHostController(EventLogger):
 
     def get_oper_status(self):
         """Return the current operational status of Switch-Host (ONLINE/OFFLINE)."""
-        mod = self._get_switch_host_module()
-        if mod is None:
+        # device_status: ONLINE | OFFLINE
+        module = self._get_switch_host_module()
+        if module is None:
             return NOT_AVAILABLE
-        raw = try_get(mod.get_oper_status, default=NOT_AVAILABLE)
+        raw = try_get(module.get_oper_status, default=NOT_AVAILABLE)
         # Normalise to uppercase to match HOST_STATE DB schema (ONLINE / OFFLINE)
         return str(raw).upper() if raw != NOT_AVAILABLE else raw
 
@@ -348,28 +352,31 @@ class SwitchHostController(EventLogger):
             context, expected_status, timeout_secs, self.get_oper_status()))
         return False
 
-    def _apply_admin_state(self, admin_up, power_state, transitional_status, expected_oper, op_name):
+    def _apply_admin_state(self, admin_up, transitional_power_state, final_power_state, expected_oper, op_name):
         """
         Common implementation for power_on and power_off.
-        Snapshots prior STATE_DB values, writes the transitional status, issues
-        set_admin_state, verifies the result, then writes the final state.
+        Snapshots prior STATE_DB values, writes the transitional power state,
+        issues set_admin_state, verifies the result, then writes the final power state.
+        device_status is always written from module->get_oper_status() (ONLINE|OFFLINE).
         Rolls back to the prior STATE_DB snapshot on exception.
         """
-        mod = self._get_switch_host_module()
-        if mod is None:
+        module = self._get_switch_host_module()
+        if module is None:
             self.log_error("Cannot {} Switch-Host: module not found".format(op_name))
             return False
         prior_power_state = self.get_db_power_state()
         prior_status = self.get_db_device_status()
         try:
-            self._update_host_state(power_state, transitional_status)
-            mod.set_admin_state(admin_up)
+            # Write transitional power state (e.g. POWERING_ON/OFF) before platform call
+            self._update_host_state(transitional_power_state)
+            module.set_admin_state(admin_up)
             self.log_notice("Switch-Host {} issued; verifying oper_status...".format(op_name))
             verified = self._verify_oper_status(expected_oper, POWER_VERIFY_TIMEOUT_SECS, op_name)
             if not verified:
                 self.log_error("Switch-Host {}: oper_status did not confirm {}".format(
                     op_name, expected_oper))
-            self._update_host_state(power_state)
+            # Write final stable power state (e.g. POWER_ON/OFF); device_status from live oper_status
+            self._update_host_state(final_power_state)
             return verified
         except Exception as e:
             self.log_error("Failed to {} Switch-Host: {}".format(op_name, repr(e)))
@@ -377,32 +384,46 @@ class SwitchHostController(EventLogger):
             return False
 
     def power_on(self):
-        """Power ON the Switch-Host via module->set_admin_state(True)."""
+        """Power ON the Switch-Host via module->set_admin_state(True).
+
+        device_power_state: POWERING_ON (transitional) -> POWER_ON (final)
+        device_status:      ONLINE | OFFLINE from module->get_oper_status()
+        """
         return self._apply_admin_state(
-            True, POWER_STATE_ON, SWITCH_HOST_POWERING_ON, SWITCH_HOST_ONLINE, "power_on")
+            True, SWITCH_HOST_POWERING_ON, POWER_STATE_ON, SWITCH_HOST_ONLINE, "power_on")
 
     def power_off(self):
-        """Power OFF the Switch-Host via module->set_admin_state(False)."""
+        """Power OFF the Switch-Host via module->set_admin_state(False).
+
+        device_power_state: POWERING_OFF (transitional) -> POWER_OFF (final)
+        device_status:      ONLINE | OFFLINE from module->get_oper_status()
+        """
         return self._apply_admin_state(
-            False, POWER_STATE_OFF, SWITCH_HOST_POWERING_OFF, SWITCH_HOST_OFFLINE, "power_off")
+            False, SWITCH_HOST_POWERING_OFF, POWER_STATE_OFF, SWITCH_HOST_OFFLINE, "power_off")
 
     def power_cycle(self):
-        """Power cycle the Switch-Host via module->do_power_cycle()."""
-        mod = self._get_switch_host_module()
-        if mod is None:
+        """Power cycle the Switch-Host via module->do_power_cycle().
+
+        device_power_state: POWER_CYCLING (transitional) -> POWER_CYCLE (final)
+        device_status:      ONLINE | OFFLINE from module->get_oper_status()
+        """
+        module = self._get_switch_host_module()
+        if module is None:
             self.log_error("Cannot power cycle Switch-Host: module not found")
             return False
         prior_power_state = self.get_db_power_state()
         prior_status = self.get_db_device_status()
         try:
-            self._update_host_state(POWER_STATE_CYCLE, SWITCH_HOST_POWER_CYCLING)
-            try_get(mod.do_power_cycle, default=False)
+            # Write transitional power state (POWER_CYCLING) before platform call
+            self._update_host_state(SWITCH_HOST_POWER_CYCLING)
+            try_get(module.do_power_cycle, default=False)
             self.log_notice("Switch-Host power cycle issued; verifying oper_status...")
             # Use 2x timeout: host must go offline then come back online
             verified = self._verify_oper_status(
                 SWITCH_HOST_ONLINE, POWER_VERIFY_TIMEOUT_SECS * 2, "power_cycle")
             if not verified:
                 self.log_error("Switch-Host power cycle: oper_status did not confirm ONLINE")
+            # Write final stable power state; device_status from live oper_status
             self._update_host_state(POWER_STATE_CYCLE)
             return verified
         except Exception as e:
@@ -413,10 +434,11 @@ class SwitchHostController(EventLogger):
     def _update_host_state(self, power_state, device_status=None):
         """Write device_power_state and device_status to HOST_STATE STATE_DB.
 
-        When device_status is None the current live oper_status is used (normal
-        completion path).  Pass an explicit transitional constant such as
-        SWITCH_HOST_POWERING_ON before issuing the platform call so external
-        observers can see that a power transition is in progress.
+        power_state   : device_power_state field value.
+                        Transitional: POWERING_ON | POWERING_OFF | POWER_CYCLING
+                        Final/stable: POWER_ON | POWER_OFF | POWER_CYCLE | GRACEFUL_SHUT
+        device_status : device_status field value — always ONLINE | OFFLINE.
+                        When None, fetched live from module->get_oper_status().
         """
         if device_status is None:
             device_status = self.get_oper_status()
@@ -490,7 +512,7 @@ class PolicyReader(EventLogger):
         raw = self._get_chassis_module_entry().get(FIELD_POWER_ON_DELAY)
         if raw is not None:
             try:
-                return float(raw)
+                return int(raw)
             except (ValueError, TypeError):
                 pass
         return DEFAULT_POWER_ON_DELAY_SECS
@@ -500,7 +522,7 @@ class PolicyReader(EventLogger):
         raw = self._get_chassis_module_entry().get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT)
         if raw is not None:
             try:
-                return float(raw)
+                return int(raw)
             except (ValueError, TypeError):
                 pass
         return DEFAULT_SHUTDOWN_DELAY_SECS
@@ -590,8 +612,8 @@ class CriticalEventChecker(EventLogger):
 class GracefulShutdownHandler(EventLogger):
     """
     Issues a GNOI soft shutdown to Switch-Host and waits graceful_shutdown_timeout
-    seconds for it to go OFFLINE.  Falls back to hard power-off if
-    GNOI fails or the timer expires.
+    seconds for it to go OFFLINE.  Call platform power_off after the graceful_shutdown_timeout
+    irrespective of GNOI request succeeded or not.
     """
 
     def __init__(self, controller, policy_reader):
@@ -612,8 +634,8 @@ class GracefulShutdownHandler(EventLogger):
         prior_power_state = self.controller.get_db_power_state()
         prior_status = self.controller.get_db_device_status()
 
-        # Write transitional state immediately so STATE_DB reflects in-progress shutdown
-        self.controller._update_host_state(POWER_STATE_GRACEFUL_SHUT, SWITCH_HOST_POWERING_OFF)
+        # Write transitional power state (GRACEFUL_SHUTTING_DOWN) before issuing shutdown
+        self.controller._update_host_state(SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
 
         # graceful_shutdown_timeout == 0 means skip GNOI and force power-off immediately
         if graceful_shutdown_timeout == 0:
@@ -728,12 +750,15 @@ class BmcEventHandler(EventLogger):
         self.system_leak_sub = swsscommon.SubscriberStateTable(
             self.state_db, SYSTEM_LEAK_STATUS_TABLE)
 
-        # Map each subscriber to its handler
+        # Map each subscriber's file descriptor to its handler.
+        # getFd() returns a stable integer regardless of how swsscommon re-wraps
+        # the C++ Selectable* returned by sel.select(), unlike id() which varies
+        # per wrapper object and would always miss.
         self._sub_handlers = {
-            id(self.rack_mgr_cmd_sub): self._handle_rack_mgr_command,
-            id(self.chassis_module_sub): self._handle_chassis_module,
-            id(self.rack_mgr_alert_sub): self._handle_rack_mgr_alert,
-            id(self.system_leak_sub): self._handle_system_leak,
+            self.rack_mgr_cmd_sub.getFd():   self._handle_rack_mgr_command,
+            self.chassis_module_sub.getFd(): self._handle_chassis_module,
+            self.rack_mgr_alert_sub.getFd(): self._handle_rack_mgr_alert,
+            self.system_leak_sub.getFd():    self._handle_system_leak,
         }
 
         self.sel = swsscommon.Select()
@@ -757,7 +782,7 @@ class BmcEventHandler(EventLogger):
             key, op, fvs = selectable.pop()
             if op != "SET":
                 continue
-            handler = self._sub_handlers.get(id(selectable))
+            handler = self._sub_handlers.get(selectable.getFd())
             if handler:
                 handler(key, fvs_to_dict(fvs))
 
@@ -1028,6 +1053,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                                        "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(admin_status))
             return
 
+        # TODO : Optimize by adding this delay only to a case when there is a cold boot
         boot_delay = self.policy_reader.get_power_on_delay()
         self.log_notice("Waiting {}s before initial Switch-Host power-on check "
                                    "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay))
@@ -1075,22 +1101,23 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self._event_log.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
 
         current_status = self.controller.get_oper_status()
-        db_status = self.controller.get_db_device_status()
+        db_power_state = self.controller.get_db_power_state()
         if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
-            if current_status == SWITCH_HOST_OFFLINE or db_status == SWITCH_HOST_POWERING_OFF:
+            if current_status == SWITCH_HOST_OFFLINE or db_power_state in (
+                    SWITCH_HOST_POWERING_OFF, SWITCH_HOST_GRACEFUL_SHUTTING_DOWN):
                 self._event_log.log_notice(
                     "ACTION SKIPPED: '{}' trigger='{}' — "
-                    "host already OFFLINE or POWERING_OFF (db_status={})".format(
-                        item.action, item.event_desc, db_status))
+                    "host already OFFLINE or shutting down (db_power_state={})".format(
+                        item.action, item.event_desc, db_power_state))
                 if item.on_complete:
                     item.on_complete(True)
                 return
         elif item.action == ACTION_POWER_ON:
-            if current_status == SWITCH_HOST_ONLINE or db_status == SWITCH_HOST_POWERING_ON:
+            if current_status == SWITCH_HOST_ONLINE or db_power_state == SWITCH_HOST_POWERING_ON:
                 self._event_log.log_notice(
                     "ACTION SKIPPED: '{}' trigger='{}' — "
-                    "host already ONLINE or POWERING_ON (db_status={})".format(
-                        item.action, item.event_desc, db_status))
+                    "host already ONLINE or POWERING_ON (db_power_state={})".format(
+                        item.action, item.event_desc, db_power_state))
                 if item.on_complete:
                     item.on_complete(True)
                 return
