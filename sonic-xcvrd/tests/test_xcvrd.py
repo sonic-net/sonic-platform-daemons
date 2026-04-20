@@ -519,32 +519,185 @@ class TestXcvrdScript(object):
         mock_xcvr_api.__class__ = mock_class
         assert common.is_cmis_api(mock_xcvr_api) == expected_return_value
 
-    def test_get_state_db_port_table_val_by_key(self):
-        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        port_mapping = PortMapping()
-
-        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", None, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
-
-        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
-        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=None)
-        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
-
-        mock_state_port_table = MagicMock()
-        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=mock_state_port_table)
-        mock_state_port_table.get = MagicMock(return_value=(None, None))
-        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
-
-        mock_state_port_table.get = MagicMock(return_value=(True, {'A' : 'B'}))
-        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == None
-        mock_state_port_table.get = MagicMock(return_value=(True, {NPU_SI_SETTINGS_SYNC_STATUS_KEY : NPU_SI_SETTINGS_DEFAULT_VALUE}))
-        assert xcvr_table_helper.get_state_db_port_table_val_by_key("Ethernet0", port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY) == NPU_SI_SETTINGS_DEFAULT_VALUE
-
     def test_is_npu_si_settings_update_required(self):
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         port_mapping = PortMapping()
-        xcvr_table_helper.get_state_db_port_table_val_by_key = MagicMock(side_effect=[None, NPU_SI_SETTINGS_NOTIFIED_VALUE])
+
+        # None (field absent) → update required
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value=None)
         assert xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
+
+        # SI_SETTINGS_DEFAULT:<n> → update required
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_DEFAULT:1")
+        assert xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
+
+        # SI_SETTINGS_NOTIFIED:<n> → already notified, no update needed
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_NOTIFIED:2")
         assert not xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
+
+        # Unknown format → update required (safe default)
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="GARBAGE_FORMAT")
+        assert xcvr_table_helper.is_npu_si_settings_update_required("Ethernet0", port_mapping)
+
+    def test_get_next_si_notification_number(self):
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        mock_read_tbl = MagicMock()
+        asic_id = 0
+        xcvr_table_helper.app_port_read_tbl[asic_id] = mock_read_tbl
+
+        # Port not found → returns 1
+        mock_read_tbl.get.return_value = (False, None)
+        assert xcvr_table_helper.get_next_si_notification_number("Ethernet0", asic_id) == 1
+
+        # Port found but si_sync_status key absent → returns 1
+        mock_read_tbl.get.return_value = (True, [("other_key", "val")])
+        assert xcvr_table_helper.get_next_si_notification_number("Ethernet0", asic_id) == 1
+
+        # SI_SETTINGS_DEFAULT:5 → returns 6
+        mock_read_tbl.get.return_value = (True, [("si_sync_status", "SI_SETTINGS_DEFAULT:5")])
+        assert xcvr_table_helper.get_next_si_notification_number("Ethernet0", asic_id) == 6
+
+        # SI_SETTINGS_NOTIFIED:3 → returns 4
+        mock_read_tbl.get.return_value = (True, [("si_sync_status", "SI_SETTINGS_NOTIFIED:3")])
+        assert xcvr_table_helper.get_next_si_notification_number("Ethernet0", asic_id) == 4
+
+        # Malformed value → returns 1
+        mock_read_tbl.get.return_value = (True, [("si_sync_status", "bad")])
+        assert xcvr_table_helper.get_next_si_notification_number("Ethernet0", asic_id) == 1
+
+    def test_get_appl_db_port_table_val_by_key(self):
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        port_mapping = PortMapping()
+
+        # asic_index is None → returns None
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
+        assert xcvr_table_helper.get_appl_db_port_table_val_by_key("Ethernet0", port_mapping, "si_sync_status") is None
+
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        mock_table = MagicMock()
+        xcvr_table_helper.app_port_read_tbl[0] = mock_table
+
+        # Port not found in APPL_DB → returns None
+        mock_table.get.return_value = (False, None)
+        assert xcvr_table_helper.get_appl_db_port_table_val_by_key("Ethernet0", port_mapping, "si_sync_status") is None
+
+        # Port found but key absent → returns None
+        mock_table.get.return_value = (True, [("other_key", "val")])
+        assert xcvr_table_helper.get_appl_db_port_table_val_by_key("Ethernet0", port_mapping, "si_sync_status") is None
+
+        # Port found and key present → returns value
+        mock_table.get.return_value = (True, [("si_sync_status", "SI_SETTINGS_NOTIFIED:5")])
+        assert xcvr_table_helper.get_appl_db_port_table_val_by_key("Ethernet0", port_mapping, "si_sync_status") == "SI_SETTINGS_NOTIFIED:5"
+
+    def test_is_si_settings_already_applied(self):
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        port_mapping = PortMapping()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        mock_state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=mock_state_port_tbl)
+
+        # APPL_DB status is None → False
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value=None)
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # APPL_DB not notified (default state) → False
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_DEFAULT:1")
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # APPL_DB notified but malformed number → False
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_NOTIFIED:bad")
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # asic_index is None → False
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_NOTIFIED:3")
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+
+        # STATE_DB hget returns not found → False
+        xcvr_table_helper.get_appl_db_port_table_val_by_key = MagicMock(return_value="SI_SETTINGS_NOTIFIED:3")
+        mock_state_port_tbl.hget = MagicMock(return_value=(False, None))
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # STATE_DB status not done → False
+        mock_state_port_tbl.hget = MagicMock(return_value=(True, "SI_SYNC_PENDING:3"))
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # STATE_DB done but malformed number → False
+        mock_state_port_tbl.hget = MagicMock(return_value=(True, "SI_SYNC_DONE:bad"))
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # Number mismatch (APPL_DB=3, STATE_DB=2) → False
+        mock_state_port_tbl.hget = MagicMock(return_value=(True, "SI_SYNC_DONE:2"))
+        assert not xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+        # Numbers match → True
+        mock_state_port_tbl.hget = MagicMock(return_value=(True, "SI_SYNC_DONE:3"))
+        assert xcvr_table_helper.is_si_settings_already_applied("Ethernet0", port_mapping)
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_can_skip_cmis_init_after_restart(self, mock_platform_chassis):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+
+        mock_api = MagicMock()
+        host_lanes_mask = 0x3  # lanes 0 and 1
+        desired_appl = 1
+
+        # Check 1: application mismatch on lane 0 → False
+        mock_api.get_application = MagicMock(return_value=2)
+        assert not task.can_skip_cmis_init_after_restart("Ethernet0", mock_api, desired_appl, host_lanes_mask)
+
+        # Check 2: app matches but SI not synced → False
+        mock_api.get_application = MagicMock(return_value=desired_appl)
+        task.xcvr_table_helper.is_si_settings_already_applied = MagicMock(return_value=False)
+        assert not task.can_skip_cmis_init_after_restart("Ethernet0", mock_api, desired_appl, host_lanes_mask)
+
+        # Check 3: app matches, SI synced, but config not success → False
+        task.xcvr_table_helper.is_si_settings_already_applied = MagicMock(return_value=True)
+        task.check_config_error = MagicMock(return_value=False)
+        assert not task.can_skip_cmis_init_after_restart("Ethernet0", mock_api, desired_appl, host_lanes_mask)
+
+        # Check 4: app matches, SI synced, config ok, but datapath not activated → False
+        task.check_config_error = MagicMock(return_value=True)
+        task.check_datapath_state = MagicMock(return_value=False)
+        assert not task.can_skip_cmis_init_after_restart("Ethernet0", mock_api, desired_appl, host_lanes_mask)
+
+        # All checks pass → True
+        task.check_datapath_state = MagicMock(return_value=True)
+        assert task.can_skip_cmis_init_after_restart("Ethernet0", mock_api, desired_appl, host_lanes_mask)
+
+    @patch('time.sleep', MagicMock())
+    @patch('xcvrd.xcvrd.XcvrTableHelper')
+    @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw', MagicMock())
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
+    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    def test_on_sfp_remove_event_resets_si_sync_status(self, mock_change_event, mock_mapping_event, mock_xcvr_table_helper_cls):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+
+        mock_app_port_tbl = MagicMock()
+        task.xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=mock_app_port_tbl)
+        task.xcvr_table_helper.get_next_si_notification_number = MagicMock(return_value=3)
+
+        mock_mapping_event.return_value = NORMAL_EVENT
+        mock_change_event.return_value = (True, {1: SFP_STATUS_REMOVED}, {})
+        stop_event.is_set = MagicMock(side_effect=[False, True])
+
+        task.task_worker(stop_event, sfp_error_event)
+
+        mock_app_port_tbl.set.assert_called_with('Ethernet0', [("si_sync_status", "SI_SETTINGS_DEFAULT:3")])
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1820,12 +1973,15 @@ class TestXcvrdScript(object):
         app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
         xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
         xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_next_si_notification_number = MagicMock(return_value=1)
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', index, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
         media_settings_parser.notify_media_setting(logical_port_name, xcvr_info_dict, xcvr_table_helper, port_mapping)
         found, result = app_port_tbl.get(logical_port_name)
         result_dict = dict(result) if result else None
+        if result_dict is not None:
+            result_dict.pop('si_sync_status', None)
         assert found == expected_found
         assert result_dict == expected_value
 
@@ -1858,6 +2014,7 @@ class TestXcvrdScript(object):
         app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
         xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
         xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_next_si_notification_number = MagicMock(return_value=1)
 
         # Mock gearbox_line_lanes_dict to simulate gearbox configuration
         gearbox_lanes_dict = {logical_port_name: gearbox_line_lanes}
@@ -1871,6 +2028,8 @@ class TestXcvrdScript(object):
 
         found, result = app_port_tbl.get(logical_port_name)
         result_dict = dict(result) if result else None
+        if result_dict is not None:
+            result_dict.pop('si_sync_status', None)
 
         # Verify that settings were found
         assert found == True
@@ -2226,24 +2385,6 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
-
-    def test_DaemonXcvrd_initialize_port_init_control_fields_in_port_table(self):
-        port_mapping = PortMapping()
-        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-
-        port_mapping.logical_port_list = ['Ethernet0']
-        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
-        mock_xcvrd_table_helper = MagicMock()
-        mock_xcvrd_table_helper.get_state_port_tbl = MagicMock(return_value=None)
-        xcvrd.xcvr_table_helper = mock_xcvrd_table_helper
-        xcvrd.initialize_port_init_control_fields_in_port_table(port_mapping)
-
-        mock_state_db = MagicMock()
-        mock_xcvrd_table_helper.get_state_port_tbl = MagicMock(return_value=mock_state_db)
-        mock_state_db.get = MagicMock(return_value=(False, {}))
-
-        xcvrd.initialize_port_init_control_fields_in_port_table(port_mapping)
-        mock_state_db.set.call_count = 2
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_initialize_sfp_obj_dict(self, mock_platform_chassis):
@@ -3669,6 +3810,8 @@ class TestXcvrdScript(object):
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_AP_CONF
 
         # Case 2: DP_DEINIT --> AP Configured
+        # Ensure APPL_DB read for si_sync_status returns "not found" so state goes to DP_INIT (not SI_SETTINGS_WAIT)
+        swsscommon.Table.return_value.get.return_value = (False, None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert mock_xcvr_api.set_application.call_count == 1
@@ -4149,6 +4292,8 @@ class TestXcvrdScript(object):
         assert task.is_decomm_pending('Ethernet0')
         assert not task.is_decomm_failed('Ethernet0')
 
+        # Ensure APPL_DB read for si_sync_status returns "not found" so state goes to DP_INIT (not SI_SETTINGS_WAIT)
+        swsscommon.Table.return_value.get.return_value = (False, None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False]*3 + [True])
         task.task_worker()
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_INIT
