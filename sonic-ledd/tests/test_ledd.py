@@ -1,6 +1,17 @@
 import os
 import sys
-from imp import load_source
+import importlib.util
+import importlib.machinery
+def load_source(module_name, module_path):
+    loader = importlib.machinery.SourceFileLoader(module_name, module_path)
+    spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
+    if module_name in sys.modules:
+        module = sys.modules[module_name]
+    else:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 import pytest
 from unittest import mock
@@ -192,7 +203,7 @@ def test_find_front_panel_ports(mock_get_database_table, mock_load_platform_util
     )
     mock_state_table.get.side_effect = lambda key: (
         key,
-        [("oper_status", "up" if key == "Ethernet0" else "down")],
+        [("netdev_oper_status", "up" if key == "Ethernet0" else "down")],
     )
 
     # Create an instance of DaemonLedd
@@ -229,7 +240,7 @@ def test_get_port_table_event(mock_cast_selectable, mock_subscriber_table):
     # Mock the SubscriberStateTable behavior
     mock_table = mock.Mock()
     mock_subscriber_table.return_value = mock_table
-    mock_table.pop.return_value = ("Ethernet0", "SET", [("oper_status", ledd.Port.PORT_UP)])
+    mock_table.pop.return_value = ("Ethernet0", "SET", [("netdev_oper_status", ledd.Port.PORT_UP)])
 
     # Create an instance of PortStateObserver
     observer = ledd.PortStateObserver()

@@ -2,7 +2,18 @@ import os
 import sys
 import threading
 import time
-from imp import load_source  # TODO: Replace with importlib once we no longer need to support Python 2
+import importlib.util
+import importlib.machinery
+def load_source(module_name, module_path):
+    loader = importlib.machinery.SourceFileLoader(module_name, module_path)
+    spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
+    if module_name in sys.modules:
+        module = sys.modules[module_name]
+    else:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
