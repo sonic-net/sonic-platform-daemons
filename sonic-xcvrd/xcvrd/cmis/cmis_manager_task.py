@@ -16,9 +16,9 @@ try:
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities.common import (
         CMIS_STATE_UNKNOWN, CMIS_STATE_INSERTED, CMIS_STATE_DP_PRE_INIT_CHECK,
-        CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_DP_ACTIVATE,
-        CMIS_STATE_DP_INIT, CMIS_STATE_DP_TXON, CMIS_STATE_READY,
-        CMIS_STATE_REMOVED, CMIS_STATE_FAILED, CMIS_TERMINAL_STATES
+        CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_SI_SETTINGS_WAIT,
+        CMIS_STATE_DP_ACTIVATE, CMIS_STATE_DP_INIT, CMIS_STATE_DP_TXON,
+        CMIS_STATE_READY, CMIS_STATE_REMOVED, CMIS_STATE_FAILED, CMIS_TERMINAL_STATES
     )
     from ..xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from ..xcvrd_utilities import port_event_helper
@@ -42,6 +42,7 @@ class CmisManagerTask(threading.Thread):
 
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
+    CMIS_SI_SETTINGS_WAIT_TIMEOUT = 10 # seconds, timeout for waiting SI settings to be applied on ASIC
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
@@ -52,6 +53,7 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
+        self.port_mapping = port_mapping
         self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
         self.decomm_pending_dict = {}
         self.isPortInitDone = False
@@ -589,6 +591,161 @@ class CmisManagerTask(threading.Thread):
         found, admin_status = cfg_port_tbl.hget(lport, 'admin_status')
         return admin_status if found else 'down'
 
+    def check_si_settings_app_status(self, lport):
+        """
+        Check if SI settings have been applied on the ASIC by reading from STATE_DB
+
+        Args:
+            lport:
+                Logical port name
+
+        Returns:
+            String, the current SI settings sync status value from STATE_DB,
+            or None if not found
+        """
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
+
+        found, si_settings_sync_status = state_port_tbl.hget(lport, 'si_settings_sync_status')
+        return si_settings_sync_status if found else None
+
+    def parse_si_notification_number(self, lport, si_sync_status):
+        """
+        Parse SI notification number from APPL_DB si_sync_status field
+
+        Args:
+            lport: Logical port name
+            si_sync_status: String value from APPL_DB, format "SI_SETTINGS_NOTIFIED:<number>"
+
+        Returns:
+            Integer notification number if valid format, None otherwise
+        """
+        if not si_sync_status or not si_sync_status.startswith("SI_SETTINGS_NOTIFIED"):
+            return None
+
+        try:
+            parts = si_sync_status.split(':')
+            if len(parts) == 2 and parts[0] == "SI_SETTINGS_NOTIFIED":
+                return int(parts[1])
+            else:
+                self.log_notice("{}: Invalid si_sync_status format in APPL_DB: {}".format(
+                    lport, si_sync_status))
+                return None
+        except (ValueError, IndexError) as e:
+            self.log_error("{}: Failed to parse notification number from {}: {}".format(
+                lport, si_sync_status, e))
+            return None
+
+    def check_si_sync_done_match(self, lport, si_settings_status, expected_number):
+        """
+        Check if SI_SYNC_DONE status from STATE_DB matches expected notification number
+
+        Args:
+            lport: Logical port name
+            si_settings_status: String value from STATE_DB, format "SI_SYNC_DONE:<number>"
+            expected_number: Expected notification number to match
+
+        Returns:
+            True if match, False otherwise
+        """
+        if not si_settings_status or not si_settings_status.startswith("SI_SYNC_DONE"):
+            return False
+
+        try:
+            parts = si_settings_status.split(':')
+            if len(parts) == 2:
+                completed_number = int(parts[1])
+                if expected_number is not None and completed_number == expected_number:
+                    return True
+                elif expected_number is None:
+                    self.log_error("{}: SI sync check failed - no expected notification number stored".format(lport))
+                    return False
+                else:
+                    # Number mismatch, keep waiting (might be from previous notification)
+                    self.log_debug("{}: SI_SYNC_DONE number mismatch (got: {}, expected: {})".format(
+                        lport, completed_number, expected_number))
+                    return False
+            else:
+                self.log_error("{}: Invalid SI_SYNC_DONE format: {}".format(
+                    lport, si_settings_status))
+                return False
+        except (ValueError, IndexError) as e:
+            self.log_error("{}: Failed to parse SI_SYNC_DONE number from {}: {}".format(
+                lport, si_settings_status, e))
+            return False
+
+    def can_skip_cmis_init_after_restart(self, lport, api, appl, host_lanes_mask):
+        """
+        Check if CMIS initialization can be skipped after xcvrd restart
+
+        This applies to BOTH:
+        - Warmstart/warm-reboot scenarios
+        - Simple xcvrd process restart scenarios
+
+        If the module is already configured, SI settings are synced, and
+        datapaths are activated, skip reprogramming to avoid link flaps.
+
+        Checks performed in order:
+        1. Desired application matches what's configured on the module
+        2. SI settings synced between APPL_DB and STATE_DB (with matching numbers)
+        3. All active lanes have ConfigSuccess status
+        4. All active lanes are in DataPathActivated state
+
+        Args:
+            lport:
+                Logical port name
+            api:
+                XcvrApi object
+            appl:
+                Integer, the desired application code
+            host_lanes_mask:
+                Integer, a bitmask of the lanes on the host side
+
+        Returns:
+            True if all checks pass and CMIS init can be skipped, False otherwise
+        """
+        # Check 1: Verify the desired application matches what's on the module
+        # Read the current application from each active lane
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
+                continue
+            current_appl = api.get_application(lane)
+            if current_appl != appl:
+                self.log_debug(
+                    "{}: Cannot skip CMIS init - Application mismatch on lane {} (current: {}, desired: {})".format(
+                        lport, lane, current_appl, appl
+                    )
+                )
+                return False
+
+        # Check 2: SI settings synced in APPL_DB and STATE_DB?
+        if not self.xcvr_table_helper.is_si_settings_already_applied(lport, self.port_mapping):
+            return False
+
+        # Check 3: All active lanes have ConfigSuccess? (check before DP state)
+        # This ensures the configuration was successfully applied
+        if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
+            self.log_debug(
+                "{}: Cannot skip CMIS init - Config status: {}".format(
+                    lport, api.get_config_datapath_hostlane_status()
+                )
+            )
+            return False
+
+        # Check 4: All active lanes in DataPathActivated state?
+        # This ensures the datapath is already up and running
+        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
+            self.log_debug(
+                "{}: Cannot skip CMIS init - DP state: {}".format(
+                    lport, api.get_datapath_state()
+                )
+            )
+            return False
+
+        self.log_notice(
+            "{}: Module already configured and ready - Application matches, SI synced, Config successful, DP activated".format(lport)
+        )
+        return True
+
     def configure_tx_output_power(self, api, lport, tx_power):
         min_p, max_p = api.get_supported_power_config()
         if tx_power < min_p:
@@ -799,6 +956,19 @@ class CmisManagerTask(threading.Thread):
                 decomm_status_str = "waiting for completion"
             self.log_notice("{}: DECOMMISSION: decommission has already started for this physical port, "
                             "{}".format(lport, decomm_status_str))
+            return False
+
+        # Restart optimization - Skip CMIS init if module is already configured and ready
+        # This applies to both warmstart/warm-reboot and simple xcvrd process restart scenarios
+        # Checks: Application matches, SI settings synced, ConfigSuccess, and DataPathActivated
+        if self.can_skip_cmis_init_after_restart(lport, api, appl, host_lanes_mask):
+            self.log_notice(
+                "{}: Module already configured after restart - "
+                "skipping CMIS programming and going to READY".format(lport)
+            )
+            # Update TRANSCEIVER_INFO with current active application
+            self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
             return False
 
         if self.port_dict[lport]['host_tx_ready'] != 'true' or \
@@ -1037,7 +1207,50 @@ class CmisManagerTask(threading.Thread):
                     self.force_cmis_reinit(lport, retries + 1)
                     return
 
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+                # Check if SI settings were notified to OA by reading APPL_DB
+                # If SI settings were notified, transition to CMIS_STATE_SI_SETTINGS_WAIT to wait for ASIC to apply the settings
+                si_sync_status_app = self.xcvr_table_helper.get_appl_db_port_table_val_by_key(
+                    lport, self.port_mapping, 'si_sync_status')
+
+                notification_number = self.parse_si_notification_number(lport, si_sync_status_app)
+
+                if notification_number is not None:
+                    # Store the notification number in port_dict to verify later
+                    self.port_dict[lport]['si_notification_number'] = notification_number
+                    self.log_notice("{}: SI settings notified to OA with number {}, waiting for ASIC to apply".format(
+                        lport, notification_number))
+                    self.update_cmis_state_expiration_time(lport, self.CMIS_SI_SETTINGS_WAIT_TIMEOUT)
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_SI_SETTINGS_WAIT)
+                else:
+                    # SI settings not notified to OA, go directly to DP_INIT (current behavior)
+                    self.log_debug("{}: SI settings not notified to OA (si_sync_status: {}), skipping SI wait".format(
+                        lport, si_sync_status_app if si_sync_status_app is not None else "NOT_FOUND"))
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+            elif state == CMIS_STATE_SI_SETTINGS_WAIT:
+                # Wait for SI settings to be applied on the ASIC
+                # Check if the si_settings_sync_status in STATE_DB has been updated to indicate SI settings are applied
+                si_settings_status = self.check_si_settings_app_status(lport)
+                expected_notification_number = self.port_dict[lport].get('si_notification_number')
+
+                # SI settings are considered applied when the status is "SI_SYNC_DONE:<number>"
+                # where <number> must match the notification number we sent
+                # This status is set by portsorch after successfully applying serdes settings to the ASIC
+                if self.check_si_sync_done_match(lport, si_settings_status, expected_notification_number):
+                    self.log_notice("{}: SI settings applied on ASIC (status: {}, expected: {}), proceeding to DP_INIT".format(
+                        lport, si_settings_status, expected_notification_number))
+                    # Clear the stored notification number
+                    self.port_dict[lport].pop('si_notification_number', None)
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+                elif self.is_timer_expired(expired):
+                    # Timeout waiting for SI settings to be applied
+                    # Log a warning but proceed anyway to avoid blocking the state machine
+                    self.log_notice("{}: timeout waiting for SI settings to be applied (status: {}, expected: {}), "
+                                    "proceeding to DP_INIT anyway".format(lport, si_settings_status, expected_notification_number))
+                    self.port_dict[lport].pop('si_notification_number', None)
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+                else:
+                    # Still waiting for SI settings to be applied
+                    return
             elif state == CMIS_STATE_DP_INIT:
                 if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                     if self.is_timer_expired(expired):
