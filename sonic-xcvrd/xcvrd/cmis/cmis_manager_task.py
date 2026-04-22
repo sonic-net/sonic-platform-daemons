@@ -61,6 +61,8 @@ class CmisManagerTask(threading.Thread):
         self.platform_chassis = platform_chassis
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self._is_fast_reboot_enabled = None
+        # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
+        self._gearbox_lanes_dict = None
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -197,20 +199,19 @@ class CmisManagerTask(threading.Thread):
     def get_cmis_module_power_down_duration_secs(self, api):
         return api.get_module_pwr_down_duration()/1000
 
-    def get_host_lane_count(self, lport, port_config_lanes, gearbox_lanes_dict):
+    def get_host_lane_count(self, lport, port_config_lanes):
         """
         Get host lane count from gearbox configuration if available, otherwise from port config
 
         Args:
             lport: logical port name (e.g., "Ethernet0")
             port_config_lanes: lanes string from port config (e.g., "25,26,27,28")
-            gearbox_lanes_dict: dictionary of gearbox line lanes counts
 
         Returns:
             Integer: number of host lanes
         """
-        # First try to get from gearbox configuration
-        gearbox_host_lane_count = gearbox_lanes_dict.get(lport, 0)
+        # First try to get from gearbox configuration cache (refreshed each task_worker iteration)
+        gearbox_host_lane_count = (self._gearbox_lanes_dict or {}).get(lport, 0)
         if gearbox_host_lane_count > 0:
             self.log_debug("{}: Using gearbox line lanes count: {}".format(lport, gearbox_host_lane_count))
             return gearbox_host_lane_count
@@ -381,33 +382,26 @@ class CmisManagerTask(threading.Thread):
             == CMIS_STATE_FAILED
         )
 
-    def get_desired_app_map(self, api, lport, gearbox_lanes_dict=None):
+    def get_sibling_port_configs(self, lport):
         """
-        Build a per-lane desired application code map for all lanes of the
-        physical port that lport belongs to, by reading sibling logical port
-        configurations from the CONFIG_DB PORT table.
+        Fetch sibling logical port configurations sharing the same physical port
+        as lport from the CONFIG_DB PORT table.
 
         Args:
-            api:
-                XcvrApi object
             lport:
                 String, logical port name triggering this check
-            gearbox_lanes_dict:
-                Optional dictionary of gearbox line lanes counts keyed by
-                logical port. When omitted, it is fetched from table helper.
 
         Returns:
-            list of CMIS_MAX_HOST_LANES integers, desired app code per lane
-            (0 = unused/unassigned)
+            list of dicts, one per sibling logical port on the same physical port,
+            each with keys: 'lport' (str), 'subport' (int), 'speed' (int),
+            'host_lane_count' (int).
         """
-        desired_map = [0] * self.CMIS_MAX_HOST_LANES
+        siblings = []
         pport = self.port_dict[lport].get('index')
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
         if cfg_port_tbl is None:
-            self.log_error("{}: cfg_port_tbl is None while building desired app map".format(lport))
-            return desired_map
-        if gearbox_lanes_dict is None:
-            gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+            self.log_error("{}: cfg_port_tbl is None while fetching sibling port configs".format(lport))
+            return siblings
 
         for sibling_lport in cfg_port_tbl.getKeys():
             # Single read per key: use full hash and derive index from fields.
@@ -444,19 +438,49 @@ class CmisManagerTask(threading.Thread):
             if not sibling_speed or not sibling_lanes:
                 continue
 
-            sibling_host_lane_count = self.get_host_lane_count(sibling_lport, sibling_lanes, gearbox_lanes_dict)
-            sibling_appl = common.get_cmis_application_desired(api, sibling_host_lane_count, sibling_speed)
+            sibling_host_lane_count = self.get_host_lane_count(sibling_lport, sibling_lanes)
+
+            siblings.append({
+                'lport': sibling_lport,
+                'subport': sibling_subport,
+                'speed': sibling_speed,
+                'host_lane_count': sibling_host_lane_count,
+            })
+
+        return siblings
+
+    def get_desired_app_map(self, api, lport):
+        """
+        Build a per-lane desired application code map for all lanes of the
+        physical port that lport belongs to, using sibling logical port
+        configurations fetched from the CONFIG_DB PORT table.
+
+        Args:
+            api:
+                XcvrApi object
+            lport:
+                String, logical port name triggering this check
+
+        Returns:
+            list of CMIS_MAX_HOST_LANES integers, desired app code per lane
+            (0 = unused/unassigned)
+        """
+        desired_map = [0] * self.CMIS_MAX_HOST_LANES
+        for sibling in self.get_sibling_port_configs(lport):
+            sibling_appl = common.get_cmis_application_desired(
+                api, sibling['host_lane_count'], sibling['speed'])
             if sibling_appl is None:
                 continue
 
-            sibling_mask = self.get_cmis_host_lanes_mask(api, sibling_appl, sibling_host_lane_count, sibling_subport)
+            sibling_mask = self.get_cmis_host_lanes_mask(
+                api, sibling_appl, sibling['host_lane_count'], sibling['subport'])
             for lane in range(self.CMIS_MAX_HOST_LANES):
                 if (1 << lane) & sibling_mask:
                     desired_map[lane] = sibling_appl
 
         return desired_map
 
-    def is_decommission_required(self, api, lport, gearbox_lanes_dict=None):
+    def is_decommission_required(self, api, lport):
         """
         Check if CMIS decommission (reset AppSel to 0 for all lanes of the
         physical port) is required. Per CMIS spec, a DP's lane width can only
@@ -471,14 +495,11 @@ class CmisManagerTask(threading.Thread):
                 XcvrApi object
             lport:
                 String, logical port name triggering the check
-            gearbox_lanes_dict:
-                Optional dictionary of gearbox line lanes counts keyed by
-                logical port. When omitted, desired app map helper fetches it.
         Returns:
             True, if decommission is required
             False, if decommission is not required
         """
-        desired_map = self.get_desired_app_map(api, lport, gearbox_lanes_dict)
+        desired_map = self.get_desired_app_map(api, lport)
         active_apsel = api.get_active_apsel_hostlane()
         current_map = []
         for lane in range(self.CMIS_MAX_HOST_LANES):
@@ -878,8 +899,7 @@ class CmisManagerTask(threading.Thread):
         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
-        gearbox_lanes_dict = self.port_dict[lport].get('gearbox_lanes_dict')
-        if self.is_decommission_required(api, lport, gearbox_lanes_dict):
+        if self.is_decommission_required(api, lport):
             self.set_decomm_pending(lport)
 
         if self.is_decomm_lead_lport(lport):
@@ -1215,7 +1235,7 @@ class CmisManagerTask(threading.Thread):
             common.log_exception_traceback()
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
-    def process_single_lport(self, lport, info, gearbox_lanes_dict):
+    def process_single_lport(self, lport, info):
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
         if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
             if state != CMIS_STATE_READY:
@@ -1238,7 +1258,7 @@ class CmisManagerTask(threading.Thread):
         if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
             return
 
-        host_lane_count = self.get_host_lane_count(lport, lanes, gearbox_lanes_dict)
+        host_lane_count = self.get_host_lane_count(lport, lanes)
 
         # double-check the HW presence before moving forward
         sfp = self.platform_chassis.get_sfp(pport)
@@ -1280,7 +1300,6 @@ class CmisManagerTask(threading.Thread):
             self.port_dict[lport]['host_lane_count'] = host_lane_count
             self.port_dict[lport]['api'] = api
             self.port_dict[lport]['sfp'] = sfp
-            self.port_dict[lport]['gearbox_lanes_dict'] = gearbox_lanes_dict
         except AttributeError:
             # Skip if these essential routines are not available
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
@@ -1304,7 +1323,7 @@ class CmisManagerTask(threading.Thread):
             port_change_observer.handle_port_update_event()
 
             # Cache gearbox line lanes dictionary once per iteration over all ports
-            gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+            self._gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():
@@ -1313,7 +1332,7 @@ class CmisManagerTask(threading.Thread):
                 if lport not in self.port_dict:
                     continue
 
-                self.process_single_lport(lport, info, gearbox_lanes_dict)
+                self.process_single_lport(lport, info)
 
         self.log_notice("Stopped")
 
