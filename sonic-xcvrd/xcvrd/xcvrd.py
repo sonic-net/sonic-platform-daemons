@@ -874,7 +874,9 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, dom_temperature_poll_interval=None, dom_update_interval=None):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False,
+                 dom_temperature_poll_interval=None, dom_update_interval=None,
+                 hold_lpmode_tx_ready_time=None):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
@@ -882,6 +884,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.enable_sff_mgr = enable_sff_mgr
         self.dom_temperature_poll_interval = dom_temperature_poll_interval
         self.dom_update_interval = dom_update_interval
+        self.hold_lpmode_tx_ready_time = hold_lpmode_tx_ready_time
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
@@ -1147,7 +1150,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the SFF manager
         sff_manager = None
         if self.enable_sff_mgr:
-            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis, helper_logger)
+            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis,
+                                         helper_logger,
+                                         hold_lpmode_tx_ready_time=self.hold_lpmode_tx_ready_time)
             sff_manager.start()
             self.threads.append(sff_manager)
         else:
@@ -1247,10 +1252,12 @@ def main():
     parser.add_argument('--enable_sff_mgr', action='store_true')
     parser.add_argument('--dom_temperature_poll_interval', default=None, type=int)
     parser.add_argument('--dom_update_interval', default=None, type=int)
+    parser.add_argument('--hold_lpmode_tx_ready_time', default=None, type=int)
 
     args = parser.parse_args()
     xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
-                        args.dom_temperature_poll_interval, args.dom_update_interval)
+                        args.dom_temperature_poll_interval, args.dom_update_interval,
+                        args.hold_lpmode_tx_ready_time)
     xcvrd.run()
 
 
