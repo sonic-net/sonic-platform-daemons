@@ -29,6 +29,7 @@ def test_provision_db():
     serial = "Serial No"
     model = "Model A"
     revision = "Rev C"
+    switch_host_serial = NOT_AVAILABLE
 
     chassis_table = provision_db(chassis, log)
 
@@ -38,6 +39,7 @@ def test_provision_db():
     assert serial == fvs[CHASSIS_INFO_SERIAL_FIELD]
     assert model == fvs[CHASSIS_INFO_MODEL_FIELD]
     assert revision == fvs[CHASSIS_INFO_REV_FIELD]
+    assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
 def test_try_get_timeout_error():
     def raise_timeout():
