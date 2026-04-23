@@ -531,6 +531,40 @@ class TestDaemonPsud(object):
         daemon_psud._update_single_psu_entity_info(3, mock_psu1)
         daemon_psud.phy_entity_tbl.set.assert_called_with('PSU 3', expected_fvp)
 
+    def test_deinit(self):
+        psud.platform_chassis = MockChassis()
+        daemon_psud = psud.DaemonPsud(SYSLOG_IDENTIFIER)
+        daemon_psud.num_psus = 2
+        daemon_psud.psu_tbl = psud.swsscommon.Table("STATE_DB", "psu_table")
+        daemon_psud.psu_tbl._del = mock.MagicMock()
+        daemon_psud.phy_entity_tbl = psud.swsscommon.Table("STATE_DB", "phy_entity_table")
+        # Pre-populate physical entity table with PSU entries and extra entries
+        daemon_psud.phy_entity_tbl.mock_dict['PSU 1'] = {}
+        daemon_psud.phy_entity_tbl.mock_dict['PSU 2'] = {}
+        daemon_psud.phy_entity_tbl.mock_dict['FAN 1'] = {}  # Extra entry not owned by psud
+        daemon_psud.phy_entity_tbl._del = mock.MagicMock()
+        daemon_psud.chassis_tbl = psud.swsscommon.Table("STATE_DB", "chassis_table")
+        daemon_psud.chassis_tbl._del = mock.MagicMock()
+
+        daemon_psud.__del__()
+
+        # Verify PSU table entries are deleted for all PSUs
+        assert daemon_psud.psu_tbl._del.call_count == 2
+        expected_psu_calls = [mock.call('PSU 1'), mock.call('PSU 2')]
+        daemon_psud.psu_tbl._del.assert_has_calls(expected_psu_calls, any_order=True)
+
+        # Verify only physical entity entries for PSUs are deleted (not FAN 1)
+        assert daemon_psud.phy_entity_tbl._del.call_count == 2
+        daemon_psud.phy_entity_tbl._del.assert_has_calls(expected_psu_calls, any_order=True)
+
+        # Verify chassis table entries are deleted
+        assert daemon_psud.chassis_tbl._del.call_count == 2
+        expected_chassis_calls = [
+            mock.call(psud.CHASSIS_INFO_KEY),
+            mock.call(psud.CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        ]
+        daemon_psud.chassis_tbl._del.assert_has_calls(expected_chassis_calls, any_order=True)
+
     @mock.patch('psud.datetime')
     def test_update_psu_fan_data(self, mock_datetime):
         fake_time = datetime.datetime(2021, 1, 1, 12, 34, 56)
