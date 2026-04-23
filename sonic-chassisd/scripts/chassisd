@@ -287,14 +287,14 @@ class ModuleUpdater(logger.Logger):
 
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
         if self._is_supervisor():
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
+            self.asic_table = swsscommon.Table(self.chassis_state_db,
                                             CHASSIS_FABRIC_ASIC_INFO_TABLE)
         else:
-            self.asic_table = swsscommon.Table(self.chassis_state_db, 
+            self.asic_table = swsscommon.Table(self.chassis_state_db,
                                             CHASSIS_ASIC_INFO_TABLE)
 
         self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
-        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE) 
+        self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
         self.down_modules = {}
         self.chassis_app_db_clean_sha = None
 
@@ -305,7 +305,7 @@ class ModuleUpdater(logger.Logger):
                     field = line.split('=')[0].strip()
                     if field == "linecard_reboot_timeout":
                         self.linecard_reboot_timeout = int(line.split('=')[1].strip())
-                        
+
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
             self.log_error("Chassisd midplane intialization failed")
@@ -407,7 +407,7 @@ class ModuleUpdater(logger.Logger):
                 else:
                     if self.phy_entity_table.get(key) is not None:
                         self.phy_entity_table._del(key)
-                    
+
                 # Construct key for down_modules dict. Example down_modules key format: LINE-CARD0|<hostname>
                 fvs = self.hostname_table.get(key)
                 if isinstance(fvs, list) and fvs[0] is True:
@@ -421,7 +421,7 @@ class ModuleUpdater(logger.Logger):
                     if prev_status == ModuleBase.MODULE_STATUS_ONLINE:
                         notOnlineModules.append(key)
                         # Record the time when the module down was detected to track the
-                        # module down time. Used for chassis db cleanup for all asics of the module if the module is down for a 
+                        # module down time. Used for chassis db cleanup for all asics of the module if the module is down for a
                         # long time like 30 mins.
                         # All down modules including supervisor are added to the down modules dictionary. This is to help
                         # identifying module operational status change. But the clean up will not be attempted for supervisor
@@ -457,12 +457,12 @@ class ModuleUpdater(logger.Logger):
                             self.asic_table.set(asic_key, asic_fvs)
 
         # In line card push the hostname of the module and num_asics to the chassis state db.
-        # The hostname is used as key to access chassis app db entries 
+        # The hostname is used as key to access chassis app db entries
         if not self._is_supervisor():
            module_info_dict = self._get_module_info(my_index)
            hostname_key = "{}{}".format(ModuleBase.MODULE_TYPE_LINE, int(self.my_slot) - 1)
            hostname = try_get(device_info.get_hostname, default="None")
-           hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)), 
+           hostname_fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_SLOT_FIELD, str(self.my_slot)),
                                                         (CHASSIS_MODULE_INFO_HOSTNAME_FIELD, hostname),
                                                         (CHASSIS_MODULE_INFO_NUM_ASICS_FIELD, str(len(module_info_dict[CHASSIS_MODULE_INFO_ASICS])))])
            self.hostname_table.set(hostname_key, hostname_fvs)
@@ -520,12 +520,12 @@ class ModuleUpdater(logger.Logger):
             if fvs[CHASSIS_MODULE_REBOOT_REBOOT_FIELD] == "expected":
                 return True
         return False
-    
+
     def module_reboot_set_time(self, key):
         time_now = time.time()
         fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD, str(time_now))])
         self.module_reboot_table.set(key,fvs)
-        
+
     def is_module_reboot_system_up_expired(self, key):
         fvs = self.module_reboot_table.get(key)
         if isinstance(fvs, list) and fvs[0] is True:
@@ -537,7 +537,7 @@ class ModuleUpdater(logger.Logger):
                     self.module_reboot_table._del(key)
                     return True
         return False
-    
+
     def check_midplane_reachability(self):
         if not self.midplane_initialized:
             return
@@ -584,7 +584,7 @@ class ModuleUpdater(logger.Logger):
             elif midplane_access is False and current_midplane_state == 'False':
                 if self.is_module_reboot_system_up_expired(module_key):
                     self.log_warning("Unexpected: Module {} (Slot {}) midplane connectivity is not restored in {} seconds".format(module_key, module.get_slot(), self.linecard_reboot_timeout))
-                    
+
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
                                               (CHASSIS_MIDPLANE_INFO_ACCESS_FIELD, str(midplane_access))])
@@ -718,6 +718,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if not self.midplane_initialized:
             self.log_error("Chassisd midplane intialization failed")
 
+        self._pending_reboot_check = {}
         self.dpu_reboot_timeout = DEFAULT_DPU_REBOOT_TIMEOUT
         if os.path.isfile(PLATFORM_JSON_FILE):
             try:
@@ -774,69 +775,113 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             self.log_error(f"{module}: Failed to read previous-reboot-cause.json: {e}")
         return None, None
 
+    def _extract_cause(self, reboot_cause):
+        """Extract the scalar cause string from a reboot_cause that may be a tuple, list, or string."""
+        if isinstance(reboot_cause, (tuple, list)):
+            return reboot_cause[0]
+        return reboot_cause
+
+    def _handle_module_status_change(self, key, module_index, prev_status, current_status):
+        """Handle DPU operational-status transitions and reboot-cause tracking."""
+        was_known = prev_status != ModuleBase.MODULE_STATUS_EMPTY
+        was_offline = prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)
+        now_offline = current_status == str(ModuleBase.MODULE_STATUS_OFFLINE)
+
+        # Transition to offline from a known non-offline state.
+        # Persist the down-time but defer get_reboot_cause until the DPU
+        # is back online — querying a powered-off DPU is unreliable.
+        if was_known and not was_offline and now_offline:
+            self.log_notice(f"{key} operational status transitioning to offline")
+            self.persist_dpu_reboot_time(key)
+            self._pending_reboot_check[key] = 'reboot'
+            return
+
+        # DPU discovered offline after chassisd restart (e.g. config reload
+        # during an ongoing DPU reboot).  prev_status is EMPTY because
+        # STATE_DB was flushed.  Defer reboot-cause check until DPU is online.
+        if not was_known and now_offline:
+            self._pending_reboot_check[key] = 'restart'
+            return
+
+        # Transition to online from EMPTY or OFFLINE
+        if (not was_known or was_offline) and not now_offline:
+            self.log_notice(f"{key} operational status transitioning to online")
+
+            deferred = self._pending_reboot_check.pop(key, None)
+
+            reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+            current_cause = self._extract_cause(reboot_cause)
+            stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
+
+            # Deferred from Online→Offline: the DPU went down and is now back.
+            # Reboot time was already persisted.  Skip persisting if this is a
+            # back-to-back reboot with the same cause (is_reboot detection).
+            if deferred == 'reboot':
+                if current_cause and stored_cause and stored_time_str:
+                    try:
+                        stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
+                        delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
+                        if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
+                            self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
+                            self.update_dpu_reboot_cause_to_db(key)
+                            return
+                    except Exception as e:
+                        self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
+                self.persist_dpu_reboot_cause(reboot_cause, key)
+                self.update_dpu_reboot_cause_to_db(key)
+                return
+
+            # Deferred from EMPTY→Offline: chassisd restarted while DPU was
+            # offline, now it is online so we can read the real reboot cause.
+            # Only persist if the cause actually changed.
+            if deferred == 'restart':
+                if stored_cause is not None and current_cause and current_cause != stored_cause:
+                    self.log_notice(
+                        f"{key}: Reboot cause changed while chassisd was down "
+                        f"(stored: {stored_cause}, current: {current_cause})")
+                    self.persist_dpu_reboot_time(key)
+                    self.persist_dpu_reboot_cause(reboot_cause, key)
+                    self.update_dpu_reboot_cause_to_db(key)
+                return
+
+            is_reboot = False
+            if current_cause and stored_cause and stored_time_str:
+                try:
+                    stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
+                    delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
+
+                    if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
+                        self.log_info(f"{key}: is_reboot=True \u2014 same reboot cause within {int(delta_sec)}s")
+                        is_reboot = True
+                except Exception as e:
+                    self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
+
+            if not is_reboot and (stored_time_str is not None or self._is_first_boot(key)):
+                self.persist_dpu_reboot_cause(reboot_cause, key)
+                self.update_dpu_reboot_cause_to_db(key)
+
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
             module_info_dict = self._get_module_info(module_index)
-            if module_info_dict is not None:
-                key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
+            if module_info_dict is None:
+                continue
 
-                if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
-                    self.log_error("Incorrect module-name {}. Should start with {} ".format(key,
-                                                            ModuleBase.MODULE_TYPE_DPU))
-                    continue
+            key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
+            if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
+                self.log_error("Incorrect module-name {}. Should start with {} ".format(key,
+                                                        ModuleBase.MODULE_TYPE_DPU))
+                continue
 
-                fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
+            fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
+                                              (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
+                                              (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
+                                              (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
 
-                # Get a copy of the previous operational status of the module
-                prev_status = self.get_module_current_status(key)
-                self.module_table.set(key, fvs)
+            prev_status = self.get_module_current_status(key)
+            self.module_table.set(key, fvs)
+            current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
 
-                # Get a copy of the current operational status of the module
-                current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-
-                # Operational status transitioning to offline
-                if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice("{} operational status transitioning to offline".format(key))
-
-                    # Persist dpu down time
-                    self.persist_dpu_reboot_time(key)
-                    # persist reboot cause
-                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-                    self.persist_dpu_reboot_cause(reboot_cause, key)
-                    # publish reboot cause to db
-                    self.update_dpu_reboot_cause_to_db(key)
-
-                elif (prev_status == ModuleBase.MODULE_STATUS_EMPTY or prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice(f"{key} operational status transitioning to online")
-
-                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-                    if isinstance(reboot_cause, (tuple, list)):
-                        current_cause = reboot_cause[0]
-                    else:
-                        current_cause = reboot_cause
-
-                    stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
-
-                    is_reboot = False
-                    if current_cause and stored_cause and stored_time_str:
-                        try:
-                            stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
-                            now = datetime.now(timezone.utc)
-                            delta_sec = (now - stored_dt).total_seconds()
-
-                            if current_cause == stored_cause and delta_sec <  MAX_DPU_REBOOT_DURATION:
-                                self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
-                                is_reboot = True
-                        except Exception as e:
-                            self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
-
-                    if not is_reboot and (stored_time_str is not None or self._is_first_boot(key)):
-                        # persist reboot cause and publish to db
-                        self.persist_dpu_reboot_cause(reboot_cause, key)
-                        self.update_dpu_reboot_cause_to_db(key)
+            self._handle_module_status_change(key, module_index, prev_status, current_status)
 
     def _get_module_info(self, module_index):
         """
