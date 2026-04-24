@@ -207,14 +207,26 @@ class MockLiquidCoolingSensor(liquid_cooling_base.LeakageSensorBase):
     def is_leak(self):
         return self._is_leak
 
+    def get_type(self):
+        return "mock_sensor"
+
     def set_leak(self, leak_status):
         """Helper method for testing"""
         self._is_leak = leak_status
 
+    def get_leak_profile(self):
+        class MockProfile(liquid_cooling_base.LeakSensorProfileBase):
+            def get_type(self):
+                return "mock_sensor"
+            def get_leak_max_minor_duration_sec(self):
+                return 1
+            
+        return MockProfile()
+
 class MockLiquidCooling(liquid_cooling_base.LiquidCoolingBase):
     def __init__(self, num_sensors=2):
         sensors = [MockLiquidCoolingSensor(f"leakage{i+1}") for i in range(num_sensors)]
-        super(MockLiquidCooling, self).__init__(num_sensors, sensors)
+        super(MockLiquidCooling, self).__init__(sensors)
         self._name = None
         self._presence = True
         self._model = 'Liquid Cooling Model'
