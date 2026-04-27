@@ -102,6 +102,8 @@ jobs:
           target/debs/bookworm/libnl-route-3-200_*.deb
           target/debs/bookworm/libnl-nf-3-200_*.deb
           target/debs/bookworm/libyang_1.0.73_amd64.deb
+          target/debs/bookworm/libyang3_*.deb
+          target/debs/bookworm/python3-libyang*.deb
           target/debs/bookworm/libswsscommon_1.0.0_amd64.deb
           target/debs/bookworm/python3-swsscommon_1.0.0_amd64.deb
 
@@ -121,6 +123,8 @@ jobs:
         sudo dpkg -i libnl-route-3-200_*.deb
         sudo dpkg -i libnl-nf-3-200_*.deb
         sudo dpkg -i libyang_1.0.73_amd64.deb
+        sudo dpkg -i libyang3_*.deb
+        sudo dpkg -i python3-libyang*.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
       workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/bookworm/
