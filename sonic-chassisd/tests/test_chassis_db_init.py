@@ -41,6 +41,20 @@ def test_provision_db():
     assert revision == fvs[CHASSIS_INFO_REV_FIELD]
     assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
+def test_provision_db_bmc():
+    chassis = MockChassis()
+    log = MagicMock()
+    switch_host_serial = "Switch Host Serial"
+
+    with patch.object(chassis, 'is_bmc', return_value=True), \
+         patch.object(chassis, 'get_switch_host_serial', create=True, return_value=switch_host_serial):
+        chassis_table = provision_db(chassis, log)
+
+    fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
+
 def test_try_get_timeout_error():
     def raise_timeout():
         raise TimeoutError("timeout")
