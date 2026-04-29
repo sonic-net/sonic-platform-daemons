@@ -333,10 +333,7 @@ class SfpStateUpdateTask(threading.Thread):
             is_warm_start = warm_start_status.get(namespace, False)
 
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
-            if rc != SFP_EEPROM_NOT_READY:
-                if is_warm_start == False:
-                    media_settings_parser.notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
-            else:
+            if rc == SFP_EEPROM_NOT_READY:
                 retry_eeprom_set.add(logical_port_name)
         
         dom_thresholds_cache = {}
@@ -567,8 +564,6 @@ class SfpStateUpdateTask(threading.Thread):
                                 if rc != SFP_EEPROM_NOT_READY:
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-
-                                    media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 # Remove the SFP API object for this physical port
@@ -578,11 +573,11 @@ class SfpStateUpdateTask(threading.Thread):
                                 except (NotImplementedError, AttributeError) as e:
                                     helper_logger.log_error(f"Failed to remove xcvr api for port {key}: {str(e)}")
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
-                                # Reset si_sync_status in APPL_DB for the logical port
+                                # Reset si_settings_notification in APPL_DB for the logical port
                                 next_number = self.xcvr_table_helper.get_next_si_notification_number(logical_port, asic_index)
                                 si_default_value = f"SI_SETTINGS_DEFAULT:{next_number}"
                                 app_port_table = self.xcvr_table_helper.get_app_port_tbl(asic_index)
-                                app_port_table.set(logical_port, [("si_sync_status", si_default_value)])
+                                app_port_table.set(logical_port, [("si_settings_notification", si_default_value)])
 
                                 common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
@@ -828,7 +823,6 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         common.update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
@@ -855,8 +849,6 @@ class SfpStateUpdateTask(threading.Thread):
             if rc != SFP_EEPROM_NOT_READY:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-
-                media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
@@ -1121,7 +1113,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the SFF manager
         sff_manager = None
         if self.enable_sff_mgr:
-            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis, helper_logger)
+            sff_manager = SffManagerTask(self.namespaces, port_mapping_data, self.stop_event, platform_chassis, helper_logger)
             sff_manager.start()
             self.threads.append(sff_manager)
         else:

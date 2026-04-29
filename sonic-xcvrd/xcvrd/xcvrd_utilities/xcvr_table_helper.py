@@ -184,14 +184,14 @@ class XcvrTableHelper:
     def get_next_si_notification_number(self, port_name, asic_id):
         """
         Return the next SI notification number for port_name by reading the
-        current si_sync_status from APPL_DB and incrementing its counter.
+        current si_settings_notification from APPL_DB and incrementing its counter.
         Returns 1 if no prior value exists or the format is unrecognised.
         """
         found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
         if not found:
             return 1
         fvs_dict = dict(fvs)
-        current_value = fvs_dict.get('si_sync_status')
+        current_value = fvs_dict.get('si_settings_notification')
         if not current_value:
             return 1
         try:
@@ -210,165 +210,6 @@ class XcvrTableHelper:
 
     def get_state_port_tbl(self, asic_id):
         return self.state_port_tbl[asic_id]
-
-    def get_appl_db_port_table_val_by_key(self, lport, port_mapping, key):
-        """
-        Get value from APPL_DB PORT_TABLE by key for a given logical port
-
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-            key:
-                The key to retrieve from the port table
-        Returns:
-            The value associated with the key, or None if not found
-        """
-        asic_index = port_mapping.get_asic_id_for_logical_port(lport)
-        if asic_index is None:
-            helper_logger.log_error(
-                "Get value by key from APPL_DB: Unable to get ASIC index for lport {}".format(lport)
-            )
-            return None
-
-        app_port_read_tbl = self.get_app_port_read_tbl(asic_index)
-
-        found, fvs = app_port_read_tbl.get(lport)
-
-        if not found:
-            helper_logger.log_debug(
-                "Get value by key from APPL_DB: Port {} not found in APPL_DB".format(lport)
-            )
-            return None
-
-        fvs_dict = dict(fvs)
-        if key not in fvs_dict:
-            helper_logger.log_debug(
-                "Get value by key from APPL_DB: Key {} not found for port {}".format(key, lport)
-            )
-            return None
-
-        return fvs_dict[key]
-
-    def is_npu_si_settings_update_required(self, lport, port_mapping):
-        """
-        Checks if NPU SI settings update is required for a module by reading from APPL_DB
-
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-        Returns:
-            True if si_sync_status in APPL_DB is:
-                - not present/accessible from APPL_DB or
-                - set to SI_SETTINGS_DEFAULT:<number>
-            False if si_sync_status is SI_SETTINGS_NOTIFIED:<number>
-        """
-        si_sync_status = self.get_appl_db_port_table_val_by_key(lport, port_mapping, 'si_sync_status')
-
-        if si_sync_status is None:
-            helper_logger.log_debug(
-                "SI settings update required for port {}: si_sync_status not found in APPL_DB".format(lport)
-            )
-            return True
-
-        if si_sync_status.startswith("SI_SETTINGS_DEFAULT"):
-            helper_logger.log_notice(
-                "SI settings update required for port {}: status={}".format(lport, si_sync_status)
-            )
-            return True
-        elif si_sync_status.startswith("SI_SETTINGS_NOTIFIED"):
-            helper_logger.log_debug(
-                "SI settings already notified for port {}: status={}".format(lport, si_sync_status)
-            )
-            return False
-        else:
-            helper_logger.log_warning(
-                "SI settings update required for port {}: Unknown si_sync_status format '{}', "
-                "assuming update required".format(lport, si_sync_status)
-            )
-            return True
-
-    def is_si_settings_already_applied(self, lport, port_mapping):
-        """
-        Check if SI settings are already applied based on sync status in databases
-
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-        Returns:
-            True if SI settings are synced (APPL_DB notified and STATE_DB applied with matching numbers)
-            False otherwise
-        """
-        si_sync_status_appl = self.get_appl_db_port_table_val_by_key(lport, port_mapping, 'si_sync_status')
-
-        if si_sync_status_appl is None or not si_sync_status_appl.startswith("SI_SETTINGS_NOTIFIED"):
-            helper_logger.log_debug(
-                "{}: Cannot skip CMIS init - SI not notified in APPL_DB (status: {})".format(
-                    lport, si_sync_status_appl
-                )
-            )
-            return False
-
-        try:
-            appl_notification_number = int(si_sync_status_appl.split(':')[1])
-        except (ValueError, IndexError, AttributeError):
-            helper_logger.log_warning(
-                "{}: Cannot skip CMIS init - Failed to parse APPL_DB notification number from '{}'".format(
-                    lport, si_sync_status_appl
-                )
-            )
-            return False
-
-        asic_index = port_mapping.get_asic_id_for_logical_port(lport)
-        if asic_index is None:
-            return False
-
-        state_port_tbl = self.get_state_port_tbl(asic_index)
-        found, si_settings_sync_status = state_port_tbl.hget(lport, 'si_settings_sync_status')
-
-        if not found or not si_settings_sync_status:
-            helper_logger.log_debug(
-                "{}: Cannot skip CMIS init - si_settings_sync_status not in STATE_DB".format(lport)
-            )
-            return False
-
-        if not si_settings_sync_status.startswith("SI_SYNC_DONE"):
-            helper_logger.log_debug(
-                "{}: Cannot skip CMIS init - SI not done in STATE_DB (status: {})".format(
-                    lport, si_settings_sync_status
-                )
-            )
-            return False
-
-        try:
-            state_completion_number = int(si_settings_sync_status.split(':')[1])
-        except (ValueError, IndexError, AttributeError):
-            helper_logger.log_warning(
-                "{}: Cannot skip CMIS init - Failed to parse STATE_DB completion number from '{}'".format(
-                    lport, si_settings_sync_status
-                )
-            )
-            return False
-
-        if appl_notification_number != state_completion_number:
-            helper_logger.log_warning(
-                "{}: Cannot skip CMIS init - Number mismatch (APPL_DB={}, STATE_DB={})".format(
-                    lport, appl_notification_number, state_completion_number
-                )
-            )
-            return False
-
-        helper_logger.log_debug(
-            "{}: SI settings sync check passed (notification number={})".format(
-                lport, appl_notification_number
-            )
-        )
-        return True
 
     def get_gearbox_line_lanes_dict(self):
         """
