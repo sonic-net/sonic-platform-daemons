@@ -279,6 +279,98 @@ media_settings_optic_copper_si = {
 
 media_settings_empty = {}
 
+custom_serdes_attrs_xyz_10 = {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13}
+custom_serdes_attrs_xyz_20 = {'lane0': 20, 'lane1': 21, 'lane2': 22, 'lane3': 23}
+custom_serdes_attrs_abc_mode = {'lane0': 'mode_a', 'lane1': 'mode_b', 'lane2': 'mode_c', 'lane3': 'mode_d'}
+
+media_settings_custom_attrs = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '1, 3-4, 8': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                    'CUSTOM:ABC': custom_serdes_attrs_abc_mode,
+                },
+            },
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+        '7-9': {
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_no_space = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '1,3-4,8': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_non_string_selector = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        9: {
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_with_port_and_global = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
+media_settings_custom_attrs_with_port_and_global['CUSTOM_MEDIA_SETTINGS'] = media_settings_custom_attrs['CUSTOM_MEDIA_SETTINGS']
+media_settings_custom_attrs_with_port_and_global['GLOBAL_MEDIA_SETTINGS'] = {
+    '0-31': {
+        'NO_MATCH': {
+            'speed:100GAUI-2': {
+                'pre1': {'lane0': '0x000000ff'},
+            },
+        },
+    },
+}
+
+media_settings_custom_attrs_medium_lane = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '7-9': {
+            'COPPER50': {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            },
+        },
+    }
+}
+
+media_settings_custom_attrs_empty_explicit_then_default = {
+    'CUSTOM_MEDIA_SETTINGS': {
+        '7-9': {
+            'QSFP-DD-active_cable_media_interface': {
+                'speed:200GAUI-4': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                },
+            },
+            'Default': {
+                'speed:100GAUI-2': {
+                    'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+                },
+            },
+        },
+    }
+}
+
 def gen_cmis_lanes_dict(key_format_str, value, one_based=True):
     start_idx = 1 if one_based else 0
     lanes_dict = {}
@@ -1788,6 +1880,140 @@ class TestXcvrdScript(object):
         self._check_notify_media_setting(6, True, {'preemphasis': ','.join(['0x124A08'] * 2)})
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_custom_only(self):
+        custom_media_dict = {
+            'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+        }
+        expected = '{"attributes":[{"XYZ":{"value":[10,11]}}]}'
+
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[1])
+
+        transceiver_dict = {
+            1: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+        with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
+                            get_media_settings_value=MagicMock(return_value={}),
+                            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict)):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        assert app_port_tbl.set.called
+        set_key, fvs = app_port_tbl.set.call_args[0]
+        assert set_key == 'Ethernet0'
+        result_dict = dict(fvs)
+        assert result_dict == {
+            media_settings_parser.CustomMediaSettingsParser.CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected
+        }
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_empty_serialized_payload(self):
+        custom_media_dict = {
+            'NOT_CUSTOM': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+        }
+
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[1])
+
+        transceiver_dict = {
+            1: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+        with patch.multiple('xcvrd.xcvrd_utilities.media_settings_parser',
+                            get_media_settings_value=MagicMock(return_value={}),
+                            get_custom_media_settings_value=MagicMock(return_value=custom_media_dict)):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        assert not app_port_tbl.set.called
+        assert not state_port_tbl.set.called
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.media_settings_present', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_media_settings_key',
+           MagicMock(return_value={'vendor_key': 'UNKOWN', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.get_speed_lane_count_and_subport', MagicMock(return_value=(100000, 2, 1)))
+    def test_notify_media_setting_mixed_settings(self):
+        expected_custom = '{"attributes":[{"XYZ":{"value":[20,21]}}]}'
+        xcvr_table_helper = MagicMock()
+        xcvr_table_helper.is_npu_si_settings_update_required = MagicMock(return_value=True)
+        xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=MagicMock())
+        xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
+        app_port_tbl = MagicMock()
+        xcvr_table_helper.get_app_port_tbl = MagicMock(return_value=app_port_tbl)
+        state_port_tbl = MagicMock()
+        xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=state_port_tbl)
+
+        port_mapping = MagicMock()
+        port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[7])
+
+        transceiver_dict = {
+            7: {
+                'manufacturer': 'Molex',
+                'model': '1064141421',
+                'cable_type': 'Length Cable Assembly(m)',
+                'cable_length': '255',
+                'specification_compliance': "{'10/40G Ethernet Compliance Code': '10GBase-SR'}",
+                'type_abbrv_name': 'QSFP+'
+            }
+        }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_with_port_and_global):
+            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, xcvr_table_helper, port_mapping)
+
+        set_key, fvs = app_port_tbl.set.call_args[0]
+        assert set_key == 'Ethernet0'
+        result_dict = dict(fvs)
+        assert result_dict == {
+            'pre1': '0x00000002,0x00000002',
+            'main': '0x00000020,0x00000020',
+            'post1': '0x00000006,0x00000006',
+            'regn_bfm1n': '0x000000aa,0x000000aa',
+            media_settings_parser.CustomMediaSettingsParser.CUSTOM_SERDES_ATTRS_KEY_IN_DB: expected_custom,
+        }
+
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', gearbox_media_settings_dict)
@@ -1859,6 +2085,187 @@ class TestXcvrdScript(object):
             result_dict.pop('si_settings_notification', None)
         assert found == expected_found
         assert result_dict == expected_value
+
+    @pytest.mark.parametrize("media_dict, lane_count, subport_num, expected", [
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 10, 'lane1': 11, 'lane2': 12, 'lane3': 13},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+                'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
+            },
+            2, 2,
+            '{"attributes":[{"XYZ":{"value":[12,13]}},{"ABC":{"value":[3,4]}}]}',
+        ),
+        (
+            {
+                'CUSTOM:XYZ': {'lane0': 'ADAPTIVE', 'lane1': 'ADAPTIVE', 'lane2': 'ADAPTIVE', 'lane3': 'ADAPTIVE'},
+                'CUSTOM:ABC': {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4},
+            },
+            2, 2,
+            '{"attributes":[{"XYZ":{"value":["ADAPTIVE","ADAPTIVE"]}},{"ABC":{"value":[3,4]}}]}',
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            2, 2,
+            None,
+        ),
+    ])
+    def test_custom_media_settings_to_db_value(self, media_dict, lane_count, subport_num, expected):
+        assert expected == media_settings_parser.CustomMediaSettingsParser.to_db_value(
+            media_dict, lane_count, subport_num)
+
+    def test_custom_media_settings_get_lane_values(self):
+        lane_dict = {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}
+        lane_values = media_settings_parser.CustomMediaSettingsParser._get_lane_values(
+            lane_dict, 2, 2
+        )
+        assert lane_values == [3, 4]
+
+        lane_values = media_settings_parser.CustomMediaSettingsParser._get_lane_values(
+            lane_dict, 2, 3
+        )
+        assert lane_values == [1, 2]
+
+    def test_custom_media_settings_is_port_selected(self):
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1, 3-4, 8', 8)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,3-4,8', 4)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('01', 1)
+        assert media_settings_parser.CustomMediaSettingsParser.is_port_selected('1 - 3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,3-4,8', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('   ', 1)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1,,3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1-a', 1)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('1-2-3', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected('a', 2)
+        assert not media_settings_parser.CustomMediaSettingsParser.is_port_selected(123, 1)
+
+    def test_get_custom_media_settings_value(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'QSFP-DD-active_cable_media_interface',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'UNKNOWN',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs):
+            result = media_settings_parser.get_custom_media_settings_value(8, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+                'CUSTOM:ABC': custom_serdes_attrs_abc_mode,
+            }
+
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+            key_no_match = copy.deepcopy(key)
+            key_no_match['media_key'] = 'UNMATCHED_MEDIA'
+            result = media_settings_parser.get_custom_media_settings_value(8, key_no_match)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs_no_space):
+            result = media_settings_parser.get_custom_media_settings_value(4, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_10,
+            }
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', media_settings_custom_attrs_non_string_selector):
+            result = media_settings_parser.get_custom_media_settings_value(9, key)
+            assert result == {}
+
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_empty_explicit_then_default):
+            result = media_settings_parser.get_custom_media_settings_value(8, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    def test_custom_media_settings_mixed_with_port_and_global(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'QSFP-DD-active_cable_media_interface',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'UNKNOWN',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_with_port_and_global):
+            result = media_settings_parser.get_media_settings_value(7, key)
+            assert result == {
+                'pre1': {'lane0': '0x00000002', 'lane1': '0x00000002'},
+                'main': {'lane0': '0x00000020', 'lane1': '0x00000020'},
+                'post1': {'lane0': '0x00000006', 'lane1': '0x00000006'},
+                'regn_bfm1n': {'lane0': '0x000000aa', 'lane1': '0x000000aa'},
+            }
+
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    def test_custom_media_settings_medium_lane_key(self):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'UNMATCHED_MEDIA',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'COPPER50',
+        }
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict',
+                   media_settings_custom_attrs_medium_lane):
+            result = media_settings_parser.get_custom_media_settings_value(7, key)
+            assert result == {
+                'CUSTOM:XYZ': custom_serdes_attrs_xyz_20,
+            }
+
+    @pytest.mark.parametrize("settings", [{}, [], None])
+    def test_custom_media_settings_parser_empty_or_invalid_settings(self, settings):
+        key = {
+            'vendor_key': 'UNKOWN',
+            'media_key': 'UNMATCHED_MEDIA',
+            'lane_speed_key': 'speed:100GAUI-2',
+            'medium_lane_speed_key': 'COPPER50',
+        }
+        parser = media_settings_parser.CustomMediaSettingsParser()
+        assert parser.parse(settings, 7, key) == ({}, {})
+
+    @pytest.mark.parametrize("media_dict, lane_count, subport_num, gearbox_line_lane_count, expected", [
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'}},
+            2, 2, None,
+            [('main', '0x13,0x14')],
+        ),
+        (
+            {'main': {'lane0': '0x11', 'lane1': '0x12'}, 'los_thresh': '7'},
+            2, 0, None,
+            [('main', '0x11,0x12'), ('los_thresh', '7')],
+        ),
+        (
+            {},
+            2, 2, None,
+            [],
+        ),
+        (
+            {
+                'gb_line_main': {
+                    'lane0': '0x10', 'lane1': '0x11', 'lane2': '0x12', 'lane3': '0x13',
+                    'lane4': '0x14', 'lane5': '0x15', 'lane6': '0x16', 'lane7': '0x17',
+                },
+                'gb_system_main': {
+                    'lane0': '0x20', 'lane1': '0x21', 'lane2': '0x22', 'lane3': '0x23',
+                },
+            },
+            4, 0, 8,
+            [
+                ('gb_line_main', '0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17'),
+                ('gb_system_main', '0x20,0x21,0x22,0x23'),
+            ],
+        ),
+    ])
+    def test_media_settings_to_db_value(self, media_dict, lane_count, subport_num,
+                                        gearbox_line_lane_count, expected):
+        assert expected == media_settings_parser.MediaSettingsParserBase.to_db_value(
+            media_dict, lane_count, subport_num, gearbox_line_lane_count)
 
     def _check_notify_media_setting_with_gearbox(self, index, gearbox_line_lanes, system_lanes, xcvr_info_dict=None):
         """
@@ -2871,7 +3278,8 @@ class TestXcvrdScript(object):
         info = task.port_dict['Ethernet0']
 
         # Process the port - should fail due to invalid host_lanes_mask
-        task.process_single_lport('Ethernet0', info, {})
+        task._gearbox_lanes_dict = {}
+        task.process_single_lport('Ethernet0', info)
 
         # Verify state transitioned to FAILED
         assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_FAILED
@@ -2944,7 +3352,8 @@ class TestXcvrdScript(object):
         info = task.port_dict['Ethernet0']
 
         # Process the port - should log error when tx power config fails
-        task.process_single_lport('Ethernet0', info, {})
+        task._gearbox_lanes_dict = {}
+        task.process_single_lport('Ethernet0', info)
 
         # Verify configure_tx_output_power was called
         assert task.configure_tx_output_power.called
@@ -3013,20 +3422,307 @@ class TestXcvrdScript(object):
         cmis_manager.join()
         assert not cmis_manager.is_alive()
 
-    @pytest.mark.parametrize("app_new, lane_appl_code, expected", [
-        (2, {0 : 1, 1 : 1, 2 : 1, 3 : 1, 4 : 2, 5 : 2, 6 : 2, 7 : 2}, True),
-        (0, {0 : 1, 1 : 1, 2 : 1, 3 : 1}, True),
-        (1, {0 : 0, 1 : 0, 2 : 0, 3 : 0, 4 : 0, 5 : 0, 6 : 0, 7 : 0}, False)
+    @pytest.mark.parametrize("active_map, desired_map, expected", [
+        # Lanes 0-3 have app 1 but desired is 2 for all → decommission
+        ([1,1,1,1,2,2,2,2], [2,2,2,2,2,2,2,2], True),
+        # Lanes 0-3 active with app 1, desired is 0 → decommission
+        ([1,1,1,1,0,0,0,0], [0,0,0,0,0,0,0,0], True),
+        # All lanes unused, desired has app 1 → no decommission
+        ([0,0,0,0,0,0,0,0], [1,1,1,1,0,0,0,0], False),
+        # Mixed mode: adding new DPs on unused lanes → no decommission
+        ([3,3,3,3,0,0,0,0], [3,3,3,3,1,1,1,1], False),
+        # Mixed mode steady state: all lanes match → no decommission
+        ([3,3,3,3,1,1,1,1], [3,3,3,3,1,1,1,1], False),
      ])
-    def test_CmisManagerTask_is_decommission_required(self, app_new, lane_appl_code, expected):
+    def test_CmisManagerTask_is_decommission_required(self, active_map, desired_map, expected):
         mock_xcvr_api = MagicMock()
-        def get_application(lane):
-            return lane_appl_code.get(lane, 0)
-        mock_xcvr_api.get_application = MagicMock(side_effect=get_application)
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane{}'.format(lane + 1): active_map[lane]
+            for lane in range(CmisManagerTask.CMIS_MAX_HOST_LANES)
+        })
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: active_map[lane])
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
-        assert task.is_decommission_required(mock_xcvr_api, app_new) == expected
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') == expected
+
+    def test_CmisManagerTask_is_decommission_required_uses_active_appsel_not_staged(self):
+        mock_xcvr_api = MagicMock()
+        # Active app map still old layout, staged app map already matches desired.
+        active_map = [1,1,1,1,1,1,1,1]
+        staged_map = [3,3,3,3,1,1,1,1]
+        desired_map = [3,3,3,3,1,1,1,1]
+
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane{}'.format(lane + 1): active_map[lane]
+            for lane in range(CmisManagerTask.CMIS_MAX_HOST_LANES)
+        })
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: staged_map[lane])
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
+
+    def test_CmisManagerTask_is_decommission_required_invalid_active_appsel(self):
+        mock_xcvr_api = MagicMock()
+        desired_map = [2,2,2,2,2,2,2,2]
+
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane1': 'N/A',
+            'ActiveAppSelLane2': 1,
+            'ActiveAppSelLane3': 1,
+            'ActiveAppSelLane4': 1,
+            'ActiveAppSelLane5': 2,
+            'ActiveAppSelLane6': 2,
+            'ActiveAppSelLane7': 2,
+            'ActiveAppSelLane8': 2,
+        })
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
+
+    def test_CmisManagerTask_is_decommission_required_missing_active_appsel_lane(self):
+        mock_xcvr_api = MagicMock()
+        desired_map = [2,2,2,2,2,2,2,2]
+
+        # Missing ActiveAppSelLane8 should trigger fail-safe decommission.
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane1': 1,
+            'ActiveAppSelLane2': 1,
+            'ActiveAppSelLane3': 1,
+            'ActiveAppSelLane4': 1,
+            'ActiveAppSelLane5': 2,
+            'ActiveAppSelLane6': 2,
+            'ActiveAppSelLane7': 2,
+        })
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=desired_map)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
+
+    def test_CmisManagerTask_get_desired_app_map(self):
+        """Test get_desired_app_map with mixed mode, skipped siblings, and edge cases"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        # Mock cfg_port_tbl
+        cfg_port_tbl = MagicMock()
+
+        # CONFIG_DB has 5 keys:
+        #   Ethernet0  (index=1, 400G, 8 lanes, subport=0) — non-breakout
+        #   Ethernet8  (index=2, different pport — should be skipped)
+        #   Ethernet16 (index=1, but missing speed — should be skipped)
+        #   Ethernet24 (missing index in full hash — should be skipped)
+        #   Ethernet32 (get returns not found — should be skipped)
+        cfg_port_tbl.getKeys = MagicMock(return_value=[
+            'Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet32'
+        ])
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0':  (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0'), ('index', '1')]),
+                'Ethernet8':  (True, [('speed', '100000'), ('lanes', '9'), ('subport', '1'), ('index', '2')]),
+                'Ethernet16': (True, [('lanes', '1,2,3,4'), ('index', '1')]),  # missing speed
+                'Ethernet24': (True, [('speed', '100000'), ('lanes', '1')]),    # missing index
+                'Ethernet32': (False, []),
+            }
+            return data.get(key, (False, []))
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {}
+
+        # get_cmis_application_desired returns app code 3 for 8-lane 400G
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', return_value=3):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [3, 3, 3, 3, 3, 3, 3, 3]
+
+    def test_CmisManagerTask_get_desired_app_map_mixed_mode(self):
+        """Test get_desired_app_map with mixed application codes (1x400G + 4x100G)"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0', 'Ethernet4', 'Ethernet5', 'Ethernet6', 'Ethernet7'])
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0': (True, [('speed', '400000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]),
+                'Ethernet4': (True, [('speed', '100000'), ('lanes', '5'), ('subport', '5'), ('index', '1')]),
+                'Ethernet5': (True, [('speed', '100000'), ('lanes', '6'), ('subport', '6'), ('index', '1')]),
+                'Ethernet6': (True, [('speed', '100000'), ('lanes', '7'), ('subport', '7'), ('index', '1')]),
+                'Ethernet7': (True, [('speed', '100000'), ('lanes', '8'), ('subport', '8'), ('index', '1')]),
+            }
+            return data.get(key, (False, []))
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {}
+
+        # app=3 for 4-lane 400G, app=1 for 1-lane 100G
+        def get_app_desired(api, lane_count, speed):
+            if lane_count == 4 and speed == 400000:
+                return 3
+            if lane_count == 1 and speed == 100000:
+                return 1
+            return None
+        # host_lane_assignment_option: all lanes assignable
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', side_effect=get_app_desired):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [3, 3, 3, 3, 1, 1, 1, 1]
+
+    def test_CmisManagerTask_get_desired_app_map_no_matching_app(self):
+        """Test get_desired_app_map when get_cmis_application_desired returns None"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
+        cfg_port_tbl.get = MagicMock(return_value=(True, [('speed', '999999'), ('lanes', '1,2,3,4'), ('subport', '0'), ('index', '1')]))
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {}
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', return_value=None):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [0, 0, 0, 0, 0, 0, 0, 0]
+
+    def test_CmisManagerTask_get_desired_app_map_uses_gearbox_lane_count(self):
+        """Test get_desired_app_map uses gearbox lane count over PORT table lanes"""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
+        # PORT table lanes suggest 4 lanes, but gearbox says 2 for this lport.
+        cfg_port_tbl.get = MagicMock(return_value=(True, [('speed', '200000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]))
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {'Ethernet0': 2}
+
+        # Return app only when lane_count comes from gearbox (2 lanes) for speed 200G.
+        def get_app_desired(api, lane_count, speed):
+            if lane_count == 2 and speed == 200000:
+                return 2
+            return None
+
+        # app=2 with host_lane_count=2 and subport=1 should map lanes 0 and 1.
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(return_value=0xFF)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', side_effect=get_app_desired):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet0')
+
+        assert result == [2, 2, 0, 0, 0, 0, 0, 0]
+
+    def test_CmisManagerTask_get_sibling_port_configs(self):
+        """get_sibling_port_configs returns one entry per sibling sharing pport,
+        skipping rows with mismatched pport, missing index/speed/lanes, invalid
+        numeric fields, or get() returning not-found."""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=[
+            'Ethernet0',   # match
+            'Ethernet4',   # match
+            'Ethernet8',   # different pport — skip
+            'Ethernet12',  # missing index — skip
+            'Ethernet16',  # missing speed — skip
+            'Ethernet20',  # missing lanes — skip
+            'Ethernet24',  # invalid speed — skip
+            'Ethernet28',  # invalid index — skip
+            'Ethernet32',  # not found — skip
+        ])
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0':  (True, [('speed', '400000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]),
+                'Ethernet4':  (True, [('speed', '100000'), ('lanes', '5'),       ('subport', '5'), ('index', '1')]),
+                'Ethernet8':  (True, [('speed', '100000'), ('lanes', '9'),       ('subport', '1'), ('index', '2')]),
+                'Ethernet12': (True, [('speed', '100000'), ('lanes', '1')]),
+                'Ethernet16': (True, [('lanes', '1,2,3,4'), ('index', '1')]),
+                'Ethernet20': (True, [('speed', '100000'), ('subport', '1'), ('index', '1')]),
+                'Ethernet24': (True, [('speed', 'foo'), ('lanes', '1'), ('subport', '1'), ('index', '1')]),
+                'Ethernet28': (True, [('speed', '100000'), ('lanes', '1'), ('subport', '1'), ('index', 'bar')]),
+                'Ethernet32': (False, []),
+            }
+            return data.get(key, (False, []))
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {}
+
+        siblings = task.get_sibling_port_configs('Ethernet0')
+
+        assert siblings == [
+            {'lport': 'Ethernet0', 'subport': 1, 'speed': 400000, 'host_lane_count': 4},
+            {'lport': 'Ethernet4', 'subport': 5, 'speed': 100000, 'host_lane_count': 1},
+        ]
+
+    def test_CmisManagerTask_get_sibling_port_configs_no_cfg_port_tbl(self):
+        """get_sibling_port_configs returns [] when cfg_port_tbl is None."""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=None)
+        task._gearbox_lanes_dict = {}
+
+        assert task.get_sibling_port_configs('Ethernet0') == []
+
+    def test_CmisManagerTask_get_sibling_port_configs_uses_gearbox_lane_count(self):
+        """get_sibling_port_configs uses gearbox lane count when present."""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet0'])
+        cfg_port_tbl.get = MagicMock(return_value=(
+            True, [('speed', '200000'), ('lanes', '1,2,3,4'), ('subport', '1'), ('index', '1')]))
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {'Ethernet0': 2}
+
+        siblings = task.get_sibling_port_configs('Ethernet0')
+
+        assert siblings == [
+            {'lport': 'Ethernet0', 'subport': 1, 'speed': 200000, 'host_lane_count': 2},
+        ]
 
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
@@ -3259,8 +3955,9 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task._gearbox_lanes_dict = gearbox_lanes_dict
 
-        result = task.get_host_lane_count(lport, port_config_lanes, gearbox_lanes_dict)
+        result = task.get_host_lane_count(lport, port_config_lanes)
         assert result == expected_count
 
     def test_CmisManagerTask_gearbox_integration_end_to_end(self):
@@ -3295,7 +3992,8 @@ class TestXcvrdScript(object):
         }
 
         # Test the integration: should use gearbox line lanes (2) not port config lanes (4)
-        host_lane_count = task.get_host_lane_count("Ethernet0", port_config_lanes, gearbox_lanes_dict)
+        task._gearbox_lanes_dict = gearbox_lanes_dict
+        host_lane_count = task.get_host_lane_count("Ethernet0", port_config_lanes)
         assert host_lane_count == 2  # Should use gearbox line lanes, not port config
 
         # Test that this leads to correct CMIS application selection
@@ -3315,13 +4013,14 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.get_gearbox_line_lanes_dict.return_value = mock_gearbox_lanes_dict
 
         # Test that get_host_lane_count uses the cached dictionary correctly
-        result1 = task.get_host_lane_count("Ethernet0", "25,26,27,28", mock_gearbox_lanes_dict)
+        task._gearbox_lanes_dict = mock_gearbox_lanes_dict
+        result1 = task.get_host_lane_count("Ethernet0", "25,26,27,28")
         assert result1 == 2  # Should use gearbox count
 
-        result2 = task.get_host_lane_count("Ethernet4", "29,30", mock_gearbox_lanes_dict)
+        result2 = task.get_host_lane_count("Ethernet4", "29,30")
         assert result2 == 4  # Should use gearbox count
 
-        result3 = task.get_host_lane_count("Ethernet8", "33,34,35", mock_gearbox_lanes_dict)
+        result3 = task.get_host_lane_count("Ethernet8", "33,34,35")
         assert result3 == 3  # Should fall back to port config count
 
     @patch('swsscommon.swsscommon.FieldValuePairs')
@@ -5492,40 +6191,60 @@ class TestXcvrdScript(object):
         physical_port = 33
         assert not common.check_port_in_range(range_str, physical_port)
 
-    def test_get_serdes_si_setting_val_str(self):
+    def test_media_settings_parser_base_get_lane_values_str(self):
         lane_dict = {'lane0': '1', 'lane1': '2', 'lane2': '3', 'lane3': '4'}
         # non-breakout case
         lane_count = 4
         subport_num = 0
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2,3,4'
         # breakout case
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '3,4'
         # breakout case without subport number specified in config
         lane_count = 2
         subport_num = 0
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # breakout case with out-of-range subport number
         lane_count = 2
         subport_num = 3
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # breakout case with smaler lane_dict
         lane_dict = {'lane0': '1', 'lane1': '2'}
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == '1,2'
         # lane key-value pair inserted in non-asceding order
         lane_dict = {'lane0': 'a', 'lane2': 'c', 'lane1': 'b', 'lane3': 'd'}
         lane_count = 2
         subport_num = 2
-        media_str = get_serdes_si_setting_val_str(lane_dict, lane_count, subport_num)
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
         assert media_str == 'c,d'
+        # non-string lane values are coerced defensively for string output
+        lane_dict = {'lane0': 1, 'lane1': 2, 'lane2': 3, 'lane3': 4}
+        lane_count = 2
+        subport_num = 2
+        media_str = media_settings_parser.MediaSettingsParserBase._get_lane_values_str(
+            lane_dict, lane_count, subport_num
+        )
+        assert media_str == '3,4'
 
     class MockPortMapping:
         logical_port_list = [0, 1, 2]
