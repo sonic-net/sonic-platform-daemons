@@ -395,7 +395,7 @@ class TestXcvrdThreadException(object):
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(side_effect=NotImplementedError))
     def test_SffManagerTask_task_run_with_exception(self):
         stop_event = threading.Event()
-        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        sff_mgr = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(), stop_event, MagicMock(), helper_logger)
         exception_received = None
         trace = None
         try:
@@ -2770,7 +2770,7 @@ class TestXcvrdScript(object):
 
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
-        task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
+        task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(), stop_event, MagicMock(), helper_logger)
 
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
         task.on_port_update_event(port_change_event)
@@ -2808,7 +2808,7 @@ class TestXcvrdScript(object):
         assert len(task.port_dict) == 0
 
     def test_SffManagerTask_get_active_lanes_for_lport(self):
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -2862,7 +2862,7 @@ class TestXcvrdScript(object):
         assert result == expected_result
 
     def test_SffManagerTask_get_active_lanes_for_lport_with_invalid_input(self):
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -2885,7 +2885,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_host_tx_status(self, mock_get_state_port_tbl):
         mock_get_state_port_tbl.return_value.hget.return_value = (True, 'true')
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -2899,7 +2899,7 @@ class TestXcvrdScript(object):
     def test_SffManagerTask_get_admin_status(self, mock_get_cfg_port_tbl):
         mock_get_cfg_port_tbl.return_value.hget.return_value = (True, 'up')
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                  threading.Event(),
                                  MagicMock(),
                                  helper_logger)
@@ -2924,7 +2924,7 @@ class TestXcvrdScript(object):
         mock_sfp.get_xcvr_api = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                           threading.Event(),
                                           mock_chassis,
                                           mock_logger)
@@ -2956,7 +2956,7 @@ class TestXcvrdScript(object):
         mock_xcvr_api.set_high_power_class = MagicMock(return_value=True)
         lport = 'Ethernet0'
 
-        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                                           threading.Event(),
                                           MagicMock(),
                                           helper_logger)
@@ -3010,7 +3010,7 @@ class TestXcvrdScript(object):
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        task = SffManagerTask(DEFAULT_NAMESPACE,
+        task = SffManagerTask(DEFAULT_NAMESPACE, PortMapping(),
                               threading.Event(),
                               mock_chassis,
                               mock_logger)
@@ -5711,7 +5711,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
         assert mock_post_firmware_info.call_count == 0
-        assert mock_update_media_setting.call_count == 1
+        assert mock_update_media_setting.call_count == 0
 
         stop_event.is_set = MagicMock(side_effect=[False, True])
         mock_change_event.return_value = (True, {1: SFP_STATUS_REMOVED}, {})
@@ -5801,7 +5801,7 @@ class TestXcvrdScript(object):
         assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
         task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_with('Ethernet0')
         task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_with('Ethernet0')
-        assert mock_update_media_setting.call_count == 1
+        assert mock_update_media_setting.call_count == 0
         assert 'Ethernet0' not in task.retry_eeprom_set
 
         mock_get_presence.return_value = False
@@ -6611,7 +6611,7 @@ class TestXcvrdScript(object):
         assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
         assert mock_post_firmware_info.call_count == 0
-        assert mock_update_media_setting.call_count == 1
+        assert mock_update_media_setting.call_count == 0
 
         stop_event.is_set = MagicMock(side_effect=[False, True])
         mock_change_event.return_value = (True, {1: SFP_STATUS_REMOVED}, {})

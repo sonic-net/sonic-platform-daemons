@@ -1195,19 +1195,6 @@ class CmisManagerTask(threading.Thread):
                     # Set Explicit control bit to apply Custom Host SI settings
                     ec = 1
 
-        # Some transceiver firmwares clear DpInitPending on unrelated datapaths when
-        # Apply_DataPathInit is written for a different datapath. So delay configuration
-        # until DpInitPending is cleared on all datapaths.
-        if hasattr(api, 'get_cmis_rev'):
-            # Check datapath init pending on module that supports CMIS 5.x
-            majorRev = int(api.get_cmis_rev().split('.')[0])
-            if majorRev >= 5 and self.check_any_datapath_init_pending(pport, lport):
-                self.log_notice("{}: datapath init was pending, delay config".format(lport))
-                if self.is_timer_expired(expired):
-                    self.log_notice("{}: timeout for clearing data path init pending".format(lport))
-                    self.force_cmis_reinit(lport, retries + 1)
-                return False
-
         # D.1.3 Software Configuration and Initialization
         api.set_application(host_lanes_mask, appl, ec)
         if not api.scs_apply_datapath_init(host_lanes_mask):

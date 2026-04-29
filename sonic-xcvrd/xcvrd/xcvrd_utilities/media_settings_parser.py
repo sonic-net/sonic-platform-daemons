@@ -634,8 +634,8 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
         # Add si_settings_notification to APPL_DB
         si_settings_notification_value = "SI_SETTINGS_NOTIFIED:{}".format(notification_number)
-        fvs[index] = ("si_settings_notification", si_settings_notification_value)
-        helper_logger.log_notice("{}:({},{}) ".format(index, "si_settings_notification", si_settings_notification_value))
+        fvs[len(fvs_list)] = ("si_settings_notification", si_settings_notification_value)
+        helper_logger.log_notice("{}:({},{}) ".format(len(fvs_list), "si_settings_notification", si_settings_notification_value))
 
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
         helper_logger.log_notice("Notify media setting: Published SI setting "
