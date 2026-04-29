@@ -15,6 +15,7 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from .xcvrd_utilities import common
+    from .xcvrd_utilities import media_settings_parser
     from sonic_platform_base.sonic_xcvr.api.public.sff8472 import Sff8472Api
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -86,7 +87,7 @@ class SffManagerTask(threading.Thread):
 
     SFF_LOGGER_PREFIX = "SFF-MAIN: "
 
-    def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
+    def __init__(self, namespaces, port_mapping, main_thread_stop_event, platform_chassis, helper_logger):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
         self.exc = None
@@ -95,6 +96,7 @@ class SffManagerTask(threading.Thread):
         self.helper_logger = helper_logger
         self.logger_for_port_update_event = SffLoggerForPortUpdateEvent(helper_logger)
         self.platform_chassis = platform_chassis
+        self.port_mapping = port_mapping
         # port_dict holds data obtained from on_port_update_event per port entry
         # with logical_port_name as key.
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
@@ -193,6 +195,7 @@ class SffManagerTask(threading.Thread):
 
             if self.XCVR_TYPE in port_change_event.port_dict:
                 self.port_dict[lport][self.XCVR_TYPE] = port_change_event.port_dict[self.XCVR_TYPE]
+                self.port_dict[lport]['notify_si_settings'] = True
             self.port_dict[lport]['asic_id'] = asic_id
         # CONFIG_DB PORT_TABLE DEL case:
         elif port_change_event.db_name and \
@@ -456,6 +459,15 @@ class SffManagerTask(threading.Thread):
                     xcvr_inserted,
                     data[self.HOST_TX_READY], host_tx_ready_changed,
                     data[self.ADMIN_STATUS], admin_status_changed))
+
+                if data.get('notify_si_settings'):
+                    self.port_dict[lport]['notify_si_settings'] = False
+                    xcvr_info = sfp.get_transceiver_info()
+                    if xcvr_info is not None:
+                        media_settings_parser.notify_media_setting(
+                            lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+                    else:
+                        self.log_error("{}: failed to read transceiver info for SI settings notify".format(lport))
 
                 try:
                     # Skip if it's a copper cable

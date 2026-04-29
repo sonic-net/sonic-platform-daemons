@@ -551,6 +551,7 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
+
 def notify_media_setting(logical_port_name, transceiver_dict,
                          xcvr_table_helper, port_mapping):
 
@@ -562,11 +563,6 @@ def notify_media_setting(logical_port_name, transceiver_dict,
                                 "not initialized for lport {}".format(logical_port_name))
         return
 
-    if not xcvr_table_helper.is_npu_si_settings_update_required(logical_port_name, port_mapping):
-        helper_logger.log_notice("Notify media setting: Media settings already "
-                                 "notified for lport {}".format(logical_port_name))
-        return
-
     asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
 
     port_speed, lane_count, subport_num = get_speed_lane_count_and_subport(logical_port_name, xcvr_table_helper.get_cfg_port_tbl(asic_index))
@@ -574,6 +570,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
 
     ganged_port = False
     ganged_member_num = 1
+    last_notification_number = None
 
     physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
     if physical_port_list is None:
@@ -625,14 +622,24 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             helper_logger.log_info("Error in obtaining media setting for {}".format(logical_port_name))
             return
 
-        fvs = swsscommon.FieldValuePairs(len(fvs_list))
+        fvs = swsscommon.FieldValuePairs(len(fvs_list) + 1)
 
         helper_logger.log_notice("Publishing SI setting for port {} in APP_DB:".format(logical_port_name))
         for index, (media_key, val_str) in enumerate(fvs_list):
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
             fvs[index] = (str(media_key), str(val_str))
 
+        # Get next notification number from APPL_DB for this port
+        notification_number = xcvr_table_helper.get_next_si_notification_number(port_name, asic_index)
+
+        # Add si_settings_notification to APPL_DB
+        si_settings_notification_value = "SI_SETTINGS_NOTIFIED:{}".format(notification_number)
+        fvs[len(fvs_list)] = ("si_settings_notification", si_settings_notification_value)
+        helper_logger.log_notice("{}:({},{}) ".format(len(fvs_list), "si_settings_notification", si_settings_notification_value))
+
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
-        xcvr_table_helper.get_state_port_tbl(asic_index).set(logical_port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
         helper_logger.log_notice("Notify media setting: Published SI setting "
-                                 "for lport {} in APP_DB".format(logical_port_name))
+                                 "for lport {} in APP_DB with notification number {}".format(logical_port_name, notification_number))
+        last_notification_number = notification_number
+
+    return last_notification_number
