@@ -62,6 +62,13 @@ class CmisManagerTask(threading.Thread):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
+        self.fast_reboot_status = self.initialize_fast_reboot_status()
+
+    def initialize_fast_reboot_status(self):
+        fast_reboot_status = {}
+        for namespace in self.namespaces:
+            fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
+        return fast_reboot_status
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -78,7 +85,7 @@ class CmisManagerTask(threading.Thread):
     def is_fast_reboot_enabled_for_lport(self, lport):
         asic_id = self.get_asic_id(lport)
         namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
-        return bool(common.is_fast_reboot_enabled(namespace))
+        return self.fast_reboot_status.get(namespace, False)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
         status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))

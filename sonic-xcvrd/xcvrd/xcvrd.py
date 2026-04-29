@@ -278,15 +278,23 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_obj_dict = sfp_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
         self.dom_db_utils = DOMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
         self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+
+    def initialize_warm_fast_reboot_status(self):
+        warm_fast_reboot_status = {}
+        for namespace in self.namespaces:
+            warm_fast_reboot_status[namespace] = bool(common.is_syncd_warm_restore_complete(namespace) or
+                                                      common.is_fast_reboot_enabled(namespace))
+        return warm_fast_reboot_status
 
     def is_warm_fast_reboot_for_lport(self, logical_port):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
         if asic_index is None:
             return False
         namespace = common.get_namespace_from_asic_id(asic_index)
-        return bool(common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace))
+        return self.warm_fast_reboot_status.get(namespace, False)
 
     def should_notify_media_settings(self, logical_port):
         return not self.is_warm_fast_reboot_for_lport(logical_port)
@@ -321,11 +329,6 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        # Pre-fetch warm/fast reboot status for all namespaces/ASICs
-        warm_fast_reboot_status = {}
-        for namespace in self.namespaces:
-            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)
-
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -340,7 +343,7 @@ class SfpStateUpdateTask(threading.Thread):
 
             # Get warm/fast reboot status for this ASIC's namespace
             namespace = common.get_namespace_from_asic_id(asic_index)
-            is_warm_fast_reboot = warm_fast_reboot_status.get(namespace, False)
+            is_warm_fast_reboot = self.warm_fast_reboot_status.get(namespace, False)
 
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:

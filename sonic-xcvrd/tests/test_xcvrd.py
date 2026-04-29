@@ -3145,13 +3145,14 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic1'))
     def test_CmisManagerTask_is_fast_reboot_enabled_for_lport(self):
         port_mapping = PortMapping()
+        port_mapping.logical_to_asic = {'Ethernet0': 1}
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
-        task.port_dict['Ethernet0'] = {'asic_id': 1}
+        task = CmisManagerTask(['asic1'], port_mapping, stop_event, platform_chassis=MagicMock())
+        common.is_fast_reboot_enabled.reset_mock()
 
         assert task.is_fast_reboot_enabled_for_lport('Ethernet0') is True
         common.get_namespace_from_asic_id.assert_called_with(1)
-        common.is_fast_reboot_enabled.assert_called_with('asic1')
+        common.is_fast_reboot_enabled.assert_not_called()
 
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
     def test_CmisManagerTask_is_fast_reboot_enabled_for_lport_default_namespace(self):
@@ -5592,12 +5593,16 @@ class TestXcvrdScript(object):
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task = SfpStateUpdateTask(['asic2'], port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        common.is_syncd_warm_restore_complete.assert_called_once_with('asic2')
+        common.is_fast_reboot_enabled.assert_called_once_with('asic2')
+        common.is_syncd_warm_restore_complete.reset_mock()
+        common.is_fast_reboot_enabled.reset_mock()
 
         assert task.is_warm_fast_reboot_for_lport('Ethernet0') is True
         common.get_namespace_from_asic_id.assert_called_with(2)
-        common.is_syncd_warm_restore_complete.assert_called_with('asic2')
-        common.is_fast_reboot_enabled.assert_called_with('asic2')
+        common.is_syncd_warm_restore_complete.assert_not_called()
+        common.is_fast_reboot_enabled.assert_not_called()
 
     def test_SfpStateUpdateTask_is_warm_fast_reboot_for_lport_invalid_asic(self):
         port_mapping = PortMapping()
