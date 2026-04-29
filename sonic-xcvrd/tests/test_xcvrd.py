@@ -5241,6 +5241,73 @@ class TestXcvrdScript(object):
         assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 1
         assert mock_post_pm_info.call_count == 1
 
+    @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    def test_DomInfoUpdateTask_task_worker_stop_event_during_port_update_wait(self, mock_post_pm_info):
+        """
+        This test simulates the scenario where task_stopping_event is set
+        while waiting for periodic DB update (during check_port_update loop)
+        """
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = MagicMock()
+
+        # Set DOM_INFO_UPDATE_PERIOD_SECS to a large value so periodic update is not triggered
+        # This ensures we stay in the inner while loop
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 1000
+
+        # Mock check_port_update to track if it's called
+        check_port_update_call_count = [0]
+        original_check_port_update = task.check_port_update
+
+        def mock_check_port_update(port_change_observer, timeout):
+            check_port_update_call_count[0] += 1
+            # Don't actually call the original to avoid complexity
+            pass
+
+        task.check_port_update = mock_check_port_update
+
+        # Mock log_notice to verify the specific log message is generated
+        log_messages = []
+        original_log_notice = task.log_notice
+
+        def mock_log_notice(message):
+            log_messages.append(message)
+            original_log_notice(message)
+
+        task.log_notice = mock_log_notice
+
+        # Set up task_stopping_event to be set after check_port_update is called once
+        # First False: outer loop check
+        # Second False: inner loop check for stopping_event_set
+        # Third True: check after check_port_update
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+
+        task.port_mapping.logical_port_list = ['Ethernet0']
+        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
+
+        # Run task_worker
+        task.task_worker()
+
+        # Verify that check_port_update was called
+        assert check_port_update_call_count[0] >= 1, "check_port_update should have been called at least once"
+
+        # Verify that the specific log message was generated
+        assert any("Stop event generated during DOM monitoring loop while checking port update" in msg for msg in log_messages), \
+            "Expected log message about stop event during port update check was not found"
+
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
@@ -6557,6 +6624,211 @@ class TestXcvrdScript(object):
         assert mock_update_status.call_count == 1
         assert mock_del_dom.call_count == 1
         mock_sfp.remove_xcvr_api.assert_called_once()
+
+    @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
+    def test_DomInfoUpdateTask_check_port_update(self):
+        """Test the check_port_update method with various scenarios"""
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = MagicMock()
+
+        # Create a mock port_change_observer
+        mock_port_change_observer = MagicMock()
+        mock_port_change_observer.handle_port_update_event = MagicMock()
+
+        # Mock update_port_db_diagnostics_on_link_change
+        task.update_port_db_diagnostics_on_link_change = MagicMock()
+
+        # Test 1: No link change affected ports
+        task.link_change_affected_ports = {}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+
+        # Test 2: Link change affected port with time in the past (should trigger update)
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        past_time = datetime.datetime.now() - datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {0: past_time}
+        task.check_port_update(mock_port_change_observer, 100)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(100)
+        task.update_port_db_diagnostics_on_link_change.assert_called_once_with(0)
+        assert 0 not in task.link_change_affected_ports
+
+        # Test 3: Link change affected port with time in the future (should not trigger update)
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        future_time = datetime.datetime.now() + datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {4: future_time}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+        assert 4 in task.link_change_affected_ports
+
+        # Test 4: Multiple link change affected ports, some ready, some not
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        past_time1 = datetime.datetime.now() - datetime.timedelta(seconds=2)
+        past_time2 = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        future_time = datetime.datetime.now() + datetime.timedelta(seconds=5)
+        task.link_change_affected_ports = {
+            0: past_time1,
+            8: past_time2,
+            12: future_time
+        }
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 2
+        # Check that the two past ports were processed
+        calls = [call[0][0] for call in task.update_port_db_diagnostics_on_link_change.call_args_list]
+        assert 0 in calls
+        assert 8 in calls
+        # Future port should still be in the dict
+        assert 12 in task.link_change_affected_ports
+        assert 0 not in task.link_change_affected_ports
+        assert 8 not in task.link_change_affected_ports
+
+        # Test 5: Stop event is set during processing
+        mock_port_change_observer.handle_port_update_event.reset_mock()
+        task.update_port_db_diagnostics_on_link_change.reset_mock()
+        task.task_stopping_event.set()
+        past_time = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        task.link_change_affected_ports = {16: past_time}
+        task.check_port_update(mock_port_change_observer, 1000)
+        mock_port_change_observer.handle_port_update_event.assert_called_once_with(1000)
+        # Should break early and not process the port
+        assert task.update_port_db_diagnostics_on_link_change.call_count == 0
+        assert 16 in task.link_change_affected_ports
+
+    @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db', MagicMock(return_value=True))
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver')
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
+    @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
+    def test_DomInfoUpdateTask_scheduling_uses_loop_start_time(self, mock_post_pm_info, mock_observer_class):
+        """
+        Test that the scheduling logic uses the loop-start timestamp instead of loop-end timestamp.
+        This verifies that even if per-iteration processing takes a long time, the next update time
+        is based on when the loop started, not when it ended, preventing timing drift.
+
+        The test simulates:
+        - Iteration 1: starts at T=0, processing takes 5 seconds (ends at T=5)
+        - If correct: next update scheduled at T=0+60=60
+        - If wrong (using loop end): next update scheduled at T=5+60=65
+        - Iteration 2: starts at T=61
+        - If correct: update triggers (61 >= 60), processes, schedules next at T=61+60=121
+        - If wrong: update doesn't trigger yet (61 < 65), which we can detect
+        """
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        mock_cmis_manager = MagicMock()
+        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
+        task.xcvr_table_helper = MagicMock()
+
+        # Set a non-zero DOM_INFO_UPDATE_PERIOD_SECS to test the scheduling logic
+        task.DOM_INFO_UPDATE_PERIOD_SECS = 60
+
+        # Mock the port change observer
+        mock_observer_instance = MagicMock()
+        mock_observer_instance.handle_port_update_event = MagicMock()
+        mock_observer_class.return_value = mock_observer_instance
+
+        # Setup port mapping with one port
+        task.port_mapping.physical_to_logical = {1: ['Ethernet0']}
+        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
+        task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
+        task.is_port_in_cmis_initialization_process = MagicMock(return_value=False)
+
+        # Mock all the DB update methods
+        task.dom_db_utils = MagicMock()
+        task.status_db_utils = MagicMock()
+        task.vdm_utils = MagicMock()
+        task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=False)
+
+        # Strategy: Every call to now() advances time by 1 second.
+        # When the DOM polling function is called, we advance time by 30 seconds to simulate long processing.
+        # This lets us verify that scheduling uses loop start time, not loop end time: if loop end were used,
+        # the next iteration's DOM polling would be ~90s after the first, instead of ~60s.
+        base_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+    
+        current_time = [base_time]
+        first_dom_loop_start_time = [None]
+        second_dom_loop_start_time = [None]
+        dom_call_count = [0]
+    
+        def mock_now():
+            # Advance time by 1 second on each call
+            current_time[0] = current_time[0] + datetime.timedelta(seconds=1)
+            return current_time[0]
+    
+        # Wrap the DOM polling function to track when it's called and simulate long processing
+        dom_sensor_mock = task.dom_db_utils.post_port_dom_sensor_info_to_db
+    
+        def dom_sensor_side_effect(logical_port_name):
+            dom_call_count[0] += 1
+        
+            if dom_call_count[0] == 1:
+                # Approximate loop-start time for first iteration
+                first_dom_loop_start_time[0] = current_time[0]
+                # Simulate long processing: advance time by 30 seconds
+                current_time[0] = current_time[0] + datetime.timedelta(seconds=30)
+            elif dom_call_count[0] == 2:
+                # Approximate loop-start time for second iteration
+                second_dom_loop_start_time[0] = current_time[0]
+                # Simulate long processing again
+                current_time[0] = current_time[0] + datetime.timedelta(seconds=30)
+        
+            # We don't need to call the original MagicMock explicitly; returning None is fine.
+            return None
+    
+        dom_sensor_mock.side_effect = dom_sensor_side_effect
+    
+        # Patch datetime.datetime.now in the dom_mgr module
+        with patch('xcvrd.dom.dom_mgr.datetime.datetime') as mock_datetime:
+            mock_datetime.now = MagicMock(side_effect=mock_now)
+            mock_datetime.timedelta = datetime.timedelta
+        
+            # Stop the task after we've seen two DOM DB updates
+            def mock_is_set():
+                return dom_call_count[0] >= 2
+        
+            task.task_stopping_event.is_set = MagicMock(side_effect=mock_is_set)
+        
+            # Run the task worker
+            task.task_worker()
+        
+        # We expect two periodic DOM updates to have happened
+        assert dom_call_count[0] >= 2, \
+            f"Expected at least 2 DOM sensor DB updates, got {dom_call_count[0]}"
+    
+        assert first_dom_loop_start_time[0] is not None and second_dom_loop_start_time[0] is not None, \
+            "DOM sensor DB updates did not run twice as expected"
+    
+        delta = (second_dom_loop_start_time[0] - first_dom_loop_start_time[0]).total_seconds()
+    
+        # If scheduling uses loop-start time, the gap between iterations should be close to
+        # DOM_INFO_UPDATE_PERIOD_SECS (60s) and significantly less than 90s (which would
+        # include the simulated 30s processing time).
+        assert delta < 70, \
+            f"Expected time between iterations to be based on loop-start time (~60s), got {delta} seconds"
+    
+        # Also verify that the other DOM-related DB methods ran at least twice
+        assert task.dom_db_utils.post_port_dom_sensor_info_to_db.call_count >= 2, \
+            f"Expected at least 2 calls (one per iteration), got {task.dom_db_utils.post_port_dom_sensor_info_to_db.call_count}"
+        assert task.dom_db_utils.post_port_dom_flags_to_db.call_count >= 2, \
+            f"Expected at least 2 calls, got {task.dom_db_utils.post_port_dom_flags_to_db.call_count}"
+        assert task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count >= 2, \
+            f"Expected at least 2 calls, got {task.status_db_utils.post_port_transceiver_hw_status_to_db.call_count}"
+        assert task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count >= 2, \
+            f"Expected at least 2 calls, got {task.status_db_utils.post_port_transceiver_hw_status_flags_to_db.call_count}"
 
     def test_DomInfoUpdateTask_dom_update_interval_parameter(self):
         """Test that DomInfoUpdateTask correctly handles dom_update_interval parameter"""
