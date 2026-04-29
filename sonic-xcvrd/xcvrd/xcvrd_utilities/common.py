@@ -145,10 +145,12 @@ def _wrapper_get_presence(physical_port):
                 pass
     return False
 
-def is_fast_reboot_enabled():
+def is_fast_reboot_enabled(namespace=''):
     """Check if fast reboot is enabled"""
-    fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
-    return "true" in fastboot_enabled
+    state_db = daemon_base.db_connect("STATE_DB", namespace=namespace)
+    fastboot_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
+    if isinstance(fastboot_enabled, str):
+        return fastboot_enabled.strip().lower() == "true"
 
 def is_warm_reboot_enabled():
     """Check if warm reboot is enabled"""

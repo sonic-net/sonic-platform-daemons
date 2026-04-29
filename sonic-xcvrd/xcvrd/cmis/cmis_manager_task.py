@@ -60,9 +60,15 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.platform_chassis = platform_chassis
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self._is_fast_reboot_enabled = None
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
+        self.fast_reboot_status = self.initialize_fast_reboot_status()
+
+    def initialize_fast_reboot_status(self):
+        fast_reboot_status = {}
+        for namespace in self.namespaces:
+            fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
+        return fast_reboot_status
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -73,14 +79,13 @@ class CmisManagerTask(threading.Thread):
     def log_error(self, message):
         helper_logger.log_error(message)
 
-    def is_fast_reboot_enabled(self):
-        """Check if fast reboot is enabled, caching the result"""
-        if self._is_fast_reboot_enabled is None:
-            self._is_fast_reboot_enabled = common.is_fast_reboot_enabled()
-        return self._is_fast_reboot_enabled
-
     def get_asic_id(self, lport):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
+
+    def is_fast_reboot_enabled_for_lport(self, lport):
+        asic_id = self.get_asic_id(lport)
+        namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
+        return self.fast_reboot_status.get(namespace, False)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
         status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))
@@ -862,7 +867,7 @@ class CmisManagerTask(threading.Thread):
         speed = port_info.get('speed')
         subport = port_info.get('subport')
         appl = port_info.get('appl', 0)
-        is_fast_reboot = self.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled_for_lport(lport)
 
         self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, speed)
         if self.port_dict[lport]['appl'] is None:
@@ -1058,7 +1063,6 @@ class CmisManagerTask(threading.Thread):
         subport = port_info.get('subport')
         pport = port_info.get('pport')
         sfp = port_info.get('sfp')
-        is_fast_reboot = self.is_fast_reboot_enabled()
 
         # CMIS expiration and retries
         #
@@ -1367,4 +1371,3 @@ class CmisManagerTask(threading.Thread):
             threading.Thread.join(self)
             if self.exc:
                 raise self.exc
-
