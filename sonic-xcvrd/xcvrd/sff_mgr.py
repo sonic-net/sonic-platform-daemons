@@ -402,8 +402,8 @@ class SffManagerTask(threading.Thread):
                     # Skip if these essential routines are not available
                     continue
 
-                # Procced only for QSFP28/QSFP+ transceiver
-                if not (xcvr_type.startswith('QSFP28') or xcvr_type.startswith('QSFP+')) or common.is_cmis_api(api):
+                # Proceed only for non-cmis transceiver
+                if common.is_cmis_api(api):
                     continue
 
                 # Handle the case that host_tx_ready value in the local cache hasn't
@@ -458,12 +458,6 @@ class SffManagerTask(threading.Thread):
                     data[self.ADMIN_STATUS], admin_status_changed))
 
                 try:
-                    # Skip if it's not a paged memory device
-                    if api.is_flat_memory():
-                        self.log_notice(
-                            "{}: skipping sff_mgr for flat memory xcvr".format(lport))
-                        continue
-
                     # Skip if it's a copper cable
                     if api.is_copper():
                         self.log_notice(
