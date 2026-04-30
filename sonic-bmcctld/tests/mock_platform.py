@@ -43,6 +43,15 @@ class MockModule:
     def get_admin_state(self):
         return self._admin_state
 
+    def get_description(self):
+        return "Switch Host Module"
+
+    def get_slot(self):
+        return self.index
+
+    def get_serial(self):
+        return "MOCK-SERIAL-{}".format(self.index)
+
     def do_power_cycle(self):
         self.power_cycle_called = True
         self._oper_status = self.MODULE_STATUS_ONLINE

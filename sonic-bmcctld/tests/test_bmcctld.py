@@ -76,6 +76,7 @@ def chassis():
 def controller(chassis):
     ctrl = bmcctld.SwitchHostController(chassis)
     ctrl.host_state_table = Table(None, bmcctld.HOST_STATE_TABLE)
+    ctrl.chassis_module_info_table = Table(None, bmcctld.CHASSIS_MODULE_INFO_TABLE)
     return ctrl
 
 
@@ -100,11 +101,12 @@ def graceful_shutdown(controller, policy_reader):
 
 
 @pytest.fixture
-def event_handler(policy_reader, critical_event_checker):
+def event_handler(controller, policy_reader, critical_event_checker):
     stop_event = threading.Event()
     stop_event.set()  # Prevent blocking in tests
     action_queue = __import__('queue').Queue()
-    eh = bmcctld.BmcEventHandler(action_queue, policy_reader, critical_event_checker, stop_event)
+    eh = bmcctld.BmcEventHandler(action_queue, policy_reader, critical_event_checker, stop_event,
+                                  controller)
     # Replace live DB tables with in-memory mocks
     eh._cmd_table = Table(None, bmcctld.RACK_MANAGER_COMMAND_TABLE)
     return eh
@@ -599,7 +601,10 @@ class TestBmcEventHandlerRackMgrCommands:
 
 class TestBmcEventHandlerChassisModule:
 
-    def test_admin_down_triggers_graceful_shutdown(self, event_handler):
+    def test_admin_down_triggers_graceful_shutdown_when_online(self, event_handler, controller):
+        # host is ONLINE → admin_down should enqueue graceful_shutdown
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
@@ -607,7 +612,20 @@ class TestBmcEventHandlerChassisModule:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
 
-    def test_admin_up_powers_on_when_no_leak(self, event_handler):
+    def test_admin_down_no_action_when_already_offline(self, event_handler, controller):
+        # host is OFFLINE (e.g. startup replay) → admin_down should be a no-op
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_admin_up_powers_on_when_no_leak(self, event_handler, controller):
+        # host is OFFLINE → admin_up should enqueue power_on
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
         event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
@@ -616,7 +634,20 @@ class TestBmcEventHandlerChassisModule:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_ON
 
-    def test_admin_up_blocked_by_critical_leak(self, event_handler):
+    def test_admin_up_no_action_when_already_online(self, event_handler, controller):
+        # host is already ONLINE → admin_up should be a no-op
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_admin_up_blocked_by_critical_leak(self, event_handler, controller):
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
         event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
@@ -1199,4 +1230,128 @@ class TestBmcctldDaemonRun:
             result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_called_once()
+
+
+# --------------------------------------------------------------------------
+# Tests: ChassisModuleInfo — CHASSIS_MODULE_TABLE STATE_DB integration
+# --------------------------------------------------------------------------
+
+class TestChassisModuleInfo:
+
+    def test_initialize_chassis_module_info_all_fields(self, chassis, controller):
+        """initialize_chassis_module_info writes all expected fields to CHASSIS_MODULE_TABLE."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD] == "SWITCH-HOST"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_DESC_FIELD] == "Switch Host Module"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_SLOT_FIELD] == "1"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_SERIAL_FIELD] == "MOCK-SERIAL-1"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
+
+    def test_initialize_chassis_module_info_oper_status_online(self, chassis, controller):
+        """oper_status reflects live module state at initialization time."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_ONLINE
+
+    def test_initialize_chassis_module_info_admin_down(self, chassis, controller):
+        """admin_status=down is stored when module is initially down."""
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
+
+    def test_initialize_chassis_module_info_no_module(self, controller):
+        """When module not found, initialize logs an error and does not write the table."""
+        controller._get_switch_host_module = MagicMock(return_value=None)
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is False
+
+    def test_power_on_mirrors_oper_status_online(self, chassis, controller):
+        """power_on updates oper_status=ONLINE in CHASSIS_MODULE_TABLE."""
+        controller.power_on()
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_ONLINE
+
+    def test_power_off_mirrors_oper_status_offline(self, chassis, controller):
+        """power_off updates oper_status=OFFLINE in CHASSIS_MODULE_TABLE."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.power_off()
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
+
+    def test_refresh_host_state_mirrors_oper_status(self, chassis, controller):
+        """refresh_host_state also updates oper_status in CHASSIS_MODULE_TABLE."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.refresh_host_state()
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_ONLINE
+
+    def test_initialize_then_power_off_preserves_static_fields(self, chassis, controller):
+        """oper_status update via power_off merges into entry; static fields are preserved."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        # Now power off — oper_status should update but name/serial/etc. must survive
+        controller.power_off()
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD] == "SWITCH-HOST"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_SERIAL_FIELD] == "MOCK-SERIAL-1"
+        assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+        assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
+
+    def test_admin_status_updated_on_chassis_module_event(self, event_handler, controller):
+        """CHASSIS_MODULE admin_status event mirrors admin_status to CHASSIS_MODULE_TABLE."""
+        # Initialize the table first so merging has something to merge into
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        # Simulate an admin_up event while host is OFFLINE and a critical leak blocks power-on
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+
+    def test_admin_down_event_mirrors_admin_status(self, event_handler, controller):
+        """CHASSIS_MODULE admin_down event mirrors admin_status=down to CHASSIS_MODULE_TABLE."""
+        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
+        )
+        result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        info = dict(result[1])
+        assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
+
+    def test_daemon_init_calls_initialize_chassis_module_info(self, chassis):
+        """BmcctldDaemon.__init__ populates CHASSIS_MODULE_TABLE at startup."""
+        with patch('sonic_platform.platform.Platform') as MockPlatform:
+            MockPlatform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        result = daemon.controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        info = dict(result[1])
+        assert bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD in info
+        assert bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD in info
+        assert bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD in info
 

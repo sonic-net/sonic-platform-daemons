@@ -233,6 +233,15 @@ DEFAULT_SHUTDOWN_DELAY_SECS = 120   # 2 minutes - wait for graceful shutdown bef
 # Switch-Host module name key in CHASSIS_MODULE table
 SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
 
+# CHASSIS_MODULE_INFO_TABLE — populated at startup and kept current (matches chassisd naming)
+CHASSIS_MODULE_INFO_TABLE = "CHASSIS_MODULE_TABLE"
+CHASSIS_MODULE_INFO_NAME_FIELD = "name"
+CHASSIS_MODULE_INFO_DESC_FIELD = "desc"
+CHASSIS_MODULE_INFO_SLOT_FIELD = "slot"
+CHASSIS_MODULE_INFO_SERIAL_FIELD = "serial"
+CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = "oper_status"
+CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD = "admin_status"
+
 # BMC JSON config file locations (in precedence order)
 BMC_JSON_PATHS = [
     "/usr/share/sonic/platform/bmc.json",
@@ -308,6 +317,7 @@ class SwitchHostController(EventLogger):
         self._switch_host_module = None
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
+        self.chassis_module_info_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
 
     def _get_switch_host_module(self):
         """Return the Switch-Host Module object from the chassis module list."""
@@ -448,6 +458,7 @@ class SwitchHostController(EventLogger):
             (FIELD_LAST_CHANGE_TIMESTAMP, get_current_timestamp()),
         ])
         self.host_state_table.set(HOST_STATE_KEY, fvs)
+        self._update_chassis_module_oper_status(device_status)
 
     def get_db_device_status(self):
         """Read device_status from HOST_STATE STATE_DB (reflects transitional states)."""
@@ -476,12 +487,51 @@ class SwitchHostController(EventLogger):
         oper_status = self.get_oper_status()
         if cur_power_state == NOT_AVAILABLE:
             cur_power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
+        self._update_host_state(cur_power_state, oper_status)
+
+    def initialize_chassis_module_info(self, admin_status):
+        """Populate CHASSIS_MODULE_TABLE|SWITCH-HOST in STATE_DB at daemon startup.
+
+        Reads module identity fields from the platform and writes them alongside
+        the current admin_status and oper_status.  Called once from
+        BmcctldDaemon.__init__ after policy_reader is available.
+        """
+        module = self._get_switch_host_module()
+        if module is None:
+            self.log_error("Cannot initialize CHASSIS_MODULE_INFO: Switch-Host module not found")
+            return
+        name = try_get(module.get_name, default=NOT_AVAILABLE)
+        desc = try_get(module.get_description, default=NOT_AVAILABLE)
+        slot = str(try_get(module.get_slot, default=NOT_AVAILABLE))
+        serial = try_get(module.get_serial, default=NOT_AVAILABLE)
+        oper_status = self.get_oper_status()
         fvs = swsscommon.FieldValuePairs([
-            (FIELD_DEVICE_POWER_STATE, cur_power_state),
-            (FIELD_DEVICE_STATUS, str(oper_status)),
-            (FIELD_LAST_CHANGE_TIMESTAMP, get_current_timestamp()),
+            (CHASSIS_MODULE_INFO_NAME_FIELD, name),
+            (CHASSIS_MODULE_INFO_DESC_FIELD, desc),
+            (CHASSIS_MODULE_INFO_SLOT_FIELD, slot),
+            (CHASSIS_MODULE_INFO_SERIAL_FIELD, serial),
+            (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, oper_status),
+            (CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, admin_status),
         ])
-        self.host_state_table.set(HOST_STATE_KEY, fvs)
+        self.chassis_module_info_table.set(SWITCH_HOST_MODULE_KEY, fvs)
+        self.log_info(
+            "CHASSIS_MODULE_INFO initialized for SWITCH-HOST: "
+            "name={} serial={} admin_status={} oper_status={}".format(
+                name, serial, admin_status, oper_status))
+
+    def _update_chassis_module_oper_status(self, oper_status):
+        """Update oper_status in CHASSIS_MODULE_TABLE|SWITCH-HOST to mirror HOST_STATE."""
+        fvs = swsscommon.FieldValuePairs([
+            (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, str(oper_status)),
+        ])
+        self.chassis_module_info_table.set(SWITCH_HOST_MODULE_KEY, fvs)
+
+    def update_chassis_module_admin_status(self, admin_status):
+        """Update admin_status in CHASSIS_MODULE_TABLE|SWITCH-HOST when config changes."""
+        fvs = swsscommon.FieldValuePairs([
+            (CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, admin_status),
+        ])
+        self.chassis_module_info_table.set(SWITCH_HOST_MODULE_KEY, fvs)
 
 
 # ============================================================
@@ -729,13 +779,15 @@ class BmcEventHandler(EventLogger):
     daemon thread — this class never blocks.
     """
 
-    def __init__(self, action_queue, policy_reader, critical_event_checker, stop_event):
+    def __init__(self, action_queue, policy_reader, critical_event_checker, stop_event,
+                 controller):
         super(BmcEventHandler, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
         self._event_log = _event_logger  # for critical leak / alert events only
         self.action_queue = action_queue
         self.policy_reader = policy_reader
         self.critical_event_checker = critical_event_checker
         self.stop_event = stop_event
+        self.controller = controller
 
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.config_db = daemon_base.db_connect("CONFIG_DB")
@@ -750,15 +802,17 @@ class BmcEventHandler(EventLogger):
         self.system_leak_sub = swsscommon.SubscriberStateTable(
             self.state_db, SYSTEM_LEAK_STATUS_TABLE)
 
-        # Map each subscriber's file descriptor to its handler.
+        # Map fd -> (table, handler).
         # getFd() returns a stable integer regardless of how swsscommon re-wraps
-        # the C++ Selectable* returned by sel.select(), unlike id() which varies
-        # per wrapper object and would always miss.
-        self._sub_handlers = {
-            self.rack_mgr_cmd_sub.getFd():   self._handle_rack_mgr_command,
-            self.chassis_module_sub.getFd(): self._handle_chassis_module,
-            self.rack_mgr_alert_sub.getFd(): self._handle_rack_mgr_alert,
-            self.system_leak_sub.getFd():    self._handle_system_leak,
+        # the C++ Selectable* returned by sel.select().  The table reference is
+        # kept here because sel.select() returns a raw Selectable that has
+        # getFd() but no pop(); pop() must be called on the original
+        # SubscriberStateTable object.
+        self._subscribers = {
+            self.rack_mgr_cmd_sub.getFd():   (self.rack_mgr_cmd_sub,   self._handle_rack_mgr_command),
+            self.chassis_module_sub.getFd(): (self.chassis_module_sub, self._handle_chassis_module),
+            self.rack_mgr_alert_sub.getFd(): (self.rack_mgr_alert_sub, self._handle_rack_mgr_alert),
+            self.system_leak_sub.getFd():    (self.system_leak_sub,    self._handle_system_leak),
         }
 
         self.sel = swsscommon.Select()
@@ -779,12 +833,16 @@ class BmcEventHandler(EventLogger):
             if state != swsscommon.Select.OBJECT:
                 self.log_warning("sel.select() returned unexpected state: {}".format(state))
                 continue
-            key, op, fvs = selectable.pop()
+            fd = selectable.getFd()
+            entry = self._subscribers.get(fd)
+            if entry is None:
+                self.log_warning("sel.select() returned unknown fd={}".format(fd))
+                continue
+            table, handler = entry
+            key, op, fvs = table.pop()
             if op != "SET":
                 continue
-            handler = self._sub_handlers.get(selectable.getFd())
-            if handler:
-                handler(key, fvs_to_dict(fvs))
+            handler(key, fvs_to_dict(fvs))
 
     # ---- internal event handlers ----
 
@@ -832,16 +890,26 @@ class BmcEventHandler(EventLogger):
         admin_status = fvs.get(FIELD_ADMIN_STATUS, "")
         self.log_notice("CHASSIS_MODULE change: key={} admin_status={}".format(key, admin_status))
 
+        # Mirror admin_status to CHASSIS_MODULE_INFO_TABLE immediately on config change
+        if admin_status:
+            self.controller.update_chassis_module_admin_status(admin_status)
+
         if admin_status == ADMIN_DOWN:
-            self.log_notice("User CLI admin_down: initiating graceful shutdown of Switch-Host")
-            self.action_queue.put(ActionItem(ACTION_GRACEFUL_SHUTDOWN, "CLI_ADMIN_DOWN"))
+            if self.controller.get_db_device_status() != SWITCH_HOST_ONLINE:
+                self.log_info("admin_down: Switch-Host already OFFLINE; no action needed")
+                return
+            self.log_notice("CHASSIS_MODULE admin_down: initiating graceful shutdown of Switch-Host")
+            self.action_queue.put(ActionItem(ACTION_GRACEFUL_SHUTDOWN, "CHASSIS_MODULE:ADMIN_DOWN"))
 
         elif admin_status == ADMIN_UP:
+            if self.controller.get_db_device_status() == SWITCH_HOST_ONLINE:
+                self.log_info("admin_up: Switch-Host already ONLINE; no action needed")
+                return
             if self.critical_event_checker.has_any_critical_event():
                 self.log_warning("POWER_ON blocked by CLI admin_up: active critical leak or alert")
                 return
-            self.log_notice("User CLI admin_up: powering ON Switch-Host")
-            self.action_queue.put(ActionItem(ACTION_POWER_ON, "CLI_ADMIN_UP"))
+            self.log_notice("CHASSIS_MODULE admin_up: powering ON Switch-Host")
+            self.action_queue.put(ActionItem(ACTION_POWER_ON, "CHASSIS_MODULE:ADMIN_UP"))
 
     def _handle_system_leak(self, key, fvs):
         """Process SYSTEM_LEAK_STATUS change from thermalctld."""
@@ -988,7 +1056,12 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.policy_reader,
             self.critical_event_checker,
             self.stop_event,
+            self.controller,
         )
+
+        # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status
+        admin_status = self.policy_reader.get_switch_host_admin_status()
+        self.controller.initialize_chassis_module_info(admin_status)
 
         for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
             try:

@@ -55,10 +55,13 @@ class Table:
             del self.mock_dict[key]
 
     def set(self, key, fvs):
+        # Merge into existing entry (matches real Redis HSET field-level update semantics)
+        if key not in self.mock_dict:
+            self.mock_dict[key] = {}
         if isinstance(fvs, list):
-            self.mock_dict[key] = dict(fvs)
+            self.mock_dict[key].update(dict(fvs))
         elif hasattr(fvs, 'fv_dict'):
-            self.mock_dict[key] = fvs.fv_dict
+            self.mock_dict[key].update(fvs.fv_dict)
         else:
             raise ValueError("Unsupported fvs format: {}".format(type(fvs)))
 
