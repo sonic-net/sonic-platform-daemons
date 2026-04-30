@@ -43,7 +43,6 @@ import swsscommon as mock_swsscommon
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
 
