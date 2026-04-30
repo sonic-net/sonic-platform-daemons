@@ -36,6 +36,7 @@ PLATFORM_SPECIFIC_CLASS_NAME = "PsuUtil"
 CHASSIS_INFO_TABLE = 'CHASSIS_INFO'
 CHASSIS_INFO_KEY = 'chassis 1'
 CHASSIS_INFO_PSU_NUM_FIELD = 'psu_num'
+CHASSIS_INFO_PDB_NUM_FIELD = 'pdb_num'
 
 CHASSIS_INFO_POWER_CONSUMER_FIELD = 'Consumed Power {}'
 CHASSIS_INFO_POWER_SUPPLIER_FIELD = 'Supplied Power {}'
@@ -64,6 +65,9 @@ PSU_INFO_FRU_FIELD = 'is_replaceable'
 PSU_INFO_IN_VOLTAGE_FIELD = 'input_voltage'
 PSU_INFO_IN_CURRENT_FIELD = 'input_current'
 PSU_INFO_POWER_MAX_FIELD = 'max_power'
+PSU_INFO_TIMESTAMP_FIELD = 'timestamp'
+
+PDB_INFO_KEY_TEMPLATE = 'PDB {}'
 
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 
@@ -92,11 +96,17 @@ exit_code = 0
 
 
 def _wrapper_get_num_psus(logger):
+    """Get total number of PSUs when using psuutil; total PSUs+PDBs when using chassis (for __del__ iteration)."""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_num_psus()
+            n_psu = platform_chassis.get_num_psus()
         except NotImplementedError:
-            pass
+            n_psu = 0
+        try:
+            n_pdb = platform_chassis.get_num_pdbs()
+        except NotImplementedError:
+            n_pdb = 0
+        return n_psu + n_pdb
     if platform_psuutil is not None:
         return platform_psuutil.get_num_psus()
     if logger:
@@ -110,19 +120,45 @@ def _wrapper_get_psu(logger, psu_index):
     :param logger: Logger instance for error/warning messages
     :param psu_index: PSU index (1-based)
     :return: PSU object if available, None otherwise
-
-    Note:
-        If logger is None, errors and warnings encountered during execution will not be logged.
     """
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_psu(psu_index - 1)
-        except NotImplementedError as e:
-            if logger:
-                logger.log_warning("get_psu() not implemented by platform chassis: {}".format(str(e)))
-        except Exception as e:
-            if logger:
-                logger.log_error("Failed to get PSU {} from platform chassis: {}".format(psu_index, str(e)))
+    if platform_chassis is None:
+        return None
+    if psu_index < 1:
+        return None
+    try:
+        psu = platform_chassis.get_psu(psu_index - 1)
+        if psu is not None:
+            return psu
+    except NotImplementedError:
+        if logger:
+            logger.log_warning("get_psu() not implemented by platform chassis: Not implemented")
+    except Exception as e:
+        if logger:
+            logger.log_error("Failed to get PSU {} from platform chassis: {}".format(psu_index, str(e)))
+    return None
+
+
+def _wrapper_get_pdb(logger, pdb_index):
+    """
+    Get PDB object from platform chassis
+    :param logger: Logger instance for error/warning messages
+    :param pdb_index: PDB index (1-based)
+    :return: PDB object if available, None otherwise
+    """
+    if platform_chassis is None:
+        return None
+    if pdb_index < 1:
+        return None
+    try:
+        pdb = platform_chassis.get_pdb(pdb_index - 1)
+        if pdb is not None:
+            return pdb
+    except NotImplementedError:
+        if logger:
+            logger.log_warning("get_pdb() not implemented by platform chassis: Not implemented")
+    except Exception as e:
+        if logger:
+            logger.log_error("Failed to get PDB {} from platform chassis: {}".format(pdb_index, str(e)))
     return None
 
 
@@ -150,6 +186,22 @@ def _wrapper_get_psu_presence(logger, psu_index):
     return False
 
 
+def _wrapper_get_pdb_presence(logger, pdb_index):
+    if platform_chassis is None:
+        return False
+    pdb = _wrapper_get_pdb(logger, pdb_index)
+    if not pdb:
+        return False
+    try:
+        return pdb.get_presence()
+    except NotImplementedError:
+        return False
+    except Exception as e:
+        if logger:
+            logger.log_warning("Exception in pdb.get_presence() for PDB {}: {}".format(pdb_index, str(e)))
+        return False
+
+
 def _wrapper_get_psu_status(logger, psu_index):
     if platform_chassis is not None:
         psu = _wrapper_get_psu(logger, psu_index)
@@ -174,19 +226,46 @@ def _wrapper_get_psu_status(logger, psu_index):
     return False
 
 
+def _wrapper_get_pdb_status(logger, pdb_index):
+    if platform_chassis is None:
+        return False
+    pdb = _wrapper_get_pdb(logger, pdb_index)
+    if not pdb:
+        return False
+    try:
+        return pdb.get_powergood_status()
+    except NotImplementedError:
+        return False
+    except Exception as e:
+        if logger:
+            logger.log_warning("Exception in pdb.get_powergood_status() for PDB {}: {}".format(pdb_index, str(e)))
+        return False
+
+
 #
 # Helper functions =============================================================
 #
 
 def get_psu_key(psu_index):
-    if platform_chassis is not None:
-        psu = _wrapper_get_psu(None, psu_index)
-        if psu:
-            try:
-                return psu.get_name()
-            except Exception:
-                pass
+    """Return PSU_INFO key (object name) for 1-based PSU index. Used for legacy psuutil path."""
+    psu = _wrapper_get_psu(None, psu_index)
+    if psu is not None:
+        try:
+            return psu.get_name()
+        except Exception:
+            pass
     return PSU_INFO_KEY_TEMPLATE.format(psu_index)
+
+
+def get_pdb_key(pdb_index):
+    """Return PDB_INFO_KEY_TEMPLATE key (object name) for 1-based PDB index."""
+    pdb = _wrapper_get_pdb(None, pdb_index)
+    if pdb is not None:
+        try:
+            return pdb.get_name()
+        except Exception:
+            pass
+    return PDB_INFO_KEY_TEMPLATE.format(pdb_index)
 
 
 # try get information from platform API and return a default value if we catch NotImplementedError
@@ -213,6 +292,30 @@ def try_get(callback, default=None):
         ret = default
 
     return ret
+
+
+def _sum_system_power_from_other_psus_and_pdbs(chassis, entity, system_power):
+    """
+    Add get_power() from every other PSU and every other PDB to system_power.
+    Uses two separate loops (does not build a combined PSUs+PDBs list).
+    """
+    try:
+        for other in chassis.get_all_psus():
+            if other is not entity:
+                power_str = try_get(other.get_power, NOT_AVAILABLE)
+                if power_str != NOT_AVAILABLE:
+                    system_power += float(power_str)
+    except NotImplementedError:
+        pass
+    try:
+        for other in chassis.get_all_pdbs():
+            if other is not entity:
+                power_str = try_get(other.get_power, NOT_AVAILABLE)
+                if power_str != NOT_AVAILABLE:
+                    system_power += float(power_str)
+    except NotImplementedError:
+        pass
+    return system_power
 
 
 def log_on_status_changed(logger, normal_status, normal_log, abnormal_log):
@@ -258,34 +361,52 @@ class PsuChassisInfo(logger.Logger):
 
         dict_index = 0
         total_entries_len = 2  # For total supplied and consumed
-        dict_len = self.chassis.get_num_psus() +\
+        psu_list = []
+        pdb_list = []
+        try:
+            psu_list = list(self.chassis.get_all_psus())
+            pdb_list = list(self.chassis.get_all_pdbs())
+        except NotImplementedError:
+            pdb_list = []
+            try:
+                psu_list = list(self.chassis.get_all_psus())
+            except NotImplementedError:
+                psu_list = []
+        num_suppliers = len(psu_list) + len(pdb_list)
+        dict_len = num_suppliers +\
             self.chassis.get_num_fan_drawers() +\
             self.chassis.get_num_modules() + \
             total_entries_len
 
         fvs = swsscommon.FieldValuePairs(dict_len)
 
-        for index, psu in enumerate(self.chassis.get_all_psus()):
-            name = try_get(psu.get_name, 'PSU {}'.format(index + 1))
-            presence = try_get(psu.get_presence)
+        def _process_power_supplier(supplier, index, default_prefix):
+            nonlocal dict_index, total_supplied_power
+            name = try_get(supplier.get_name, '{} {}'.format(default_prefix, index + 1))
+            presence = try_get(supplier.get_presence)
             if not presence:
                 try:
                     chassis_tbl.hdel(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1), CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name))
                 except RuntimeError as e:
-                    self.log_error("Failed to delete PSU {} power info from DB: {}".format(name, e))
-                continue
+                    self.log_error("Failed to delete {} power info from DB: {}".format(name, e))
+                return
 
-            power_good = try_get(psu.get_powergood_status)
+            power_good = try_get(supplier.get_powergood_status)
             if not power_good:
                 supplied_power = 0.0
                 fvs[dict_index] = (CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name), str(supplied_power))
                 dict_index += 1
-                continue
+                return
 
-            supplied_power = try_get(psu.get_maximum_supplied_power, 0.0)
+            supplied_power = try_get(supplier.get_maximum_supplied_power, 0.0)
             total_supplied_power = total_supplied_power + supplied_power
             fvs[dict_index] = (CHASSIS_INFO_POWER_SUPPLIER_FIELD.format(name), str(supplied_power))
             dict_index += 1
+
+        for index, supplier in enumerate(psu_list):
+            _process_power_supplier(supplier, index, 'PSU')
+        for index, supplier in enumerate(pdb_list):
+            _process_power_supplier(supplier, index, 'PDB')
 
         for index, power_consumer in enumerate(self.chassis.get_all_fan_drawers()):
             presence = try_get(power_consumer.get_presence)
@@ -362,9 +483,10 @@ class PsuChassisInfo(logger.Logger):
 
 
 class PsuStatus(object):
-    def __init__(self, logger, psu, psu_index):
-        self.psu = psu
-        self.psu_index = psu_index
+    def __init__(self, logger, entity, name):
+        """entity: PSU or PDB object (PsuBase/PdbBase). name: DB key e.g. 'PSU 1' or 'PDB 1'."""
+        self.psu = entity
+        self.psu_index = name  # used in log messages
         self.presence = True
         self.power_good = True
         self.voltage_good = True
@@ -488,36 +610,73 @@ class DaemonPsud(daemon_base.DaemonBase):
             self.log_error("Failed to connect to STATE_DB: {}".format(e))
             sys.exit(PSU_DB_CONNECT_ERROR)
 
-        # Post psu number info to STATE_DB
+        # Post psu/pdb number info to STATE_DB (once at boot/reload)
         self.num_psus = _wrapper_get_num_psus(self)
-        fvs = swsscommon.FieldValuePairs([(CHASSIS_INFO_PSU_NUM_FIELD, str(self.num_psus))])
+        num_psus_chassis = 0
+        num_pdbs_chassis = 0
+        self.all_power_entity_names = []
+        if platform_chassis is not None:
+            try:
+                num_psus_chassis = platform_chassis.get_num_psus()
+                self.all_power_entity_names.extend([p.get_name() for p in platform_chassis.get_all_psus()])
+            except NotImplementedError:
+                pass
+            try:
+                num_pdbs_chassis = platform_chassis.get_num_pdbs()
+                self.all_power_entity_names.extend([p.get_name() for p in platform_chassis.get_all_pdbs()])
+            except NotImplementedError:
+                pass
+        fvs = swsscommon.FieldValuePairs([
+            (CHASSIS_INFO_PSU_NUM_FIELD, str(num_psus_chassis)),
+            (CHASSIS_INFO_PDB_NUM_FIELD, str(num_pdbs_chassis)),
+        ])
         try:
             self.chassis_tbl.set(CHASSIS_INFO_KEY, fvs)
         except RuntimeError as e:
-            self.log_error("Failed to set PSU number to DB: {}".format(e))
+            self.log_error("Failed to set PSU/PDB number to DB: {}".format(e))
 
     def __del__(self):
-        # Delete all the information from DB and then exit
-        for psu_index in range(1, self.num_psus + 1):
-            try:
-                self.psu_tbl._del(get_psu_key(psu_index))
-            except Exception as e:
-                self.log_error("Failed to delete PSU {} info from DB: {}".format(psu_index, e))
-            if self.phy_entity_tbl.get(get_psu_key(psu_index)) is not None:
-                try:
-                    self.phy_entity_tbl._del(get_psu_key(psu_index))
-                except:
-                    self.log_error("Failed to delete physical entity info from DB: {}".format(e))
+        # Delete all the information from DB and then exit. Do not use log_error here:
+        # during interpreter shutdown logging may be broken and can raise.
+        psu_tbl = getattr(self, 'psu_tbl', None)
+        phy_entity_tbl = getattr(self, 'phy_entity_tbl', None)
 
-        if self.chassis_tbl is not None:
+        def _del_phy_entity(key):
+            if phy_entity_tbl is None:
+                return
+            try:
+                if phy_entity_tbl.get(key) is not None:
+                    phy_entity_tbl._del(key)
+            except Exception:
+                pass
+
+        if psu_tbl is not None:
+            names = getattr(self, 'all_power_entity_names', None)
+            if names:
+                for name in names:
+                    try:
+                        psu_tbl._del(name)
+                    except Exception:
+                        pass
+                    _del_phy_entity(name)
+            else:
+                for psu_index in range(1, getattr(self, 'num_psus', 0) + 1):
+                    key = get_psu_key(psu_index)
+                    try:
+                        psu_tbl._del(key)
+                    except Exception:
+                        pass
+                    _del_phy_entity(key)
+
+        if getattr(self, 'chassis_tbl', None) is not None:
             try:
                 self.chassis_tbl._del(CHASSIS_INFO_KEY)
-            except Exception as e:
-                self.log_error("Failed to delete chassis info from DB: {}".format(e))
+            except Exception:
+                pass
             try:
                 self.chassis_tbl._del(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
-            except Exception as e:
-                self.log_error("Failed to delete chassis power info from DB: {}".format(e))
+            except Exception:
+                pass
 
     # Override signal handler from DaemonBase
     def signal_handler(self, sig, frame):
@@ -548,7 +707,9 @@ class DaemonPsud(daemon_base.DaemonBase):
         # hence move it to the iteration run, so the key will be filled again after removed.
         self._update_psu_entity_info()
 
+        self.psu_threshold_exceeded_logged = False
         self.update_psu_data()
+        self.update_pdb_data()
         self._update_led_color()
 
         if platform_chassis and platform_chassis.is_modular_chassis():
@@ -563,17 +724,47 @@ class DaemonPsud(daemon_base.DaemonBase):
         if not platform_chassis:
             return
 
-        self.psu_threshold_exceeded_logged = False
-        for index, psu in enumerate(platform_chassis.get_all_psus()):
-            try:
-                self._update_single_psu_data(index + 1, psu)
-            except Exception as e:
-                self.log_warning("Failed to update PSU data - {}".format(e))
+        try:
+            for psu in platform_chassis.get_all_psus():
+                try:
+                    self._update_single_psu_data(psu)
+                except Exception as e:
+                    self.log_warning("Failed to update PSU data - {}".format(e))
+        except NotImplementedError:
+            pass
 
-    def _update_single_psu_data(self, index, psu):
-        name = get_psu_key(index)
-        presence = _wrapper_get_psu_presence(self, index)
-        power_good = False
+    def update_pdb_data(self):
+        if not platform_chassis:
+            return
+
+        try:
+            for pdb in platform_chassis.get_all_pdbs():
+                try:
+                    self._update_single_pdb_data(pdb)
+                except Exception as e:
+                    self.log_warning("Failed to update PDB data - {}".format(e))
+        except NotImplementedError:
+            pass
+
+    def _update_single_psu_data(self, entity):
+        """Update STATE_DB for one PSU (PsuBase)."""
+        self._update_single_power_entity_data(entity, 'psu')
+
+    def _update_single_pdb_data(self, entity):
+        """Update STATE_DB for one PDB (PdbBase)."""
+        self._update_single_power_entity_data(entity, 'pdb')
+
+    def _update_single_power_entity_data(self, entity, kind):
+        """
+        Shared STATE_DB update for one PSU or PDB. kind is 'psu' or 'pdb'.
+        """
+        label = 'PSU' if kind == 'psu' else 'PDB'
+        name = try_get(entity.get_name, NOT_AVAILABLE)
+        if name == NOT_AVAILABLE:
+            idx = getattr(entity, 'index', 'unknown')
+            name = '{} {}'.format(label, idx) if isinstance(idx, int) else str(idx)
+        presence = try_get(entity.get_presence, False)
+        power_good = try_get(entity.get_powergood_status, False) if presence else False
         voltage = NOT_AVAILABLE
         voltage_high_threshold = NOT_AVAILABLE
         voltage_low_threshold = NOT_AVAILABLE
@@ -581,37 +772,40 @@ class DaemonPsud(daemon_base.DaemonBase):
         temperature_threshold = NOT_AVAILABLE
         current = NOT_AVAILABLE
         power = NOT_AVAILABLE
-        is_replaceable = try_get(psu.is_replaceable, False)
+        is_replaceable = try_get(entity.is_replaceable, False)
         in_voltage = NOT_AVAILABLE
         in_current = NOT_AVAILABLE
         max_power = NOT_AVAILABLE
         if presence:
-            power_good = _wrapper_get_psu_status(self, index)
-            voltage = try_get(psu.get_voltage, NOT_AVAILABLE)
-            voltage_high_threshold = try_get(psu.get_voltage_high_threshold, NOT_AVAILABLE)
-            voltage_low_threshold = try_get(psu.get_voltage_low_threshold, NOT_AVAILABLE)
-            temperature = try_get(psu.get_temperature, NOT_AVAILABLE)
-            temperature_threshold = try_get(psu.get_temperature_high_threshold, NOT_AVAILABLE)
-            current = try_get(psu.get_current, NOT_AVAILABLE)
-            power = try_get(psu.get_power, NOT_AVAILABLE)
-            in_current = try_get(psu.get_input_current, NOT_AVAILABLE)
-            in_voltage = try_get(psu.get_input_voltage, NOT_AVAILABLE)
-            max_power = try_get(psu.get_maximum_supplied_power, NOT_AVAILABLE)
+            voltage = try_get(entity.get_voltage, NOT_AVAILABLE)
+            voltage_high_threshold = try_get(entity.get_voltage_high_threshold, NOT_AVAILABLE)
+            voltage_low_threshold = try_get(entity.get_voltage_low_threshold, NOT_AVAILABLE)
+            temperature = try_get(entity.get_temperature, NOT_AVAILABLE)
+            temperature_threshold = try_get(entity.get_temperature_high_threshold, NOT_AVAILABLE)
+            current = try_get(entity.get_current, NOT_AVAILABLE)
+            power = try_get(entity.get_power, NOT_AVAILABLE)
+            in_current = try_get(entity.get_input_current, NOT_AVAILABLE)
+            in_voltage = try_get(entity.get_input_voltage, NOT_AVAILABLE)
+            max_power = try_get(entity.get_maximum_supplied_power, NOT_AVAILABLE)
 
-        if index not in self.psu_status_dict:
-            self.psu_status_dict[index] = PsuStatus(self, psu, index)
+        if name not in self.psu_status_dict:
+            self.psu_status_dict[name] = PsuStatus(self, entity, name)
 
-        psu_status = self.psu_status_dict[index]
+        psu_status = self.psu_status_dict[name]
         set_led = self.first_run
         presence_changed = psu_status.set_presence(presence)
         if presence_changed:
             set_led = True
             log_on_status_changed(self, psu_status.presence,
-                                  'PSU absence warning cleared: {} is inserted back.'.format(name),
-                                  'PSU absence warning: {} is not present.'.format(name)
+                                  '{} absence warning cleared: {} is inserted back.'.format(label, name),
+                                  '{} absence warning: {} is not present.'.format(label, name)
                                   )
             if not psu_status.presence:
                  psu_status.check_psu_power_threshold = False
+            if not psu_status.presence:
+                self.log_error("{} is not present.".format(name))
+        elif self.first_run and not presence:
+            self.log_error("{} is not present.".format(name))
 
         if presence_changed or self.first_run:
             # Have to update PSU fan data here because PSU presence status changed. If we don't
@@ -619,7 +813,7 @@ class DaemonPsud(daemon_base.DaemonBase):
             # and "show platform fan". For example, say PSU 1 is removed, and psud query PSU status every 3 seconds,
             # it will update PSU state to "Not OK" and PSU LED to "red"; but thermalctld query PSU fan status
             # every 60 seconds, it may still treat PSU state to "OK" and PSU LED to "red".
-            self._update_psu_fan_data(psu, index)
+            self._update_psu_fan_data(entity)
 
         power_good_changed = psu_status.set_power_good(power_good)
         if presence and power_good_changed:
@@ -634,22 +828,15 @@ class DaemonPsud(daemon_base.DaemonBase):
             if psu_status.power_good:
                 # power_good has been updated and it is True, which means it was False
                 # Initialize power exceeding threshold state in this case
-                if (try_get(psu.get_psu_power_critical_threshold) and try_get(psu.get_psu_power_warning_suppress_threshold) and power != NOT_AVAILABLE):
+                if (try_get(entity.get_psu_power_critical_threshold) and try_get(entity.get_psu_power_warning_suppress_threshold) and power != NOT_AVAILABLE):
                     psu_status.check_psu_power_threshold = True
 
         power_exceeded_threshold = psu_status.power_exceeded_threshold
-        power_warning_suppress_threshold = try_get(psu.get_psu_power_warning_suppress_threshold, NOT_AVAILABLE)
-        power_critical_threshold = try_get(psu.get_psu_power_critical_threshold, NOT_AVAILABLE)
+        power_warning_suppress_threshold = try_get(entity.get_psu_power_warning_suppress_threshold, NOT_AVAILABLE)
+        power_critical_threshold = try_get(entity.get_psu_power_critical_threshold, NOT_AVAILABLE)
         if psu_status.check_psu_power_threshold:
-            # Calculate total power
-            system_power = float(power)
-            for _, other_psu in enumerate(platform_chassis.get_all_psus()):
-                if other_psu is psu:
-                    # Skip the current PSU
-                    continue
-                power_str = try_get(other_psu.get_power, NOT_AVAILABLE)
-                if power_str != NOT_AVAILABLE:
-                    system_power += float(power_str)
+            # Calculate total power from all power entities (PSUs + PDBs)
+            system_power = _sum_system_power_from_other_psus_and_pdbs(platform_chassis, entity, float(power))
 
             if power_warning_suppress_threshold == NOT_AVAILABLE or power_critical_threshold == NOT_AVAILABLE:
                 self.log_error("PSU power thresholds become invalid: threshold {} critical threshold {}".format(power_warning_suppress_threshold, power_critical_threshold))
@@ -676,26 +863,26 @@ class DaemonPsud(daemon_base.DaemonBase):
         if presence and psu_status.set_voltage(voltage, voltage_high_threshold, voltage_low_threshold):
             set_led = True
             log_on_status_changed(self, psu_status.voltage_good,
-                                  'PSU voltage warning cleared: {} voltage is back to normal.'.format(name),
-                                  'PSU voltage warning: {} voltage out of range, current voltage={}, valid range=[{}, {}].'.format(
+                                  'Voltage warning cleared: {} voltage is back to normal.'.format(name),
+                                  'Voltage warning: {} voltage out of range, current voltage={}, valid range=[{}, {}].'.format(
                                       name, voltage, voltage_high_threshold, voltage_low_threshold)
                                   )
 
         if presence and psu_status.set_temperature(temperature, temperature_threshold):
             set_led = True
             log_on_status_changed(self, psu_status.temperature_good,
-                                  'PSU temperature warning cleared: {} temperature is back to normal.'.format(name),
-                                  'PSU temperature warning: {} temperature too hot, temperature={}, threshold={}.'.format(
+                                  'Temperature warning cleared: {} temperature is back to normal.'.format(name),
+                                  'Temperature warning: {} temperature too hot, temperature={}, threshold={}.'.format(
                                       name, temperature, temperature_threshold)
                                   )
 
         if set_led:
-            self._set_psu_led(psu, psu_status)
+            self._set_psu_led(entity, psu_status)
 
         fvs = swsscommon.FieldValuePairs(
-            [(PSU_INFO_MODEL_FIELD, str(try_get(psu.get_model, NOT_AVAILABLE))),
-             (PSU_INFO_SERIAL_FIELD, str(try_get(psu.get_serial, NOT_AVAILABLE))),
-             (PSU_INFO_REV_FIELD, str(try_get(psu.get_revision, NOT_AVAILABLE))),
+            [(PSU_INFO_MODEL_FIELD, str(try_get(entity.get_model, NOT_AVAILABLE))),
+             (PSU_INFO_SERIAL_FIELD, str(try_get(entity.get_serial, NOT_AVAILABLE))),
+             (PSU_INFO_REV_FIELD, str(try_get(entity.get_revision, NOT_AVAILABLE))),
              (PSU_INFO_TEMP_FIELD, str(temperature)),
              (PSU_INFO_TEMP_TH_FIELD, str(temperature_threshold)),
              (PSU_INFO_VOLTAGE_FIELD, str(voltage)),
@@ -710,44 +897,53 @@ class DaemonPsud(daemon_base.DaemonBase):
              (PSU_INFO_IN_CURRENT_FIELD, str(in_current)),
              (PSU_INFO_IN_VOLTAGE_FIELD, str(in_voltage)),
              (PSU_INFO_POWER_MAX_FIELD, str(max_power)),
-             (PSU_INFO_PRESENCE_FIELD, 'true' if _wrapper_get_psu_presence(self, index) else 'false'),
-             (PSU_INFO_STATUS_FIELD, 'true' if _wrapper_get_psu_status(self, index) else 'false'),
+             (PSU_INFO_PRESENCE_FIELD, 'true' if presence else 'false'),
+             (PSU_INFO_STATUS_FIELD, 'true' if power_good else 'false'),
+             (PSU_INFO_TIMESTAMP_FIELD, str(datetime.now().timestamp())),
              ])
         try:
             self.psu_tbl.set(name, fvs)
         except RuntimeError as e:
-            self.log_error("Failed to update PSU {} info to DB: {}".format(name, e))
+            self.log_error("Failed to update {} info to DB: {}".format(name, e))
 
     def _update_psu_entity_info(self):
         if not platform_chassis:
             return
 
-        for index, psu in enumerate(platform_chassis.get_all_psus()):
-            try:
-                self._update_single_psu_entity_info(index + 1, psu)
-            except Exception as e:
-                self.log_warning("Failed to update PSU data - {}".format(e))
+        try:
+            for psu in platform_chassis.get_all_psus():
+                try:
+                    self._update_single_psu_entity_info(psu)
+                except Exception as e:
+                    self.log_warning("Failed to update PSU entity data - {}".format(e))
+        except NotImplementedError:
+            pass
+        try:
+            for pdb in platform_chassis.get_all_pdbs():
+                try:
+                    self._update_single_psu_entity_info(pdb)
+                except Exception as e:
+                    self.log_warning("Failed to update PDB entity data - {}".format(e))
+        except NotImplementedError:
+            pass
 
-    def _update_single_psu_entity_info(self, psu_index, psu):
-        position = try_get(psu.get_position_in_parent, psu_index)
+    def _update_single_psu_entity_info(self, entity):
+        name = try_get(entity.get_name, 'unknown')
+        position = try_get(entity.get_position_in_parent, 0)
         fvs = swsscommon.FieldValuePairs(
             [('position_in_parent', str(position)),
              ('parent_name', CHASSIS_INFO_KEY),
              ])
         try:
-            self.phy_entity_tbl.set(get_psu_key(psu_index), fvs)
+            self.phy_entity_tbl.set(name, fvs)
         except RuntimeError as e:
-            self.log_error("Failed to update PSU {} entity info to DB: {}".format(psu_index, e))
+            self.log_error("Failed to update {} entity info to DB: {}".format(name, e))
 
-    def _update_psu_fan_data(self, psu, psu_index):
-        """
-        :param psu:
-        :param psu_index:
-        :return:
-        """
-        psu_name = get_psu_key(psu_index)
-        presence = _wrapper_get_psu_presence(self, psu_index)
-        fan_list = psu.get_all_fans()
+    def _update_psu_fan_data(self, entity):
+        """Update FAN_INFO for fans belonging to this PSU/PDB (entity)."""
+        psu_name = try_get(entity.get_name, 'unknown')
+        presence = try_get(entity.get_presence, False)
+        fan_list = entity.get_all_fans()
         for index, fan in enumerate(fan_list):
             fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
             direction = try_get(fan.get_direction, NOT_AVAILABLE) if presence else NOT_AVAILABLE
@@ -765,10 +961,10 @@ class DaemonPsud(daemon_base.DaemonBase):
             except RuntimeError as e:
                 self.log_error("Failed to update fan {} info to DB: {}".format(fan_name, e))
 
-    def _set_psu_led(self, psu, psu_status):
+    def _set_psu_led(self, entity, psu_status):
         try:
-            color = psu.STATUS_LED_COLOR_GREEN if psu_status.is_ok() else psu.STATUS_LED_COLOR_RED
-            psu.set_status_led(color)
+            color = entity.STATUS_LED_COLOR_GREEN if psu_status.is_ok() else entity.STATUS_LED_COLOR_RED
+            entity.set_status_led(color)
         except NotImplementedError:
             self.log_warning("set_status_led() not implemented")
 
@@ -776,21 +972,21 @@ class DaemonPsud(daemon_base.DaemonBase):
         if not platform_chassis:
             return
 
-        for index, psu_status in self.psu_status_dict.items():
+        for name, psu_status in self.psu_status_dict.items():
             fvs = swsscommon.FieldValuePairs([
                 ('led_status', str(try_get(psu_status.psu.get_status_led, NOT_AVAILABLE)))
             ])
             try:
-                self.psu_tbl.set(get_psu_key(index), fvs)
+                self.psu_tbl.set(name, fvs)
             except RuntimeError as e:
-                self.log_error("Failed to update PSU {} LED status to DB: {}".format(get_psu_key(index), e))
-            self._update_psu_fan_led_status(psu_status.psu, index)
+                self.log_error("Failed to update {} LED status to DB: {}".format(name, e))
+            self._update_psu_fan_led_status(psu_status.psu, name)
 
-    def _update_psu_fan_led_status(self, psu, psu_index):
-        psu_name = get_psu_key(psu_index)
-        fan_list = psu.get_all_fans()
+    def _update_psu_fan_led_status(self, entity, entity_name):
+        """entity: PSU or PDB object; entity_name: its name (e.g. 'PSU 1', 'PDB 1')."""
+        fan_list = entity.get_all_fans()
         for index, fan in enumerate(fan_list):
-            fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
+            fan_name = try_get(fan.get_name, '{} FAN {}'.format(entity_name, index + 1))
             fvs = swsscommon.FieldValuePairs([
                 (FAN_INFO_LED_STATUS_FIELD, str(try_get(fan.get_status_led, NOT_AVAILABLE)))
             ])
