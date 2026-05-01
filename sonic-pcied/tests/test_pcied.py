@@ -1,7 +1,5 @@
 import os
 import sys
-from imp import load_source  # Replace with importlib once we no longer need to support Python 2
-
 import pytest
 
 # TODO: Clean this up once we no longer need to support Python 2
@@ -23,7 +21,6 @@ from sonic_py_common import daemon_base, device_info
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('pcied', os.path.join(scripts_path, 'pcied'))
 import pcied
 
 

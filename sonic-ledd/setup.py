@@ -21,6 +21,13 @@ setup(
         'pytest',
         'pytest-cov'
     ],
+    extras_require={
+        'testing': [
+            'mock>=2.0.0; python_version < "3.3"',
+            'pytest',
+            'pytest-cov'
+        ]
+    },
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: No Input/Output (Daemon)',
