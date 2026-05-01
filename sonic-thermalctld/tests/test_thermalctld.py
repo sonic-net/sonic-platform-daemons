@@ -843,15 +843,17 @@ class TestTemperatureUpdater(object):
         # With sfp_util mocked and port_name available, Redis reading is attempted
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [])
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock()}
 
         temperature_updater.update()
-        # Verify Redis table was queried
-        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
+        mock_dom_temp_tbl.get.assert_called_with('Ethernet0')
 
     def test_update_thermal_with_exception(self):
         chassis = MockChassis()
@@ -905,20 +907,23 @@ class TestTemperatureUpdater(object):
         # Mock the SfpUtilHelper to return correct port mapping
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
-        # Mock the Redis tables to return temperature data
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        # Mock the per-ASIC Redis tables to return temperature data
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
 
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [
             ('temphighwarning', '70.0'),
             ('templowwarning', '-5.0'),
             ('temphighalarm', '75.0'),
             ('templowalarm', '-10.0')
         ])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
 
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock()}
 
         # Use a real Table object to capture the set() calls
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
@@ -926,8 +931,8 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
 
         # Verify temperature was read from Redis
-        temperature_updater.xcvr_dom_temp_tbl.get.assert_called_with('Ethernet0')
-        temperature_updater.xcvr_dom_threshold_tbl.get.assert_called_with('Ethernet0')
+        mock_dom_temp_tbl.get.assert_called_with('Ethernet0')
+        mock_dom_threshold_tbl.get.assert_called_with('Ethernet0')
 
         # Verify TEMPERATURE_INFO table was populated with correct values
         assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
@@ -960,18 +965,21 @@ class TestTemperatureUpdater(object):
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
         # Temperature exceeds high threshold (80 > 70)
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '80.0')])
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '80.0')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
 
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [
             ('temphighwarning', '70.0'),
             ('templowwarning', '-5.0')
         ])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
 
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock()}
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
 
         temperature_updater.update()
@@ -995,24 +1003,28 @@ class TestTemperatureUpdater(object):
         # Mock the SfpUtilHelper
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
         # Mock DOM_TEMPERATURE table to return no data
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
 
         # Mock DOM_THRESHOLD table to return no data
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
 
         # Mock DOM_SENSOR table to return temperature data (fallback)
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [
+        mock_dom_sensor_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl.get.return_value = (True, [
             ('temperature', '60.0'),
             ('temphighwarning', '75.0'),
             ('templowwarning', '-5.0'),
             ('temphighalarm', '80.0'),
             ('templowalarm', '-10.0')
         ])
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         # Use a real Table object to capture the set() calls
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
@@ -1020,7 +1032,7 @@ class TestTemperatureUpdater(object):
         temperature_updater.update()
 
         # Verify fallback to DOM_SENSOR table was called
-        temperature_updater.xcvr_dom_sensor_tbl.get.assert_called()
+        mock_dom_sensor_tbl.get.assert_called()
 
         # Verify TEMPERATURE_INFO table was populated with fallback values
         assert 'xSFP module 1 Temp' in temperature_updater.table.mock_dict
@@ -1082,31 +1094,61 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
 
-        # Mock the Redis tables
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        # Mock the Redis tables keyed by asic_id (0 for single-ASIC)
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         # Test reading from DOM_TEMPERATURE table
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5')])
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == 55.5
 
         # Test fallback to DOM_SENSOR table
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [('temperature', '60.0')])
+        mock_dom_temp_tbl.get.return_value = (False, [])
+        mock_dom_sensor_tbl.get.return_value = (True, [('temperature', '60.0')])
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == 60.0
 
         # Test with N/A value
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+        mock_dom_sensor_tbl.get.return_value = (False, [])
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == thermalctld.NOT_AVAILABLE
 
         # Test with temperature value containing unit suffix
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == 55.5
+
+    def test_get_sfp_temperature_from_db_multi_asic(self):
+        """Verify per-asic_id table lookup on multi-ASIC platforms."""
+        chassis = MockChassis()
+        temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        temperature_updater.sfp_util = mock.MagicMock()
+
+        # Set up two per-asic_id dom_temp tables with distinct values
+        mock_asic0_tbl = mock.MagicMock()
+        mock_asic0_tbl.get.return_value = (True, [('temperature', '40.0')])
+        mock_asic1_tbl = mock.MagicMock()
+        mock_asic1_tbl.get.return_value = (True, [('temperature', '70.0')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_asic0_tbl, 1: mock_asic1_tbl}
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock(), 1: mock.MagicMock()}
+
+        # Port resolves to asic1 -> asic1 table is queried, not asic0
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 1
+        assert temperature_updater._get_sfp_temperature_from_db('Ethernet64') == 70.0
+        mock_asic1_tbl.get.assert_called_with('Ethernet64')
+        mock_asic0_tbl.get.assert_not_called()
+
+        # Port resolves to asic0 -> asic0 table is queried
+        mock_asic0_tbl.get.reset_mock()
+        mock_asic1_tbl.get.reset_mock()
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
+        assert temperature_updater._get_sfp_temperature_from_db('Ethernet0') == 40.0
+        mock_asic0_tbl.get.assert_called_with('Ethernet0')
+        mock_asic1_tbl.get.assert_not_called()
 
     def test_sfp_temperature_na_value(self):
         """Test that N/A temperature is stored correctly in TEMPERATURE_INFO"""
@@ -1120,16 +1162,20 @@ class TestTemperatureUpdater(object):
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
         # Return N/A temperature
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', 'N/A')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
 
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (False, [])
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
 
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+        mock_dom_sensor_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
 
@@ -1158,21 +1204,24 @@ class TestTemperatureUpdater(object):
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
         # Temperature with unit suffix
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '55.5 C')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
 
         # Thresholds with unit suffix
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [
             ('temphighwarning', '70.0 C'),
             ('templowwarning', '-5.0 C'),
             ('temphighalarm', '75.0 C'),
             ('templowalarm', '-10.0 C')
         ])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
 
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock()}
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
 
         temperature_updater.update()
@@ -1272,18 +1321,21 @@ class TestTemperatureUpdater(object):
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
         temperature_updater.sfp_util = mock.MagicMock()
         temperature_updater.sfp_util.get_physical_to_logical.return_value = ['Ethernet0']
+        temperature_updater.sfp_util.get_asic_id_for_logical_port.return_value = 0
 
-        # Mock Redis tables
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (True, [('temperature', '45.0')])
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+        # Mock Redis tables keyed by asic_id (0 for single-ASIC)
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (True, [('temperature', '45.0')])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [
             ('temphighwarning', '70.0'),
             ('templowwarning', '-5.0'),
             ('temphighalarm', '75.0'),
             ('templowalarm', '-10.0')
         ])
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock.MagicMock()}
         temperature_updater.table = Table("STATE_DB", "TEMPERATURE_INFO")
 
         temperature_updater.update()
@@ -1318,10 +1370,12 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
 
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.side_effect = Exception("Redis error")
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (True, [('temperature', '50.0')])
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.side_effect = Exception("Redis error")
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
+        mock_dom_sensor_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl.get.return_value = (True, [('temperature', '50.0')])
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         # Should fallback to DOM_SENSOR
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
@@ -1332,10 +1386,12 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
 
-        temperature_updater.xcvr_dom_temp_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_temp_tbl.get.return_value = (False, [])
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl.get.side_effect = Exception("Redis error")
+        mock_dom_temp_tbl = mock.MagicMock()
+        mock_dom_temp_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_temp_tbl = {0: mock_dom_temp_tbl}
+        mock_dom_sensor_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl.get.side_effect = Exception("Redis error")
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         temp = temperature_updater._get_sfp_temperature_from_db('Ethernet0')
         assert temp == thermalctld.NOT_AVAILABLE
@@ -1345,13 +1401,14 @@ class TestTemperatureUpdater(object):
         chassis = MockChassis()
         temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
 
-        temperature_updater.xcvr_dom_threshold_tbl = mock.MagicMock()
-        # Return invalid threshold value that will cause float() to fail
-        temperature_updater.xcvr_dom_threshold_tbl.get.return_value = (True, [
+        mock_dom_threshold_tbl = mock.MagicMock()
+        mock_dom_threshold_tbl.get.return_value = (True, [
             ('temphighwarning', 'invalid_float'),
         ])
-        temperature_updater.xcvr_dom_sensor_tbl = mock.MagicMock()
-        temperature_updater.xcvr_dom_sensor_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_threshold_tbl = {0: mock_dom_threshold_tbl}
+        mock_dom_sensor_tbl = mock.MagicMock()
+        mock_dom_sensor_tbl.get.return_value = (False, [])
+        temperature_updater.xcvr_dom_sensor_tbl = {0: mock_dom_sensor_tbl}
 
         # Should return N/A values without raising exception
         high, low, high_crit, low_crit = temperature_updater._get_sfp_thresholds_from_db('Ethernet0')

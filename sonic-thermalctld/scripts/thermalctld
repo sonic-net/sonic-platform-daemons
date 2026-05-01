@@ -708,9 +708,16 @@ class TemperatureUpdater(logger.Logger):
         state_db = daemon_base.db_connect("STATE_DB")
         self.table = swsscommon.Table(state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
-        self.xcvr_dom_temp_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_TEMPERATURE_TABLE)
-        self.xcvr_dom_threshold_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_THRESHOLD_TABLE)
-        self.xcvr_dom_sensor_tbl = swsscommon.Table(state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
+        self.xcvr_dom_temp_tbl = {}
+        self.xcvr_dom_threshold_tbl = {}
+        self.xcvr_dom_sensor_tbl = {}
+        for namespace in multi_asic.get_front_end_namespaces():
+            asic_id = multi_asic.get_asic_index_from_namespace(namespace)
+            ns_state_db = daemon_base.db_connect("STATE_DB", namespace)
+            self.xcvr_dom_temp_tbl[asic_id] = swsscommon.Table(ns_state_db, TRANSCEIVER_DOM_TEMPERATURE_TABLE)
+            self.xcvr_dom_threshold_tbl[asic_id] = swsscommon.Table(ns_state_db, TRANSCEIVER_DOM_THRESHOLD_TABLE)
+            self.xcvr_dom_sensor_tbl[asic_id] = swsscommon.Table(ns_state_db, TRANSCEIVER_DOM_SENSOR_TABLE)
+
         self.chassis_table = None
         self.all_thermals = set()
 
@@ -801,6 +808,20 @@ class TemperatureUpdater(logger.Logger):
             # Return the first logical port (for breakout, this is the primary port with DOM data)
             return logical_ports[0]
         return None
+
+    def _get_asic_id_for_port(self, port_name):
+        """
+        Get the ASIC index for a given logical port name.
+
+        :param port_name: Logical port name (e.g., 'Ethernet0')
+        :return: ASIC index (0 for single-ASIC, 0/1/... for multi-ASIC)
+        """
+        if self.sfp_util is None:
+            return 0
+        asic_id = self.sfp_util.get_asic_id_for_logical_port(port_name)
+        if asic_id is not None:
+            return int(asic_id)
+        return 0
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -1042,9 +1063,13 @@ class TemperatureUpdater(logger.Logger):
         :param port_name: Port name (e.g., 'Ethernet0')
         :return: Temperature value as float, or NOT_AVAILABLE if not found
         """
+        asic_id = self._get_asic_id_for_port(port_name)
+        dom_temp_tbl = self.xcvr_dom_temp_tbl.get(asic_id)
+        dom_sensor_tbl = self.xcvr_dom_sensor_tbl.get(asic_id)
+
         # First try TRANSCEIVER_DOM_TEMPERATURE table
         try:
-            status, fvs = self.xcvr_dom_temp_tbl.get(port_name)
+            status, fvs = dom_temp_tbl.get(port_name)
             if status:
                 for field, value in fvs:
                     if field == 'temperature':
@@ -1056,7 +1081,7 @@ class TemperatureUpdater(logger.Logger):
 
         # Fallback to TRANSCEIVER_DOM_SENSOR table
         try:
-            status, fvs = self.xcvr_dom_sensor_tbl.get(port_name)
+            status, fvs = dom_sensor_tbl.get(port_name)
             if status:
                 for field, value in fvs:
                     if field == 'temperature':
@@ -1081,15 +1106,19 @@ class TemperatureUpdater(logger.Logger):
         high_critical_threshold = NOT_AVAILABLE
         low_critical_threshold = NOT_AVAILABLE
 
+        asic_id = self._get_asic_id_for_port(port_name)
+        dom_threshold_tbl = self.xcvr_dom_threshold_tbl.get(asic_id)
+        dom_sensor_tbl = self.xcvr_dom_sensor_tbl.get(asic_id)
+
         fvs_dict = {}
         try:
             # First try TRANSCEIVER_DOM_THRESHOLD table
-            status, fvs = self.xcvr_dom_threshold_tbl.get(port_name)
+            status, fvs = dom_threshold_tbl.get(port_name)
             if status:
                 fvs_dict = dict(fvs)
             # Fallback to TRANSCEIVER_DOM_SENSOR table if no thresholds found
             if not fvs_dict or 'temphighwarning' not in fvs_dict:
-                status, fvs = self.xcvr_dom_sensor_tbl.get(port_name)
+                status, fvs = dom_sensor_tbl.get(port_name)
                 if status:
                     fvs_dict = dict(fvs)
         except Exception as e:
@@ -1233,6 +1262,9 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
 
         # Set minimum logging level to INFO
         self.set_min_log_priority_info()
+
+        if multi_asic.is_multi_asic():
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
 
         self.stop_event = threading.Event()
 
