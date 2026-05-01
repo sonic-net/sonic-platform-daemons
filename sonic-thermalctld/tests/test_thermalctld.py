@@ -24,6 +24,7 @@ assert len(swsscommon.__path__) == 1
 assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, 'swsscommon')))
 
 from sonic_py_common import daemon_base, device_info
+from sonic_platform_base.liquid_cooling_base import LeakSeverity
 
 from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockSfp, MockThermal
 from .mock_swsscommon import Table
@@ -405,23 +406,31 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
-        liquid_cooling_updater.table = mock.MagicMock()
-        liquid_cooling_updater.leaking_sensors = []
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
 
         mock_try_get.side_effect = lambda func, default: func()
 
         liquid_cooling_updater._refresh_leak_status()
 
-        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
         assert liquid_cooling_updater.log_error.call_count == 0
         assert liquid_cooling_updater.log_notice.call_count == 0
         assert len(liquid_cooling_updater.leaking_sensors) == 0
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
 
-        calls = liquid_cooling_updater.table.set.call_args_list
+        calls = liquid_cooling_updater.sensor_table.set.call_args_list
         for call in calls:
             sensor_name, fvp = call[0]
             assert sensor_name in ["leakage1", "leakage2"]
-            assert fvp.fv_dict['leak_status'] == 'No'
+            assert fvp.fv_dict['leaking'] == 'No'
+
+        calls_sys = liquid_cooling_updater.system_table.set.call_args_list
+        for call in calls_sys:
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            assert fvp.fv_dict['device_leak_status'] == 'None'
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_with_leak(self, mock_try_get):
@@ -433,31 +442,136 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
-        liquid_cooling_updater.table = mock.MagicMock()
-        liquid_cooling_updater.leaking_sensors = []
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
 
         mock_try_get.side_effect = lambda func, default: func()
 
         liquid_cooling_updater._refresh_leak_status()
 
-        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
         assert liquid_cooling_updater.log_error.call_count == 1
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
 
         liquid_cooling_updater.log_error.assert_called_with(
             'Liquid cooling leakage sensor leakage1 reported leaking'
         )
 
-        calls = liquid_cooling_updater.table.set.call_args_list
+        calls = liquid_cooling_updater.sensor_table.set.call_args_list
         leak_statuses = {}
         for call in calls:
             sensor_name, fvp = call[0]
-            leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
+            leak_statuses[sensor_name] = fvp.fv_dict['leaking']
 
         assert leak_statuses["leakage1"] == "Yes"
         assert leak_statuses["leakage2"] == "No"
 
+        calls_sys = liquid_cooling_updater.system_table.set.call_args_list
+        for call in calls_sys:
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_with_multiple_leaks(self, mock_try_get):
+        """Test _refresh_leak_status when multiple sensors are leaking"""
+        mock_chassis = MockChassis()
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Sensors need to be minor leaks to test the multi-leak logic.
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        mock_chassis.get_liquid_cooling().leakage_sensors[1].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+
+        # Start with a single sensor leaking.
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert liquid_cooling_updater.log_error.call_count == 1
+        assert len(liquid_cooling_updater.leaking_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+
+        # Make the second sensor leak and poll again.
+        mock_chassis.get_liquid_cooling().make_sensor_leak(1)
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert liquid_cooling_updater.log_error.call_count == 2
+        assert len(liquid_cooling_updater.leaking_sensors) == 2
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert "leakage2" in liquid_cooling_updater.leaking_sensors
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
+
+        calls_sys = liquid_cooling_updater.system_table.set.call_args_list
+        for index, call in enumerate(calls_sys):
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            if index == 0:
+                assert fvp.fv_dict['device_leak_status'] == 'MINOR'
+            elif index == 1:
+                assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_with_long_leak(self, mock_try_get):
+        """Test _refresh_leak_status when one sensor leaks for an extended period"""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        # Sensors need to be minor leaks to test the long leak logic.
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=1)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert liquid_cooling_updater.log_error.call_count == 1
+        assert len(liquid_cooling_updater.leaking_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+
+        time.sleep(2)
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert len(liquid_cooling_updater.leaking_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
+
+        calls_sys = liquid_cooling_updater.system_table.set.call_args_list
+        for index, call in enumerate(calls_sys):
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            if index == 0:
+                assert fvp.fv_dict['device_leak_status'] == 'MINOR'
+            elif index == 1:
+                assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_leak_recovery(self, mock_try_get):
@@ -467,43 +581,103 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
-        liquid_cooling_updater.table = mock.MagicMock()
-        liquid_cooling_updater.leaking_sensors = ["leakage1"]
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {"leakage1": 0}
 
         mock_try_get.side_effect = lambda func, default: func()
 
         liquid_cooling_updater._refresh_leak_status()
 
-        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
         assert len(liquid_cooling_updater.leaking_sensors) == 0
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_sensor_unavailable(self, mock_try_get):
         """Test _refresh_leak_status when sensor returns None/N/A"""
         mock_chassis = MockChassis()
 
-        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak = mock.MagicMock(return_value=None)
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = mock.MagicMock(return_value=False)
 
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
-        liquid_cooling_updater.table = mock.MagicMock()
-        liquid_cooling_updater.leaking_sensors = []
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
 
         mock_try_get.side_effect = lambda func, default: func()
 
         liquid_cooling_updater._refresh_leak_status()
 
-        assert liquid_cooling_updater.table.set.call_count == 2
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
 
-        calls = liquid_cooling_updater.table.set.call_args_list
+        calls = liquid_cooling_updater.sensor_table.set.call_args_list
         leak_statuses = {}
         for call in calls:
             sensor_name, fvp = call[0]
-            leak_statuses[sensor_name] = fvp.fv_dict['leak_status']
+            leak_statuses[sensor_name] = fvp.fv_dict['leaking']
+
+        assert len(liquid_cooling_updater.faulty_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.faulty_sensors
 
         assert leak_statuses["leakage1"] == "N/A"
+        assert leak_statuses["leakage2"] == "No"
+
+        calls_sys = liquid_cooling_updater.system_table.call_args_list
+        for call in calls_sys:
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            assert fvp.fv_dict['device_leak_status'] == 'None'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_fault_recovery(self, mock_try_get):
+        """Test _refresh_leak_status recovery when a sensor is no longer faulty."""
+        mock_chassis = MockChassis()
+
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = mock.MagicMock(return_value=False)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
+
+        calls = liquid_cooling_updater.sensor_table.set.call_args_list
+        leak_statuses = {}
+        for call in calls:
+            sensor_name, fvp = call[0]
+            leak_statuses[sensor_name] = fvp.fv_dict['leaking']
+
+        assert len(liquid_cooling_updater.faulty_sensors) == 1
+        assert "leakage1" in liquid_cooling_updater.faulty_sensors
+
+        assert leak_statuses["leakage1"] == "N/A"
+        assert leak_statuses["leakage2"] == "No"
+
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = mock.MagicMock(return_value=True)
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        calls = liquid_cooling_updater.sensor_table.set.call_args_list
+        leak_statuses = {}
+        for call in calls:
+            sensor_name, fvp = call[0]
+            leak_statuses[sensor_name] = fvp.fv_dict['leaking']
+
+        assert len(liquid_cooling_updater.faulty_sensors) == 0
+
+        assert leak_statuses["leakage1"] == "No"
         assert leak_statuses["leakage2"] == "No"
 
     def test_run(self):
