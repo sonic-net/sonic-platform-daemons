@@ -612,9 +612,10 @@ class CriticalEventChecker(EventLogger):
         "Rack_level_leak",
     ]
 
-    def __init__(self):
+    def __init__(self, policy_reader):
         super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
         self.state_db = daemon_base.db_connect("STATE_DB")
+        self.policy_reader = policy_reader
 
     def has_critical_system_leak(self):
         """Return True if SYSTEM_LEAK_STATUS|system shows CRITICAL_SYSTEM_LEAK."""
@@ -643,8 +644,17 @@ class CriticalEventChecker(EventLogger):
         return False
 
     def has_any_critical_event(self):
-        """Return True if any critical system or Rack Manager event is active."""
-        return self.has_critical_system_leak() or self.has_critical_rack_mgr_alert()
+        """Return True if any critical system or Rack Manager event is active and its policy is enabled.
+
+        Skips system leak check if system_leak_policy == 'disabled'.
+        Skips Rack Manager alert check if rack_mgr_leak_policy == 'disabled'.
+        """
+        policy = self.policy_reader.get_leak_control_policy()
+        if policy.get("system_leak_policy") != "disabled" and self.has_critical_system_leak():
+            return True
+        if policy.get("rack_mgr_leak_policy") != "disabled" and self.has_critical_rack_mgr_alert():
+            return True
+        return False
 
     def get_system_leak_status(self):
         """Return device_leak_status string from SYSTEM_LEAK_STATUS table."""
@@ -906,7 +916,7 @@ class BmcEventHandler(EventLogger):
                 self.log_info("admin_up: Switch-Host already ONLINE; no action needed")
                 return
             if self.critical_event_checker.has_any_critical_event():
-                self.log_warning("POWER_ON blocked by CLI admin_up: active critical leak or alert")
+                self.log_warning("admin_up: POWER_ON blocked by active critical leak or alert")
                 return
             self.log_notice("CHASSIS_MODULE admin_up: powering ON Switch-Host")
             self.action_queue.put(ActionItem(ACTION_POWER_ON, "CHASSIS_MODULE:ADMIN_UP"))
@@ -1048,7 +1058,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
 
         self.controller = SwitchHostController(self.chassis)
         self.policy_reader = PolicyReader()
-        self.critical_event_checker = CriticalEventChecker()
+        self.critical_event_checker = CriticalEventChecker(self.policy_reader)
         self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
         self.action_queue = queue.Queue()
         self.event_handler = BmcEventHandler(

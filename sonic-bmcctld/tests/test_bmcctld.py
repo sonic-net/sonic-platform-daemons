@@ -87,8 +87,8 @@ def policy_reader():
 
 
 @pytest.fixture
-def critical_event_checker():
-    lc = bmcctld.CriticalEventChecker()
+def critical_event_checker(policy_reader):
+    lc = bmcctld.CriticalEventChecker(policy_reader)
     lc._system_leak_table = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
     lc._rack_alert_table = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
     return lc
