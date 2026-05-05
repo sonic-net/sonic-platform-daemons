@@ -30,7 +30,6 @@ import ledd
 daemon_base.db_connect = mock.MagicMock()
 swsscommon.Table = mock.MagicMock()
 swsscommon.ProducerStateTable = mock.MagicMock()
-swsscommon.SubscriberStateTable = mock.MagicMock()
 swsscommon.SonicDBConfig = mock.MagicMock()
 
 def test_help_args(capsys):
@@ -140,15 +139,19 @@ def test_daemon_ledd_initialization(mock_fp_ports, mock_port_observer, mock_get_
 
 @mock.patch('swsscommon.swsscommon.Select.addSelectable', mock.MagicMock())
 @mock.patch("ledd.DaemonLedd.load_platform_util")
+@mock.patch("ledd.multi_asic.get_front_end_namespaces")
 @mock.patch("ledd.PortStateObserver.getSelectEvent")
 @mock.patch("ledd.DaemonLedd.findFrontPanelPorts")
 @mock.patch("ledd.FrontPanelPorts")
-def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, mock_get_select_event, mock_load_platform_util):
+def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, mock_get_select_event, mock_get_namespaces, mock_load_platform_util):
     """
     Test that DaemonLedd.run() handles a timeout from the select method correctly.
     """
     # Mock getSelectEvent to return a timeout
     mock_get_select_event.return_value = (swsscommon.Select.TIMEOUT, None)
+
+    # Mock get_front_end_namespaces to return empty list
+    mock_get_namespaces.return_value = []
 
     # Mock load_platform_util to prevent actual loading of the LedControl module
     mock_load_platform_util.return_value = mock.Mock()
