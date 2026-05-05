@@ -417,7 +417,7 @@ class TestPolicyReader:
 
     def test_get_leak_control_policy_custom(self, policy_reader):
         tbl = Table(None, bmcctld.LEAK_CONTROL_POLICY_TABLE)
-        _set_table_entry(tbl, bmcctld.LEAK_CONTROL_POLICY_TABLE, {
+        _set_table_entry(tbl, "policy", {
             "system_critical_leak_action": bmcctld.ACTION_GRACEFUL_SHUTDOWN,
             "rack_mgr_critical_alert_action": bmcctld.ACTION_POWER_OFF,
         })
@@ -1247,7 +1247,6 @@ class TestChassisModuleInfo:
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD] == "SWITCH-HOST"
         assert info[bmcctld.CHASSIS_MODULE_INFO_DESC_FIELD] == "Switch Host Module"
-        assert info[bmcctld.CHASSIS_MODULE_INFO_SLOT_FIELD] == "1"
         assert info[bmcctld.CHASSIS_MODULE_INFO_SERIAL_FIELD] == "MOCK-SERIAL-1"
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE

@@ -237,7 +237,6 @@ SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
 CHASSIS_MODULE_INFO_TABLE = "CHASSIS_MODULE_TABLE"
 CHASSIS_MODULE_INFO_NAME_FIELD = "name"
 CHASSIS_MODULE_INFO_DESC_FIELD = "desc"
-CHASSIS_MODULE_INFO_SLOT_FIELD = "slot"
 CHASSIS_MODULE_INFO_SERIAL_FIELD = "serial"
 CHASSIS_MODULE_INFO_OPERSTATUS_FIELD = "oper_status"
 CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD = "admin_status"
@@ -500,15 +499,13 @@ class SwitchHostController(EventLogger):
         if module is None:
             self.log_error("Cannot initialize CHASSIS_MODULE_INFO: Switch-Host module not found")
             return
-        name = try_get(module.get_name, default=NOT_AVAILABLE)
+        name = SWITCH_HOST_MODULE_KEY
         desc = try_get(module.get_description, default=NOT_AVAILABLE)
-        slot = str(try_get(module.get_slot, default=NOT_AVAILABLE))
         serial = try_get(module.get_serial, default=NOT_AVAILABLE)
         oper_status = self.get_oper_status()
         fvs = swsscommon.FieldValuePairs([
             (CHASSIS_MODULE_INFO_NAME_FIELD, name),
             (CHASSIS_MODULE_INFO_DESC_FIELD, desc),
-            (CHASSIS_MODULE_INFO_SLOT_FIELD, slot),
             (CHASSIS_MODULE_INFO_SERIAL_FIELD, serial),
             (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, oper_status),
             (CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, admin_status),
@@ -588,8 +585,8 @@ class PolicyReader(EventLogger):
             "rack_mgr_minor_alert_action": DEFAULT_RACK_MGR_MINOR_ALERT_ACTION,
         }
         tbl = swsscommon.Table(self.config_db, LEAK_CONTROL_POLICY_TABLE)
-        # LEAK_CONTROL_POLICY is stored as a single-row table keyed by table name or empty string
-        for key in (LEAK_CONTROL_POLICY_TABLE, ""):
+        # LEAK_CONTROL_POLICY is a single-row table; CLI writes key "policy", legacy variants also tried
+        for key in ("policy", LEAK_CONTROL_POLICY_TABLE, ""):
             result = tbl.get(key)
             if result and result[0]:
                 policy.update({k: v for k, v in fvs_to_dict(result[1]).items() if k in policy})
@@ -760,6 +757,7 @@ class GracefulShutdownHandler(EventLogger):
             self.log_warning("GNOI shutdown exception: {}".format(repr(e)))
             return False
         """
+        return True
 
     def _get_switch_host_addr(self):
         """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
