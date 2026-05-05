@@ -201,9 +201,9 @@ CMD_STATUS_FAILED = "FAILED"
 ADMIN_UP = "up"
 ADMIN_DOWN = "down"
 
-# Leak status values (SYSTEM_LEAK_STATUS table)
-SYSTEM_LEAK_CRITICAL = "CRITICAL_SYSTEM_LEAK"
-SYSTEM_LEAK_MINOR = "MINOR_SYSTEM_LEAK"
+# Leak status values (SYSTEM_LEAK_STATUS table) — match LeakSeverity.value from liquid_cooling_base.py
+SYSTEM_LEAK_CRITICAL = "CRITICAL"
+SYSTEM_LEAK_MINOR = "MINOR"
 
 # Alert severity values
 ALERT_SEVERITY_CRITICAL = "CRITICAL"
