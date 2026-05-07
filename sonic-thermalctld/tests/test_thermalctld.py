@@ -138,6 +138,46 @@ class TestFanUpdater(object):
 
     # TODO: Add a test case for _refresh_fan_drawer_status with a good fan drawer
 
+    def test_deinit(self):
+        chassis = MockChassis()
+        fan_updater = thermalctld.FanUpdater(chassis, threading.Event())
+        fan_updater.table = Table("STATE_DB", "fan_table")
+        fan_updater.table._del = mock.MagicMock()
+        fan_updater.table.getKeys = mock.MagicMock(return_value=['fan1', 'fan2'])
+        fan_updater.drawer_table = Table("STATE_DB", "drawer_table")
+        fan_updater.drawer_table._del = mock.MagicMock()
+        fan_updater.drawer_table.getKeys = mock.MagicMock(return_value=['drawer1', 'drawer2'])
+        fan_updater.phy_entity_table = Table("STATE_DB", "phy_entity_table")
+        # Pre-populate physical entity table so .get() returns non-None
+        fan_updater.phy_entity_table.mock_dict['fan1'] = {}
+        fan_updater.phy_entity_table.mock_dict['fan2'] = {}
+        fan_updater.phy_entity_table.mock_dict['fanExtra'] = {}
+        fan_updater.phy_entity_table.mock_dict['drawer1'] = {}
+        fan_updater.phy_entity_table.mock_dict['drawer2'] = {}
+        fan_updater.phy_entity_table.mock_dict['drawerExtra'] = {}
+
+        fan_updater.phy_entity_table._del = mock.MagicMock()
+
+        fan_updater.__del__()
+
+        # Verify fan table entries are deleted
+        assert fan_updater.table.getKeys.call_count == 1
+        assert fan_updater.table._del.call_count == 2
+        fan_table_calls = [mock.call('fan1'), mock.call('fan2')]
+        fan_updater.table._del.assert_has_calls(fan_table_calls, any_order=True)
+
+        # Verify drawer table entries are deleted
+        assert fan_updater.drawer_table.getKeys.call_count == 1
+        assert fan_updater.drawer_table._del.call_count == 2
+        drawer_table_calls = [mock.call('drawer1'), mock.call('drawer2')]
+        fan_updater.drawer_table._del.assert_has_calls(drawer_table_calls, any_order=True)
+
+        # Verify only physical entity entries matching fan and drawer keys are deleted
+        # Should be 4 calls total: 2 for fans + 2 for drawers, rather than 6 (all 4 + redundant)
+        assert fan_updater.phy_entity_table._del.call_count == 4
+        phy_entity_calls = [mock.call('fan1'), mock.call('fan2'), mock.call('drawer1'), mock.call('drawer2')]
+        fan_updater.phy_entity_table._del.assert_has_calls(phy_entity_calls, any_order=True)
+
     def test_update_fan_with_exception(self):
         chassis = MockChassis()
         chassis.make_error_fan()
@@ -412,19 +452,30 @@ class TestTemperatureUpdater(object):
         temp_updater.table._del = mock.MagicMock()
         temp_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         temp_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        # Pre-populate physical entity table so .get() returns non-None
+        temp_updater.phy_entity_table.mock_dict['key1'] = {}
+        temp_updater.phy_entity_table.mock_dict['key2'] = {}
+        temp_updater.phy_entity_table.mock_dict['keyredundant'] = {}
         temp_updater.phy_entity_table._del = mock.MagicMock()
-        temp_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         temp_updater.chassis_table = Table("STATE_DB", "ctable")
         temp_updater.chassis_table._del = mock.MagicMock()
         temp_updater.is_chassis_system = True
         temp_updater.is_chassis_upd_required = True
 
         temp_updater.__del__()
+
+        # Verify temperature table entries are deleted
         assert temp_updater.table.getKeys.call_count == 1
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+
+        # Verify chassis table entries are deleted
         assert temp_updater.chassis_table._del.call_count == 2
+
+        # Verify only physical entity entries matching table keys are deleted (not redundant)
+        assert temp_updater.phy_entity_table._del.call_count == 2
+        temp_updater.phy_entity_table._del.assert_has_calls(expected_calls, any_order=True)
 
     def test_deinit_exception(self):
         chassis = MockChassis()
@@ -434,8 +485,10 @@ class TestTemperatureUpdater(object):
         temp_updater.table._del = mock.MagicMock()
         temp_updater.table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         temp_updater.phy_entity_table = Table("STATE_DB", "ytable")
+        # Pre-populate physical entity table so .get() returns non-None
+        temp_updater.phy_entity_table.mock_dict['key1'] = {}
+        temp_updater.phy_entity_table.mock_dict['key2'] = {}
         temp_updater.phy_entity_table._del = mock.MagicMock()
-        temp_updater.phy_entity_table.getKeys = mock.MagicMock(return_value=['key1','key2'])
         temp_updater.chassis_table = Table("STATE_DB", "ctable")
         temp_updater.chassis_table._del = mock.Mock()
         temp_updater.chassis_table._del.side_effect = Exception('test')
@@ -443,10 +496,14 @@ class TestTemperatureUpdater(object):
         temp_updater.is_chassis_upd_required = True
 
         temp_updater.__del__()
+
+        # Verify temperature table entries are deleted
         assert temp_updater.table.getKeys.call_count == 1
         assert temp_updater.table._del.call_count == 2
         expected_calls = [mock.call('key1'), mock.call('key2')]
         temp_updater.table._del.assert_has_calls(expected_calls, any_order=True)
+
+        # Verify chassis_table is set to None after exception
         assert temp_updater.chassis_table is None
 
     def test_over_temper(self):

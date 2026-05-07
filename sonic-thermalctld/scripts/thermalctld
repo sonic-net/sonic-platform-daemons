@@ -205,14 +205,16 @@ class FanUpdater(logger.Logger):
             table_keys = self.table.getKeys()
             for tk in table_keys:
                 self.table._del(tk)
+                if self.phy_entity_table:
+                    if self.phy_entity_table.get(tk) is not None:
+                        self.phy_entity_table._del(tk)
         if self.drawer_table:
             drawer_keys = self.drawer_table.getKeys()
             for dtk in drawer_keys:
                 self.drawer_table._del(dtk)
-        if self.phy_entity_table:
-            phy_entity_keys = self.phy_entity_table.getKeys()
-            for pek in phy_entity_keys:
-                self.phy_entity_table._del(pek)
+                if self.phy_entity_table:
+                    if self.phy_entity_table.get(dtk) is not None:
+                        self.phy_entity_table._del(dtk)
 
     def _log_on_status_changed(self, normal_status, normal_log, abnormal_log):
         """
@@ -583,10 +585,9 @@ class TemperatureUpdater(logger.Logger):
                     # to the supervisor and chassisdb. If this happens then we
                     # should simply remove our handle to chassisdb.
                     self.chassis_table = None
-        if self.phy_entity_table:
-            phy_entity_keys = self.phy_entity_table.getKeys()
-            for pek in phy_entity_keys:
-                self.phy_entity_table._del(pek)
+                if self.phy_entity_table:
+                    if self.phy_entity_table.get(tk) is not None:
+                        self.phy_entity_table._del(tk)
 
     def _init_sfp_util_helper(self):
         """
