@@ -67,6 +67,9 @@ parameters:
     - name: stormond
       root_dir: sonic-stormond
       python3: true
+    - name: bmcctld
+      root_dir: sonic-bmcctld
+      python3: true
 - name: artifactBranch
   type: string
   default: 'refs/heads/master'

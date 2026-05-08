@@ -7,6 +7,7 @@ class ModuleBase():
     MODULE_TYPE_LINE = "LINE-CARD"
     MODULE_TYPE_FABRIC = "FABRIC-CARD"
     MODULE_TYPE_DPU = "DPU"
+    MODULE_TYPE_SWITCH_HOST = "SWITCH_HOST"
 
     # Possible card status for modular chassis
     # Module state is Empty if no module is inserted in the slot
