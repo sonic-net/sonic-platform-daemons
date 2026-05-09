@@ -17,13 +17,11 @@ setup(
         'wheel'
     ],
     tests_require=[
-        'mock>=2.0.0; python_version < "3.3"',
         'pytest',
         'pytest-cov'
     ],
     extras_require={
         'testing': [
-            'mock>=2.0.0; python_version < "3.3"',
             'pytest',
             'pytest-cov'
         ]
