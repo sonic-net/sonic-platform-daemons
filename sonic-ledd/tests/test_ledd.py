@@ -30,6 +30,7 @@ import ledd
 daemon_base.db_connect = mock.MagicMock()
 swsscommon.Table = mock.MagicMock()
 swsscommon.ProducerStateTable = mock.MagicMock()
+swsscommon.SubscriberStateTable = mock.MagicMock()
 swsscommon.SonicDBConfig = mock.MagicMock()
 
 def test_help_args(capsys):
@@ -150,8 +151,8 @@ def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, moc
     # Mock getSelectEvent to return a timeout
     mock_get_select_event.return_value = (swsscommon.Select.TIMEOUT, None)
 
-    # Mock get_front_end_namespaces to return empty list
-    mock_get_namespaces.return_value = []
+    # Mock get_front_end_namespaces to list with one element
+    mock_get_namespaces.return_value = ['']
 
     # Mock load_platform_util to prevent actual loading of the LedControl module
     mock_load_platform_util.return_value = mock.Mock()
@@ -210,7 +211,7 @@ def test_find_front_panel_ports(mock_get_database_table, mock_is_front_panel_por
     )
     mock_state_table.get.side_effect = lambda key: (
         key,
-        [("netdev_oper_status", "up" if key == "Ethernet0" else "down")],
+        [("oper_status", "up" if key == "Ethernet0" else "down")],
     )
 
     # Create an instance of DaemonLedd
@@ -248,7 +249,7 @@ def test_get_port_table_event(mock_cast_selectable, mock_subscriber_table):
     # Mock the SubscriberStateTable behavior
     mock_table = mock.Mock()
     mock_subscriber_table.return_value = mock_table
-    mock_table.pop.return_value = ("Ethernet0", "SET", [("netdev_oper_status", ledd.Port.PORT_UP)])
+    mock_table.pop.return_value = ("Ethernet0", "SET", [("oper_status", ledd.Port.PORT_UP)])
 
     # Create an instance of PortStateObserver
     observer = ledd.PortStateObserver()
