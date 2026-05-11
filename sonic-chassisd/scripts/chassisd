@@ -809,6 +809,18 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
             deferred = self._pending_reboot_check.pop(key, None)
 
+            # EMPTY→ONLINE with no deferred: chassisd restarted while the
+            # DPU was already online — no reboot happened during this cycle.
+            # On first boot persist the initial cause; otherwise just
+            # repopulate CHASSIS_STATE_DB from on-disk data.
+            if deferred is None and not was_known:
+                if self._is_first_boot(key):
+                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+                    self.persist_dpu_reboot_time(key)
+                    self.persist_dpu_reboot_cause(reboot_cause, key)
+                self.update_dpu_reboot_cause_to_db(key)
+                return
+
             reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
             current_cause = self._extract_cause(reboot_cause)
             stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
@@ -822,7 +834,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
                         delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
                         if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
-                            self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
+                            self.log_notice(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
                             self.update_dpu_reboot_cause_to_db(key)
                             return
                     except Exception as e:
@@ -844,6 +856,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     self.update_dpu_reboot_cause_to_db(key)
                 return
 
+            # OFFLINE→ONLINE with no deferred (edge case).
             is_reboot = False
             if current_cause and stored_cause and stored_time_str:
                 try:
@@ -851,7 +864,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
 
                     if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
-                        self.log_info(f"{key}: is_reboot=True \u2014 same reboot cause within {int(delta_sec)}s")
+                        self.log_notice(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
                         is_reboot = True
                 except Exception as e:
                     self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
