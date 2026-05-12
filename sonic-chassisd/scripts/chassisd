@@ -826,19 +826,14 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
 
             # Deferred from Online→Offline: the DPU went down and is now back.
-            # Reboot time was already persisted.  Skip persisting if this is a
-            # back-to-back reboot with the same cause (is_reboot detection).
+            # Reboot time was already persisted.  Skip persisting if the
+            # cause was already recorded after this reboot's execution time.
             if deferred == 'reboot':
-                if current_cause and stored_cause and stored_time_str:
-                    try:
-                        stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
-                        delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
-                        if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
-                            self.log_notice(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
-                            self.update_dpu_reboot_cause_to_db(key)
-                            return
-                    except Exception as e:
-                        self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
+                reboot_time = self.retrieve_dpu_reboot_time(key)
+                if stored_time_str and reboot_time and stored_time_str >= reboot_time:
+                    self.log_notice(f"{key}: Reboot cause already persisted after reboot at {reboot_time}")
+                    self.update_dpu_reboot_cause_to_db(key)
+                    return
                 self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
                 return
@@ -853,23 +848,17 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                         f"(stored: {stored_cause}, current: {current_cause})")
                     self.persist_dpu_reboot_time(key)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
-                    self.update_dpu_reboot_cause_to_db(key)
+                self.update_dpu_reboot_cause_to_db(key)
                 return
 
             # OFFLINE→ONLINE with no deferred (edge case).
-            is_reboot = False
-            if current_cause and stored_cause and stored_time_str:
-                try:
-                    stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
-                    delta_sec = (datetime.now(timezone.utc) - stored_dt).total_seconds()
+            already_persisted = False
+            reboot_time = self.retrieve_dpu_reboot_time(key)
+            if stored_time_str and reboot_time and stored_time_str >= reboot_time:
+                self.log_notice(f"{key}: Reboot cause already persisted after reboot at {reboot_time}")
+                already_persisted = True
 
-                    if current_cause == stored_cause and delta_sec < MAX_DPU_REBOOT_DURATION:
-                        self.log_notice(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
-                        is_reboot = True
-                except Exception as e:
-                    self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
-
-            if not is_reboot and (stored_time_str is not None or self._is_first_boot(key)):
+            if not already_persisted and (stored_time_str is not None or self._is_first_boot(key)):
                 self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
 
