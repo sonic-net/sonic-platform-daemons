@@ -1,6 +1,17 @@
 import os
 import sys
-from imp import load_source  # Replace with importlib once we no longer need to support Python 2
+import importlib.util
+import importlib.machinery
+def load_source(module_name, module_path):
+    loader = importlib.machinery.SourceFileLoader(module_name, module_path)
+    spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
+    if module_name in sys.modules:
+        module = sys.modules[module_name]
+    else:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 import pytest
 
@@ -28,11 +39,21 @@ sys.path.insert(0, mocked_libs_path)
 load_source('swsscommon', os.path.join(mocked_libs_path, 'swsscommon', 'swsscommon.py'))
 import swsscommon as mock_swsscommon
 
+# Patch Table.set so it accepts real swsscommon.FieldValuePairs (no .fv_dict) from production code
+_original_table_set = mock_swsscommon.Table.set
+def _patched_table_set(self, key, fvs):
+    if hasattr(fvs, 'fv_dict'):
+        return _original_table_set(self, key, fvs)
+    try:
+        self.mock_dict[key] = dict(fvs)
+    except (TypeError, ValueError):
+        self.mock_dict[key] = dict(list(fvs))
+mock_swsscommon.Table.set = _patched_table_set
+
 # Add path to the file under test so that we can load it
 modules_path = os.path.dirname(tests_path)
 scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
-load_source('psud', os.path.join(scripts_path, 'psud'))
 import psud
 
 
@@ -403,3 +424,54 @@ class TestPsuChassisInfo(object):
         # Should have tried hdel for PSU, fan drawer, and module
         assert chassis_tbl.hdel.call_count == 3
         assert chassis_info.log_error.call_count == 3
+
+    def test_supplied_power_includes_pdbs(self):
+        chassis = MockChassis()
+        pdb1 = MockPsu("PDB 1", 0, True, True)
+        pdb1.set_maximum_supplied_power(150.0)
+        chassis._pdb_list.append(pdb1)
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info.run_power_budget(chassis_tbl)
+        fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) == 150.0
+
+    def test_run_power_budget_when_get_all_pdbs_raises(self):
+        """
+        If get_all_psus succeeds but get_all_pdbs raises, the outer except re-fetches
+        PSUs only and still records PSU suppliers (no PDBs in that pass).
+        """
+        class ChassisPdbListNotImplemented(MockChassis):
+            def get_all_pdbs(self):
+                raise NotImplementedError
+
+        chassis = ChassisPdbListNotImplemented()
+        psu1 = MockPsu("PSU 1", 0, True, True)
+        psu1.set_maximum_supplied_power(200.0)
+        chassis._psu_list.append(psu1)
+
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info.run_power_budget(chassis_tbl)
+        fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) == 200.0
+
+    def test_run_power_budget_when_all_supplier_lists_unavailable(self):
+        """Both get_all_psus and get_all_pdbs raise: no suppliers, totals only."""
+        class ChassisNoSuppliers(MockChassis):
+            def get_all_psus(self):
+                raise NotImplementedError
+
+            def get_all_pdbs(self):
+                raise NotImplementedError
+
+        chassis = ChassisNoSuppliers()
+        state_db = daemon_base.db_connect("STATE_DB")
+        chassis_tbl = mock_swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
+        chassis_info = psud.PsuChassisInfo(SYSLOG_IDENTIFIER, chassis)
+        chassis_info.run_power_budget(chassis_tbl)
+        fvs = chassis_tbl.get(CHASSIS_INFO_POWER_KEY_TEMPLATE.format(1))
+        assert float(fvs[CHASSIS_INFO_TOTAL_POWER_SUPPLIED_FIELD]) == 0.0

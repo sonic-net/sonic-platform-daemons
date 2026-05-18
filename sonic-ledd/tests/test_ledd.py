@@ -1,6 +1,17 @@
 import os
 import sys
-from imp import load_source
+import importlib.util
+import importlib.machinery
+def load_source(module_name, module_path):
+    loader = importlib.machinery.SourceFileLoader(module_name, module_path)
+    spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
+    if module_name in sys.modules:
+        module = sys.modules[module_name]
+    else:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 import pytest
 from unittest import mock
@@ -129,15 +140,19 @@ def test_daemon_ledd_initialization(mock_fp_ports, mock_port_observer, mock_get_
 
 @mock.patch('swsscommon.swsscommon.Select.addSelectable', mock.MagicMock())
 @mock.patch("ledd.DaemonLedd.load_platform_util")
+@mock.patch("ledd.multi_asic.get_front_end_namespaces")
 @mock.patch("ledd.PortStateObserver.getSelectEvent")
 @mock.patch("ledd.DaemonLedd.findFrontPanelPorts")
 @mock.patch("ledd.FrontPanelPorts")
-def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, mock_get_select_event, mock_load_platform_util):
+def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, mock_get_select_event, mock_get_namespaces, mock_load_platform_util):
     """
     Test that DaemonLedd.run() handles a timeout from the select method correctly.
     """
     # Mock getSelectEvent to return a timeout
     mock_get_select_event.return_value = (swsscommon.Select.TIMEOUT, None)
+
+    # Mock get_front_end_namespaces to list with one element
+    mock_get_namespaces.return_value = ['']
 
     # Mock load_platform_util to prevent actual loading of the LedControl module
     mock_load_platform_util.return_value = mock.Mock()
@@ -162,8 +177,9 @@ def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, moc
 
 @mock.patch('swsscommon.swsscommon.Select.addSelectable', mock.MagicMock())
 @mock.patch("ledd.DaemonLedd.load_platform_util")
+@mock.patch("ledd.multi_asic.is_front_panel_port")
 @mock.patch("ledd.PortStateObserver.getDatabaseTable")
-def test_find_front_panel_ports(mock_get_database_table, mock_load_platform_util):
+def test_find_front_panel_ports(mock_get_database_table, mock_is_front_panel_port, mock_load_platform_util):
     """
     Test DaemonLedd.findFrontPanelPorts to ensure it correctly processes namespaces and returns
     the expected front panel port data.
@@ -174,6 +190,9 @@ def test_find_front_panel_ports(mock_get_database_table, mock_load_platform_util
 
     # Mock load_platform_util to prevent actual loading of the LedControl module
     mock_load_platform_util.return_value = mock.Mock()
+
+    # Mock is_front_panel_port to return True for all ports
+    mock_is_front_panel_port.return_value = True
 
     # Mock the return values for CONFIG_DB and STATE_DB tables
     mock_get_database_table.side_effect = lambda dbname, tblname, namespace: (
@@ -192,7 +211,7 @@ def test_find_front_panel_ports(mock_get_database_table, mock_load_platform_util
     )
     mock_state_table.get.side_effect = lambda key: (
         key,
-        [("netdev_oper_status", "up" if key == "Ethernet0" else "down")],
+        [("oper_status", "up" if key == "Ethernet0" else "down")],
     )
 
     # Create an instance of DaemonLedd
@@ -222,6 +241,7 @@ def test_get_port_table_event(mock_cast_selectable, mock_subscriber_table):
     Test PortStateObserver.getPortTableEvent to ensure it correctly processes events from the PORT table.
     """
     # Mock the selectable object and namespace
+    mock_selectable = mock.Mock()
     mock_redis_select_obj = mock.Mock()
     mock_cast_selectable.return_value = mock_redis_select_obj
     mock_redis_select_obj.getDbConnector.return_value.getNamespace.return_value = "namespace1"
@@ -229,14 +249,14 @@ def test_get_port_table_event(mock_cast_selectable, mock_subscriber_table):
     # Mock the SubscriberStateTable behavior
     mock_table = mock.Mock()
     mock_subscriber_table.return_value = mock_table
-    mock_table.pop.return_value = ("Ethernet0", "SET", [("netdev_oper_status", ledd.Port.PORT_UP)])
+    mock_table.pop.return_value = ("Ethernet0", "SET", [("oper_status", ledd.Port.PORT_UP)])
 
     # Create an instance of PortStateObserver
     observer = ledd.PortStateObserver()
     observer.tables["namespace1"] = mock_table
 
-    # Call the method under test
-    event = observer.getPortTableEvent(mock.Mock())
+    # Call the method under test with the mocked selectable object
+    event = observer.getPortTableEvent(mock_selectable)
 
     # Assertions
     assert event is not None
@@ -244,7 +264,7 @@ def test_get_port_table_event(mock_cast_selectable, mock_subscriber_table):
     assert event[1] == ledd.Port.PORT_UP  # Port state
 
     # Verify that the mock methods were called
-    mock_cast_selectable.assert_called_once()
+    mock_cast_selectable.assert_called_once_with(mock_selectable)
     mock_table.pop.assert_called_once()
 
 @mock.patch("ledd.swsscommon.SubscriberStateTable")
@@ -254,6 +274,7 @@ def test_get_port_table_event_no_key(mock_cast_selectable, mock_subscriber_table
     Test PortStateObserver.getPortTableEvent to handle cases where no key is returned.
     """
     # Mock the selectable object and namespace
+    mock_selectable = mock.Mock()
     mock_redis_select_obj = mock.Mock()
     mock_cast_selectable.return_value = mock_redis_select_obj
     mock_redis_select_obj.getDbConnector.return_value.getNamespace.return_value = "namespace1"
@@ -267,14 +288,14 @@ def test_get_port_table_event_no_key(mock_cast_selectable, mock_subscriber_table
     observer = ledd.PortStateObserver()
     observer.tables["namespace1"] = mock_table
 
-    # Call the method under test
-    event = observer.getPortTableEvent(mock.Mock())
+    # Call the method under test with the mocked selectable object
+    event = observer.getPortTableEvent(mock_selectable)
 
     # Assertions
     assert event is None
 
     # Verify that the mock methods were called
-    mock_cast_selectable.assert_called_once()
+    mock_cast_selectable.assert_called_once_with(mock_selectable)
     mock_table.pop.assert_called_once()
 
 @mock.patch("ledd.DaemonLedd")

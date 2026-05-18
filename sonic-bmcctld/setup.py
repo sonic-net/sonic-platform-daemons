@@ -1,31 +1,31 @@
 from setuptools import setup
 
 setup(
-    name='sonic-ledd',
-    version='1.1',
-    description='Front-panel LED control daemon for SONiC',
+    name='sonic-bmcctld',
+    version='1.0',
+    description='BMC controller daemon for SONiC',
     license='Apache 2.0',
     author='SONiC Team',
     author_email='linuxnetdev@microsoft.com',
     url='https://github.com/Azure/sonic-platform-daemons',
-    maintainer='Prince George',
-    maintainer_email='prgeor@microsoft.com',
+    maintainer='Judy Joseph',
+    maintainer_email='judyjoseph@microsoft.com',
+    packages=[
+        'tests'
+    ],
     scripts=[
-        'scripts/ledd',
+        'scripts/bmcctld',
     ],
     setup_requires=[
+        'pytest-runner',
         'wheel'
     ],
     tests_require=[
         'pytest',
-        'pytest-cov'
+        'mock>=2.0.0',
+        'pytest-cov',
+        'sonic-platform-common'
     ],
-    extras_require={
-        'testing': [
-            'pytest',
-            'pytest-cov'
-        ]
-    },
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: No Input/Output (Daemon)',
@@ -35,8 +35,9 @@ setup(
         'License :: OSI Approved :: Apache Software License',
         'Natural Language :: English',
         'Operating System :: POSIX :: Linux',
-        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.7',
         'Topic :: System :: Hardware',
     ],
-    keywords='sonic SONiC LED led daemon LEDD ledd',
+    keywords='sonic SONiC BMC bmc controller bmcctld',
+    test_suite='setup.get_test_suite'
 )

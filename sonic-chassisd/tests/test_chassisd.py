@@ -5,8 +5,6 @@ import tempfile
 import json
 import pytest
 import time
-from imp import load_source
-
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
 
@@ -33,7 +31,6 @@ scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
 
 os.environ["CHASSISD_UNIT_TESTING"] = "1"
-load_source('chassisd', scripts_path + '/chassisd')
 from chassisd import *
 
 

@@ -24,12 +24,13 @@ class MockChassis(chassis_base.ChassisBase):
         self._psu_list = []
         self._fan_drawer_list = []
         self._module_list = []
+        self._pdb_list = []
 
     def get_num_psus(self):
         return len(self._psu_list)
 
     def get_all_psus(self):
-        return self._psu_list
+        return self._psu_list  
 
     def get_psu(self, index):
         return self._psu_list[index]
@@ -45,6 +46,12 @@ class MockChassis(chassis_base.ChassisBase):
 
     def get_all_modules(self):
         return self._module_list
+
+    def get_num_pdbs(self):
+        return len(self._pdb_list)
+
+    def get_all_pdbs(self):
+        return self._pdb_list
 
     def get_status_led(self):
         return self._status_led_color

@@ -150,14 +150,6 @@ def is_fast_reboot_enabled():
     fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
     return "true" in fastboot_enabled
 
-def is_warm_reboot_enabled():
-    """Check if warm reboot is enabled"""
-    warmstart = swsscommon.WarmStart()
-    warmstart.initialize("xcvrd", "pmon")
-    warmstart.checkWarmStart("xcvrd", "pmon", False)
-    is_warm_start = warmstart.isWarmStart()
-    return is_warm_start
-
 def is_syncd_warm_restore_complete(namespace=''):
     """
     This function determines whether syncd's restore count is not 0, which indicates warm-reboot

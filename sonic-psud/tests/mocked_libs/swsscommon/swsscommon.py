@@ -13,7 +13,8 @@ class Table:
         self.mock_dict = {}
 
     def _del(self, key):
-        del self.mock_dict[key]
+        if key in self.mock_dict:
+            del self.mock_dict[key]
         pass
 
     def hdel(self, key, value):
@@ -21,7 +22,14 @@ class Table:
         pass
 
     def set(self, key, fvs):
-        self.mock_dict[key] = fvs.fv_dict
+        if hasattr(fvs, 'fv_dict'):
+            self.mock_dict[key] = fvs.fv_dict
+        else:
+            # Real swsscommon.FieldValuePairs (C extension): iterable as (field, value) pairs
+            try:
+                self.mock_dict[key] = dict(fvs)
+            except (TypeError, ValueError):
+                self.mock_dict[key] = dict(list(fvs))
         pass
 
     def get(self, key):

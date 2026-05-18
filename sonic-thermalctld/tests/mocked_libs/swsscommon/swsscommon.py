@@ -2,9 +2,31 @@
     Mock implementation of swsscommon package for unit testing
 '''
 
-from swsssdk import ConfigDBConnector, SonicDBConfig, SonicV2Connector
-
 STATE_DB = ''
+
+class ConfigDBConnector:
+    """
+    Mock ConfigDBConnector that avoids real Redis connections.
+    """
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def connect(self, *args, **kwargs):
+        pass
+
+    def get_table(self, table_name):
+        return {}
+
+    def get_entry(self, table, key):
+        return {}
+
+
+class SonicV2Connector:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def connect(self, *args, **kwargs):
+        pass
 
 
 class Table:

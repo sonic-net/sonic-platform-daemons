@@ -151,6 +151,9 @@ class MockChassis:
     def get_revision(self):
         return "Rev C"
 
+    def is_bmc(self):
+        return False
+
     def is_smartswitch(self):
         return self._is_smartswitch
 
