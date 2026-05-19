@@ -4562,9 +4562,9 @@ class TestXcvrdScript(object):
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = MagicMock()
 
-        # Set DOM_INFO_UPDATE_PERIOD_SECS to a large value so periodic update is not triggered
+        # Set dom_update_interval to a large value so periodic update is not triggered
         # This ensures we stay in the inner while loop
-        task.DOM_INFO_UPDATE_PERIOD_SECS = 1000
+        task.dom_update_interval = 1000
 
         # Mock check_port_update to track if it's called
         check_port_update_call_count = [0]
@@ -6014,8 +6014,8 @@ class TestXcvrdScript(object):
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         task.xcvr_table_helper = MagicMock()
 
-        # Set a non-zero DOM_INFO_UPDATE_PERIOD_SECS to test the scheduling logic
-        task.DOM_INFO_UPDATE_PERIOD_SECS = 60
+        # Set a non-zero dom_update_interval to test the scheduling logic
+        task.dom_update_interval = 60
 
         # Mock the port change observer
         mock_observer_instance = MagicMock()
@@ -6096,7 +6096,7 @@ class TestXcvrdScript(object):
         delta = (second_dom_loop_start_time[0] - first_dom_loop_start_time[0]).total_seconds()
     
         # If scheduling uses loop-start time, the gap between iterations should be close to
-        # DOM_INFO_UPDATE_PERIOD_SECS (60s) and significantly less than 90s (which would
+        # dom_update_interval (60s) and significantly less than 90s (which would
         # include the simulated 30s processing time).
         assert delta < 70, \
             f"Expected time between iterations to be based on loop-start time (~60s), got {delta} seconds"

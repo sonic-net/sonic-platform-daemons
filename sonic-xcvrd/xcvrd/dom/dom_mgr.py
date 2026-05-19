@@ -296,7 +296,6 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         # Adding dom_info_update_periodic_secs to allow xcvrd to initialize ports
         # before starting the periodic update
         next_periodic_db_update_time = datetime.datetime.now() + datetime.timedelta(seconds=dom_info_update_periodic_secs)
-        is_periodic_db_update_needed = False
 
         # Start loop to update dom info in DB periodically and handle port change events
         while not self.task_stopping_event.is_set():
@@ -413,10 +412,8 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                         except (KeyError, TypeError) as e:
                             self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
 
-            # Set the periodic db update time after all the ports are processed
-            if is_periodic_db_update_needed:
-                next_periodic_db_update_time = dom_loop_start_time + datetime.timedelta(seconds=dom_info_update_periodic_secs)
-                is_periodic_db_update_needed = False
+            # Schedule next poll from loop start time for consistent intervals
+            next_periodic_db_update_time = dom_loop_start_time + datetime.timedelta(seconds=dom_info_update_periodic_secs)
 
         self.log_notice("Stop DOM monitoring loop")
 
