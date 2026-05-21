@@ -50,6 +50,7 @@ try:
     from datetime import datetime
 
     from sonic_py_common import daemon_base, logger
+    from sonic_platform_base.chassis_base import ChassisBase
 
     try:
         from sonic_py_common import is_liquid_cooled
@@ -598,7 +599,7 @@ class PolicyReader(EventLogger):
 # CriticalEventChecker
 # ============================================================
 
-class CriticalEventChecker(EventLogger):
+class CriticalEventChecker(logger.Logger):
     """Checks current system and Rack Manager leak/alert status from STATE_DB."""
 
     # Alert keys in RACK_MANAGER_ALERT table
@@ -610,7 +611,7 @@ class CriticalEventChecker(EventLogger):
     ]
 
     def __init__(self, policy_reader):
-        super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+        super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER)
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.policy_reader = policy_reader
 
@@ -620,7 +621,7 @@ class CriticalEventChecker(EventLogger):
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
             if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
-                _event_logger.log_error("CRITICAL system leak detected in {}: {}={}".format(
+                self.log_error("CRITICAL system leak detected in {}: {}={}".format(
                     SYSTEM_LEAK_STATUS_TABLE, FIELD_DEVICE_LEAK_STATUS, SYSTEM_LEAK_CRITICAL))
                 return True
         return False
@@ -635,7 +636,7 @@ class CriticalEventChecker(EventLogger):
                 # severity field for temperature/flow/pressure; leak field for rack-level leak
                 severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
                 if severity == ALERT_SEVERITY_CRITICAL:
-                    _event_logger.log_error("CRITICAL Rack Manager alert: key={} severity={}".format(
+                    self.log_error("CRITICAL Rack Manager alert: key={} severity={}".format(
                         alert_key, severity))
                     return True
         return False
@@ -674,7 +675,8 @@ class GracefulShutdownHandler(EventLogger):
     """
 
     def __init__(self, controller, policy_reader):
-        super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
+        super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        self._event_log = _event_logger  # for critical leak / alert events only
         self.controller = controller
         self.policy_reader = policy_reader
 
@@ -697,29 +699,31 @@ class GracefulShutdownHandler(EventLogger):
         # graceful_shutdown_timeout == 0 means skip GNOI and force power-off immediately
         if graceful_shutdown_timeout == 0:
             self.log_notice("graceful_shutdown_timeout is 0: forcing immediate power OFF")
-            return self.controller.power_off()
-
-        try:
-            gnoi_ok = self._issue_gnoi_shutdown()
-        except Exception as e:
-            self.log_error("Unexpected error during GNOI shutdown: {}".format(repr(e)))
-            self.controller._update_host_state(prior_power_state, prior_status)
-            return False
-
-        if not gnoi_ok:
-            self.log_warning("GNOI shutdown request failed; proceeding with power OFF")
         else:
-            # Wait up to graceful_shutdown_timeout for Switch-Host to go OFFLINE gracefully
-            self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(graceful_shutdown_timeout))
-            went_offline = self.controller._verify_oper_status(
-                SWITCH_HOST_OFFLINE, graceful_shutdown_timeout, "graceful_shutdown")
-            if went_offline:
-                self.log_notice("Switch-Host went OFFLINE gracefully; issuing power OFF")
-            else:
-                self.log_warning("Graceful shutdown timed out after {}s; issuing power OFF".format(
-                    graceful_shutdown_timeout))
+            try:
+                gnoi_ok = self._issue_gnoi_shutdown()
+            except Exception as e:
+                self.log_error("Unexpected error during GNOI shutdown: {}".format(repr(e)))
+                self.controller._update_host_state(prior_power_state, prior_status)
+                return False
 
-        return self.controller.power_off()
+            if not gnoi_ok:
+                self.log_warning("GNOI shutdown request failed; proceeding with power OFF")
+            else:
+                # Wait up to graceful_shutdown_timeout for Switch-Host to go OFFLINE gracefully
+                self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(graceful_shutdown_timeout))
+                went_offline = self.controller._verify_oper_status(
+                    SWITCH_HOST_OFFLINE, graceful_shutdown_timeout, "graceful_shutdown")
+                if went_offline:
+                    self.log_notice("Switch-Host went OFFLINE gracefully; issuing power OFF")
+                else:
+                    self.log_warning("Graceful shutdown timed out after {}s; issuing power OFF".format(
+                        graceful_shutdown_timeout))
+
+        success = self.controller.power_off()
+        self._event_log.log_notice("GRACEFUL_SHUTDOWN done: success={} (timeout={}s)".format(
+            success, graceful_shutdown_timeout))
+        return success
 
     def _issue_gnoi_shutdown(self):
         # TODO: This approach of calling gnoi_client to be replaced by idea in this PR
@@ -868,12 +872,15 @@ class BmcEventHandler(EventLogger):
 
         if command == CMD_POWER_ON:
             if self.critical_event_checker.has_any_critical_event():
-                self.log_warning("POWER_ON blocked: active critical leak or alert")
+                self._event_log.log_warning(
+                    "RACK_MGR_CMD FAILED: key={} command={} reason=CRITICAL_LEAK_PRESENT "
+                    "(active critical leak or alert)".format(key, command))
                 self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
                 return
 
         elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
-            self.log_warning("Unknown Rack Manager command: {}".format(command))
+            self._event_log.log_warning(
+                "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
             self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
             return
 
@@ -884,7 +891,7 @@ class BmcEventHandler(EventLogger):
             CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
         }
 
-        def on_complete(success, cmd_key=key):
+        def on_complete(success, cmd_key=key, cmd=command):
             self._set_cmd_status(cmd_key,
                                  CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
                                  "SUCCESS" if success else "ERROR")
@@ -904,17 +911,21 @@ class BmcEventHandler(EventLogger):
 
         if admin_status == ADMIN_DOWN:
             if self.controller.get_db_device_status() != SWITCH_HOST_ONLINE:
-                self.log_info("admin_down: Switch-Host already OFFLINE; no action needed")
+                self._event_log.log_notice(
+                    "CHASSIS_MODULE admin_down: key={} NOOP (Switch-Host already OFFLINE)".format(key))
                 return
             self.log_notice("CHASSIS_MODULE admin_down: initiating graceful shutdown of Switch-Host")
             self.action_queue.put(ActionItem(ACTION_GRACEFUL_SHUTDOWN, "CHASSIS_MODULE:ADMIN_DOWN"))
 
         elif admin_status == ADMIN_UP:
             if self.controller.get_db_device_status() == SWITCH_HOST_ONLINE:
-                self.log_info("admin_up: Switch-Host already ONLINE; no action needed")
+                self._event_log.log_notice(
+                    "CHASSIS_MODULE admin_up: key={} NOOP (Switch-Host already ONLINE)".format(key))
                 return
             if self.critical_event_checker.has_any_critical_event():
-                self.log_warning("admin_up: POWER_ON blocked by active critical leak or alert")
+                self._event_log.log_warning(
+                    "CHASSIS_MODULE admin_up: key={} BLOCKED "
+                    "(CRITICAL_LEAK_PRESENT: active critical leak or alert)".format(key))
                 return
             self.log_notice("CHASSIS_MODULE admin_up: powering ON Switch-Host")
             self.action_queue.put(ActionItem(ACTION_POWER_ON, "CHASSIS_MODULE:ADMIN_UP"))
@@ -928,7 +939,9 @@ class BmcEventHandler(EventLogger):
         policy = self.policy_reader.get_leak_control_policy()
 
         if policy.get("system_leak_policy") == "disabled":
-            self.log_info("system_leak_policy disabled; skipping leak event key={}".format(key))
+            self._event_log.log_notice(
+                "SYSTEM_LEAK handler done: key={} status={} result=SKIPPED (policy=disabled)".format(
+                    key, leak_status))
             return
 
         if leak_status == SYSTEM_LEAK_CRITICAL:
@@ -942,37 +955,9 @@ class BmcEventHandler(EventLogger):
             self._dispatch_action(action, "MINOR_SYSTEM_LEAK")
 
         else:
-            self.log_notice("System leak cleared (status={}); no automatic power-on".format(leak_status))
-
-    def _log_host_thermal_sensors_above_threshold(self):
-        """Read TEMPERATURE_INFO from STATE_DB and log any sensor in warning state."""
-        try:
-            tbl = swsscommon.Table(self.state_db, "TEMPERATURE_INFO")
-            keys = tbl.getKeys()
-            above = []
-            for sensor_name in keys:
-                result = tbl.get(sensor_name)
-                if not result or not result[0]:
-                    continue
-                d = fvs_to_dict(result[1])
-                if str(d.get("warning", "False")).lower() == "true":
-                    above.append(
-                        "  {} temp={} high_th={} crit_high_th={}".format(
-                            sensor_name,
-                            d.get("temperature", NOT_AVAILABLE),
-                            d.get("high_threshold", NOT_AVAILABLE),
-                            d.get("critical_high_threshold", NOT_AVAILABLE),
-                        )
-                    )
-            if above:
-                self._event_log.log_notice(
-                    "Switch-Host thermal sensors above threshold ({} sensor(s)):\n{}".format(
-                        len(above), "\n".join(above)))
-            else:
-                self._event_log.log_notice(
-                    "Switch-Host: no thermal sensors above threshold at time of alert")
-        except Exception as e:
-            self.log_warning("Failed to read Switch-Host thermal sensors: {}".format(repr(e)))
+            self._event_log.log_notice(
+                "SYSTEM_LEAK handler done: key={} status={} result=CLEARED (no action)".format(
+                    key, leak_status))
 
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
@@ -980,14 +965,15 @@ class BmcEventHandler(EventLogger):
         policy = self.policy_reader.get_leak_control_policy()
 
         if policy.get("rack_mgr_leak_policy") == "disabled":
-            self.log_info("rack_mgr_leak_policy disabled; skipping alert key={}".format(key))
+            self._event_log.log_notice(
+                "RACK_MGR_ALERT handler done: key={} severity={} result=SKIPPED (policy=disabled)".format(
+                    key, severity))
             return
 
         if severity == ALERT_SEVERITY_CRITICAL:
             action = policy.get("rack_mgr_critical_alert_action", DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION)
             self._event_log.log_notice("CRITICAL RACK MGR ALERT (severity={} key={}); "
                                        "action={}".format(severity, key, action))
-            self._log_host_thermal_sensors_above_threshold()
             self._dispatch_action(action, "RACK_MGR_CRITICAL_EVENT key={}".format(key))
 
         elif severity in (ALERT_SEVERITY_MINOR, ALERT_SEVERITY_MAJOR):
@@ -995,7 +981,9 @@ class BmcEventHandler(EventLogger):
             self._dispatch_action(action, "RACK_MGR_MINOR_EVENT key={}".format(key))
 
         else:
-            self.log_info("Rack Manager alert cleared for key={}; no action taken".format(key))
+            self._event_log.log_notice(
+                "RACK_MGR_ALERT handler done: key={} severity={} result=CLEARED (no action)".format(
+                    key, severity))
 
     # ---- dispatch helpers ----
 
@@ -1134,10 +1122,22 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                                        "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(admin_status))
             return
 
-        # TODO : Optimize by adding this delay only to a case when there is a cold boot
-        boot_delay = self.policy_reader.get_power_on_delay()
-        self.log_notice("Waiting {}s before initial Switch-Host power-on check "
-                                   "(SWITCH_HOST_POWER_ON_DELAY)".format(boot_delay))
+        # Only apply the boot delay on a cold boot (FULL POWER LOSS). On warm/fast/soft
+        # reboots, the Switch-Host is expected to come back quickly and Rack Manager/
+        # liquid flow has already been verified, so the delay is unnecessary.
+        boot_delay = 0
+        try:
+            reboot_cause, _ = self.chassis.get_reboot_cause()
+        except Exception as e:
+            self.log_warning("STARTUP: get_reboot_cause() failed: {}; assuming cold boot".format(repr(e)))
+            reboot_cause = ChassisBase.REBOOT_CAUSE_POWER_LOSS
+
+        if reboot_cause == ChassisBase.REBOOT_CAUSE_POWER_LOSS:
+            boot_delay = self.policy_reader.get_power_on_delay()
+            self.log_notice("Waiting {}s before initial Switch-Host power-on check "
+                            "(SWITCH_HOST_POWER_ON_DELAY, reboot_cause={})".format(boot_delay, reboot_cause))
+        else:
+            self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY (reboot_cause={}, not a full power loss)".format(reboot_cause))
 
         # Drain the action queue while we wait so Rack Manager / admin commands
         # received during the boot delay are processed in real time.

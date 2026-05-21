@@ -60,6 +60,9 @@ class MockModule:
 class MockChassis:
     """Simulates a sonic_platform_base.chassis_base.ChassisBase with two modules."""
 
+    REBOOT_CAUSE_POWER_LOSS = "Power Loss"
+    REBOOT_CAUSE_NON_HARDWARE = "Non-Hardware"
+
     def __init__(self):
         bmc = MockModule(0, "BMC", MockModule.MODULE_TYPE_BMC)
         switch_host = MockModule(
@@ -67,6 +70,7 @@ class MockChassis:
             oper_status=MockModule.MODULE_STATUS_OFFLINE
         )
         self._module_list = [bmc, switch_host]
+        self._reboot_cause = (self.REBOOT_CAUSE_POWER_LOSS, "")
 
     def get_all_modules(self):
         return self._module_list
@@ -76,6 +80,12 @@ class MockChassis:
 
     def get_num_modules(self):
         return len(self._module_list)
+
+    def get_reboot_cause(self):
+        return self._reboot_cause
+
+    def set_reboot_cause(self, cause, description=""):
+        self._reboot_cause = (cause, description)
 
     @property
     def switch_host(self):

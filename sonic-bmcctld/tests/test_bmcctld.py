@@ -1165,6 +1165,45 @@ class TestBmcctldDaemonInitialSequence:
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             assert daemon._rack_mgr_power_cmd_executed() is False
 
+    def test_cold_boot_applies_power_on_delay(self, chassis):
+        """On a FULL POWER LOSS (cold boot), SWITCH_HOST_POWER_ON_DELAY must be applied."""
+        chassis.set_reboot_cause(bmcctld.ChassisBase.REBOOT_CAUSE_POWER_LOSS)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Bound the sequence by setting stop_event after one queue.get cycle
+        daemon.stop_event.set()
+        daemon._initial_power_on_sequence()
+        daemon.policy_reader.get_power_on_delay.assert_called_once()
+
+    def test_warm_boot_skips_power_on_delay(self, chassis):
+        """On warm/fast/soft reboot (non-POWER_LOSS), the boot delay must be skipped."""
+        chassis.set_reboot_cause(chassis.REBOOT_CAUSE_NON_HARDWARE)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon._initial_power_on_sequence()
+        # Boot delay is skipped → get_power_on_delay must NOT be called
+        daemon.policy_reader.get_power_on_delay.assert_not_called()
+        # And we still proceeded to the power-on check
+        daemon.controller.power_on.assert_called_once()
+
+    def test_reboot_cause_exception_falls_back_to_cold_boot(self, chassis):
+        """If chassis.get_reboot_cause() raises, fall back to cold-boot behavior (apply delay)."""
+        chassis.get_reboot_cause = MagicMock(side_effect=RuntimeError("platform API not available"))
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon.stop_event.set()
+        daemon._initial_power_on_sequence()
+        daemon.policy_reader.get_power_on_delay.assert_called_once()
+
 
 class TestBmcctldDaemonRun:
 

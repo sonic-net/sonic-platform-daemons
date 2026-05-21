@@ -9,6 +9,7 @@ from enum import Enum, auto
 from math import inf
 import argparse
 import json
+import logging
 import os
 import signal
 import sys
@@ -35,6 +36,53 @@ CHASSIS_INFO_KEY = 'chassis 1'
 PHYSICAL_ENTITY_INFO_TABLE = 'PHYSICAL_ENTITY_INFO'
 INVALID_SLOT_OR_DPU = -1
 PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
+
+# Critical-event log file teed in addition to syslog.
+CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
+
+# This class could be moved to sonic-py-common, the log file name can be passed as input.
+class EventLogger(logger.Logger):
+    """Logger that tees every log call to a local file in addition to syslog."""
+
+    def __init__(self, syslog_identifier, log_file=CRITICAL_EVENT_LOG_FILE):
+        super(EventLogger, self).__init__(syslog_identifier)
+        py_name = "{}.{}".format(syslog_identifier,
+                                 os.path.basename(log_file).replace(".", "_"))
+        self._file_logger = logging.getLogger(py_name)
+        if not self._file_logger.handlers and os.getenv("THERMALCTLD_UNIT_TESTING") != "1":
+            try:
+                handler = logging.FileHandler(log_file)
+                handler.setFormatter(logging.Formatter(
+                    "%(asctime)s %(name)s[%(process)d] %(levelname)s: %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S",
+                ))
+                self._file_logger.addHandler(handler)
+                self._file_logger.setLevel(logging.DEBUG)
+            except (OSError, IOError):
+                pass
+
+    def log_debug(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_debug(msg, also_print_to_console)
+        self._file_logger.debug(msg)
+
+    def log_info(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_info(msg, also_print_to_console)
+        self._file_logger.info(msg)
+
+    def log_notice(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_notice(msg, also_print_to_console)
+        self._file_logger.info("NOTICE: " + msg)
+
+    def log_warning(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_warning(msg, also_print_to_console)
+        self._file_logger.warning(msg)
+
+    def log_error(self, msg, also_print_to_console=False):
+        super(EventLogger, self).log_error(msg, also_print_to_console)
+        self._file_logger.error(msg)
+
+# STATE_DB database ID
+STATE_DB_ID = 6
 
 ERR_UNKNOWN = 1
 CHASSIS_GET_ERROR = 2
@@ -544,7 +592,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         :param chassis: Object representing a platform chassis
         """
         threading.Thread.__init__(self)
-        logger.Logger.__init__(self)
+        logger.Logger.__init__(self, SYSLOG_IDENTIFIER)
+        # EventLogger tees CRITICAL leak events to /host/bmc/event.log.
+        self.event_logger = EventLogger(SYSLOG_IDENTIFIER, log_file=CRITICAL_EVENT_LOG_FILE)
         self.name = "LiquidCoolingUpdater"
         self.exc = None
         self.task_stopping_event = threading.Event()
@@ -552,6 +602,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.liquid_cooling = self.chassis.get_liquid_cooling()
         self.leaking_sensors: Dict[str, datetime] = {}
         self.faulty_sensors: Dict[str, datetime] = {}
+        self.critical_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
 
@@ -605,11 +656,13 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             if sensor_is_ok:
                 if sensor_is_leak:
-                    if sensor_name not in self.leaking_sensors:
+                    new_leak = sensor_name not in self.leaking_sensors
+                    if new_leak:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
 
                     # Upgrade minor leaks to critical if the time threshold has been exceeded.
+                    escalated_to_critical = False
                     if sensor_leak_severity == LeakSeverity.MINOR:
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
@@ -618,6 +671,17 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                             max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
                             if max_minor <= now:
                                 sensor_leak_severity = LeakSeverity.CRITICAL
+                                escalated_to_critical = True
+
+                    if new_leak and sensor_leak_severity == LeakSeverity.CRITICAL:
+                        self.event_logger.log_error(
+                            'CRITICAL leak reported by sensor {}'.format(sensor_name))
+                        self.critical_sensors.add(sensor_name)
+                    elif escalated_to_critical:
+                        self.event_logger.log_error(
+                            'Leak on sensor {} escalated from MINOR to CRITICAL after {}s'.format(
+                                sensor_name, max_minor_secs))
+                        self.critical_sensors.add(sensor_name)
 
                     if status is not None:
                         # Multiple leaks (any severity) are critical.
@@ -628,7 +692,12 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 else:
                     if sensor_name in self.leaking_sensors:
                         del self.leaking_sensors[sensor_name]
-                        self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
+                        if sensor_name in self.critical_sensors:
+                            self.critical_sensors.discard(sensor_name)
+                            self.event_logger.log_notice(
+                                'Liquid cooling leakage sensor {} recovered from CRITICAL leak'.format(sensor_name))
+                        else:
+                            self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
 
             # Per-sensor status.
             leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
@@ -642,7 +711,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             ])
             self.sensor_table.set(sensor_name, fvs)
 
-        # Overall system status.
+        if status == LeakSeverity.CRITICAL and self.last_leak_status != LeakSeverity.CRITICAL:
+            leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
+            self.event_logger.log_error(
+                'CRITICAL system leak detected (sensors: {})'.format(leaking_names))
+        elif (self.last_leak_status == LeakSeverity.CRITICAL
+              and status != LeakSeverity.CRITICAL):
+            self.event_logger.log_notice('CRITICAL system leak cleared (current status: {})'.format(
+                status.value if status is not None else 'None'))
         self.last_leak_status = status
         status_str = status.value if status is not None else 'None'
         fvs = swsscommon.FieldValuePairs([
@@ -772,7 +848,11 @@ class TemperatureStatus(logger.Logger):
 # TemperatureUpdater  ======================================================================
 #
 class TemperatureUpdater(logger.Logger):
-    # Temperature information table name in database
+    # Temperature information table name in database.
+    # The BMC and Switch-Host both populate this same table in the BMC's
+    # STATE_DB; sensor names never collide across the two, giving a unified
+    # chassis-wide view ("show platform temperature" on the BMC shows all
+    # thermals).
     TEMPER_INFO_TABLE_NAME = 'TEMPERATURE_INFO'
 
     def __init__(self, chassis, task_stopping_event, psu_interval=None, thermal_intervals=None,
@@ -819,6 +899,64 @@ class TemperatureUpdater(logger.Logger):
                 except Exception as e:
                     self.chassis_table = None
 
+        # When running on the Switch-Host of a BMC-equipped chassis, mirror
+        # every TEMPERATURE_INFO entry (temperature value + all thresholds)
+        # into the BMC's STATE_DB over the host<->bmc link.  BMC consumes
+        # this to syslog critical thermal deviations and (eventually) take
+        # proactive action.  See SONiC pmon-bmc-design section 2.4.1.
+        self.bmc_temperature_table = None
+        self._bmc_addr = None
+        if device_info.is_switch_host():
+            self._init_bmc_temperature_table()
+
+    def _init_bmc_temperature_table(self):
+        """Open a swsscommon.Table backed by the BMC's STATE_DB."""
+        try:
+            bmc_addr = device_info.get_bmc_address()
+            if not bmc_addr:
+                return
+            self._bmc_addr = bmc_addr
+            remote_state_db = daemon_base.db_connect_remote(STATE_DB_ID, bmc_addr)
+            self.bmc_temperature_table = swsscommon.Table(
+                remote_state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
+            self.log_info(
+                'Mirroring TEMPERATURE_INFO to BMC STATE_DB at {} (table {})'.format(
+                    bmc_addr, TemperatureUpdater.TEMPER_INFO_TABLE_NAME))
+        except Exception as e:
+            self.bmc_temperature_table = None
+            self.log_warning(
+                'Failed to open remote BMC TEMPERATURE_INFO table: {}'.format(repr(e)))
+
+    def _bmc_table_set(self, name, fvs):
+        """Tee a TEMPERATURE_INFO row to the BMC.  Reconnect once on failure."""
+        if self._bmc_addr is None:
+            return
+        # Try once, then on failure clear the handle, reconnect, and retry
+        # once more.  Recovers transparently from a dropped host<->BMC link
+        # or a BMC redis restart without dropping this update.
+        for attempt in range(2):
+            if self.bmc_temperature_table is None:
+                self._init_bmc_temperature_table()
+                if self.bmc_temperature_table is None:
+                    return
+            try:
+                self.bmc_temperature_table.set(name, fvs)
+                return
+            except Exception as e:
+                self.bmc_temperature_table = None
+                if attempt == 1:
+                    self.log_warning(
+                        'Failed to push TEMPERATURE_INFO/{} to BMC: {}'.format(name, repr(e)))
+
+    def _bmc_table_del(self, name):
+        """Remove a TEMPERATURE_INFO row from the BMC mirror, best-effort."""
+        if self.bmc_temperature_table is None:
+            return
+        try:
+            self.bmc_temperature_table._del(name)
+        except Exception:
+            self.bmc_temperature_table = None
+
     def __del__(self):
         try:
             table = getattr(self, 'table', None)
@@ -838,6 +976,11 @@ class TemperatureUpdater(logger.Logger):
                         # On a chassis system we may lose connection to the supervisor
                         # and chassisdb; drop the handle.
                         self.chassis_table = None
+                    try:
+                        if getattr(self, 'bmc_temperature_table', None) is not None:
+                            self.bmc_temperature_table._del(tk)
+                    except Exception:
+                        self.bmc_temperature_table = None
                     if phy_entity_table is not None:
                         try:
                             if phy_entity_table.get(tk) is not None:
@@ -1026,6 +1169,7 @@ class TemperatureUpdater(logger.Logger):
             self.table.set(name, fvs)
             if self.is_chassis_upd_required and self.chassis_table is not None:
                 self.chassis_table.set(name, fvs)
+            self._bmc_table_set(name, fvs)
         except Exception as e:
             self.log_warning('Failed to update thermal status for {} - {}'.format(name, repr(e)))
 
@@ -1041,6 +1185,8 @@ class TemperatureUpdater(logger.Logger):
                 self.chassis_table._del(name)
             except Exception:
                 pass
+
+        self._bmc_table_del(name)
 
 
 class ThermalMonitor(ThreadTaskBase):
@@ -1108,6 +1254,92 @@ class ThermalMonitor(ThreadTaskBase):
                     fan_drawer_interval, psu_interval,
                     {k: v for k, v in thermal_intervals.items()} if thermal_intervals else 'default'))
 
+        # On the BMC, monitor the Switch-Host-mirrored TEMPERATURE_INFO table
+        # and tee CRITICAL threshold breaches into /host/bmc/event.log via a
+        # dedicated logger.  See pmon-bmc-design §2.4.1 (phase 1: syslog-only,
+        # no action).
+        self._switch_host_thermal_table = None
+        self._switch_host_thermal_state = {}
+        self._sw_host_thermal_event_logger = None
+        if device_info.is_switch_bmc():
+            self._init_switch_host_thermal_monitor()
+
+    def _init_switch_host_thermal_monitor(self):
+        """Open BMC's TEMPERATURE_INFO table for periodic CRITICAL checks."""
+        try:
+            state_db = daemon_base.db_connect("STATE_DB")
+            self._switch_host_thermal_table = swsscommon.Table(
+                state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
+            self._sw_host_thermal_event_logger = EventLogger(
+                SYSLOG_IDENTIFIER, log_file=CRITICAL_EVENT_LOG_FILE)
+            self.logger.log_info(
+                'Monitoring chassis thermals (BMC STATE_DB {}) for CRITICAL breaches'.format(
+                    TemperatureUpdater.TEMPER_INFO_TABLE_NAME))
+        except Exception as e:
+            self._switch_host_thermal_table = None
+            self._sw_host_thermal_event_logger = None
+            self.logger.log_warning(
+                'Failed to init chassis thermal monitor: {}'.format(repr(e)))
+
+    @staticmethod
+    def _parse_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _check_switch_host_thermals(self):
+        """Poll TEMPERATURE_INFO and log CRITICAL breaches on transition."""
+        if self._switch_host_thermal_table is None:
+            return
+        try:
+            keys = self._switch_host_thermal_table.getKeys() or []
+        except Exception as e:
+            self.logger.log_warning(
+                'Failed to read TEMPERATURE_INFO keys: {}'.format(repr(e)))
+            return
+
+        seen = set()
+        for key in keys:
+            seen.add(key)
+            try:
+                ok, fvs = self._switch_host_thermal_table.get(key)
+            except Exception:
+                continue
+            if not ok:
+                continue
+            fvs_dict = dict(fvs) if fvs else {}
+
+            temp = self._parse_float(fvs_dict.get('temperature'))
+            crit_high = self._parse_float(fvs_dict.get('critical_high_threshold'))
+            crit_low = self._parse_float(fvs_dict.get('critical_low_threshold'))
+            if temp is None:
+                continue
+
+            reasons = []
+            if crit_high is not None and temp >= crit_high:
+                reasons.append('>= critical_high_threshold {}C'.format(crit_high))
+            if crit_low is not None and temp <= crit_low:
+                reasons.append('<= critical_low_threshold {}C'.format(crit_low))
+            breach = bool(reasons)
+
+            was_critical = self._switch_host_thermal_state.get(key, False)
+            if breach and not was_critical:
+                # _sw_host_thermal_event_logger tees to BOTH syslog and /host/bmc/event.log.
+                if self._sw_host_thermal_event_logger is not None:
+                    self._sw_host_thermal_event_logger.log_error(
+                        'CRITICAL chassis thermal: {} temperature {}C {}'.format(
+                            key, temp, '; '.join(reasons)))
+                self._switch_host_thermal_state[key] = True
+            elif not breach and was_critical:
+                # Track recovery internally to avoid re-logging on next breach,
+                # but stay silent — only critical-threshold breaches are logged.
+                self._switch_host_thermal_state[key] = False
+
+        # Drop state for sensors that have disappeared from the mirror.
+        for stale in set(self._switch_host_thermal_state) - seen:
+            del self._switch_host_thermal_state[stale]
+
     def main(self):
         begin = time.time()
 
@@ -1116,6 +1348,7 @@ class ThermalMonitor(ThreadTaskBase):
             self._last_fan_update = begin
 
         self.temperature_updater.update(now=begin)
+        self._check_switch_host_thermals()
         elapsed = time.time() - begin
         if elapsed < self.update_interval:
             self.wait_time = self.update_interval - elapsed
