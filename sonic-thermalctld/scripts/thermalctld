@@ -605,6 +605,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.critical_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
+        self.last_sensor_fvs: Dict[str, tuple] = {}
 
         state_db = daemon_base.db_connect("STATE_DB")
         self.sensor_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
@@ -618,6 +619,13 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('max_minor_duration_sec', profile.get_leak_max_minor_duration_sec()),
             ])
             self.profile_table.set(profile.get_type(), fvs)
+
+        # Seed SYSTEM_LEAK_STATUS|system once at startup so consumers always
+        # find a row. Subsequent writes happen only on transition.
+        self.system_table.set('system', swsscommon.FieldValuePairs([
+            ('device_leak_status', 'None'),
+            ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
+        ]))
 
     def __del__(self):
         try:
@@ -699,17 +707,19 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         else:
                             self.log_notice('Liquid cooling leakage sensor {} recovered from leaking'.format(sensor_name))
 
-            # Per-sensor status.
+            # Per-sensor status. Only write on change to avoid Redis churn.
             leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
-            fvs = swsscommon.FieldValuePairs([
+            fvs_tuple = (
                 ('name', sensor_name),
                 ('leaking', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
                 ('type', sensor.get_leak_sensor_type()),
                 ('location', sensor.get_leak_sensor_location()),
                 ('severity', str(sensor_leak_severity)),
-            ])
-            self.sensor_table.set(sensor_name, fvs)
+            )
+            if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
+                self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(list(fvs_tuple)))
+                self.last_sensor_fvs[sensor_name] = fvs_tuple
 
         if status == LeakSeverity.CRITICAL and self.last_leak_status != LeakSeverity.CRITICAL:
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'

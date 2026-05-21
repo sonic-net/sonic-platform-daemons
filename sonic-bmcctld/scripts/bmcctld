@@ -621,8 +621,6 @@ class CriticalEventChecker(logger.Logger):
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
             if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
-                self.log_error("CRITICAL system leak detected in {}: {}={}".format(
-                    SYSTEM_LEAK_STATUS_TABLE, FIELD_DEVICE_LEAK_STATUS, SYSTEM_LEAK_CRITICAL))
                 return True
         return False
 
@@ -636,8 +634,6 @@ class CriticalEventChecker(logger.Logger):
                 # severity field for temperature/flow/pressure; leak field for rack-level leak
                 severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
                 if severity == ALERT_SEVERITY_CRITICAL:
-                    self.log_error("CRITICAL Rack Manager alert: key={} severity={}".format(
-                        alert_key, severity))
                     return True
         return False
 
@@ -804,6 +800,13 @@ class BmcEventHandler(EventLogger):
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
+        # Act on RACK_MANAGER_ALERT severity changes only.
+        # Rack Manager (redfish docker) may republish identical rows each cycle.
+        self._last_rack_mgr_alert_severity = {}
+
+        # Act on CHASSIS_MODULE admin_status transitions only.
+        self._last_chassis_module_admin_status = {}
+
         # One SubscriberStateTable per watched table
         self.rack_mgr_cmd_sub = swsscommon.SubscriberStateTable(
             self.state_db, RACK_MANAGER_COMMAND_TABLE)
@@ -903,11 +906,16 @@ class BmcEventHandler(EventLogger):
     def _handle_chassis_module(self, key, fvs):
         """Process CHASSIS_MODULE admin_status change (admin up/down from CLI)."""
         admin_status = fvs.get(FIELD_ADMIN_STATUS, "")
+        if not admin_status:
+            return
+        if self._last_chassis_module_admin_status.get(key) == admin_status:
+            return
+        self._last_chassis_module_admin_status[key] = admin_status
+
         self.log_notice("CHASSIS_MODULE change: key={} admin_status={}".format(key, admin_status))
 
         # Mirror admin_status to CHASSIS_MODULE_INFO_TABLE immediately on config change
-        if admin_status:
-            self.controller.update_chassis_module_admin_status(admin_status)
+        self.controller.update_chassis_module_admin_status(admin_status)
 
         if admin_status == ADMIN_DOWN:
             if self.controller.get_db_device_status() != SWITCH_HOST_ONLINE:
@@ -962,6 +970,10 @@ class BmcEventHandler(EventLogger):
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
         severity = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+        if self._last_rack_mgr_alert_severity.get(key) == severity:
+            return
+        self._last_rack_mgr_alert_severity[key] = severity
+
         policy = self.policy_reader.get_leak_control_policy()
 
         if policy.get("rack_mgr_leak_policy") == "disabled":
@@ -1140,9 +1152,10 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY (reboot_cause={}, not a full power loss)".format(reboot_cause))
 
         # Drain the action queue while we wait so Rack Manager / admin commands
-        # received during the boot delay are processed in real time.
-        deadline = time.time() + boot_delay
-        while time.time() < deadline:
+        # received during the boot delay are processed in real time. Use a
+        # monotonic clock so an NTP step during boot can't extend the wait.
+        deadline = time.monotonic() + boot_delay
+        while time.monotonic() < deadline:
             if self.stop_event.is_set():
                 return
             try:
