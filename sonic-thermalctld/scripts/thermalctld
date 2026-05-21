@@ -715,17 +715,18 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
             self.event_logger.log_error(
                 'CRITICAL system leak detected (sensors: {})'.format(leaking_names))
-        elif (self.last_leak_status == LeakSeverity.CRITICAL
-              and status != LeakSeverity.CRITICAL):
-            self.event_logger.log_notice('CRITICAL system leak cleared (current status: {})'.format(
-                status.value if status is not None else 'None'))
+
+        # Only write SYSTEM_LEAK_STATUS on actual transitions to avoid
+        # subscriber spam from per-cycle timestamp updates.
+        if status != self.last_leak_status:
+            status_str = status.value if status is not None else 'None'
+            fvs = swsscommon.FieldValuePairs([
+                ('device_leak_status', status_str),
+                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
+            ])
+            self.system_table.set('system', fvs)
+
         self.last_leak_status = status
-        status_str = status.value if status is not None else 'None'
-        fvs = swsscommon.FieldValuePairs([
-            ('device_leak_status', status_str),
-            ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
-        ])
-        self.system_table.set('system', fvs)
 
     def update(self):
         self._refresh_leak_status()
