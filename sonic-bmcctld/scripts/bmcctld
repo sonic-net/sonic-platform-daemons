@@ -52,13 +52,6 @@ try:
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.chassis_base import ChassisBase
 
-    try:
-        from sonic_py_common import is_liquid_cooled
-    except ImportError:
-        # Fall back to liquid-cooled (safe default — full monitoring enabled)
-        def is_liquid_cooled():
-            return True
-
     if os.getenv("BMCCTLD_UNIT_TESTING") == "1":
         from tests import mock_swsscommon as swsscommon
     else:
@@ -1280,7 +1273,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
                                        "skipping boot sequence")
             self.controller.refresh_host_state()
-        elif not is_liquid_cooled():
+        elif not self.chassis.is_liquid_cooled():
             self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
                                        "immediate power_on, no additional checks")
             self.controller.power_on()

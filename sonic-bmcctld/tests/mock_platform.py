@@ -87,6 +87,12 @@ class MockChassis:
     def set_reboot_cause(self, cause, description=""):
         self._reboot_cause = (cause, description)
 
+    def is_liquid_cooled(self):
+        return getattr(self, '_liquid_cooled', True)
+
+    def set_liquid_cooled(self, val):
+        self._liquid_cooled = val
+
     @property
     def switch_host(self):
         return self._module_list[1]

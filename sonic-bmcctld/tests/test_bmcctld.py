@@ -1220,8 +1220,8 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=False):
-            result = daemon.run()
+        chassis.set_liquid_cooled(False)
+        result = daemon.run()
         assert result is False
         daemon.controller.power_on.assert_called_once()
         daemon._run_action_loop.assert_called_once()
@@ -1234,8 +1234,8 @@ class TestBmcctldDaemonRun:
         daemon._run_action_loop = MagicMock()
         daemon._initial_power_on_sequence = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=False):
-            daemon.run()
+        chassis.set_liquid_cooled(False)
+        daemon.run()
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.event_handler.run_event_loop.assert_called_once()
 
@@ -1248,8 +1248,8 @@ class TestBmcctldDaemonRun:
         daemon.controller.refresh_host_state = MagicMock()
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=True):
-            result = daemon.run()
+        chassis.set_liquid_cooled(True)
+        result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.controller.power_on.assert_not_called()
@@ -1265,8 +1265,8 @@ class TestBmcctldDaemonRun:
         daemon.event_handler.run_event_loop = MagicMock()
         # Set stop_event so _run_action_loop returns without looping
         daemon._initial_power_on_sequence.side_effect = lambda: daemon.stop_event.set()
-        with patch('bmcctld.is_liquid_cooled', return_value=True):
-            result = daemon.run()
+        chassis.set_liquid_cooled(True)
+        result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_called_once()
 
