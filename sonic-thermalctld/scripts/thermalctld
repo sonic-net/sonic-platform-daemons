@@ -1447,6 +1447,18 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         except Exception as e:
             self.log_error('Caught exception while initializing thermal manager - {}'.format(repr(e)))
 
+        # Enable liquid cooling if requested via pmon_daemon_control.json as before, or
+        # if the platform chassis reports itself as liquid cooled via the platform API.
+        if not enable_liquid_cooling:
+            try:
+                enable_liquid_cooling = bool(self.chassis.is_liquid_cooled())
+            except (AttributeError, NotImplementedError):
+                enable_liquid_cooling = False
+            except Exception as e:
+                self.log_warning(
+                    "Failed to query chassis.is_liquid_cooled(): {}".format(repr(e)))
+                enable_liquid_cooling = False
+
         self.liquid_cooling_updater = LiquidCoolingUpdater(self.chassis, liquid_cooling_update_interval) if enable_liquid_cooling else None
 
         if self.liquid_cooling_updater is not None:
