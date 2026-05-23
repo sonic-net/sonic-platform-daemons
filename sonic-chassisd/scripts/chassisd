@@ -840,13 +840,30 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
             # Deferred from EMPTY→Offline: chassisd restarted while DPU was
             # offline, now it is online so we can read the real reboot cause.
-            # Only persist if the cause actually changed.
+            # Persist if: (a) a reboot execution time exists that is newer than
+            # the stored cause timestamp (same logic as deferred=='reboot'), or
+            # (b) the cause string itself changed.  This handles back-to-back
+            # reboots that produce the same cause type.
             if deferred == 'restart':
-                if stored_cause is not None and current_cause and current_cause != stored_cause:
+                reboot_time = self.retrieve_dpu_reboot_time(key)
+                should_persist = False
+                if reboot_time and stored_time_str and stored_time_str < reboot_time:
+                    self.log_notice(
+                        f"{key}: New reboot detected (stored time {stored_time_str} "
+                        f"< reboot time {reboot_time})")
+                    should_persist = True
+                elif stored_cause is not None and current_cause and current_cause != stored_cause:
                     self.log_notice(
                         f"{key}: Reboot cause changed while chassisd was down "
                         f"(stored: {stored_cause}, current: {current_cause})")
-                    self.persist_dpu_reboot_time(key)
+                    should_persist = True
+                elif stored_cause is None and current_cause:
+                    # First reboot ever — no stored cause yet
+                    should_persist = True
+
+                if should_persist:
+                    if not reboot_time:
+                        self.persist_dpu_reboot_time(key)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
                 return
@@ -860,7 +877,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
             if not already_persisted and (stored_time_str is not None or self._is_first_boot(key)):
                 self.persist_dpu_reboot_cause(reboot_cause, key)
-                self.update_dpu_reboot_cause_to_db(key)
+            self.update_dpu_reboot_cause_to_db(key)
 
     def module_db_update(self):
         for module_index in range(0, self.num_modules):

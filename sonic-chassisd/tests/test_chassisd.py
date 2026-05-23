@@ -491,6 +491,7 @@ def test_empty_to_offline_persists_changed_reboot_cause():
     with patch.object(module, 'get_reboot_cause', return_value=("Power Loss", "power auxiliary outage or reload")), \
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Reboot", "2025_10_10_07_36_12")), \
+         patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
          patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
@@ -510,11 +511,53 @@ def test_empty_to_offline_persists_changed_reboot_cause():
         mock_persist_cause.assert_called_once_with(("Power Loss", "power auxiliary outage or reload"), name)
         mock_update_db.assert_called_once_with(name)
 
-def test_empty_to_offline_skips_same_reboot_cause():
+def test_empty_to_offline_persists_same_cause_new_reboot():
     """
     After chassisd restart, if the DPU is offline the EMPTY→OFFLINE
     transition defers the check.  When the DPU comes online with the
-    same reboot cause, we must NOT create a duplicate entry.
+    same reboot cause but a reboot_time newer than stored_time, we MUST
+    persist — this is a new reboot that produced the same cause type.
+    Fixes sonic-net/sonic-buildimage#24275.
+    """
+    chassis = MockSmartSwitchChassis()
+    name = "DPU0"
+    module = MockModule(0, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
+    chassis.module_list.append(module)
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # Stored cause is from a prior reboot, reboot_time is from the current reboot
+    stored_time = "2025_10_10_07_36_12"
+    reboot_time = "2025_10_10_07_40_34"
+
+    with patch.object(module, 'get_reboot_cause', return_value=("Reboot", "Reset from Main board")), \
+         patch.object(updater, 'retrieve_dpu_reboot_info',
+                      return_value=("Reboot", stored_time)), \
+         patch.object(updater, 'retrieve_dpu_reboot_time', return_value=reboot_time), \
+         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
+
+        # EMPTY→OFFLINE: deferred
+        updater.module_db_update()
+        assert name in updater._pending_reboot_check
+
+        # DPU comes online — same cause but reboot_time > stored_time → persist
+        module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_db_update()
+        assert name not in updater._pending_reboot_check
+        mock_persist_time.assert_not_called()  # reboot_time already exists
+        mock_persist_cause.assert_called_once()
+        mock_update_db.assert_called_once_with(name)
+
+
+def test_empty_to_offline_skips_same_cause_no_new_reboot():
+    """
+    After chassisd restart, if the DPU is offline the EMPTY→OFFLINE
+    transition defers the check.  When the DPU comes online with the
+    same reboot cause and NO reboot_time (or stored_time >= reboot_time),
+    we must NOT create a duplicate entry — no new reboot happened.
     """
     chassis = MockSmartSwitchChassis()
     name = "DPU0"
@@ -527,6 +570,7 @@ def test_empty_to_offline_skips_same_reboot_cause():
     with patch.object(module, 'get_reboot_cause', return_value=("Reboot", "Reset from Main board")), \
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Reboot", "2025_10_10_07_36_12")), \
+         patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
          patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
@@ -535,7 +579,7 @@ def test_empty_to_offline_skips_same_reboot_cause():
         updater.module_db_update()
         assert name in updater._pending_reboot_check
 
-        # DPU comes online — same cause, no new persistence
+        # DPU comes online — same cause, no reboot_time → skip
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
@@ -544,11 +588,11 @@ def test_empty_to_offline_skips_same_reboot_cause():
         # DB should still be repopulated (STATE_DB was flushed)
         mock_update_db.assert_called_once_with(name)
 
-def test_empty_to_offline_skips_first_boot():
+def test_empty_to_offline_persists_first_boot():
     """
     On first boot there is no previous-reboot-cause.json so stored_cause
     is None.  The EMPTY→OFFLINE transition defers, and when the DPU
-    comes online the deferred path must NOT persist (stored_cause is None).
+    comes online the deferred path persists the initial cause.
     """
     chassis = MockSmartSwitchChassis()
     name = "DPU0"
@@ -561,6 +605,7 @@ def test_empty_to_offline_skips_first_boot():
     with patch.object(module, 'get_reboot_cause', return_value=("Power Loss", "N/A")), \
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=(None, None)), \
+         patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
          patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
@@ -569,13 +614,12 @@ def test_empty_to_offline_skips_first_boot():
         updater.module_db_update()
         assert name in updater._pending_reboot_check
 
-        # DPU comes online — no stored cause (first boot), should NOT persist
+        # DPU comes online — first boot, persist the initial cause
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
-        mock_persist_time.assert_not_called()
-        mock_persist_cause.assert_not_called()
-        # DB should still be repopulated (STATE_DB was flushed)
+        mock_persist_time.assert_called_once_with(name)
+        mock_persist_cause.assert_called_once()
         mock_update_db.assert_called_once_with(name)
 
 def test_retrieve_dpu_reboot_info_success():
