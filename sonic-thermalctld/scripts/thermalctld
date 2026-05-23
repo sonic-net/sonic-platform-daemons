@@ -709,12 +709,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             # Per-sensor status. Only write on change to avoid Redis churn.
             leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
+            sensor_type = try_get(sensor.get_leak_sensor_type, NOT_AVAILABLE)
+            sensor_location = try_get(sensor.get_leak_sensor_location, NOT_AVAILABLE)
             fvs_tuple = (
                 ('name', sensor_name),
                 ('leaking', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
-                ('type', sensor.get_leak_sensor_type()),
-                ('location', sensor.get_leak_sensor_location()),
+                ('type', str(sensor_type) if sensor_type is not None else NOT_AVAILABLE),
+                ('location', str(sensor_location) if sensor_location is not None else NOT_AVAILABLE),
                 ('severity', str(sensor_leak_severity)),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
