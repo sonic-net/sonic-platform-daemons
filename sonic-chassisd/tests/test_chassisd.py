@@ -411,11 +411,11 @@ def test_deferred_reboot_skips_already_persisted():
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
-        # ONLINE→OFFLINE: deferred='reboot', time persisted
+        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT, time persisted
         module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
         updater.module_db_update()
         mock_persist_time.assert_called_once_with(name)
-        assert updater._pending_reboot_check[name] == 'reboot'
+        assert updater._pending_reboot_check[name] == DEFERRED_DPU_REBOOT
 
         mock_persist_time.reset_mock()
 
@@ -456,11 +456,11 @@ def test_deferred_reboot_persists_new_reboot():
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
-        # ONLINE→OFFLINE: deferred='reboot', time persisted
+        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT, time persisted
         module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
         updater.module_db_update()
         mock_persist_time.assert_called_once_with(name)
-        assert updater._pending_reboot_check[name] == 'reboot'
+        assert updater._pending_reboot_check[name] == DEFERRED_DPU_REBOOT
 
         mock_persist_time.reset_mock()
 
