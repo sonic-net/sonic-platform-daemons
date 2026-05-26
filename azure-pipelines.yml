@@ -30,8 +30,8 @@ pool: sonictest
 
 resources:
   containers:
-  - container: sonic-slave-bookworm
-    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:$(BUILD_BRANCH)-amd64
+  - container: sonic-slave-trixie
+    image: sonicdev-microsoft.azurecr.io:443/sonic-slave-trixie:$(BUILD_BRANCH)-amd64
 
 parameters:
 - name: project_list
@@ -76,7 +76,7 @@ parameters:
 
 jobs:
   - job: build_test
-    container: sonic-slave-bookworm
+    container: sonic-slave-trixie
     variables:
       sourceBranch: "$(Build.SourceBranch)"
     steps:
@@ -100,22 +100,23 @@ jobs:
         runBranch: "$(sourceBranch)"
         path: $(Build.ArtifactStagingDirectory)/download
         patterns: |
-          target/debs/bookworm/libnl-3-200_*.deb
-          target/debs/bookworm/libnl-genl-3-200_*.deb
-          target/debs/bookworm/libnl-route-3-200_*.deb
-          target/debs/bookworm/libnl-nf-3-200_*.deb
-          target/debs/bookworm/libyang_1.0.73_amd64.deb
-          target/debs/bookworm/libyang3_*.deb
-          target/debs/bookworm/python3-libyang*.deb
-          target/debs/bookworm/libswsscommon_1.0.0_amd64.deb
-          target/debs/bookworm/python3-swsscommon_1.0.0_amd64.deb
+          target/debs/trixie/libnl-3-200_*.deb
+          target/debs/trixie/libnl-genl-3-200_*.deb
+          target/debs/trixie/libnl-route-3-200_*.deb
+          target/debs/trixie/libnl-nf-3-200_*.deb
+          target/debs/trixie/libpcre3_*.deb
+          target/debs/trixie/libyang_1.0.73_amd64.deb
+          target/debs/trixie/libyang3_*.deb
+          target/debs/trixie/python3-libyang*.deb
+          target/debs/trixie/libswsscommon_1.0.0_amd64.deb
+          target/debs/trixie/python3-swsscommon_1.0.0_amd64.deb
 
-          target/python-wheels/bookworm/swsssdk-2.0.1-py3-none-any.whl
-          target/python-wheels/bookworm/sonic_py_common-1.0-py3-none-any.whl
-          target/python-wheels/bookworm/sonic_yang_mgmt-1.0-py3-none-any.whl
-          target/python-wheels/bookworm/sonic_yang_models-1.0-py3-none-any.whl
-          target/python-wheels/bookworm/sonic_config_engine-1.0-py3-none-any.whl
-          target/python-wheels/bookworm/sonic_platform_common-1.0-py3-none-any.whl
+          target/python-wheels/trixie/swsssdk-2.0.1-py3-none-any.whl
+          target/python-wheels/trixie/sonic_py_common-1.0-py3-none-any.whl
+          target/python-wheels/trixie/sonic_yang_mgmt-1.0-py3-none-any.whl
+          target/python-wheels/trixie/sonic_yang_models-1.0-py3-none-any.whl
+          target/python-wheels/trixie/sonic_config_engine-1.0-py3-none-any.whl
+          target/python-wheels/trixie/sonic_platform_common-1.0-py3-none-any.whl
       displayName: "Download artifacts from latest sonic-buildimage build"
 
     - script: |
@@ -125,12 +126,13 @@ jobs:
         sudo dpkg -i libnl-genl-3-200_*.deb
         sudo dpkg -i libnl-route-3-200_*.deb
         sudo dpkg -i libnl-nf-3-200_*.deb
+        sudo dpkg -i libpcre3_*.deb
         sudo dpkg -i libyang_1.0.73_amd64.deb
         sudo dpkg -i libyang3_*.deb
         sudo dpkg -i python3-libyang*.deb
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
-      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/bookworm/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/trixie/
       displayName: 'Install Debian dependencies'
 
     - script: |
@@ -141,14 +143,15 @@ jobs:
         sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
         sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
         sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
-      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/python-wheels/bookworm/
+      workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/python-wheels/trixie/
       displayName: 'Install Python dependencies'
 
     - script: |
         set -ex
         # Install .NET CORE
-        curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-        sudo apt-add-repository https://packages.microsoft.com/debian/12/prod
+        curl -sSL https://packages.microsoft.com/keys/microsoft.asc -o /tmp/microsoft.asc
+        sudo install -m 644 -o root -g root /tmp/microsoft.asc /usr/share/keyrings/microsoft.gpg
+        echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod/ bookworm main" | sudo tee /etc/apt/sources.list.d/microsoft.list
         sudo apt-get update
         sudo apt-get install -y dotnet-sdk-8.0
       displayName: "Install .NET CORE"
