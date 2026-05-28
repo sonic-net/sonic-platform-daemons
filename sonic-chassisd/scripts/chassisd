@@ -808,11 +808,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         prev_status_empty = prev_status == ModuleBase.MODULE_STATUS_EMPTY
 
         # Transition to offline from a known non-offline state.
-        # Persist the down-time but defer get_reboot_cause until the DPU
-        # is back online — querying a powered-off DPU is unreliable.
+        # Defer get_reboot_cause until the DPU is back online —
+        # querying a powered-off DPU is unreliable.
         if self._is_known_to_offline(prev_status, current_status):
             self.log_notice(f"{key} operational status transitioning to offline")
-            self.persist_dpu_reboot_time(key)
             self._pending_reboot_check[key] = DEFERRED_DPU_REBOOT
             return
 
@@ -836,7 +835,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             if deferred is None and prev_status_empty:
                 if self._is_first_boot(key):
                     reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-                    self.persist_dpu_reboot_time(key)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
                 return
@@ -882,8 +880,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                     should_persist = True
 
                 if should_persist:
-                    if not reboot_time:
-                        self.persist_dpu_reboot_time(key)
                     self.persist_dpu_reboot_cause(reboot_cause, key)
                 self.update_dpu_reboot_cause_to_db(key)
                 return
@@ -1016,15 +1012,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 return content == "First boot"
         except FileNotFoundError:
                 return False
-
-    def persist_dpu_reboot_time(self, module):
-        """Persist the current reboot time to a file."""
-        time_str = self._get_current_time_str()
-        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
-
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w') as f:
-            f.write(time_str)
 
     def retrieve_dpu_reboot_time(self, module):
         """Retrieve the persisted reboot time from a file."""

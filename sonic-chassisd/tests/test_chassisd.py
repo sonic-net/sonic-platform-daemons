@@ -230,18 +230,16 @@ def test_smartswitch_moduleupdater_status_transitions():
         patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
         patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
         patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
-        patch.object(module_updater, 'persist_dpu_reboot_time') as mock_persist_time, \
         patch("os.makedirs") as mock_makedirs, \
         patch("builtins.open", mock_open()) as mock_file, \
         patch.object(module_updater, '_get_history_path', return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
 
-        # Transition from ONLINE to OFFLINE — should persist time but NOT
-        # query reboot cause (DPU is powered off).  Issue #26254.
+        # Transition from ONLINE to OFFLINE — should defer reboot cause
+        # query until DPU is back online (DPU is powered off).  Issue #26254.
         offline_status = ModuleBase.MODULE_STATUS_OFFLINE
         module.set_oper_status(offline_status)
         module_updater.module_db_update()
         assert module.get_oper_status() == offline_status
-        mock_persist_time.assert_called_once_with(name)
         mock_persist_reboot_cause.assert_not_called()
         mock_update_reboot_db.assert_not_called()
         assert name in module_updater._pending_reboot_check
@@ -251,7 +249,6 @@ def test_smartswitch_moduleupdater_status_transitions():
         mock_makedirs.reset_mock()
         mock_persist_reboot_cause.reset_mock()
         mock_update_reboot_db.reset_mock()
-        mock_persist_time.reset_mock()
 
         # Ensure ONLINE transition persists the deferred reboot cause
         online_status = ModuleBase.MODULE_STATUS_ONLINE
@@ -282,7 +279,6 @@ def test_admin_shutdown_does_not_query_reboot_cause():
     updater.module_db_update()
 
     with patch.object(module, 'get_reboot_cause') as mock_get_cause, \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
@@ -292,8 +288,6 @@ def test_admin_shutdown_does_not_query_reboot_cause():
 
         # get_reboot_cause must NOT be called while DPU is off
         mock_get_cause.assert_not_called()
-        # But reboot time should be persisted
-        mock_persist_time.assert_called_once_with(name)
         # Cause should be deferred
         mock_persist_cause.assert_not_called()
         mock_update_db.assert_not_called()
@@ -342,13 +336,11 @@ def test_empty_to_online_first_boot_persists():
 
     with patch.object(module, 'get_reboot_cause', return_value=("Power Loss", "N/A")), \
          patch.object(updater, '_is_first_boot', return_value=True), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
         updater.module_db_update()
 
-        mock_persist_time.assert_called_once_with(name)
         mock_persist_cause.assert_called_once_with(("Power Loss", "N/A"), name)
         mock_update_db.assert_called_once_with(name)
 
@@ -370,14 +362,12 @@ def test_empty_to_online_no_spurious_persist():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Non-Hardware", "2025_01_01_00_00_00")), \
          patch.object(updater, '_is_first_boot', return_value=False), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
         updater.module_db_update()
 
         # No persist — DPU didn't reboot, chassisd just restarted
-        mock_persist_time.assert_not_called()
         mock_persist_cause.assert_not_called()
         # DB should still be repopulated
         mock_update_db.assert_called_once_with(name)
@@ -407,17 +397,13 @@ def test_deferred_reboot_skips_already_persisted():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Switch rebooted DPU", stored_time)), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=reboot_time), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
-        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT, time persisted
+        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT
         module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
         updater.module_db_update()
-        mock_persist_time.assert_called_once_with(name)
         assert updater._pending_reboot_check[name] == DEFERRED_DPU_REBOOT
-
-        mock_persist_time.reset_mock()
 
         # OFFLINE→ONLINE: stored_time >= reboot_time → already persisted, skip
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
@@ -452,17 +438,13 @@ def test_deferred_reboot_persists_new_reboot():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Switch rebooted DPU", stored_time)), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=reboot_time), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
-        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT, time persisted
+        # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT
         module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
         updater.module_db_update()
-        mock_persist_time.assert_called_once_with(name)
         assert updater._pending_reboot_check[name] == DEFERRED_DPU_REBOOT
-
-        mock_persist_time.reset_mock()
 
         # OFFLINE→ONLINE: stored_time < reboot_time → persist
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
@@ -492,14 +474,12 @@ def test_empty_to_offline_persists_changed_reboot_cause():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Reboot", "2025_10_10_07_36_12")), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
         # EMPTY→OFFLINE: should defer, not persist yet
         updater.module_db_update()
         assert name in updater._pending_reboot_check
-        mock_persist_time.assert_not_called()
         mock_persist_cause.assert_not_called()
         mock_update_db.assert_not_called()
 
@@ -507,7 +487,6 @@ def test_empty_to_offline_persists_changed_reboot_cause():
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
-        mock_persist_time.assert_called_once_with(name)
         mock_persist_cause.assert_called_once_with(("Power Loss", "power auxiliary outage or reload"), name)
         mock_update_db.assert_called_once_with(name)
 
@@ -535,7 +514,6 @@ def test_empty_to_offline_persists_same_cause_new_reboot():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Reboot", stored_time)), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=reboot_time), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
@@ -547,7 +525,6 @@ def test_empty_to_offline_persists_same_cause_new_reboot():
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
-        mock_persist_time.assert_not_called()  # reboot_time already exists
         mock_persist_cause.assert_called_once()
         mock_update_db.assert_called_once_with(name)
 
@@ -571,7 +548,6 @@ def test_empty_to_offline_skips_same_cause_no_new_reboot():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=("Reboot", "2025_10_10_07_36_12")), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
@@ -583,7 +559,6 @@ def test_empty_to_offline_skips_same_cause_no_new_reboot():
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
-        mock_persist_time.assert_not_called()
         mock_persist_cause.assert_not_called()
         # DB should still be repopulated (STATE_DB was flushed)
         mock_update_db.assert_called_once_with(name)
@@ -606,7 +581,6 @@ def test_empty_to_offline_persists_first_boot():
          patch.object(updater, 'retrieve_dpu_reboot_info',
                       return_value=(None, None)), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
-         patch.object(updater, 'persist_dpu_reboot_time') as mock_persist_time, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
@@ -618,7 +592,6 @@ def test_empty_to_offline_persists_first_boot():
         module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
         updater.module_db_update()
         assert name not in updater._pending_reboot_check
-        mock_persist_time.assert_called_once_with(name)
         mock_persist_cause.assert_called_once()
         mock_update_db.assert_called_once_with(name)
 
@@ -1061,7 +1034,6 @@ def test_smartswitch_module_db_update():
         # Call the function to test
         module_updater.persist_dpu_reboot_cause(reboot_cause, key)
         module_updater._is_first_boot(name)
-        module_updater.persist_dpu_reboot_time(name)
         module_updater.update_dpu_reboot_cause_to_db(name)
 
 
