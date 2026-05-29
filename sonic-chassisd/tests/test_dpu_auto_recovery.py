@@ -49,6 +49,7 @@ from chassisd import (
     RECOVERY_RECOVERABLE,
     RECOVERY_UNRECOVERABLE,
     DEFAULT_DPU_RESET_LIMIT,
+    DEFAULT_DPU_BOOT_TIMEOUT,
     MODULE_ADMIN_DOWN,
     MODULE_ADMIN_UP,
     MODULE_REBOOT_CAUSE_DIR,
@@ -406,6 +407,160 @@ class TestBootingToReady:
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
 
+    def test_booting_timeout_triggers_power_cycle(self):
+        """Booting state exceeds dpu_boot_timeout → power-cycle triggered."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        # Simulate boot started 400s ago (exceeds default 300s timeout)
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_power_cycle_dpu') as mock_pc:
+            updater.update_dpu_recovery_state()
+
+        mock_pc.assert_called_once_with("DPU0", 0)
+
+    def test_booting_timeout_manual_intervention_when_disabled(self):
+        """Booting timeout + auto-recovery disabled → ManualIntervention."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=False), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_MANUAL_INTERVENTION
+
+    def test_booting_no_timeout_if_within_limit(self):
+        """Booting state within dpu_boot_timeout → stays Booting."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        import time as time_module
+        # Only 10s ago — well within 300s timeout
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 10
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
+
+    def test_power_cycle_timeout_triggers_another_cycle(self):
+        """PowerCycle state exceeds dpu_boot_timeout → another power-cycle."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_POWER_CYCLE
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 1
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_power_cycle_dpu') as mock_pc:
+            updater.update_dpu_recovery_state()
+
+        mock_pc.assert_called_once_with("DPU0", 0)
+
+    def test_custom_boot_timeout_from_platform_json(self):
+        """dpu_boot_timeout should be loaded from platform.json."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis, platform_json={"dpu_boot_timeout": 600})
+
+        assert updater.dpu_boot_timeout == 600
+
+    def test_booting_timeout_cp_up_dp_down_warning_only(self):
+        """Booting timeout + CP up + DP down → WARNING only, no power-cycle.
+
+        Per HLD: if control plane is up but data plane hasn't converged,
+        chassisd logs a warning but does NOT trigger power-cycle.
+        """
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        # CP is up, midplane is up, but DP is still down
+        set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_power_cycle_dpu') as mock_pc:
+            updater.update_dpu_recovery_state()
+
+        # Should NOT power-cycle — only log warning
+        mock_pc.assert_not_called()
+        # State stays Booting (ready_status remains false)
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
+        assert updater.dpu_recovery_state["DPU0"].get('boot_dp_warning_logged') is True
+
+    def test_booting_timeout_cp_up_dp_down_warning_logged_once(self):
+        """Warning for stuck DP during boot is logged only once."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        updater.dpu_recovery_state["DPU0"]['boot_dp_warning_logged'] = True
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, 'log_warning') as mock_log:
+            updater.update_dpu_recovery_state()
+
+        # Warning should NOT be logged again
+        for call in mock_log.call_args_list:
+            assert "data plane not up" not in call[0][0]
+
+    def test_booting_timeout_midplane_down_triggers_power_cycle(self):
+        """Booting timeout + midplane down → genuine boot failure → power-cycle."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 400
+
+        # Midplane is down — this is a real boot failure
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_power_cycle_dpu') as mock_pc:
+            updater.update_dpu_recovery_state()
+
+        mock_pc.assert_called_once_with("DPU0", 0)
+
 
 # ============================================================================
 # Test: State machine transitions — Ready → failure states
@@ -500,12 +655,36 @@ class TestReadyToFailure:
         # State stays Ready (dp-only doesn't trigger state machine)
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_READY
         assert get_dpu_state_field(updater, "DPU0", READY_STATUS) == 'false'
+        assert updater.dpu_recovery_state["DPU0"].get('dp_was_down') is True
 
-    def test_ready_all_up_stays_ready(self):
-        """Ready + all up → stays Ready, ready_status=true."""
+    def test_ready_dp_down_no_redundant_writes(self):
+        """Ready + DP down (already tracked) → no redundant DB writes."""
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_READY
+        updater.dpu_recovery_state["DPU0"]['dp_was_down'] = True
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_set_ready_status') as mock_set_ready, \
+             patch.object(updater, '_set_last_down_time') as mock_set_down:
+            updater.update_dpu_recovery_state()
+
+        # Should NOT write to DB since dp_was_down is already True
+        mock_set_ready.assert_not_called()
+        mock_set_down.assert_not_called()
+
+    def test_ready_all_up_stays_ready(self):
+        """Ready + all up (steady state) → stays Ready, ready_status unchanged (no redundant writes)."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_READY
+        # Simulate that ready_status was already set when entering Ready state
+        updater.dpu_state_table.hset("DPU0", READY_STATUS, 'true')
 
         set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='up')
         chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
@@ -517,6 +696,26 @@ class TestReadyToFailure:
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_READY
         assert get_dpu_state_field(updater, "DPU0", READY_STATUS) == 'true'
+
+    def test_ready_dp_down_then_up_sets_ready_status(self):
+        """Ready + DP was down, then recovers → ready_status transitions back to true."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_READY
+        updater.dpu_recovery_state["DPU0"]['dp_was_down'] = True
+
+        set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='up')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_READY
+        assert get_dpu_state_field(updater, "DPU0", READY_STATUS) == 'true'
+        assert get_dpu_state_field(updater, "DPU0", LAST_READY_TIME) is not None
+        assert updater.dpu_recovery_state["DPU0"].get('dp_was_down') is False
 
 
 # ============================================================================
@@ -645,6 +844,51 @@ class TestResetLimitUnrecoverable:
             updater.update_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_UNRECOVERABLE
+
+    def test_unrecoverable_admin_down_transitions_to_offline(self):
+        """Unrecoverable + admin-down → Offline (operator can shut it down)."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_UNRECOVERABLE
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='down'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_OFFLINE
+        assert updater.dpu_recovery_state["DPU0"].get('was_unrecoverable') is True
+
+    def test_unrecoverable_operator_startup_resets_recovery(self):
+        """Unrecoverable → Offline → Booting resets reset_count and recovery_status.
+
+        Per HLD: operator-initiated 'config chassis module startup DPU<x>'
+        on an unrecoverable DPU resets recovery_status to 'recoverable' and
+        reset_count to 0.
+        """
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_OFFLINE
+        updater.dpu_recovery_state["DPU0"]['was_unrecoverable'] = True
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 2
+        updater.dpu_state_table.hset("DPU0", RESET_COUNT, '2')
+        updater.dpu_state_table.hset("DPU0", RECOVERY_STATUS, RECOVERY_UNRECOVERABLE)
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_PRESENT)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_PRESENT))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
+        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
+        assert get_dpu_state_field(updater, "DPU0", RESET_COUNT) == '0'
+        assert get_dpu_state_field(updater, "DPU0", RECOVERY_STATUS) == RECOVERY_RECOVERABLE
 
     def test_multiple_failures_increment_reset_count(self):
         """Each failure increments reset_count until limit."""
