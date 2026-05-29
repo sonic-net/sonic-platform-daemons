@@ -803,6 +803,30 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                                 str(ModuleBase.MODULE_STATUS_OFFLINE))
                 and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE))
 
+    def persist_dpu_reboot_time_if_needed(self, module):
+        """Persist the current reboot time to prev_reboot_time.txt if module_base.py
+        has not already created it for this reboot cycle.
+
+        Detection: compare the time in prev_reboot_time.txt with the stored reboot
+        cause timestamp (from previous-reboot-cause.json).  If the file does not
+        exist, or its time is <= the stored cause time (stale from a prior reboot),
+        write the current time.
+        """
+        file_time = self.retrieve_dpu_reboot_time(module)
+        _, stored_time_str = self.retrieve_dpu_reboot_info(module)
+
+        if file_time is not None and (stored_time_str is None or file_time > stored_time_str):
+            # File already has a time newer than the last stored cause —
+            # module_base.py already created it for this reboot cycle.
+            return
+
+        # Write current time
+        time_str = self._get_current_time_str()
+        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(time_str)
+
     def _handle_module_status_change(self, key, module_index, prev_status, current_status):
         """Handle DPU operational-status transitions and reboot-cause tracking."""
         prev_status_empty = prev_status == ModuleBase.MODULE_STATUS_EMPTY
@@ -812,6 +836,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         # querying a powered-off DPU is unreliable.
         if self._is_known_to_offline(prev_status, current_status):
             self.log_notice(f"{key} operational status transitioning to offline")
+            self.persist_dpu_reboot_time_if_needed(key)
             self._pending_reboot_check[key] = DEFERRED_DPU_REBOOT
             return
 

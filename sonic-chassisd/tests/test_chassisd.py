@@ -280,6 +280,7 @@ def test_admin_shutdown_does_not_query_reboot_cause():
 
     with patch.object(module, 'get_reboot_cause') as mock_get_cause, \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
+         patch.object(updater, 'persist_dpu_reboot_time_if_needed') as mock_persist_time, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
         # Admin shutdown: DPU goes offline
@@ -292,6 +293,77 @@ def test_admin_shutdown_does_not_query_reboot_cause():
         mock_persist_cause.assert_not_called()
         mock_update_db.assert_not_called()
         assert name in updater._pending_reboot_check
+
+def test_persist_dpu_reboot_time_if_needed_creates_file_when_missing():
+    """
+    When prev_reboot_time.txt does not exist (module_base.py hasn't created it),
+    persist_dpu_reboot_time_if_needed should write the current time.
+    """
+    chassis = MockSmartSwitchChassis()
+    name = "DPU0"
+    module = MockModule(0, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    chassis.module_list.append(module)
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    with patch.object(updater, 'retrieve_dpu_reboot_time', return_value=None), \
+         patch.object(updater, 'retrieve_dpu_reboot_info', return_value=(None, None)), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as mock_file:
+
+        updater.persist_dpu_reboot_time_if_needed(name)
+
+        mock_makedirs.assert_called_once()
+        mock_file.assert_called_once()
+
+def test_persist_dpu_reboot_time_if_needed_skips_when_file_newer():
+    """
+    When prev_reboot_time.txt already has a time newer than the stored
+    reboot cause timestamp, module_base.py already created it — do not overwrite.
+    """
+    chassis = MockSmartSwitchChassis()
+    name = "DPU0"
+    module = MockModule(0, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    chassis.module_list.append(module)
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # File time is newer than stored cause time — module_base.py already handled it
+    with patch.object(updater, 'retrieve_dpu_reboot_time', return_value="2025_06_01_12_00_00"), \
+         patch.object(updater, 'retrieve_dpu_reboot_info', return_value=("Power Loss", "2025_06_01_10_00_00")), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as mock_file:
+
+        updater.persist_dpu_reboot_time_if_needed(name)
+
+        # Should NOT write — file is already up to date
+        mock_file.assert_not_called()
+
+def test_persist_dpu_reboot_time_if_needed_writes_when_file_stale():
+    """
+    When prev_reboot_time.txt has a time <= the stored reboot cause timestamp,
+    the file is stale from a prior reboot — write a new time.
+    """
+    chassis = MockSmartSwitchChassis()
+    name = "DPU0"
+    module = MockModule(0, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN0")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    chassis.module_list.append(module)
+
+    updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    # File time is older than stored cause time — stale, needs update
+    with patch.object(updater, 'retrieve_dpu_reboot_time', return_value="2025_05_01_08_00_00"), \
+         patch.object(updater, 'retrieve_dpu_reboot_info', return_value=("Power Loss", "2025_06_01_10_00_00")), \
+         patch("os.makedirs") as mock_makedirs, \
+         patch("builtins.open", mock_open()) as mock_file:
+
+        updater.persist_dpu_reboot_time_if_needed(name)
+
+        mock_makedirs.assert_called_once()
+        mock_file.assert_called_once()
 
 def test_online_transition_skips_reboot_update():
     """
@@ -398,6 +470,7 @@ def test_deferred_reboot_skips_already_persisted():
                       return_value=("Switch rebooted DPU", stored_time)), \
          patch.object(updater, 'retrieve_dpu_reboot_time', return_value=reboot_time), \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist_cause, \
+         patch.object(updater, 'persist_dpu_reboot_time_if_needed') as mock_persist_time, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
 
         # ONLINE→OFFLINE: deferred=DEFERRED_DPU_REBOOT
