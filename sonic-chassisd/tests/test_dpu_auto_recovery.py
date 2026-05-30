@@ -2572,6 +2572,8 @@ class TestUpdateRecoveryStateIntegration:
 
         module = chassis.module_list[0]
         module.set_admin_state = MagicMock()
+        module1 = chassis.module_list[1]
+        module1.set_admin_state = MagicMock()
 
         with patch("os.path.isfile", return_value=True), \
              patch("builtins.open", mock_open(read_data="kernel panic - not syncing")), \
@@ -2582,7 +2584,7 @@ class TestUpdateRecoveryStateIntegration:
         # DPU0 should be power-cycled (online + NPU crash + auto-recovery enabled)
         assert module.set_admin_state.call_count == 2
         # DPU1 should be skipped (offline)
-        assert chassis.module_list[1].set_admin_state.call_count == 0
+        assert module1.set_admin_state.call_count == 0
 
     def test_init_recovery_state_npu_crash_disabled_full_path(self):
         """init_dpu_recovery_state NPU crash + recovery disabled → ManualIntervention."""
