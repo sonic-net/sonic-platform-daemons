@@ -11,6 +11,7 @@ try:
     import sys
 
     from sonic_py_common import daemon_base, logger
+    from sonic_platform_base.module_base import ModuleBase
 
     # If unit testing is occurring, mock swsscommon and module_base
     if os.getenv("CHASSIS_DB_INIT_UNIT_TESTING") == "1":
@@ -77,7 +78,7 @@ def provision_db(platform_chassis, log):
         # BMC must also populate the switch host serial number. BMC Chassis object is expected to have
         # the switch host module at index 0.
         switch_host_mod = platform_chassis.get_module(0)
-        if not switch_host_mod or switch_host_mod.get_type() != MODULE_TYPE_SWITCH_HOST:
+        if not switch_host_mod or switch_host_mod.get_type() != ModuleBase.MODULE_TYPE_SWITCH_HOST:
             raise RuntimeError("Switch Host Module must be present in the BMC chassis module at index 0")
         switch_host_serial = switch_host_mod.get_serial()
 
