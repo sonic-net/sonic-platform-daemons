@@ -16,7 +16,7 @@ def load_source(module_name, module_path):
 from mock import Mock, MagicMock, patch
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockModule
+from .mock_platform import MockChassis, MockBMCChassis, MockModule
 from .mock_module_base import ModuleBase
 
 SYSLOG_IDENTIFIER = 'chassis_db_init_test'
@@ -53,18 +53,16 @@ def test_provision_db():
     assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
 def test_provision_db_bmc():
-    chassis = MockChassis()
     log = MagicMock()
-    switch_host_serial = "Switch Host Serial"
 
-    with patch.object(chassis, 'is_bmc', return_value=True), \
-         patch.object(chassis, 'get_switch_host_serial', create=True, return_value=switch_host_serial):
-        chassis_table = provision_db(chassis, log)
+    chassis = MockBMCChassis()
+
+    chassis_table = provision_db(chassis, log)
 
     fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
-    assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
+    assert "MOCK-SWITCH-HOST-SERIAL" == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
 def test_try_get_timeout_error():
     def raise_timeout():
