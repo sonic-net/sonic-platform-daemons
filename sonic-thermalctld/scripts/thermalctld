@@ -564,7 +564,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         for profile in self.liquid_cooling.get_all_profiles():
             fvs = swsscommon.FieldValuePairs([
                 ('type', profile.get_type()),
-                ('max_minor_duration_sec', profile.get_leak_max_minor_duration_sec()),
+                ('max_minor_duration_sec', str(profile.get_leak_max_minor_duration_sec())),
             ])
             self.profile_table.set(profile.get_type(), fvs)
 
@@ -636,8 +636,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('name', sensor_name),
                 ('leaking', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
-                ('type', sensor.get_leak_sensor_type()),
-                ('location', sensor.get_leak_sensor_location()),
+                ('type', str(sensor.get_leak_sensor_type())),
+                ('location', str(sensor.get_leak_sensor_location())),
                 ('severity', str(sensor_leak_severity)),
             ])
             self.sensor_table.set(sensor_name, fvs)
