@@ -715,8 +715,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('name', sensor_name),
                 ('leaking', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
-                ('type', str(sensor_type) if sensor_type is not None else NOT_AVAILABLE),
-                ('location', str(sensor_location) if sensor_location is not None else NOT_AVAILABLE),
+                ('type', str(sensor.get_leak_sensor_type())),
+                ('location', str(sensor.get_leak_sensor_location())),
                 ('severity', str(sensor_leak_severity)),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
