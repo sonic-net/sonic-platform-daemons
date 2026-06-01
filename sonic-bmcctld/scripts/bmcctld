@@ -81,13 +81,18 @@ class EventLogger(logger.Logger):
                                  os.path.basename(log_file).replace(".", "_"))
         self._file_logger = logging.getLogger(py_name)
         if not self._file_logger.handlers and os.getenv("BMCCTLD_UNIT_TESTING") != "1":
-            handler = logging.FileHandler(log_file)
-            handler.setFormatter(logging.Formatter(
-                "%(asctime)s %(name)s[%(process)d] %(levelname)s: %(message)s",
-                datefmt="%Y-%m-%dT%H:%M:%S",
-            ))
-            self._file_logger.addHandler(handler)
-            self._file_logger.setLevel(logging.DEBUG)
+            try:
+                handler = logging.FileHandler(log_file)
+                handler.setFormatter(logging.Formatter(
+                    "%(asctime)s %(name)s[%(process)d] %(levelname)s: %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S",
+                ))
+                self._file_logger.addHandler(handler)
+                self._file_logger.setLevel(logging.DEBUG)
+            except (OSError, IOError) as e:
+                self.log_error(
+                    "EventLogger: failed to open log file {} ({}); events will go to syslog only".format(
+                        log_file, repr(e)))
 
     def log_debug(self, msg, also_print_to_console=False):
         super(EventLogger, self).log_debug(msg, also_print_to_console)

@@ -58,8 +58,10 @@ class EventLogger(logger.Logger):
                 ))
                 self._file_logger.addHandler(handler)
                 self._file_logger.setLevel(logging.DEBUG)
-            except (OSError, IOError):
-                pass
+            except (OSError, IOError) as e:
+                self.log_error(
+                    "EventLogger: failed to open log file {} ({}); events will go to syslog only".format(
+                        log_file, repr(e)))
 
     def log_debug(self, msg, also_print_to_console=False):
         super(EventLogger, self).log_debug(msg, also_print_to_console)
@@ -709,14 +711,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             # Per-sensor status. Only write on change to avoid Redis churn.
             leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
-            sensor_type = try_get(sensor.get_leak_sensor_type, NOT_AVAILABLE)
-            sensor_location = try_get(sensor.get_leak_sensor_location, NOT_AVAILABLE)
+            sensor_type = try_get(sensor.get_leak_sensor_type, 'unknown')
+            sensor_location = try_get(sensor.get_leak_sensor_location, 'unknown')
             fvs_tuple = (
                 ('name', sensor_name),
                 ('leaking', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
-                ('type', str(sensor.get_leak_sensor_type())),
-                ('location', str(sensor.get_leak_sensor_location())),
+                ('type', str(sensor_type)),
+                ('location', str(sensor_location)),
                 ('severity', str(sensor_leak_severity)),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
