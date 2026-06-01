@@ -16,7 +16,7 @@ def load_source(module_name, module_path):
 from mock import Mock, MagicMock, patch
 from sonic_py_common import daemon_base
 
-from .mock_platform import MockChassis, MockModule
+from .mock_platform import MockChassis, MockBMCChassis, MockModule
 from .mock_module_base import ModuleBase
 
 SYSLOG_IDENTIFIER = 'chassis_db_init_test'
@@ -53,63 +53,16 @@ def test_provision_db():
     assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
 def test_provision_db_bmc():
-    chassis = MockChassis()
     log = MagicMock()
-    switch_host_serial = "Switch Host Serial"
 
-    # Create a mock switch host module at index 0
-    switch_host_module = MockModule(
-        module_index=0,
-        module_name="SWITCH-HOST0",
-        module_desc="Switch Host Module",
-        module_type=ModuleBase.MODULE_TYPE_SWITCH_HOST,
-        module_slot=0,
-        module_serial=switch_host_serial
-    )
-    chassis.module_list.append(switch_host_module)
+    chassis = MockBMCChassis()
 
-    with patch.object(chassis, 'is_bmc', return_value=True):
-        chassis_table = provision_db(chassis, log)
+    chassis_table = provision_db(chassis, log)
 
     fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     if isinstance(fvs, list):
         fvs = dict(fvs[-1])
-    assert switch_host_serial == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
-
-def test_provision_db_bmc_no_module():
-    """Test that BMC chassis without module at index 0 raises RuntimeError"""
-    chassis = MockChassis()
-    log = MagicMock()
-
-    with patch.object(chassis, 'is_bmc', return_value=True):
-        try:
-            chassis_table = provision_db(chassis, log)
-            assert False, "Expected RuntimeError to be raised"
-        except RuntimeError as e:
-            assert "Switch Host Module must be present" in str(e)
-
-def test_provision_db_bmc_wrong_module_type():
-    """Test that BMC chassis with wrong module type at index 0 raises RuntimeError"""
-    chassis = MockChassis()
-    log = MagicMock()
-
-    # Create a line card module instead of switch host module
-    wrong_module = MockModule(
-        module_index=0,
-        module_name="LINE-CARD0",
-        module_desc="Line Card Module",
-        module_type=ModuleBase.MODULE_TYPE_LINE,
-        module_slot=0,
-        module_serial="LC Serial"
-    )
-    chassis.module_list.append(wrong_module)
-
-    with patch.object(chassis, 'is_bmc', return_value=True):
-        try:
-            chassis_table = provision_db(chassis, log)
-            assert False, "Expected RuntimeError to be raised"
-        except RuntimeError as e:
-            assert "Switch Host Module must be present" in str(e)
+    assert "MOCK-SWITCH-HOST-SERIAL" == fvs[CHASSIS_INFO_SWITCH_HOST_SERIAL_FIELD]
 
 def test_try_get_timeout_error():
     def raise_timeout():

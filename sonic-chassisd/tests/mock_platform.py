@@ -163,6 +163,32 @@ class MockChassis:
     def get_supervisor_slot(self):
         return 0
 
+class MockBMCChassis(MockChassis):
+    """
+    Mock BMC Chassis for testing BMC-specific functionality.
+    Inherits from MockChassis and overrides is_bmc() to return True.
+    Always includes a switch host module at index 0.
+    """
+    def __init__(self):
+        """Initialize MockBMCChassis with a switch host module at index 0."""
+        from .mock_module_base import ModuleBase
+        super(MockBMCChassis, self).__init__()
+
+        # BMC chassis always has a switch host module at index 0
+        switch_host_module = MockModule(
+            module_index=0,
+            module_name="SWITCH-HOST0",
+            module_desc="Switch Host Module",
+            module_type=ModuleBase.MODULE_TYPE_SWITCH_HOST,
+            module_slot=0,
+            module_serial="MOCK-SWITCH-HOST-SERIAL"
+        )
+        self.module_list.append(switch_host_module)
+
+    def is_bmc(self):
+        """Override to return True for BMC chassis"""
+        return True
+
 class MockSmartSwitchChassis:
     def __init__(self):
         self.module_list = []
