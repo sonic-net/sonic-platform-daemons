@@ -57,8 +57,8 @@ MP_STATE = 'dpu_midplane_link_state'
 RECOVERY_RECOVERABLE = 'recoverable'
 RECOVERY_UNRECOVERABLE = 'unrecoverable'
 
-# Feature flag
-DPU_AUTO_RECOVERY_FEATURE = 'dpu-auto-recovery'
+# DEVICE_METADATA field for auto-recovery
+DPU_AUTO_RECOVERY_FIELD = 'dpu_auto_recovery'
 
 # Timeouts
 DPU_BOOT_TIMEOUT = 420  # 7 minutes for DPU to come up after power-cycle
@@ -134,19 +134,19 @@ def get_module_oper_status(dpu_name):
     return result if result else None
 
 
-def get_feature_state(feature_name):
-    """Get feature state from CONFIG_DB FEATURE table."""
+def get_auto_recovery_state():
+    """Get dpu_auto_recovery from CONFIG_DB DEVICE_METADATA|localhost."""
     result = run_cmd(
-        f"sonic-db-cli CONFIG_DB HGET 'FEATURE|{feature_name}' 'state'",
+        "sonic-db-cli CONFIG_DB HGET 'DEVICE_METADATA|localhost' 'dpu_auto_recovery'",
         check=False
     )
     return result if result else None
 
 
-def set_feature_state(feature_name, state):
-    """Set feature state in CONFIG_DB FEATURE table."""
-    sonic_db_cli("CONFIG_DB", f"HSET 'FEATURE|{feature_name}' 'state' '{state}'")
-    logger.info(f"Set feature {feature_name} state to '{state}'")
+def set_auto_recovery_state(state):
+    """Set dpu_auto_recovery in CONFIG_DB DEVICE_METADATA|localhost."""
+    sonic_db_cli("CONFIG_DB", f"HSET 'DEVICE_METADATA|localhost' 'dpu_auto_recovery' '{state}'")
+    logger.info(f"Set dpu_auto_recovery to '{state}'")
 
 
 def get_chassis_module_admin_status(dpu_name):
@@ -361,15 +361,15 @@ def test_reset_count_field(results, dpu_name):
 
 
 def test_auto_recovery_feature_flag(results):
-    """Verify dpu-auto-recovery feature exists in CONFIG_DB (or defaults to enabled)."""
-    logger.info("Test: dpu-auto-recovery feature flag")
-    state = get_feature_state(DPU_AUTO_RECOVERY_FEATURE)
-    valid_states = ('enabled', 'disabled', 'always_disabled')
-    # Feature may not be explicitly configured (defaults to enabled in chassisd)
+    """Verify dpu_auto_recovery exists in CONFIG_DB DEVICE_METADATA (or defaults to enabled)."""
+    logger.info("Test: dpu_auto_recovery in DEVICE_METADATA")
+    state = get_auto_recovery_state()
+    valid_states = ('enabled', 'disabled')
+    # Field may not be explicitly configured (defaults to enabled in chassisd)
     results.record(
         "auto_recovery_feature_exists",
         state is None or state in valid_states,
-        f"Feature state: '{state}' (expected None/default or one of {valid_states})"
+        f"dpu_auto_recovery: '{state}' (expected None/default or one of {valid_states})"
     )
 
 
@@ -425,12 +425,12 @@ def test_disable_auto_recovery_no_power_cycle(results, dpu_name):
     """With auto-recovery disabled, DPU failure should not trigger power-cycle."""
     logger.info(f"Test: disabled auto-recovery prevents power-cycle on {dpu_name}")
 
-    original_feature_state = get_feature_state(DPU_AUTO_RECOVERY_FEATURE)
+    original_feature_state = get_auto_recovery_state()
     original_reset_count = get_dpu_state_field(dpu_name, RESET_COUNT)
 
     try:
         # Disable auto-recovery
-        set_feature_state(DPU_AUTO_RECOVERY_FEATURE, 'disabled')
+        set_auto_recovery_state('disabled')
         time.sleep(POLL_INTERVAL)
 
         # Record current reset count
@@ -451,9 +451,9 @@ def test_disable_auto_recovery_no_power_cycle(results, dpu_name):
             f"even with auto-recovery disabled"
         )
     finally:
-        # Restore original feature state
+        # Restore original state
         if original_feature_state:
-            set_feature_state(DPU_AUTO_RECOVERY_FEATURE, original_feature_state)
+            set_auto_recovery_state(original_feature_state)
         # Ensure DPU comes back
         set_module_admin_status(dpu_name, 'up')
         wait_for_dpu_ready(dpu_name)
@@ -491,14 +491,14 @@ def test_enable_auto_recovery_feature(results, dpu_name):
     """Enable auto-recovery and verify DPU state reflects it."""
     logger.info(f"Test: enable auto-recovery feature for {dpu_name}")
 
-    original_state = get_feature_state(DPU_AUTO_RECOVERY_FEATURE)
+    original_state = get_auto_recovery_state()
 
     try:
-        set_feature_state(DPU_AUTO_RECOVERY_FEATURE, 'enabled')
+        set_auto_recovery_state('enabled')
         time.sleep(POLL_INTERVAL)
 
-        # Verify the feature is reflected (chassisd should read it next poll)
-        state = get_feature_state(DPU_AUTO_RECOVERY_FEATURE)
+        # Verify the field is reflected (chassisd should read it next poll)
+        state = get_auto_recovery_state()
         results.record(
             f"auto_recovery_enabled_{dpu_name}",
             state == 'enabled',
@@ -516,7 +516,7 @@ def test_enable_auto_recovery_feature(results, dpu_name):
             )
     finally:
         if original_state:
-            set_feature_state(DPU_AUTO_RECOVERY_FEATURE, original_state)
+            set_auto_recovery_state(original_state)
 
 
 def test_dpu_power_cycle_recovery(results, dpu_name):
@@ -527,8 +527,8 @@ def test_dpu_power_cycle_recovery(results, dpu_name):
     logger.info(f"Test: DPU power-cycle recovery for {dpu_name}")
 
     # Ensure auto-recovery is enabled
-    original_state = get_feature_state(DPU_AUTO_RECOVERY_FEATURE)
-    set_feature_state(DPU_AUTO_RECOVERY_FEATURE, 'enabled')
+    original_state = get_auto_recovery_state()
+    set_auto_recovery_state('enabled')
 
     try:
         # Record initial reset count
@@ -567,7 +567,7 @@ def test_dpu_power_cycle_recovery(results, dpu_name):
             )
     finally:
         if original_state:
-            set_feature_state(DPU_AUTO_RECOVERY_FEATURE, original_state)
+            set_auto_recovery_state(original_state)
         # Ensure DPU is admin-up
         set_module_admin_status(dpu_name, 'up')
 
@@ -599,6 +599,192 @@ def test_chassisd_stop_marks_dpus_not_ready(results, dpu_name):
         run_cmd("docker exec pmon supervisorctl start chassisd", timeout=30)
         time.sleep(CHASSISD_RESTART_WAIT)
         logger.info("chassisd restarted after deinit test")
+
+
+# ---------------------------------------------------------------------------
+# Race condition tests
+# ---------------------------------------------------------------------------
+
+def get_transition_in_progress(dpu_name):
+    """Read transition_in_progress from STATE_DB CHASSIS_MODULE_TABLE."""
+    result = run_cmd(
+        f"sonic-db-cli STATE_DB HGET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_in_progress'",
+        check=False
+    )
+    return result if result else None
+
+
+def get_transition_type(dpu_name):
+    """Read transition_type from STATE_DB CHASSIS_MODULE_TABLE."""
+    result = run_cmd(
+        f"sonic-db-cli STATE_DB HGET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_type'",
+        check=False
+    )
+    return result if result else None
+
+
+def set_transition_in_progress(dpu_name, transition_type):
+    """Simulate a planned operation by setting transition_in_progress in STATE_DB."""
+    sonic_db_cli("STATE_DB",
+                 f"HSET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_in_progress' 'True'")
+    sonic_db_cli("STATE_DB",
+                 f"HSET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_type' '{transition_type}'")
+    sonic_db_cli("STATE_DB",
+                 f"HSET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_start_time' '{int(time.time())}'")
+    logger.info(f"Set transition_in_progress=True, type={transition_type} for {dpu_name}")
+
+
+def clear_transition_in_progress(dpu_name):
+    """Clear transition_in_progress fields from STATE_DB."""
+    sonic_db_cli("STATE_DB",
+                 f"HDEL 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_in_progress'")
+    sonic_db_cli("STATE_DB",
+                 f"HDEL 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_type'")
+    sonic_db_cli("STATE_DB",
+                 f"HDEL 'CHASSIS_MODULE_TABLE|{dpu_name}' 'transition_start_time'")
+    logger.info(f"Cleared transition_in_progress for {dpu_name}")
+
+
+def test_transition_lock_suppresses_recovery(results, dpu_name):
+    """Setting transition_in_progress=True should suppress power-cycle recovery.
+
+    Race condition coverage: chassisd must not initiate power-cycle when
+    another operation (gnoi shutdown/reboot) holds the transition lock.
+    """
+    logger.info(f"Test: transition lock suppresses recovery on {dpu_name}")
+
+    original_state = get_auto_recovery_state()
+    set_auto_recovery_state('enabled')
+
+    try:
+        # Wait for DPU to be ready first
+        wait_for_dpu_ready(dpu_name, timeout=120)
+        initial_reset_count = get_dpu_state_field(dpu_name, RESET_COUNT)
+
+        # Simulate a planned shutdown (gnoi sets the lock)
+        set_transition_in_progress(dpu_name, "shutdown")
+        time.sleep(POLL_INTERVAL * 2)
+
+        # Now admin-down the DPU — this would normally trigger recovery
+        set_module_admin_status(dpu_name, 'down')
+        time.sleep(POLL_INTERVAL * 3)
+
+        # Recovery should be suppressed — reset_count should not increase
+        reset_count = get_dpu_state_field(dpu_name, RESET_COUNT)
+        results.record(
+            f"lock_suppresses_recovery_{dpu_name}",
+            reset_count == initial_reset_count,
+            f"Reset count changed from {initial_reset_count} to {reset_count} "
+            f"despite transition lock being held"
+        )
+    finally:
+        clear_transition_in_progress(dpu_name)
+        set_module_admin_status(dpu_name, 'up')
+        if original_state:
+            set_auto_recovery_state(original_state)
+        wait_for_dpu_ready(dpu_name, timeout=DPU_BOOT_TIMEOUT)
+
+
+def test_recovery_type_does_not_suppress(results, dpu_name):
+    """transition_type='recovery' should NOT suppress chassisd recovery.
+
+    Race condition coverage: chassisd sets its own lock with type='recovery'
+    during power-cycle. On the next poll, this must not self-suppress.
+    """
+    logger.info(f"Test: recovery type does not suppress on {dpu_name}")
+
+    try:
+        wait_for_dpu_ready(dpu_name, timeout=120)
+
+        # Set transition_in_progress with type='recovery' (simulating chassisd's own lock)
+        set_transition_in_progress(dpu_name, "recovery")
+        time.sleep(POLL_INTERVAL * 2)
+
+        # DPU should still be tracked as ready (not suppressed)
+        ready = get_dpu_state_field(dpu_name, READY_STATUS)
+        results.record(
+            f"recovery_type_no_suppress_{dpu_name}",
+            ready == 'true',
+            f"Expected ready_status=true (not suppressed), got '{ready}'"
+        )
+    finally:
+        clear_transition_in_progress(dpu_name)
+
+
+def test_lock_cleared_after_power_cycle(results, dpu_name):
+    """After chassisd power-cycles a DPU, the transition lock must be cleared.
+
+    Race condition coverage: stale locks would permanently suppress
+    future planned operations (gnoi shutdown/reboot).
+    """
+    logger.info(f"Test: lock cleared after power-cycle on {dpu_name}")
+
+    original_state = get_auto_recovery_state()
+    set_auto_recovery_state('enabled')
+
+    try:
+        wait_for_dpu_ready(dpu_name, timeout=120)
+
+        # Force a power-cycle by admin-down/up (which triggers boot → ready)
+        set_module_admin_status(dpu_name, 'down')
+        time.sleep(30)
+        set_module_admin_status(dpu_name, 'up')
+
+        # Wait for DPU to recover
+        wait_for_dpu_ready(dpu_name, timeout=DPU_BOOT_TIMEOUT)
+        time.sleep(POLL_INTERVAL)
+
+        # After recovery, transition_in_progress should NOT be set
+        flag = get_transition_in_progress(dpu_name)
+        results.record(
+            f"lock_cleared_after_cycle_{dpu_name}",
+            flag is None or flag != 'True',
+            f"transition_in_progress still set to '{flag}' after recovery"
+        )
+    finally:
+        clear_transition_in_progress(dpu_name)
+        set_module_admin_status(dpu_name, 'up')
+        if original_state:
+            set_auto_recovery_state(original_state)
+
+
+def test_concurrent_shutdown_during_recovery(results, dpu_name):
+    """Verify chassisd aborts power-cycle if a planned operation starts concurrently.
+
+    Race condition coverage: TOCTOU between _is_planned_transition_in_progress()
+    check and the actual power-cycle. Chassisd should detect the lock conflict
+    and back off.
+    """
+    logger.info(f"Test: concurrent shutdown during recovery on {dpu_name}")
+
+    original_state = get_auto_recovery_state()
+    set_auto_recovery_state('enabled')
+
+    try:
+        wait_for_dpu_ready(dpu_name, timeout=120)
+        initial_reset_count = int(get_dpu_state_field(dpu_name, RESET_COUNT) or '0')
+
+        # Admin-down then immediately set transition lock (simulating gnoi
+        # starting a shutdown just as chassisd detects the failure)
+        set_module_admin_status(dpu_name, 'down')
+        time.sleep(5)  # Short wait, then set lock before chassisd can react
+        set_transition_in_progress(dpu_name, "shutdown")
+        time.sleep(POLL_INTERVAL * 3)
+
+        # Chassisd should have been suppressed by the lock
+        reset_count = int(get_dpu_state_field(dpu_name, RESET_COUNT) or '0')
+        results.record(
+            f"concurrent_shutdown_aborts_recovery_{dpu_name}",
+            reset_count == initial_reset_count,
+            f"Reset count changed ({initial_reset_count} → {reset_count}); "
+            f"chassisd did not back off from concurrent shutdown"
+        )
+    finally:
+        clear_transition_in_progress(dpu_name)
+        set_module_admin_status(dpu_name, 'up')
+        if original_state:
+            set_auto_recovery_state(original_state)
+        wait_for_dpu_ready(dpu_name, timeout=DPU_BOOT_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +882,15 @@ def main():
             test_chassisd_restart_reinitializes_state(results, dpu)
             test_dpu_power_cycle_recovery(results, dpu)
             test_chassisd_stop_marks_dpus_not_ready(results, dpu)
+
+        # --- Race condition tests ---
+        logger.info("\n=== RACE CONDITION TESTS ===\n")
+        for dpu in target_dpus:
+            logger.info(f"\n--- Race condition tests for {dpu} ---")
+            test_transition_lock_suppresses_recovery(results, dpu)
+            test_recovery_type_does_not_suppress(results, dpu)
+            test_lock_cleared_after_power_cycle(results, dpu)
+            test_concurrent_shutdown_during_recovery(results, dpu)
     else:
         logger.info("\n(Skipping destructive tests as requested)\n")
 

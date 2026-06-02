@@ -86,6 +86,14 @@ class MockModule(MockDevice):
         """Mock implementation of clear_module_state_transition"""
         return True
 
+    def set_module_state_transition(self, module_name, transition_type):
+        """Mock implementation of set_module_state_transition"""
+        return True
+
+    def get_module_state_transition(self, module_name):
+        """Mock implementation of get_module_state_transition"""
+        return False
+
     def clear_module_gnoi_halt_in_progress(self):
         """Mock implementation of clear_module_gnoi_halt_in_progress"""
         return True
@@ -225,7 +233,7 @@ class MockSmartSwitchChassis:
 
     def is_smartswitch(self):
         return self._is_smartswitch
- 
+
     def get_dataplane_state(self):
         raise NotImplementedError
 
