@@ -4204,9 +4204,16 @@ class TestXcvrdScript(object):
         # Same state, but with the upper-lane mask: returns the transient state
         assert task.get_transient_datapath_state(api, 0xf0) == 'DataPathDeinit'
 
-        # Exception from api.get_datapath_state: returns None
-        api.get_datapath_state = MagicMock(side_effect=Exception('boom'))
+        # Caught exceptions (api missing / not implemented): returns None
+        api.get_datapath_state = MagicMock(side_effect=AttributeError('missing'))
         assert task.get_transient_datapath_state(api, 0xff) is None
+        api.get_datapath_state = MagicMock(side_effect=NotImplementedError('nyi'))
+        assert task.get_transient_datapath_state(api, 0xff) is None
+
+        # Unexpected exceptions propagate (we no longer swallow all errors)
+        api.get_datapath_state = MagicMock(side_effect=RuntimeError('boom'))
+        with pytest.raises(RuntimeError):
+            task.get_transient_datapath_state(api, 0xff)
 
     def _make_dp_settle_task(self):
         """Helper for the should_wait_for_dp_settle suite below: build a
