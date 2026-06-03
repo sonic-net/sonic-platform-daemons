@@ -860,7 +860,7 @@ class CmisManagerTask(threading.Thread):
         transient = ('DataPathDeinit', 'DataPathInit')
         try:
             dp_state = api.get_datapath_state() or {}
-        except Exception as e:
+        except (AttributeError, NotImplementedError) as e:
             self.log_error("Failed to read datapath state: {}".format(e))
             return None
 
@@ -879,17 +879,30 @@ class CmisManagerTask(threading.Thread):
         DpDeinit), wait for those lanes to reach a terminal datapath state
         before reconfiguring.
 
+        The deadline is held in self.port_dict[lport]['dp_settle_deadline']
+        and lives only for the current entry into CMIS_STATE_INSERTED: it is
+        seeded on first observation of a transient state and cleared once the
+        datapath settles, the wait times out, or force_cmis_reinit runs. On
+        xcvrd restart the deadline is intentionally recomputed from scratch
+        — that is the scenario this wait was added for, since xcvrd has no
+        memory of how far the in-flight transition had progressed.
+
         Returns True while the caller should return from the state handler
         (still waiting, or timeout triggered force_cmis_reinit). Returns False
         once the datapath has settled or no wait is needed.
         """
         transient_state = self.get_transient_datapath_state(api, host_lanes_mask)
         if transient_state is None:
+            if self.port_dict[lport].get('dp_settle_deadline') is not None:
+                self.log_notice("{}: datapath settled, clearing dp_settle_deadline".format(lport))
             self.port_dict[lport]['dp_settle_deadline'] = None
             return False
 
         deadline = self.port_dict[lport].get('dp_settle_deadline')
         if deadline is None:
+            # Conservative: use the full transition window. The module may
+            # already be partway through, so we may wait longer than needed
+            # in the worst case, but never shorter.
             if transient_state == 'DataPathDeinit':
                 duration = self.get_cmis_dp_deinit_duration_secs(api)
             else:  # DataPathInit

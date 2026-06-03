@@ -4208,7 +4208,9 @@ class TestXcvrdScript(object):
         api.get_datapath_state = MagicMock(side_effect=Exception('boom'))
         assert task.get_transient_datapath_state(api, 0xff) is None
 
-    def test_CmisManagerTask_should_wait_for_dp_settle(self):
+    def _make_dp_settle_task(self):
+        """Helper for the should_wait_for_dp_settle suite below: build a
+        CmisManagerTask with a single Ethernet0 entry and a dummy api/mask."""
         port_mapping = PortMapping()
         stop_event = threading.Event()
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
@@ -4216,47 +4218,62 @@ class TestXcvrdScript(object):
         api = MagicMock()
         api.get_datapath_state = MagicMock(return_value={'DP1State': 'DataPathActivated'})
         host_lanes_mask = 0x0f
+        return task, api, host_lanes_mask
 
-        # Not transient: clears deadline and returns False
+    def test_CmisManagerTask_should_wait_for_dp_settle_not_transient_clears_deadline(self):
+        """Not transient: clears any prior deadline and returns False."""
+        task, api, host_lanes_mask = self._make_dp_settle_task()
         task.port_dict['Ethernet0']['dp_settle_deadline'] = 12345.0
         task.get_transient_datapath_state = MagicMock(return_value=None)
+
         assert task.should_wait_for_dp_settle('Ethernet0', api, host_lanes_mask) is False
         assert task.port_dict['Ethernet0']['dp_settle_deadline'] is None
         task.get_transient_datapath_state.assert_called_once_with(api, host_lanes_mask)
 
-        # First call with DataPathDeinit: sets deadline using deinit duration, returns True
+    def test_CmisManagerTask_should_wait_for_dp_settle_first_deinit_sets_deadline(self):
+        """First call with DataPathDeinit: seeds deadline using deinit duration."""
+        task, api, host_lanes_mask = self._make_dp_settle_task()
         task.get_transient_datapath_state = MagicMock(return_value='DataPathDeinit')
         task.get_cmis_dp_deinit_duration_secs = MagicMock(return_value=600)
         task.get_cmis_dp_init_duration_secs = MagicMock(return_value=60)
+
         with patch('xcvrd.cmis.cmis_manager_task.time.time', return_value=1000.0):
             assert task.should_wait_for_dp_settle('Ethernet0', api, host_lanes_mask) is True
         assert task.port_dict['Ethernet0']['dp_settle_deadline'] == 1600.0
         task.get_cmis_dp_deinit_duration_secs.assert_called_once_with(api)
 
-        # First call with DataPathInit: sets deadline using init duration, returns True
-        task.port_dict['Ethernet0']['dp_settle_deadline'] = None
+    def test_CmisManagerTask_should_wait_for_dp_settle_first_init_sets_deadline(self):
+        """First call with DataPathInit: seeds deadline using init duration."""
+        task, api, host_lanes_mask = self._make_dp_settle_task()
         task.get_transient_datapath_state = MagicMock(return_value='DataPathInit')
         task.get_cmis_dp_deinit_duration_secs = MagicMock(return_value=600)
         task.get_cmis_dp_init_duration_secs = MagicMock(return_value=60)
+
         with patch('xcvrd.cmis.cmis_manager_task.time.time', return_value=2000.0):
             assert task.should_wait_for_dp_settle('Ethernet0', api, host_lanes_mask) is True
         assert task.port_dict['Ethernet0']['dp_settle_deadline'] == 2060.0
         task.get_cmis_dp_init_duration_secs.assert_called_once_with(api)
 
-        # Subsequent call within deadline: still waiting, returns True (no force_cmis_reinit)
+    def test_CmisManagerTask_should_wait_for_dp_settle_within_deadline_still_waiting(self):
+        """Subsequent call within deadline: still waiting, no force_cmis_reinit."""
+        task, api, host_lanes_mask = self._make_dp_settle_task()
         task.port_dict['Ethernet0']['dp_settle_deadline'] = 5000.0
         task.get_transient_datapath_state = MagicMock(return_value='DataPathInit')
         task.force_cmis_reinit = MagicMock()
+
         with patch('xcvrd.cmis.cmis_manager_task.time.time', return_value=4999.0):
             assert task.should_wait_for_dp_settle('Ethernet0', api, host_lanes_mask) is True
         task.force_cmis_reinit.assert_not_called()
         assert task.port_dict['Ethernet0']['dp_settle_deadline'] == 5000.0
 
-        # Past deadline: timeout, force_cmis_reinit invoked, returns True
+    def test_CmisManagerTask_should_wait_for_dp_settle_past_deadline_forces_reinit(self):
+        """Past deadline: timeout, force_cmis_reinit invoked with retries+1."""
+        task, api, host_lanes_mask = self._make_dp_settle_task()
         task.port_dict['Ethernet0']['dp_settle_deadline'] = 5000.0
         task.port_dict['Ethernet0']['cmis_retries'] = 2
         task.get_transient_datapath_state = MagicMock(return_value='DataPathInit')
         task.force_cmis_reinit = MagicMock()
+
         with patch('xcvrd.cmis.cmis_manager_task.time.time', return_value=6000.0):
             assert task.should_wait_for_dp_settle('Ethernet0', api, host_lanes_mask) is True
         task.force_cmis_reinit.assert_called_once_with('Ethernet0', 3)
@@ -4329,6 +4346,9 @@ class TestXcvrdScript(object):
             'ConfigStatusLane7': 'ConfigSuccess',
             'ConfigStatusLane8': 'ConfigSuccess'
         })
+        # First entry is consumed by the new dp-settle check at INSERTED-state
+        # entry (should_wait_for_dp_settle); remaining entries feed the rest
+        # of the CMIS state machine.
         mock_xcvr_api.get_datapath_state = MagicMock(side_effect=[
             {
                 'DP1State': 'DataPathDeactivated',
@@ -4619,6 +4639,9 @@ class TestXcvrdScript(object):
             'ConfigStatusLane7': 'ConfigSuccess',
             'ConfigStatusLane8': 'ConfigSuccess'
         })
+        # First entry is consumed by the new dp-settle check at INSERTED-state
+        # entry (should_wait_for_dp_settle); remaining entries feed the rest
+        # of the CMIS state machine.
         mock_xcvr_api.get_datapath_state = MagicMock(side_effect=[
             {
                 'DP1State': 'DataPathDeactivated',
@@ -4769,6 +4792,9 @@ class TestXcvrdScript(object):
             'ConfigStatusLane7': 'ConfigSuccess',
             'ConfigStatusLane8': 'ConfigSuccess'
         })
+        # First entry is consumed by the new dp-settle check at INSERTED-state
+        # entry (should_wait_for_dp_settle); remaining entries feed the rest
+        # of the CMIS state machine.
         mock_xcvr_api.get_datapath_state = MagicMock(side_effect=[
             {
                 'DP1State': 'DataPathDeactivated',
