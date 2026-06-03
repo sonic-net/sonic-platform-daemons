@@ -128,8 +128,8 @@ RECOVERY_UNRECOVERABLE = 'unrecoverable'
 
 # DPU auto-recovery field in CONFIG_DB DEVICE_METADATA|localhost
 DPU_AUTO_RECOVERY_FIELD = 'dpu_auto_recovery'
-DPU_AUTO_RECOVERY_ENABLED = 'enabled'
-DPU_AUTO_RECOVERY_DISABLED = 'disabled'
+DPU_AUTO_RECOVERY_ENABLED = 'enable'
+DPU_AUTO_RECOVERY_DISABLED = 'disable'
 
 # Platform.json field names for recovery thresholds
 PLATFORM_CFG_DPU_REBOOT_TIMEOUT = 'dpu_reboot_timeout'
