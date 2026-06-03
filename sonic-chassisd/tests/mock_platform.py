@@ -98,6 +98,14 @@ class MockModule(MockDevice):
         """Mock implementation of clear_module_gnoi_halt_in_progress"""
         return True
 
+    def pci_detach(self):
+        """Mock implementation of pci_detach"""
+        return True
+
+    def pci_reattach(self):
+        """Mock implementation of pci_reattach"""
+        return True
+
     def is_midplane_reachable(self):
         return self.midplane_access
 

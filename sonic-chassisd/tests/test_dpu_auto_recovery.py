@@ -228,7 +228,7 @@ class TestAutoRecoveryFeatureFlag:
         updater = create_updater(chassis)
 
         updater.device_metadata_table = MagicMock()
-        updater.device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        updater.device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
         assert updater._is_auto_recovery_enabled() is True
 
     def test_disabled_returns_false(self):
@@ -236,7 +236,7 @@ class TestAutoRecoveryFeatureFlag:
         updater = create_updater(chassis)
 
         updater.device_metadata_table = MagicMock()
-        updater.device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'disabled'),)]
+        updater.device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'disable'),)]
         assert updater._is_auto_recovery_enabled() is False
 
     def test_missing_field_defaults_to_disabled(self):
@@ -937,7 +937,7 @@ class TestResetLimitUnrecoverable:
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis, platform_json={"dpu_reset_limit": 3})
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-        updater.dpu_recovery_state["DPU0"]['reset_count'] = 2  # one below limit
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 3  # at limit
         import time as time_module
         updater.dpu_recovery_state["DPU0"]['self_recovery_start_time'] = time_module.time() - 400
 
@@ -951,7 +951,6 @@ class TestResetLimitUnrecoverable:
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_UNRECOVERABLE
         assert get_dpu_state_field(updater, "DPU0", RECOVERY_STATUS) == RECOVERY_UNRECOVERABLE
-        assert get_dpu_state_field(updater, "DPU0", RESET_COUNT) == '3'
 
     def test_unrecoverable_is_terminal(self):
         """Once unrecoverable, state doesn't change even if DPU comes back."""
@@ -1050,7 +1049,7 @@ class TestResetLimitUnrecoverable:
                  patch.object(updater, 'get_module_admin_status', return_value='up'):
                 updater.update_dpu_recovery_state()
 
-        # 5th failure: Ready → WaitForSelfRecovery → timeout → Unrecoverable
+        # 5th failure: Ready → WaitForSelfRecovery → timeout → PowerCycle (count=5)
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_READY
         set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
         with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
@@ -1058,6 +1057,16 @@ class TestResetLimitUnrecoverable:
             updater.update_dpu_recovery_state()
 
         updater.dpu_recovery_state["DPU0"]['self_recovery_start_time'] = time.time() - 400
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
+            updater.update_dpu_recovery_state()
+
+        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 5
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
+
+        # 6th attempt: PowerCycle timeout → Unrecoverable (count=5 >= limit=5)
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 700
         with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
              patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
@@ -1217,7 +1226,7 @@ class TestPowerCycleDpu:
     def test_power_cycle_increments_reset_count(self):
         """Each _enter_power_cycle_or_unrecoverable call increments reset_count."""
         chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
+        updater = create_updater(chassis, platform_json={"dpu_reset_limit": 5})
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
         updater.dpu_recovery_state["DPU0"]['reset_count'] = 2
 
@@ -1231,7 +1240,7 @@ class TestPowerCycleDpu:
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis, platform_json={"dpu_reset_limit": 3})
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-        updater.dpu_recovery_state["DPU0"]['reset_count'] = 2  # limit is 3
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 3  # at limit
 
         updater._enter_power_cycle_or_unrecoverable("DPU0", 0)
 
@@ -1367,7 +1376,7 @@ class TestMultipleDpus:
 
         # DPU0: at limit, in WaitForSelfRecovery with expired timeout → will become unrecoverable
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-        updater.dpu_recovery_state["DPU0"]['reset_count'] = 1
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 2
         updater.dpu_recovery_state["DPU0"]['self_recovery_start_time'] = time.time() - 400
         set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
         chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
@@ -1777,11 +1786,11 @@ class TestPowerCycleFailure:
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
 
     def test_power_cycle_exception_at_limit_still_marks_unrecoverable(self):
-        """Exception during power-cycle at reset_limit still marks unrecoverable."""
+        """At reset_limit, DPU is marked unrecoverable without attempting power-cycle."""
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis, platform_json={"dpu_reset_limit": 2})
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-        updater.dpu_recovery_state["DPU0"]['reset_count'] = 1
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 2
 
         module = chassis.module_list[0]
         module.set_admin_state = MagicMock(side_effect=RuntimeError("HW error"))
@@ -2330,7 +2339,7 @@ class TestMultipleDpuAdvanced:
     def test_reset_count_independent_per_dpu(self):
         """Each DPU's reset_count increments independently."""
         chassis = create_chassis_with_dpus(2)
-        updater = create_updater(chassis)
+        updater = create_updater(chassis, platform_json={"dpu_reset_limit": 10})
 
         # DPU0: WaitForSelfRecovery with expired timeout, reset_count=3
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
@@ -2434,8 +2443,8 @@ class TestExceptionPaths:
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
 
-        # Make get_module_state_transition raise — try_get returns default=False
-        chassis.module_list[0].get_module_state_transition = MagicMock(side_effect=Exception("DB error"))
+        # Make get_module_state_transition raise NotImplementedError — try_get returns default=False
+        chassis.module_list[0].get_module_state_transition = MagicMock(side_effect=NotImplementedError("not supported"))
         assert updater._is_planned_transition_in_progress("DPU0", 0) is False
 
     def test_is_planned_transition_true(self):
@@ -2511,18 +2520,15 @@ class TestExceptionPaths:
              patch("chassisd.swsscommon.Table", return_value=mock_table):
             assert updater._is_auto_recovery_enabled() is False
 
-    def test_auto_recovery_missing_state_field_defaults_enabled(self):
-        """_is_auto_recovery_enabled with no 'state' field defaults to enabled."""
+    def test_auto_recovery_missing_state_field_defaults_disabled(self):
+        """_is_auto_recovery_enabled with no 'dpu_auto_recovery' field defaults to disabled."""
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
 
-        mock_table = MagicMock()
-        # Feature exists but has no 'state' field
-        mock_table.get.return_value = [True, (('description', 'DPU Auto Recovery'),)]
-
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_table):
-            assert updater._is_auto_recovery_enabled() is True
+        updater.device_metadata_table = MagicMock()
+        # Feature exists but has no 'dpu_auto_recovery' field
+        updater.device_metadata_table.get.return_value = [True, (('description', 'DPU Auto Recovery'),)]
+        assert updater._is_auto_recovery_enabled() is False
 
 
 class TestGetModuleAdminStatus:
@@ -2572,14 +2578,12 @@ class TestUpdateRecoveryStateIntegration:
         set_dpu_states(updater, "DPU0", mp='up', cp='up', dp='up')
         updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
 
-        # Mock only the DB access for _is_auto_recovery_enabled
+        # Set device_metadata_table directly for _is_auto_recovery_enabled
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
-        # Mock get_module_admin_status since it creates a new DB connection
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table), \
-             patch.object(updater, 'get_module_admin_status', return_value='up'):
+        with patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_READY
@@ -2595,11 +2599,10 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU0", "transition_in_progress", "False")
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table), \
-             patch.object(updater, 'get_module_admin_status', return_value='up'):
+        with patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_WAIT_FOR_SELF_RECOVERY
@@ -2614,11 +2617,10 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_OFFLINE))
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table), \
-             patch.object(updater, 'get_module_admin_status', return_value='down'):
+        with patch.object(updater, 'get_module_admin_status', return_value='down'):
             updater.update_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_ADMIN_DOWN
@@ -2635,14 +2637,13 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU0", "transition_in_progress", "False")
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
         module = chassis.module_list[0]
         module.set_admin_state = MagicMock()
 
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table), \
-             patch.object(updater, 'get_module_admin_status', return_value='up'):
+        with patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
 
         # Should have power-cycled (set_admin_state called)
@@ -2664,14 +2665,13 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU0", "transition_in_progress", "False")
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
         module = chassis.module_list[0]
         module.set_admin_state = MagicMock()
 
-        with patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table), \
-             patch.object(updater, 'get_module_admin_status', return_value='up'):
+        with patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
 
         # Should have power-cycled
@@ -2687,7 +2687,8 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU1", "oper_status", str(ModuleBase.MODULE_STATUS_OFFLINE))
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'enable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
         module = chassis.module_list[0]
         module.set_admin_state = MagicMock()
@@ -2695,9 +2696,7 @@ class TestUpdateRecoveryStateIntegration:
         module1.set_admin_state = MagicMock()
 
         with patch("os.path.isfile", return_value=True), \
-             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")), \
-             patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table):
+             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")):
             updater.init_dpu_recovery_state()
 
         # DPU0 should be power-cycled (online + NPU crash + auto-recovery enabled)
@@ -2713,12 +2712,11 @@ class TestUpdateRecoveryStateIntegration:
         updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
 
         mock_device_metadata_table = MagicMock()
-        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'disabled'),)]
+        mock_device_metadata_table.get.return_value = [True, (('dpu_auto_recovery', 'disable'),)]
+        updater.device_metadata_table = mock_device_metadata_table
 
         with patch("os.path.isfile", return_value=True), \
-             patch("builtins.open", mock_open(read_data="Unknown")), \
-             patch("chassisd.daemon_base.db_connect") as mock_db, \
-             patch("chassisd.swsscommon.Table", return_value=mock_device_metadata_table):
+             patch("builtins.open", mock_open(read_data="Unknown")):
             updater.init_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_MANUAL_INTERVENTION
