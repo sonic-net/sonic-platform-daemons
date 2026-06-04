@@ -4418,7 +4418,7 @@ class TestXcvrdScript(object):
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, False, False, True])
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
         mock_detect_error.return_value = True
@@ -4446,7 +4446,7 @@ class TestXcvrdScript(object):
         assert mock_post_pm_info.call_count == 0
         mock_detect_error.return_value = False
         mock_select.return_value = (swsscommon.Select.TIMEOUT, None)
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, False, False, True])
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(side_effect=('disabled', 'enabled'))
@@ -4476,7 +4476,7 @@ class TestXcvrdScript(object):
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
@@ -4515,7 +4515,7 @@ class TestXcvrdScript(object):
         # Test the case where the VDM stats are successfully frozen but the VDM stats are not successfully unfrozen
         task.vdm_utils._freeze_vdm_stats_and_confirm.return_value = True
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = False
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
@@ -4534,7 +4534,7 @@ class TestXcvrdScript(object):
         # Step (c) COR flags still run (no continue), and PM already ran in step (a).
         task.vdm_utils._unfreeze_vdm_stats_and_confirm.return_value = True
         task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.side_effect = TypeError
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.task_worker()
         assert task.vdm_utils._freeze_vdm_stats_and_confirm.call_count == 1
         assert task.vdm_utils._unfreeze_vdm_stats_and_confirm.call_count == 1
@@ -4590,8 +4590,9 @@ class TestXcvrdScript(object):
         # Set up task_stopping_event to be set after check_port_update is called once
         # First False: outer loop check
         # Second False: inner loop check for stopping_event_set
-        # Third True: check after check_port_update
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        # Third True: inner loop check after check_port_update (breaks inner loop)
+        # Fourth True: post-inner-loop outer check (breaks outer loop)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True, True])
 
         task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
@@ -4629,7 +4630,7 @@ class TestXcvrdScript(object):
         # Expected: Skip freeze, only basic + flags, no PM
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
         task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
@@ -4656,7 +4657,7 @@ class TestXcvrdScript(object):
         mock_post_pm_info.reset_mock()
         task2 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task2.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task2.port_mapping.logical_port_list = ['Ethernet0']
         task2.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task2.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
@@ -4683,7 +4684,7 @@ class TestXcvrdScript(object):
         mock_post_pm_info.reset_mock()
         task3 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task3.port_mapping.logical_port_list = ['Ethernet0']
         task3.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task3.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
@@ -4709,7 +4710,7 @@ class TestXcvrdScript(object):
         # Expected: Freeze happens, both basic and statistic values are captured, and PM info is captured
         task4 = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task4.port_mapping.logical_port_list = ['Ethernet0']
         task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
         task4.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
