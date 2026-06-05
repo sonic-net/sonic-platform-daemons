@@ -156,6 +156,7 @@ class TestInitDpuRecoveryState:
         updater.module_table.hset("DPU1", "oper_status", str(ModuleBase.MODULE_STATUS_OFFLINE))
 
         with patch.object(updater, '_npu_crash_on_last_boot', return_value=True), \
+               patch.object(updater, 'get_module_admin_status', side_effect=lambda name: 'up' if name == 'DPU0' else 'down'), \
              patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
              patch.object(updater, '_enter_power_cycle_or_unrecoverable') as mock_pc:
             updater.init_dpu_recovery_state()
@@ -2696,7 +2697,8 @@ class TestUpdateRecoveryStateIntegration:
         module1.set_admin_state = MagicMock()
 
         with patch("os.path.isfile", return_value=True), \
-             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")):
+               patch("builtins.open", mock_open(read_data="kernel panic - not syncing")), \
+               patch.object(updater, 'get_module_admin_status', side_effect=lambda name: 'up' if name == 'DPU0' else 'down'):
             updater.init_dpu_recovery_state()
 
         # DPU0 should be power-cycled (online + NPU crash + auto-recovery enabled)

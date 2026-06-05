@@ -73,10 +73,10 @@ class MockModule(MockDevice):
             self.midplane_ip = '192.168.1.{}'.format(self.get_slot())
 
     def module_pre_shutdown(self):
-        pass
+        return self.pci_detach()
 
     def module_post_startup(self):
-        pass
+        return self.pci_reattach()
 
     def set_admin_state_gracefully(self, up):
         """Mock implementation of set_admin_state_gracefully"""

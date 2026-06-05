@@ -134,6 +134,12 @@ def get_module_oper_status(dpu_name):
     return result if result else None
 
 
+def set_module_oper_status(dpu_name, status):
+    """Set oper_status in STATE_DB CHASSIS_MODULE_TABLE (test-only fault injection)."""
+    sonic_db_cli("STATE_DB", f"HSET 'CHASSIS_MODULE_TABLE|{dpu_name}' 'oper_status' '{status}'")
+    logger.info(f"Set {dpu_name} oper_status to '{status}'")
+
+
 def get_auto_recovery_state():
     """Get dpu_auto_recovery from CONFIG_DB DEVICE_METADATA|localhost."""
     result = run_cmd(
@@ -361,11 +367,11 @@ def test_reset_count_field(results, dpu_name):
 
 
 def test_auto_recovery_feature_flag(results):
-    """Verify dpu_auto_recovery exists in CONFIG_DB DEVICE_METADATA (or defaults to enabled)."""
+    """Verify dpu_auto_recovery exists in CONFIG_DB DEVICE_METADATA (or defaults to disable)."""
     logger.info("Test: dpu_auto_recovery in DEVICE_METADATA")
     state = get_auto_recovery_state()
-    valid_states = ('enabled', 'disabled')
-    # Field may not be explicitly configured (defaults to enabled in chassisd)
+    valid_states = ('enable', 'disable')
+    # Field may not be explicitly configured (defaults to disable in chassisd)
     results.record(
         "auto_recovery_feature_exists",
         state is None or state in valid_states,
@@ -430,7 +436,7 @@ def test_disable_auto_recovery_no_power_cycle(results, dpu_name):
 
     try:
         # Disable auto-recovery
-        set_auto_recovery_state('disabled')
+        set_auto_recovery_state('disable')
         time.sleep(POLL_INTERVAL)
 
         # Record current reset count
@@ -494,15 +500,15 @@ def test_enable_auto_recovery_feature(results, dpu_name):
     original_state = get_auto_recovery_state()
 
     try:
-        set_auto_recovery_state('enabled')
+        set_auto_recovery_state('enable')
         time.sleep(POLL_INTERVAL)
 
         # Verify the field is reflected (chassisd should read it next poll)
         state = get_auto_recovery_state()
         results.record(
             f"auto_recovery_enabled_{dpu_name}",
-            state == 'enabled',
-            f"Expected state=enabled, got '{state}'"
+            state == 'enable',
+            f"Expected state=enable, got '{state}'"
         )
 
         # If DPU is healthy, it should be ready
@@ -528,7 +534,7 @@ def test_dpu_power_cycle_recovery(results, dpu_name):
 
     # Ensure auto-recovery is enabled
     original_state = get_auto_recovery_state()
-    set_auto_recovery_state('enabled')
+    set_auto_recovery_state('enable')
 
     try:
         # Record initial reset count
@@ -654,7 +660,8 @@ def test_transition_lock_suppresses_recovery(results, dpu_name):
     logger.info(f"Test: transition lock suppresses recovery on {dpu_name}")
 
     original_state = get_auto_recovery_state()
-    set_auto_recovery_state('enabled')
+    set_auto_recovery_state('enable')
+    original_oper_status = get_module_oper_status(dpu_name)
 
     try:
         # Wait for DPU to be ready first
@@ -665,8 +672,8 @@ def test_transition_lock_suppresses_recovery(results, dpu_name):
         set_transition_in_progress(dpu_name, "shutdown")
         time.sleep(POLL_INTERVAL * 2)
 
-        # Now admin-down the DPU — this would normally trigger recovery
-        set_module_admin_status(dpu_name, 'down')
+        # Inject hardware-offline while admin stays up.
+        set_module_oper_status(dpu_name, 'Offline')
         time.sleep(POLL_INTERVAL * 3)
 
         # Recovery should be suppressed — reset_count should not increase
@@ -679,6 +686,8 @@ def test_transition_lock_suppresses_recovery(results, dpu_name):
         )
     finally:
         clear_transition_in_progress(dpu_name)
+        if original_oper_status is not None:
+            set_module_oper_status(dpu_name, original_oper_status)
         set_module_admin_status(dpu_name, 'up')
         if original_state:
             set_auto_recovery_state(original_state)
@@ -720,7 +729,7 @@ def test_lock_cleared_after_power_cycle(results, dpu_name):
     logger.info(f"Test: lock cleared after power-cycle on {dpu_name}")
 
     original_state = get_auto_recovery_state()
-    set_auto_recovery_state('enabled')
+    set_auto_recovery_state('enable')
 
     try:
         wait_for_dpu_ready(dpu_name, timeout=120)
@@ -758,15 +767,15 @@ def test_concurrent_shutdown_during_recovery(results, dpu_name):
     logger.info(f"Test: concurrent shutdown during recovery on {dpu_name}")
 
     original_state = get_auto_recovery_state()
-    set_auto_recovery_state('enabled')
+    set_auto_recovery_state('enable')
+    original_oper_status = get_module_oper_status(dpu_name)
 
     try:
         wait_for_dpu_ready(dpu_name, timeout=120)
         initial_reset_count = int(get_dpu_state_field(dpu_name, RESET_COUNT) or '0')
 
-        # Admin-down then immediately set transition lock (simulating gnoi
-        # starting a shutdown just as chassisd detects the failure)
-        set_module_admin_status(dpu_name, 'down')
+        # Inject a hardware-offline failure while keeping admin up.
+        set_module_oper_status(dpu_name, 'Offline')
         time.sleep(5)  # Short wait, then set lock before chassisd can react
         set_transition_in_progress(dpu_name, "shutdown")
         time.sleep(POLL_INTERVAL * 3)
@@ -781,6 +790,8 @@ def test_concurrent_shutdown_during_recovery(results, dpu_name):
         )
     finally:
         clear_transition_in_progress(dpu_name)
+        if original_oper_status is not None:
+            set_module_oper_status(dpu_name, original_oper_status)
         set_module_admin_status(dpu_name, 'up')
         if original_state:
             set_auto_recovery_state(original_state)

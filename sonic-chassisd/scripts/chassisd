@@ -1325,10 +1325,17 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             return
 
         try:
-            try_get(module.pci_detach, default=False)
+            # Keep the same graceful sequence as module_base:
+            # pre-shutdown -> admin down -> admin up -> post-startup.
+            # Treat NotImplemented pre/post hooks as no-op success.
+            if not try_get(module.module_pre_shutdown, default=True):
+                self.log_warning("{}: module_pre_shutdown() failed".format(module_name))
+
             try_get(module.set_admin_state, MODULE_ADMIN_DOWN, default=False)
             try_get(module.set_admin_state, MODULE_ADMIN_UP, default=False)
-            try_get(module.pci_reattach, default=False)
+
+            if not try_get(module.module_post_startup, default=True):
+                self.log_warning("{}: module_post_startup() failed".format(module_name))
         except Exception as e:
             self.log_error("{}: Power-cycle failed: {}".format(module_name, e))
         finally:
@@ -1406,9 +1413,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
             # NPU kernel crash recovery: unconditionally power-cycle
             # admin-up DPUs to guarantee a known-good starting state.
-            oper_status = self.get_module_current_status(name)
-            if oper_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
-                # Admin-down DPU; leave powered off
+            admin_status = self.get_module_admin_status(name)
+            if admin_status == 'down':
+                # Admin-down DPU; leave powered off.
                 continue
             if not self._is_auto_recovery_enabled():
                 self.dpu_recovery_state[name]['state'] = DPU_STATE_MANUAL_INTERVENTION
