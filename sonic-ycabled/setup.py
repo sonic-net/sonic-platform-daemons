@@ -67,6 +67,8 @@ setup(
         # NOTE: This package also requires swsscommon, but it is not currently installed as a wheel
         'enum34; python_version < "3.4"',
         'sonic-py-common',
+        'grpcio',
+        'protobuf>=5.26.0',
     ],
     setup_requires=[
         'wheel',
