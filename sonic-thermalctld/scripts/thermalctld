@@ -666,8 +666,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             if sensor_is_ok:
                 if sensor_is_leak:
-                    new_leak = sensor_name not in self.leaking_sensors
-                    if new_leak:
+                    if sensor_name not in self.leaking_sensors:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
 
@@ -683,14 +682,27 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                                 sensor_leak_severity = LeakSeverity.CRITICAL
                                 escalated_to_critical = True
 
-                    if new_leak and sensor_leak_severity == LeakSeverity.CRITICAL:
-                        self.event_logger.log_error(
-                            'CRITICAL leak reported by sensor {}'.format(sensor_name))
-                        self.critical_sensors.add(sensor_name)
-                    elif escalated_to_critical:
-                        self.event_logger.log_error(
-                            'Leak on sensor {} escalated from MINOR to CRITICAL after {}s'.format(
-                                sensor_name, max_minor_secs))
+                    # If the platform downgrades a CRITICAL sensor (and our time-based
+                    # escalation didn't immediately re-bump it), prune it from
+                    # critical_sensors so a subsequent re-CRITICAL is logged once.
+                    if (sensor_leak_severity != LeakSeverity.CRITICAL
+                            and sensor_name in self.critical_sensors):
+                        self.critical_sensors.discard(sensor_name)
+                        new_severity = sensor_leak_severity.value if sensor_leak_severity is not None else 'None'
+                        self.event_logger.log_notice(
+                            'Liquid cooling leakage sensor {} downgraded from CRITICAL to {}'.format(
+                                sensor_name, new_severity))
+
+                    # Log CRITICAL once per leak episode, regardless of how the sensor reached
+                    # CRITICAL severity: reported directly by the platform, or escalated by us
+                    # from MINOR after the max-minor duration was exceeded.
+                    if sensor_leak_severity == LeakSeverity.CRITICAL and sensor_name not in self.critical_sensors:
+                        if escalated_to_critical:
+                            msg = 'Leak on sensor {} escalated from MINOR to CRITICAL after {}s'.format(
+                                sensor_name, max_minor_secs)
+                        else:
+                            msg = 'CRITICAL leak reported by sensor {}'.format(sensor_name)
+                        self.event_logger.log_error(msg)
                         self.critical_sensors.add(sensor_name)
 
                     if status is not None:
@@ -716,10 +728,13 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             fvs_tuple = (
                 ('name', sensor_name),
                 ('leaking', leaking),
+                # Add leak_status field for backward compatibility in system-health hardware_checker
+                # and legacy leakageshow CLI which still read 'leak_status'.
+                ('leak_status', leaking),
                 ('leak_sensor_status', 'Good' if sensor_is_ok else 'Fault'),
                 ('type', str(sensor_type)),
                 ('location', str(sensor_location)),
-                ('severity', str(sensor_leak_severity)),
+                ('leak_severity', str(sensor_leak_severity)),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
                 self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(list(fvs_tuple)))
@@ -729,6 +744,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
             self.event_logger.log_error(
                 'CRITICAL system leak detected (sensors: {})'.format(leaking_names))
+        elif self.last_leak_status == LeakSeverity.CRITICAL and status != LeakSeverity.CRITICAL:
+            self.event_logger.log_notice(
+                'CRITICAL system leak cleared (current status: {})'.format(
+                    status.value if status is not None else 'None'))
 
         # Only write SYSTEM_LEAK_STATUS on actual transitions to avoid
         # subscriber spam from per-cycle timestamp updates.
