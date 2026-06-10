@@ -317,11 +317,11 @@ class TestSwitchHostController:
         mock_sleep.assert_not_called()
 
     @patch('time.sleep')
-    @patch('time.time')
-    def test_verify_oper_status_timeout(self, mock_time, mock_sleep, chassis, controller):
+    @patch('time.monotonic')
+    def test_verify_oper_status_timeout(self, mock_monotonic, mock_sleep, chassis, controller):
         # Simulate: deadline set at t=0+30=30, first loop check t=0 (<30), sleep,
         # second loop check t=31 (>=30) → exit without match
-        mock_time.side_effect = [0, 0, 31, 31]
+        mock_monotonic.side_effect = [0, 0, 31, 31]
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = controller._verify_oper_status(bmcctld.SWITCH_HOST_ONLINE, 30, "test")
         assert result is False
