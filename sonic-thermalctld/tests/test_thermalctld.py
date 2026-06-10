@@ -651,6 +651,99 @@ class TestLiquidCoolingUpdater(object):
             assert 'escalated from MINOR to CRITICAL' not in call[0][0]
 
     @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_platform_severity_downgrade(self, mock_try_get):
+        """Platform downgrades CRITICAL -> MINOR while still leaking.
+        Verifies the sensor is pruned from critical_sensors and a one-shot
+        'downgraded from CRITICAL to MINOR' notice is emitted."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        # Long max-minor duration so time-based escalation can't fire on the
+        # downgrade cycle (which would re-bump MINOR back to CRITICAL).
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: CRITICAL detected
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+
+        # Cycle 2: platform downgrades to MINOR (sensor still leaking)
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        liquid_cooling_updater.event_logger.log_notice.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 downgraded from CRITICAL to MINOR'
+        )
+
+        # Cycle 3: still MINOR — must NOT re-log the downgrade
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        for call in liquid_cooling_updater.event_logger.log_notice.call_args_list:
+            assert 'downgraded from CRITICAL' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_critical_minor_critical_flap(self, mock_try_get):
+        """CRITICAL -> MINOR -> CRITICAL flap. Verifies the post-downgrade
+        re-CRITICAL emits the CRITICAL log again exactly once."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: CRITICAL
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+
+        # Cycle 2: downgrade to MINOR
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+
+        # Cycle 3: re-bump to CRITICAL — must log CRITICAL again
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'CRITICAL leak reported by sensor leakage1'
+        )
+
+        # Cycle 4: still CRITICAL — must NOT re-log
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
+            assert 'CRITICAL leak reported' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_leak_recovery(self, mock_try_get):
         """Test _refresh_leak_status when a sensor recovers from leak"""
         mock_chassis = MockChassis()

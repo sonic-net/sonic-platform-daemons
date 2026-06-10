@@ -350,8 +350,8 @@ class SwitchHostController(EventLogger):
         Poll get_oper_status() until it matches expected_status or timeout_secs elapses.
         Returns True when confirmed, False on timeout.
         """
-        deadline = time.time() + timeout_secs
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout_secs
+        while time.monotonic() < deadline:
             if self.get_oper_status() == expected_status:
                 self.log_info("{}: oper_status confirmed {}".format(context, expected_status))
                 return True
@@ -968,17 +968,20 @@ class BmcEventHandler(EventLogger):
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
         severity = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
-        if self._last_rack_mgr_alert_severity.get(key) == severity:
-            return
-        self._last_rack_mgr_alert_severity[key] = severity
-
         policy = self.policy_reader.get_leak_control_policy()
 
         if policy.get("rack_mgr_leak_policy") == "disabled":
-            self._event_log.log_notice(
-                "RACK_MGR_ALERT handler done: key={} severity={} result=SKIPPED (policy=disabled)".format(
-                    key, severity))
+            # Log only on transition; do NOT update dedup state so that a later
+            # policy re-enable + same severity re-publish still dispatches the action.
+            if self._last_rack_mgr_alert_severity.get(key) != severity:
+                self._event_log.log_notice(
+                    "RACK_MGR_ALERT handler done: key={} severity={} result=SKIPPED (policy=disabled)".format(
+                        key, severity))
             return
+
+        if self._last_rack_mgr_alert_severity.get(key) == severity:
+            return
+        self._last_rack_mgr_alert_severity[key] = severity
 
         if severity == ALERT_SEVERITY_CRITICAL:
             action = policy.get("rack_mgr_critical_alert_action", DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION)

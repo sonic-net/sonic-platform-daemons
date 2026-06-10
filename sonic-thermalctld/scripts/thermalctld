@@ -622,12 +622,15 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             ])
             self.profile_table.set(profile.get_type(), fvs)
 
-        # Seed SYSTEM_LEAK_STATUS|system once at startup so consumers always
-        # find a row. Subsequent writes happen only on transition.
-        self.system_table.set('system', swsscommon.FieldValuePairs([
-            ('device_leak_status', 'None'),
-            ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
-        ]))
+        # Seed SYSTEM_LEAK_STATUS|system only if absent, so a daemon restart
+        # during an active leak doesn't clobber the prior status with 'None'
+        # until the next refresh cycle.
+        existing = self.system_table.get('system')
+        if not (existing and existing[0]):
+            self.system_table.set('system', swsscommon.FieldValuePairs([
+                ('device_leak_status', 'None'),
+                ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
+            ]))
 
     def __del__(self):
         try:
@@ -933,13 +936,10 @@ class TemperatureUpdater(logger.Logger):
                 except Exception as e:
                     self.chassis_table = None
 
-        # When running on the Switch-Host of a BMC-equipped chassis, mirror
-        # every TEMPERATURE_INFO entry (temperature value + all thresholds)
-        # into the BMC's STATE_DB over the host<->bmc link.  BMC consumes
-        # this to syslog critical thermal deviations and (eventually) take
-        # proactive action.  See SONiC pmon-bmc-design section 2.4.1.
         self.bmc_temperature_table = None
         self._bmc_addr = None
+        # Suppress repeated reconnect warnings when the host<->BMC link is down.
+        self._bmc_link_failed = False
         if device_info.is_switch_host():
             self._init_bmc_temperature_table()
 
@@ -953,13 +953,16 @@ class TemperatureUpdater(logger.Logger):
             remote_state_db = daemon_base.db_connect_remote(STATE_DB_ID, bmc_addr)
             self.bmc_temperature_table = swsscommon.Table(
                 remote_state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
+            self._bmc_link_failed = False
             self.log_info(
                 'Mirroring TEMPERATURE_INFO to BMC STATE_DB at {} (table {})'.format(
                     bmc_addr, TemperatureUpdater.TEMPER_INFO_TABLE_NAME))
         except Exception as e:
             self.bmc_temperature_table = None
-            self.log_warning(
-                'Failed to open remote BMC TEMPERATURE_INFO table: {}'.format(repr(e)))
+            if not self._bmc_link_failed:
+                self.log_warning(
+                    'Failed to open remote BMC TEMPERATURE_INFO table: {}'.format(repr(e)))
+                self._bmc_link_failed = True
 
     def _bmc_table_set(self, name, fvs):
         """Tee a TEMPERATURE_INFO row to the BMC.  Reconnect once on failure."""

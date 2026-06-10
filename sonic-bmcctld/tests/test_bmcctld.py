@@ -668,6 +668,27 @@ class TestBmcEventHandlerChassisModule:
         )
         assert event_handler.action_queue.empty()
 
+    def test_empty_admin_status_does_not_poison_dedup(self, event_handler, controller):
+        """Regression: an empty admin_status must NOT update the dedup map,
+        so a subsequent real admin_status (e.g. 'up') is not silently dropped."""
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: ""},
+        )
+        assert event_handler.action_queue.empty()
+        assert bmcctld.SWITCH_HOST_MODULE_KEY not in event_handler._last_chassis_module_admin_status
+
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_POWER_ON
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - System leak events
@@ -812,6 +833,34 @@ class TestBmcEventHandlerRackMgrAlerts:
             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
         )
         assert event_handler.action_queue.empty()
+
+    def test_rack_mgr_leak_policy_disabled_does_not_poison_dedup(self, event_handler):
+        """Regression: a CRITICAL arriving while policy=disabled must NOT be
+        recorded in the dedup map, so the same severity dispatches normally
+        once the policy is re-enabled."""
+        # Phase 1: policy=disabled, CRITICAL arrives -> no action, no dedup mutation
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_leak_policy="disabled")
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_pressure",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
+        )
+        assert event_handler.action_queue.empty()
+        assert "Inlet_liquid_pressure" not in event_handler._last_rack_mgr_alert_severity
+
+        # Phase 2: policy re-enabled, SAME CRITICAL re-arrives -> action MUST dispatch
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_critical_alert_action=bmcctld.ACTION_POWER_OFF)
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_pressure",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_POWER_OFF
+        assert event_handler._last_rack_mgr_alert_severity["Inlet_liquid_pressure"] == \
+            bmcctld.ALERT_SEVERITY_CRITICAL
 
     def test_rack_level_leak_uses_leak_field(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
