@@ -227,7 +227,8 @@ DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
 DEFAULT_POWER_ON_DELAY_SECS = 0     # 0 seconds - power on Switch-Host immediately by default
-DEFAULT_SHUTDOWN_DELAY_SECS = 120   # 2 minutes - wait for graceful shutdown before force
+DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
+                                    # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
 
 # Switch-Host module name key in CHASSIS_MODULE table
 SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
@@ -559,7 +560,7 @@ class PolicyReader(EventLogger):
         return DEFAULT_POWER_ON_DELAY_SECS
 
     def get_graceful_shutdown_timeout(self):
-        """Return graceful_shutdown_timeout in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 120)."""
+        """Return graceful_shutdown_timeout in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
         raw = self._get_chassis_module_entry().get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT)
         if raw is not None:
             try:

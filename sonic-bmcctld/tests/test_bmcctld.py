@@ -368,7 +368,7 @@ class TestPolicyReader:
             assert policy_reader.get_power_on_delay() == 60
 
     def test_get_graceful_shutdown_timeout_default(self, policy_reader):
-        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 120."""
+        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 0."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
             assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
 
