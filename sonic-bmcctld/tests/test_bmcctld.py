@@ -279,29 +279,19 @@ class TestSwitchHostController:
         mod = ctrl._get_switch_host_module()
         assert mod is ch._module_list[1]
 
-    def test_refresh_host_state_preserves_power_state(self, chassis, controller):
-        controller.power_on()
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
-        result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
-        state = dict(result[1])
-        # power state must still be POWER_ON
-        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
-        assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
-
-    def test_refresh_host_state_infers_power_on_when_not_available(self, chassis, controller):
+    def test_init_host_state_infers_power_on_when_not_available(self, chassis, controller):
         # No prior power state recorded — host is ONLINE, so infer POWER_ON
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         state = dict(result[1])
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
 
-    def test_refresh_host_state_infers_power_off_when_not_available(self, chassis, controller):
+    def test_init_host_state_infers_power_off_when_not_available(self, chassis, controller):
         # No prior power state recorded — host is OFFLINE, so infer POWER_OFF
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         state = dict(result[1])
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
@@ -1115,10 +1105,10 @@ class TestBmcctldDaemonInitialSequence:
         daemon = self._make_daemon(chassis)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
-        daemon.controller.refresh_host_state = MagicMock()
+        daemon.controller.init_host_state = MagicMock()
         daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
-        daemon.controller.refresh_host_state.assert_called_once()
+        daemon.controller.init_host_state.assert_called_once()
 
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
@@ -1307,7 +1297,7 @@ class TestBmcctldDaemonRun:
         daemon = self._make_daemon(chassis)
         daemon._initial_power_on_sequence = MagicMock()
         daemon.controller.power_on = MagicMock()
-        daemon.controller.refresh_host_state = MagicMock()
+        daemon.controller.init_host_state = MagicMock()
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
         chassis.set_liquid_cooled(True)
@@ -1315,7 +1305,7 @@ class TestBmcctldDaemonRun:
         assert result is False
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.controller.power_on.assert_not_called()
-        daemon.controller.refresh_host_state.assert_called_once()
+        daemon.controller.init_host_state.assert_called_once()
         daemon._run_action_loop.assert_called_once()
 
     def test_run_liquid_cooled_runs_full_sequence(self, chassis):
@@ -1391,10 +1381,10 @@ class TestChassisModuleInfo:
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
 
-    def test_refresh_host_state_mirrors_oper_status(self, chassis, controller):
-        """refresh_host_state also updates oper_status in CHASSIS_MODULE_TABLE."""
+    def test_init_host_state_mirrors_oper_status(self, chassis, controller):
+        """init_host_state also updates oper_status in CHASSIS_MODULE_TABLE."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])

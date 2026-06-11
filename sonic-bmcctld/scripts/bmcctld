@@ -472,20 +472,15 @@ class SwitchHostController(EventLogger):
             return fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
         return NOT_AVAILABLE
 
-    def refresh_host_state(self):
-        """Refresh HOST_STATE with current oper_status, preserving last power state.
+    def init_host_state(self):
+        """Set device_power_state from live oper_status (ONLINE -> POWERED_ON, OFFLINE -> POWERED_OFF).
 
-        If no prior power state is recorded (N/A), infer it from oper_status:
-        ONLINE -> POWER_ON, OFFLINE -> POWER_OFF.
+        Called only at daemon startup. Any persisted transitional state from a prior
+        interrupted run is overwritten with the stable value derived from live oper_status.
         """
-        result = self.host_state_table.get(HOST_STATE_KEY)
-        cur_power_state = NOT_AVAILABLE
-        if result and result[0]:
-            cur_power_state = fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
         oper_status = self.get_oper_status()
-        if cur_power_state == NOT_AVAILABLE:
-            cur_power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
-        self._update_host_state(cur_power_state, oper_status)
+        power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
+        self._update_host_state(power_state, oper_status)
 
     def initialize_chassis_module_info(self, admin_status):
         """Populate CHASSIS_MODULE_TABLE|SWITCH-HOST in STATE_DB at daemon startup.
@@ -1186,7 +1181,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.controller.power_on()
         else:
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
-            self.controller.refresh_host_state()
+            self.controller.init_host_state()
 
     def _execute_action_item(self, item):
         """
@@ -1280,7 +1275,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
                                        "skipping boot sequence")
-            self.controller.refresh_host_state()
+            self.controller.init_host_state()
         elif not self.chassis.is_liquid_cooled():
             self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
                                        "immediate power_on, no additional checks")
