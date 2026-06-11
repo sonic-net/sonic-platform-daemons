@@ -370,6 +370,7 @@ class SfpStateUpdateTask(threading.Thread):
             if physical_port_list is None:
                 helper_logger.log_error("No physical ports found for logical port '{}' during sfp status table init".format(logical_port_name))
                 common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
+                continue
 
             for physical_port in physical_port_list:
                 if stop_event.is_set():

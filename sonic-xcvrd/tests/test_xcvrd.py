@@ -1535,6 +1535,31 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
         task._init_port_sfp_status_sw_tbl(port_mapping, xcvr_table_helper, stop_event)
 
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.common.update_port_transceiver_status_table_sw')
+    def test_init_port_sfp_status_sw_tbl_no_physical_port_found(self, mock_update_status):
+        """
+        Test that when a logical port has no physical port, we successfully mark the transceiver
+        as removed and move on to the next logical port.
+        """
+        port_mapping = PortMapping()
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
+        port_mapping.handle_port_change_event(port_change_event)
+        # Simulate the "no physical ports found" condition
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=None)
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task._init_port_sfp_status_sw_tbl(port_mapping, xcvr_table_helper, stop_event)
+
+        # The port with no physical mapping should be marked REMOVED
+        mock_update_status.assert_called_once()
+        assert mock_update_status.call_args.args[0] == 'Ethernet0'
+        assert mock_update_status.call_args.args[2] == SFP_STATUS_REMOVED
+
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', '/invalid/path')))
     def test_load_media_settings_missing_file(self):
         assert media_settings_parser.load_media_settings() == {}
