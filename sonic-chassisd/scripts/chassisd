@@ -146,7 +146,7 @@ MINIMUM_SELF_RECOVERY_POLL_COUNT = 3
 
 # Reboot cause file used to detect NPU kernel crash on chassisd startup
 REBOOT_CAUSE_FILE = "/host/reboot-cause/reboot-cause.txt"
-NPU_CRASH_REBOOT_CAUSE_KEYWORDS = ("kernel panic", "unknown")
+NPU_CRASH_REBOOT_CAUSE_KEYWORDS = ("kernel panic")
 
 # Internal recovery dict key for tracking prior Unrecoverable state
 WAS_UNRECOVERABLE_KEY = 'was_unrecoverable'
@@ -1208,15 +1208,15 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 keys = self.chassis_state_db.keys(pattern)
                 if keys:
                     for key in keys:
-                        if DPU_STATE_TABLE not in key and not "REBOOT_CAUSE" in key:
+                        if DPU_STATE_TABLE not in key and "REBOOT_CAUSE" not in key:
                             self.chassis_state_db.delete(key)
         return
 
     def _is_auto_recovery_enabled(self):
         """Check if dpu_auto_recovery is enabled in CONFIG_DB DEVICE_METADATA|localhost.
 
-        Returns True when the field is 'enabled'.
-        Returns False when the field is 'disabled' (or absent, defaulting to disabled).
+        Returns True when the field is 'enable'.
+        Returns False otherwise.
         """
         try:
             fvs = self.device_metadata_table.get('localhost')
@@ -1225,7 +1225,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 state = fvs.get(DPU_AUTO_RECOVERY_FIELD, DPU_AUTO_RECOVERY_DISABLED)
                 return state == DPU_AUTO_RECOVERY_ENABLED
         except Exception as e:
-            self.log_error("Failed to read dpu_auto_recovery from DEVICE_METADATA: {}".format(e))
+            self.log_error("Failed to read {} from DEVICE_METADATA: {}".format(
+                DPU_AUTO_RECOVERY_FIELD, e))
         return False  # Default to disabled
 
     def _get_dpu_states(self, module_name):
@@ -1279,11 +1280,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         return True
 
     def _enter_power_cycle_or_unrecoverable(self, module_name, module_index):
-        """Attempt to power-cycle a DPU, or mark it unrecoverable if reset_limit reached.
-
-        Checks reset_limit BEFORE issuing the power-cycle to avoid a
-        wasted reset that would immediately be marked unrecoverable.
-        """
+        """Attempt power-cycle; mark unrecoverable if reset_limit is reached."""
         recovery = self.dpu_recovery_state[module_name]
 
         # Check limit before issuing power-cycle
