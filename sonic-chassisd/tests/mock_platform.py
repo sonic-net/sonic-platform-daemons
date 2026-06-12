@@ -112,6 +112,18 @@ class MockModule(MockDevice):
     def set_midplane_reachable(self, up):
         self.midplane_access = up
 
+    def get_module_state_transition(self, module_name):
+        return getattr(self, 'state_transition', False)
+
+    def set_module_state_transition(self, state_transition):
+        self.state_transition = state_transition
+
+    def get_midplane_down_reason(self):
+        return getattr(self, 'midplane_down_reason', None)
+
+    def set_midplane_down_reason(self, reason):
+        self.midplane_down_reason = reason
+
     def get_all_asics(self):
         return self.asic_list
 
