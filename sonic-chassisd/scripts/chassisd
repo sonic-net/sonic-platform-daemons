@@ -1376,7 +1376,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         self.log_warning("{}: Boot timeout ({}s) expired {}".format(
             name, self.dpu_boot_timeout, context))
         self._set_ready_status(name, 'false')
-        self._set_last_down_time(name)
         if auto_recovery_enabled:
             self._enter_power_cycle_or_unrecoverable(name, module_index)
         else:

@@ -429,6 +429,25 @@ class TestBootingToReady:
 
         mock_pc.assert_called_once_with("DPU0", 0)
 
+    def test_booting_timeout_does_not_refresh_last_down_time(self):
+        """Boot timeout retry should not overwrite initial outage timestamp."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 700
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_set_last_down_time') as mock_set_down:
+            updater.update_dpu_recovery_state()
+
+        mock_set_down.assert_not_called()
+
     def test_booting_timeout_manual_intervention_when_disabled(self):
         """Booting timeout + auto-recovery disabled → ManualIntervention."""
         chassis = create_chassis_with_dpus(1)
@@ -485,6 +504,26 @@ class TestBootingToReady:
             updater.update_dpu_recovery_state()
 
         mock_pc.assert_called_once_with("DPU0", 0)
+
+    def test_power_cycle_timeout_does_not_refresh_last_down_time(self):
+        """PowerCycle timeout retry should not overwrite initial outage timestamp."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_POWER_CYCLE
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 1
+        import time as time_module
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time_module.time() - 700
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(updater, '_set_last_down_time') as mock_set_down:
+            updater.update_dpu_recovery_state()
+
+        mock_set_down.assert_not_called()
 
     def test_power_cycle_timeout_manual_intervention_when_disabled(self):
         """PowerCycle state exceeds dpu_boot_timeout + auto-recovery disabled → ManualIntervention."""
