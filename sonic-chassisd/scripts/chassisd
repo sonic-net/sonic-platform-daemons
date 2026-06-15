@@ -151,6 +151,9 @@ NPU_CRASH_REBOOT_CAUSE_KEYWORDS = ("kernel panic")
 # Internal recovery dict key for tracking prior Unrecoverable state
 WAS_UNRECOVERABLE_KEY = 'was_unrecoverable'
 
+# Transition type value used by chassisd when acquiring the state-transition lock
+TRANSITION_TYPE_RECOVERY = 'recovery'
+
 # DPU recovery states
 DPU_STATE_BOOTING = 'Booting'
 DPU_STATE_READY = 'Ready'
@@ -1263,7 +1266,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         Uses the platform API get_module_state_transition() which handles
         timeout-based auto-clearing. Returns True when a non-recovery
         transition is active, suppressing auto-recovery.
-        Ignores transition_type == 'recovery' so chassisd does not suppress itself.
+        Ignores transition_type == TRANSITION_TYPE_RECOVERY so chassisd does not suppress itself.
         """
         module = self.chassis.get_module(module_index)
         in_progress = try_get(module.get_module_state_transition, module_name, default=False)
@@ -1274,7 +1277,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             fvs = self.module_table.get(module_name)
             if isinstance(fvs, list) and fvs[0] is True:
                 fvs = dict(fvs[-1])
-                return fvs.get('transition_type') != 'recovery'
+                return fvs.get('transition_type') != TRANSITION_TYPE_RECOVERY
         except Exception:
             pass
         return True
@@ -1302,12 +1305,14 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         # shutdown/reboot from operating on this DPU during power-cycle.
         # If the lock cannot be acquired (another operation holds it),
         # abort the power-cycle — the other operation owns this DPU.
-        lock_acquired = try_get(module.set_module_state_transition, module_name, "recovery", default=False)
+        lock_acquired = try_get(module.set_module_state_transition, module_name, TRANSITION_TYPE_RECOVERY, default=False)
         if not lock_acquired:
             self.log_warning("{}: Cannot acquire state transition lock; "
                             "another operation in progress — skipping power-cycle".format(module_name))
             recovery['reset_count'] -= 1
             self._set_reset_count(module_name, recovery['reset_count'])
+            recovery['state'] = DPU_STATE_POWER_CYCLE
+            recovery['boot_start_time'] = time.time()
             return
 
         # Re-check transition_in_progress after acquiring our lock to close
@@ -1319,6 +1324,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             try_get(module.clear_module_state_transition, module_name, default=False)
             recovery['reset_count'] -= 1
             self._set_reset_count(module_name, recovery['reset_count'])
+            recovery['state'] = DPU_STATE_POWER_CYCLE
+            recovery['boot_start_time'] = time.time()
             return
 
         try:

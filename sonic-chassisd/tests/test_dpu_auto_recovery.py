@@ -60,6 +60,7 @@ from chassisd import (
     MAX_HISTORY_FILES,
     REBOOT_CAUSE_FILE,
     WAS_UNRECOVERABLE_KEY,
+    TRANSITION_TYPE_RECOVERY,
 )
 
 
@@ -1940,8 +1941,9 @@ class TestPowerCycleFailure:
         module.clear_module_state_transition.assert_not_called()
         # reset_count should be rolled back to 0
         assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
-        # State should NOT have changed to PowerCycle
-        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_WAIT_FOR_SELF_RECOVERY
+        # State should have entered POWER_CYCLE to wait for the in-progress
+        # operation (gnoi shutdown/reboot) to complete.
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
 
     def test_power_cycle_aborted_when_legacy_field_set_after_lock(self):
         """If transition_in_progress appears after lock acquired, abort."""
@@ -1963,15 +1965,16 @@ class TestPowerCycleFailure:
         updater._enter_power_cycle_or_unrecoverable("DPU0", 0)
 
         # Lock was acquired but then released due to legacy field detection
-        module.set_module_state_transition.assert_called_once_with("DPU0", "recovery")
+        module.set_module_state_transition.assert_called_once_with("DPU0", TRANSITION_TYPE_RECOVERY)
         module.clear_module_state_transition.assert_called_once_with("DPU0")
         # Power-cycle should NOT have been executed
         module.pci_detach.assert_not_called()
         module.set_admin_state.assert_not_called()
         # reset_count should be rolled back to 0
         assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
-        # State should NOT have changed to PowerCycle
-        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_WAIT_FOR_SELF_RECOVERY
+        # State should have entered POWER_CYCLE to wait for the in-progress
+        # operation (gnoi shutdown/reboot) to complete.
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
 
 
 # ============================================================================
