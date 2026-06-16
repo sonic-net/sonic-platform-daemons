@@ -315,8 +315,10 @@ class SwitchHostController(EventLogger):
         self.chassis = chassis
         self._switch_host_module = None
         self.state_db = daemon_base.db_connect("STATE_DB")
+        self.config_db = daemon_base.db_connect("CONFIG_DB")
         self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
         self.chassis_module_info_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
+        self.chassis_module_config_table = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
 
     def _get_switch_host_module(self):
         """Return the Switch-Host Module object from the chassis module list."""
@@ -483,13 +485,29 @@ class SwitchHostController(EventLogger):
         power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
         self._update_host_state(power_state, oper_status)
 
-    def initialize_chassis_module_info(self, admin_status):
-        """Populate CHASSIS_MODULE_TABLE|SWITCH-HOST in STATE_DB at daemon startup.
+    def initialize_chassis_module(self, admin_status):
+        """Populate CHASSIS_MODULE|SWITCH-HOST in both CONFIG_DB and STATE_DB at daemon startup.
 
-        Reads module identity fields from the platform and writes them alongside
-        the current admin_status and oper_status.  Called once from
-        BmcctldDaemon.__init__ after policy_reader is available.
+        CONFIG_DB|CHASSIS_MODULE|SWITCH-HOST is seeded with the supplied admin_status
+        and default timings (power_on_delay=0, graceful_shutdown_timeout=0) only when
+        no entry exists, so any operator override persisted from a prior boot is preserved.
+        STATE_DB|CHASSIS_MODULE_TABLE|SWITCH-HOST is always (re)populated with module
+        identity, current oper_status, and the supplied admin_status.
         """
+        # 1. Seed CONFIG_DB defaults if absent (don't clobber operator config).
+        existing = self.chassis_module_config_table.get(SWITCH_HOST_MODULE_KEY)
+        if not (existing and existing[0]):
+            self.chassis_module_config_table.set(SWITCH_HOST_MODULE_KEY, swsscommon.FieldValuePairs([
+                (CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, admin_status),
+                (FIELD_POWER_ON_DELAY, str(DEFAULT_POWER_ON_DELAY_SECS)),
+                (FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, str(DEFAULT_SHUTDOWN_DELAY_SECS)),
+            ]))
+            self.log_info(
+                "CONFIG_DB CHASSIS_MODULE|SWITCH-HOST seeded: "
+                "admin_status={} power_on_delay={} graceful_shutdown_timeout={}".format(
+                    admin_status, DEFAULT_POWER_ON_DELAY_SECS, DEFAULT_SHUTDOWN_DELAY_SECS))
+
+        # 2. Populate STATE_DB CHASSIS_MODULE_TABLE with module identity + status.
         module = self._get_switch_host_module()
         if module is None:
             self.log_error("Cannot initialize CHASSIS_MODULE_INFO: Switch-Host module not found")
@@ -545,9 +563,14 @@ class PolicyReader(EventLogger):
             return fvs_to_dict(result[1])
         return {}
 
-    def get_switch_host_admin_status(self):
-        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE|SWITCH-HOST (default: down)."""
-        return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, ADMIN_DOWN)
+    def get_switch_host_admin_status(self, default=ADMIN_DOWN):
+        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE|SWITCH-HOST.
+
+        When no entry exists, the supplied default is returned.  Callers pass
+        ADMIN_UP for air-cooled systems (no liquid-flow safety gate) and
+        ADMIN_DOWN for liquid-cooled systems (must wait for explicit admin-up).
+        """
+        return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, default)
 
     def get_power_on_delay(self):
         """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
@@ -1064,9 +1087,13 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.controller,
         )
 
-        # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status
-        admin_status = self.policy_reader.get_switch_host_admin_status()
-        self.controller.initialize_chassis_module_info(admin_status)
+        # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status.
+        # Air-cooled boxes default to admin_status=up (no liquid-flow gate); liquid-cooled
+        # boxes default to admin_status=down and require explicit admin-up to power on.
+        default_admin_status = ADMIN_DOWN if self.chassis.is_liquid_cooled() else ADMIN_UP
+
+        admin_status = self.policy_reader.get_switch_host_admin_status(default=default_admin_status)
+        self.controller.initialize_chassis_module(admin_status)
 
         for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
             try:
