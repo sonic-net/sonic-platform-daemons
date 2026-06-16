@@ -226,7 +226,9 @@ DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
-DEFAULT_POWER_ON_DELAY_SECS = 0     # 0 seconds - power on Switch-Host immediately by default
+DEFAULT_POWER_ON_DELAY_SECS = 300   # liquid-cooled: allow Rack Manager time to verify liquid flow
+                                    # before bmcctld auto-powers Switch-Host. Unused on air-cooled
+                                    # (startup path skips _initial_power_on_sequence).
 DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
                                     # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
 
