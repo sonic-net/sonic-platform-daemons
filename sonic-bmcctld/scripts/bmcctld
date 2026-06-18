@@ -1172,8 +1172,24 @@ class BmcctldDaemon(daemon_base.DaemonBase):
 
         if reboot_cause == ChassisBase.REBOOT_CAUSE_POWER_LOSS:
             boot_delay = self.policy_reader.get_power_on_delay()
-            self.log_notice("Waiting {}s before initial Switch-Host power-on check "
-                            "(SWITCH_HOST_POWER_ON_DELAY, reboot_cause={})".format(boot_delay, reboot_cause))
+            # Use system uptime so that a bmcctld restart mid-boot (or any later restart)
+            # doesn't re-arm the full SWITCH_HOST_POWER_ON_DELAY.  We only need to wait
+            # for any time remaining relative to system uptime, not start a fresh timer.
+            # CLOCK_BOOTTIME is monotonic and includes any suspend time.
+            try:
+                system_uptime = time.clock_gettime(time.CLOCK_BOOTTIME)
+            except Exception as e:
+                self.log_warning("STARTUP: failed to read CLOCK_BOOTTIME ({}); "
+                                 "assuming uptime=0".format(repr(e)))
+                system_uptime = 0
+            boot_delay = max(0, int(boot_delay - system_uptime))
+            if boot_delay > 0:
+                self.log_notice("Waiting {}s before initial Switch-Host power-on check "
+                                "(SWITCH_HOST_POWER_ON_DELAY, uptime={:.1f}s, reboot_cause={})".format(
+                                    boot_delay, system_uptime, reboot_cause))
+            else:
+                self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY: "
+                                "system uptime ({:.1f}s) already exceeds power_on_delay".format(system_uptime))
         else:
             self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY (reboot_cause={}, not a full power loss)".format(reboot_cause))
 

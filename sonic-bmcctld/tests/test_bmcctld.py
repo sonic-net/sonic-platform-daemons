@@ -7,6 +7,7 @@
 import os
 import sys
 import threading
+import time
 import importlib.util
 import importlib.machinery
 
@@ -1110,13 +1111,30 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_on.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
 
+    def test_boot_delay_skipped_when_system_uptime_exceeds_delay(self, chassis):
+        """If system uptime already exceeds power_on_delay, boot delay is skipped (no fresh timer)."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Pretend the system has been up for 10 minutes — bmcctld restart mid-life
+        # must not re-arm the full 60s delay.
+        with patch('time.clock_gettime', return_value=600):
+            t0 = time.monotonic()
+            daemon._initial_power_on_sequence()
+            elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, "boot delay should have been skipped (elapsed={:.2f}s)".format(elapsed)
+        daemon.controller.power_on.assert_called_once()
+
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
         daemon.stop_event.set()  # Signal stop before delay expires
-        daemon._initial_power_on_sequence()
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
 
     def test_boot_delay_processes_queued_actions(self, chassis):
@@ -1130,7 +1148,9 @@ class TestBmcctldDaemonInitialSequence:
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "RACK_MGR_BOOT_DELAY"))
-        daemon._initial_power_on_sequence()
+        # Force system uptime to 0 so the full configured delay applies.
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         # The POWER_OFF must have been consumed from the queue during the delay
         assert daemon.action_queue.empty()
         daemon.controller.power_off.assert_called_once()
