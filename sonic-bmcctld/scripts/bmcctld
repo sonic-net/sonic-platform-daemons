@@ -226,7 +226,9 @@ DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
-DEFAULT_POWER_ON_DELAY_SECS = 0     # 0 seconds - power on Switch-Host immediately by default
+DEFAULT_POWER_ON_DELAY_SECS = 300   # liquid-cooled: allow Rack Manager time to verify liquid flow
+                                    # before bmcctld auto-powers Switch-Host. Unused on air-cooled
+                                    # (startup path skips _initial_power_on_sequence).
 DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
                                     # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
 
@@ -315,8 +317,10 @@ class SwitchHostController(EventLogger):
         self.chassis = chassis
         self._switch_host_module = None
         self.state_db = daemon_base.db_connect("STATE_DB")
+        self.config_db = daemon_base.db_connect("CONFIG_DB")
         self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
         self.chassis_module_info_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
+        self.chassis_module_config_table = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
 
     def _get_switch_host_module(self):
         """Return the Switch-Host Module object from the chassis module list."""
@@ -483,13 +487,29 @@ class SwitchHostController(EventLogger):
         power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
         self._update_host_state(power_state, oper_status)
 
-    def initialize_chassis_module_info(self, admin_status):
-        """Populate CHASSIS_MODULE_TABLE|SWITCH-HOST in STATE_DB at daemon startup.
+    def initialize_chassis_module(self, admin_status):
+        """Populate CHASSIS_MODULE|SWITCH-HOST in both CONFIG_DB and STATE_DB at daemon startup.
 
-        Reads module identity fields from the platform and writes them alongside
-        the current admin_status and oper_status.  Called once from
-        BmcctldDaemon.__init__ after policy_reader is available.
+        CONFIG_DB|CHASSIS_MODULE|SWITCH-HOST is seeded with the supplied admin_status
+        and default timings (power_on_delay=0, graceful_shutdown_timeout=0) only when
+        no entry exists, so any operator override persisted from a prior boot is preserved.
+        STATE_DB|CHASSIS_MODULE_TABLE|SWITCH-HOST is always (re)populated with module
+        identity, current oper_status, and the supplied admin_status.
         """
+        # 1. Seed CONFIG_DB defaults if absent (don't clobber operator config).
+        existing = self.chassis_module_config_table.get(SWITCH_HOST_MODULE_KEY)
+        if not (existing and existing[0]):
+            self.chassis_module_config_table.set(SWITCH_HOST_MODULE_KEY, swsscommon.FieldValuePairs([
+                (CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, admin_status),
+                (FIELD_POWER_ON_DELAY, str(DEFAULT_POWER_ON_DELAY_SECS)),
+                (FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, str(DEFAULT_SHUTDOWN_DELAY_SECS)),
+            ]))
+            self.log_info(
+                "CONFIG_DB CHASSIS_MODULE|SWITCH-HOST seeded: "
+                "admin_status={} power_on_delay={} graceful_shutdown_timeout={}".format(
+                    admin_status, DEFAULT_POWER_ON_DELAY_SECS, DEFAULT_SHUTDOWN_DELAY_SECS))
+
+        # 2. Populate STATE_DB CHASSIS_MODULE_TABLE with module identity + status.
         module = self._get_switch_host_module()
         if module is None:
             self.log_error("Cannot initialize CHASSIS_MODULE_INFO: Switch-Host module not found")
@@ -545,9 +565,14 @@ class PolicyReader(EventLogger):
             return fvs_to_dict(result[1])
         return {}
 
-    def get_switch_host_admin_status(self):
-        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE|SWITCH-HOST (default: down)."""
-        return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, ADMIN_DOWN)
+    def get_switch_host_admin_status(self, default=ADMIN_DOWN):
+        """Return admin_status for SWITCH-HOST from CHASSIS_MODULE|SWITCH-HOST.
+
+        When no entry exists, the supplied default is returned.  Callers pass
+        ADMIN_UP for air-cooled systems (no liquid-flow safety gate) and
+        ADMIN_DOWN for liquid-cooled systems (must wait for explicit admin-up).
+        """
+        return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, default)
 
     def get_power_on_delay(self):
         """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
@@ -1064,9 +1089,13 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.controller,
         )
 
-        # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status
-        admin_status = self.policy_reader.get_switch_host_admin_status()
-        self.controller.initialize_chassis_module_info(admin_status)
+        # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status.
+        # Air-cooled boxes default to admin_status=up (no liquid-flow gate); liquid-cooled
+        # boxes default to admin_status=down and require explicit admin-up to power on.
+        default_admin_status = ADMIN_DOWN if self.chassis.is_liquid_cooled() else ADMIN_UP
+
+        admin_status = self.policy_reader.get_switch_host_admin_status(default=default_admin_status)
+        self.controller.initialize_chassis_module(admin_status)
 
         for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
             try:
@@ -1143,8 +1172,24 @@ class BmcctldDaemon(daemon_base.DaemonBase):
 
         if reboot_cause == ChassisBase.REBOOT_CAUSE_POWER_LOSS:
             boot_delay = self.policy_reader.get_power_on_delay()
-            self.log_notice("Waiting {}s before initial Switch-Host power-on check "
-                            "(SWITCH_HOST_POWER_ON_DELAY, reboot_cause={})".format(boot_delay, reboot_cause))
+            # Use system uptime so that a bmcctld restart mid-boot (or any later restart)
+            # doesn't re-arm the full SWITCH_HOST_POWER_ON_DELAY.  We only need to wait
+            # for any time remaining relative to system uptime, not start a fresh timer.
+            # CLOCK_BOOTTIME is monotonic and includes any suspend time.
+            try:
+                system_uptime = time.clock_gettime(time.CLOCK_BOOTTIME)
+            except Exception as e:
+                self.log_warning("STARTUP: failed to read CLOCK_BOOTTIME ({}); "
+                                 "assuming uptime=0".format(repr(e)))
+                system_uptime = 0
+            boot_delay = max(0, int(boot_delay - system_uptime))
+            if boot_delay > 0:
+                self.log_notice("Waiting {}s before initial Switch-Host power-on check "
+                                "(SWITCH_HOST_POWER_ON_DELAY, uptime={:.1f}s, reboot_cause={})".format(
+                                    boot_delay, system_uptime, reboot_cause))
+            else:
+                self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY: "
+                                "system uptime ({:.1f}s) already exceeds power_on_delay".format(system_uptime))
         else:
             self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY (reboot_cause={}, not a full power loss)".format(reboot_cause))
 

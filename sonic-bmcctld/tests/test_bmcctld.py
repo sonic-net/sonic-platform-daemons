@@ -7,6 +7,7 @@
 import os
 import sys
 import threading
+import time
 import importlib.util
 import importlib.machinery
 
@@ -1110,13 +1111,30 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_on.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
 
+    def test_boot_delay_skipped_when_system_uptime_exceeds_delay(self, chassis):
+        """If system uptime already exceeds power_on_delay, boot delay is skipped (no fresh timer)."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Pretend the system has been up for 10 minutes — bmcctld restart mid-life
+        # must not re-arm the full 60s delay.
+        with patch('time.clock_gettime', return_value=600):
+            t0 = time.monotonic()
+            daemon._initial_power_on_sequence()
+            elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, "boot delay should have been skipped (elapsed={:.2f}s)".format(elapsed)
+        daemon.controller.power_on.assert_called_once()
+
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
         daemon.stop_event.set()  # Signal stop before delay expires
-        daemon._initial_power_on_sequence()
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
 
     def test_boot_delay_processes_queued_actions(self, chassis):
@@ -1130,7 +1148,9 @@ class TestBmcctldDaemonInitialSequence:
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "RACK_MGR_BOOT_DELAY"))
-        daemon._initial_power_on_sequence()
+        # Force system uptime to 0 so the full configured delay applies.
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         # The POWER_OFF must have been consumed from the queue during the delay
         assert daemon.action_queue.empty()
         daemon.controller.power_off.assert_called_once()
@@ -1329,10 +1349,10 @@ class TestBmcctldDaemonRun:
 
 class TestChassisModuleInfo:
 
-    def test_initialize_chassis_module_info_all_fields(self, chassis, controller):
-        """initialize_chassis_module_info writes all expected fields to CHASSIS_MODULE_TABLE."""
+    def test_initialize_chassis_module_all_fields(self, chassis, controller):
+        """initialize_chassis_module writes all expected fields to CHASSIS_MODULE_TABLE."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])
@@ -1342,25 +1362,25 @@ class TestChassisModuleInfo:
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
 
-    def test_initialize_chassis_module_info_oper_status_online(self, chassis, controller):
+    def test_initialize_chassis_module_oper_status_online(self, chassis, controller):
         """oper_status reflects live module state at initialization time."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_ONLINE
 
-    def test_initialize_chassis_module_info_admin_down(self, chassis, controller):
+    def test_initialize_chassis_module_admin_down(self, chassis, controller):
         """admin_status=down is stored when module is initially down."""
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
-    def test_initialize_chassis_module_info_no_module(self, controller):
+    def test_initialize_chassis_module_no_module(self, controller):
         """When module not found, initialize logs an error and does not write the table."""
         controller._get_switch_host_module = MagicMock(return_value=None)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is False
 
@@ -1393,7 +1413,7 @@ class TestChassisModuleInfo:
     def test_initialize_then_power_off_preserves_static_fields(self, chassis, controller):
         """oper_status update via power_off merges into entry; static fields are preserved."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         # Now power off — oper_status should update but name/serial/etc. must survive
         controller.power_off()
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
@@ -1406,7 +1426,7 @@ class TestChassisModuleInfo:
     def test_admin_status_updated_on_chassis_module_event(self, event_handler, controller):
         """CHASSIS_MODULE admin_status event mirrors admin_status to CHASSIS_MODULE_TABLE."""
         # Initialize the table first so merging has something to merge into
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
         # Simulate an admin_up event while host is OFFLINE and a critical leak blocks power-on
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
@@ -1422,7 +1442,7 @@ class TestChassisModuleInfo:
 
     def test_admin_down_event_mirrors_admin_status(self, event_handler, controller):
         """CHASSIS_MODULE admin_down event mirrors admin_status=down to CHASSIS_MODULE_TABLE."""
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
         event_handler._handle_chassis_module(
@@ -1433,7 +1453,7 @@ class TestChassisModuleInfo:
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
-    def test_daemon_init_calls_initialize_chassis_module_info(self, chassis):
+    def test_daemon_init_calls_initialize_chassis_module(self, chassis):
         """BmcctldDaemon.__init__ populates CHASSIS_MODULE_TABLE at startup."""
         with patch('sonic_platform.platform.Platform') as MockPlatform:
             MockPlatform.return_value.get_chassis.return_value = chassis
@@ -1444,4 +1464,54 @@ class TestChassisModuleInfo:
         assert bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD in info
         assert bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD in info
         assert bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD in info
+
+    def test_initialize_chassis_module_seeds_config_db_defaults(self, chassis, controller):
+        """When CONFIG_DB CHASSIS_MODULE|SWITCH-HOST is absent, seed defaults using passed admin_status."""
+        controller.chassis_module_config_table._del(bmcctld.SWITCH_HOST_MODULE_KEY)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
+        result = controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
+        assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == str(bmcctld.DEFAULT_POWER_ON_DELAY_SECS)
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == str(bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS)
+
+    def test_initialize_chassis_module_preserves_operator_config(self, chassis, controller):
+        """Existing operator CONFIG_DB entry must not be clobbered by daemon startup."""
+        controller.chassis_module_config_table.set(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            FieldValuePairs([
+                (bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, bmcctld.ADMIN_UP),
+                (bmcctld.FIELD_POWER_ON_DELAY, "45"),
+                (bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, "90"),
+            ]),
+        )
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
+        result = controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+        assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == "45"
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == "90"
+
+    def test_daemon_init_air_cooled_defaults_admin_up(self, chassis):
+        """Air-cooled boxes default CONFIG_DB admin_status=up when no operator entry exists."""
+        chassis.set_liquid_cooled(False)
+        with patch('sonic_platform.platform.Platform') as MockPlatform:
+            MockPlatform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        result = daemon.controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+
+    def test_daemon_init_liquid_cooled_defaults_admin_down(self, chassis):
+        """Liquid-cooled boxes default CONFIG_DB admin_status=down when no operator entry exists."""
+        chassis.set_liquid_cooled(True)
+        with patch('sonic_platform.platform.Platform') as MockPlatform:
+            MockPlatform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        result = daemon.controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
