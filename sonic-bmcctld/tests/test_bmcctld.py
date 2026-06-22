@@ -7,6 +7,7 @@
 import os
 import sys
 import threading
+import time
 import importlib.util
 import importlib.machinery
 
@@ -279,29 +280,19 @@ class TestSwitchHostController:
         mod = ctrl._get_switch_host_module()
         assert mod is ch._module_list[1]
 
-    def test_refresh_host_state_preserves_power_state(self, chassis, controller):
-        controller.power_on()
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
-        result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
-        state = dict(result[1])
-        # power state must still be POWER_ON
-        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
-        assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
-
-    def test_refresh_host_state_infers_power_on_when_not_available(self, chassis, controller):
+    def test_init_host_state_infers_power_on_when_not_available(self, chassis, controller):
         # No prior power state recorded — host is ONLINE, so infer POWER_ON
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         state = dict(result[1])
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
 
-    def test_refresh_host_state_infers_power_off_when_not_available(self, chassis, controller):
+    def test_init_host_state_infers_power_off_when_not_available(self, chassis, controller):
         # No prior power state recorded — host is OFFLINE, so infer POWER_OFF
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         state = dict(result[1])
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
@@ -317,11 +308,11 @@ class TestSwitchHostController:
         mock_sleep.assert_not_called()
 
     @patch('time.sleep')
-    @patch('time.time')
-    def test_verify_oper_status_timeout(self, mock_time, mock_sleep, chassis, controller):
+    @patch('time.monotonic')
+    def test_verify_oper_status_timeout(self, mock_monotonic, mock_sleep, chassis, controller):
         # Simulate: deadline set at t=0+30=30, first loop check t=0 (<30), sleep,
         # second loop check t=31 (>=30) → exit without match
-        mock_time.side_effect = [0, 0, 31, 31]
+        mock_monotonic.side_effect = [0, 0, 31, 31]
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = controller._verify_oper_status(bmcctld.SWITCH_HOST_ONLINE, 30, "test")
         assert result is False
@@ -378,7 +369,7 @@ class TestPolicyReader:
             assert policy_reader.get_power_on_delay() == 60
 
     def test_get_graceful_shutdown_timeout_default(self, policy_reader):
-        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 120."""
+        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 0."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
             assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
 
@@ -668,6 +659,27 @@ class TestBmcEventHandlerChassisModule:
         )
         assert event_handler.action_queue.empty()
 
+    def test_empty_admin_status_does_not_poison_dedup(self, event_handler, controller):
+        """Regression: an empty admin_status must NOT update the dedup map,
+        so a subsequent real admin_status (e.g. 'up') is not silently dropped."""
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: ""},
+        )
+        assert event_handler.action_queue.empty()
+        assert bmcctld.SWITCH_HOST_MODULE_KEY not in event_handler._last_chassis_module_admin_status
+
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_POWER_ON
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - System leak events
@@ -812,6 +824,34 @@ class TestBmcEventHandlerRackMgrAlerts:
             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
         )
         assert event_handler.action_queue.empty()
+
+    def test_rack_mgr_leak_policy_disabled_does_not_poison_dedup(self, event_handler):
+        """Regression: a CRITICAL arriving while policy=disabled must NOT be
+        recorded in the dedup map, so the same severity dispatches normally
+        once the policy is re-enabled."""
+        # Phase 1: policy=disabled, CRITICAL arrives -> no action, no dedup mutation
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_leak_policy="disabled")
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_pressure",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
+        )
+        assert event_handler.action_queue.empty()
+        assert "Inlet_liquid_pressure" not in event_handler._last_rack_mgr_alert_severity
+
+        # Phase 2: policy re-enabled, SAME CRITICAL re-arrives -> action MUST dispatch
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_critical_alert_action=bmcctld.ACTION_POWER_OFF)
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_pressure",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_POWER_OFF
+        assert event_handler._last_rack_mgr_alert_severity["Inlet_liquid_pressure"] == \
+            bmcctld.ALERT_SEVERITY_CRITICAL
 
     def test_rack_level_leak_uses_leak_field(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
@@ -1066,10 +1106,26 @@ class TestBmcctldDaemonInitialSequence:
         daemon = self._make_daemon(chassis)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
-        daemon.controller.refresh_host_state = MagicMock()
+        daemon.controller.init_host_state = MagicMock()
         daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
-        daemon.controller.refresh_host_state.assert_called_once()
+        daemon.controller.init_host_state.assert_called_once()
+
+    def test_boot_delay_skipped_when_system_uptime_exceeds_delay(self, chassis):
+        """If system uptime already exceeds power_on_delay, boot delay is skipped (no fresh timer)."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Pretend the system has been up for 10 minutes — bmcctld restart mid-life
+        # must not re-arm the full 60s delay.
+        with patch('time.clock_gettime', return_value=600):
+            t0 = time.monotonic()
+            daemon._initial_power_on_sequence()
+            elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, "boot delay should have been skipped (elapsed={:.2f}s)".format(elapsed)
+        daemon.controller.power_on.assert_called_once()
 
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
@@ -1077,7 +1133,8 @@ class TestBmcctldDaemonInitialSequence:
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
         daemon.stop_event.set()  # Signal stop before delay expires
-        daemon._initial_power_on_sequence()
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
 
     def test_boot_delay_processes_queued_actions(self, chassis):
@@ -1091,7 +1148,9 @@ class TestBmcctldDaemonInitialSequence:
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "RACK_MGR_BOOT_DELAY"))
-        daemon._initial_power_on_sequence()
+        # Force system uptime to 0 so the full configured delay applies.
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
         # The POWER_OFF must have been consumed from the queue during the delay
         assert daemon.action_queue.empty()
         daemon.controller.power_off.assert_called_once()
@@ -1178,6 +1237,45 @@ class TestBmcctldDaemonInitialSequence:
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             assert daemon._rack_mgr_power_cmd_executed() is False
 
+    def test_cold_boot_applies_power_on_delay(self, chassis):
+        """On a FULL POWER LOSS (cold boot), SWITCH_HOST_POWER_ON_DELAY must be applied."""
+        chassis.set_reboot_cause(bmcctld.ChassisBase.REBOOT_CAUSE_POWER_LOSS)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Bound the sequence by setting stop_event after one queue.get cycle
+        daemon.stop_event.set()
+        daemon._initial_power_on_sequence()
+        daemon.policy_reader.get_power_on_delay.assert_called_once()
+
+    def test_warm_boot_skips_power_on_delay(self, chassis):
+        """On warm/fast/soft reboot (non-POWER_LOSS), the boot delay must be skipped."""
+        chassis.set_reboot_cause(chassis.REBOOT_CAUSE_NON_HARDWARE)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon._initial_power_on_sequence()
+        # Boot delay is skipped → get_power_on_delay must NOT be called
+        daemon.policy_reader.get_power_on_delay.assert_not_called()
+        # And we still proceeded to the power-on check
+        daemon.controller.power_on.assert_called_once()
+
+    def test_reboot_cause_exception_falls_back_to_cold_boot(self, chassis):
+        """If chassis.get_reboot_cause() raises, fall back to cold-boot behavior (apply delay)."""
+        chassis.get_reboot_cause = MagicMock(side_effect=RuntimeError("platform API not available"))
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon.stop_event.set()
+        daemon._initial_power_on_sequence()
+        daemon.policy_reader.get_power_on_delay.assert_called_once()
+
 
 class TestBmcctldDaemonRun:
 
@@ -1194,8 +1292,8 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=False):
-            result = daemon.run()
+        chassis.set_liquid_cooled(False)
+        result = daemon.run()
         assert result is False
         daemon.controller.power_on.assert_called_once()
         daemon._run_action_loop.assert_called_once()
@@ -1208,8 +1306,8 @@ class TestBmcctldDaemonRun:
         daemon._run_action_loop = MagicMock()
         daemon._initial_power_on_sequence = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=False):
-            daemon.run()
+        chassis.set_liquid_cooled(False)
+        daemon.run()
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.event_handler.run_event_loop.assert_called_once()
 
@@ -1219,15 +1317,15 @@ class TestBmcctldDaemonRun:
         daemon = self._make_daemon(chassis)
         daemon._initial_power_on_sequence = MagicMock()
         daemon.controller.power_on = MagicMock()
-        daemon.controller.refresh_host_state = MagicMock()
+        daemon.controller.init_host_state = MagicMock()
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        with patch('bmcctld.is_liquid_cooled', return_value=True):
-            result = daemon.run()
+        chassis.set_liquid_cooled(True)
+        result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.controller.power_on.assert_not_called()
-        daemon.controller.refresh_host_state.assert_called_once()
+        daemon.controller.init_host_state.assert_called_once()
         daemon._run_action_loop.assert_called_once()
 
     def test_run_liquid_cooled_runs_full_sequence(self, chassis):
@@ -1239,8 +1337,8 @@ class TestBmcctldDaemonRun:
         daemon.event_handler.run_event_loop = MagicMock()
         # Set stop_event so _run_action_loop returns without looping
         daemon._initial_power_on_sequence.side_effect = lambda: daemon.stop_event.set()
-        with patch('bmcctld.is_liquid_cooled', return_value=True):
-            result = daemon.run()
+        chassis.set_liquid_cooled(True)
+        result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_called_once()
 
@@ -1251,10 +1349,10 @@ class TestBmcctldDaemonRun:
 
 class TestChassisModuleInfo:
 
-    def test_initialize_chassis_module_info_all_fields(self, chassis, controller):
-        """initialize_chassis_module_info writes all expected fields to CHASSIS_MODULE_TABLE."""
+    def test_initialize_chassis_module_all_fields(self, chassis, controller):
+        """initialize_chassis_module writes all expected fields to CHASSIS_MODULE_TABLE."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])
@@ -1264,25 +1362,25 @@ class TestChassisModuleInfo:
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
 
-    def test_initialize_chassis_module_info_oper_status_online(self, chassis, controller):
+    def test_initialize_chassis_module_oper_status_online(self, chassis, controller):
         """oper_status reflects live module state at initialization time."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_ONLINE
 
-    def test_initialize_chassis_module_info_admin_down(self, chassis, controller):
+    def test_initialize_chassis_module_admin_down(self, chassis, controller):
         """admin_status=down is stored when module is initially down."""
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
-    def test_initialize_chassis_module_info_no_module(self, controller):
+    def test_initialize_chassis_module_no_module(self, controller):
         """When module not found, initialize logs an error and does not write the table."""
         controller._get_switch_host_module = MagicMock(return_value=None)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is False
 
@@ -1303,10 +1401,10 @@ class TestChassisModuleInfo:
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
 
-    def test_refresh_host_state_mirrors_oper_status(self, chassis, controller):
-        """refresh_host_state also updates oper_status in CHASSIS_MODULE_TABLE."""
+    def test_init_host_state_mirrors_oper_status(self, chassis, controller):
+        """init_host_state also updates oper_status in CHASSIS_MODULE_TABLE."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.refresh_host_state()
+        controller.init_host_state()
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])
@@ -1315,7 +1413,7 @@ class TestChassisModuleInfo:
     def test_initialize_then_power_off_preserves_static_fields(self, chassis, controller):
         """oper_status update via power_off merges into entry; static fields are preserved."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         # Now power off — oper_status should update but name/serial/etc. must survive
         controller.power_off()
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
@@ -1328,7 +1426,7 @@ class TestChassisModuleInfo:
     def test_admin_status_updated_on_chassis_module_event(self, event_handler, controller):
         """CHASSIS_MODULE admin_status event mirrors admin_status to CHASSIS_MODULE_TABLE."""
         # Initialize the table first so merging has something to merge into
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_DOWN)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
         # Simulate an admin_up event while host is OFFLINE and a critical leak blocks power-on
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
@@ -1344,7 +1442,7 @@ class TestChassisModuleInfo:
 
     def test_admin_down_event_mirrors_admin_status(self, event_handler, controller):
         """CHASSIS_MODULE admin_down event mirrors admin_status=down to CHASSIS_MODULE_TABLE."""
-        controller.initialize_chassis_module_info(bmcctld.ADMIN_UP)
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
         event_handler._handle_chassis_module(
@@ -1355,7 +1453,7 @@ class TestChassisModuleInfo:
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
-    def test_daemon_init_calls_initialize_chassis_module_info(self, chassis):
+    def test_daemon_init_calls_initialize_chassis_module(self, chassis):
         """BmcctldDaemon.__init__ populates CHASSIS_MODULE_TABLE at startup."""
         with patch('sonic_platform.platform.Platform') as MockPlatform:
             MockPlatform.return_value.get_chassis.return_value = chassis
@@ -1366,4 +1464,54 @@ class TestChassisModuleInfo:
         assert bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD in info
         assert bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD in info
         assert bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD in info
+
+    def test_initialize_chassis_module_seeds_config_db_defaults(self, chassis, controller):
+        """When CONFIG_DB CHASSIS_MODULE|SWITCH-HOST is absent, seed defaults using passed admin_status."""
+        controller.chassis_module_config_table._del(bmcctld.SWITCH_HOST_MODULE_KEY)
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
+        result = controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
+        assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == str(bmcctld.DEFAULT_POWER_ON_DELAY_SECS)
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == str(bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS)
+
+    def test_initialize_chassis_module_preserves_operator_config(self, chassis, controller):
+        """Existing operator CONFIG_DB entry must not be clobbered by daemon startup."""
+        controller.chassis_module_config_table.set(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            FieldValuePairs([
+                (bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, bmcctld.ADMIN_UP),
+                (bmcctld.FIELD_POWER_ON_DELAY, "45"),
+                (bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, "90"),
+            ]),
+        )
+        controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
+        result = controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+        assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == "45"
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == "90"
+
+    def test_daemon_init_air_cooled_defaults_admin_up(self, chassis):
+        """Air-cooled boxes default CONFIG_DB admin_status=up when no operator entry exists."""
+        chassis.set_liquid_cooled(False)
+        with patch('sonic_platform.platform.Platform') as MockPlatform:
+            MockPlatform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        result = daemon.controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
+
+    def test_daemon_init_liquid_cooled_defaults_admin_down(self, chassis):
+        """Liquid-cooled boxes default CONFIG_DB admin_status=down when no operator entry exists."""
+        chassis.set_liquid_cooled(True)
+        with patch('sonic_platform.platform.Platform') as MockPlatform:
+            MockPlatform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        result = daemon.controller.chassis_module_config_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert result[0] is True
+        cfg = dict(result[1])
+        assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
