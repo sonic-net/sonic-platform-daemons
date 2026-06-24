@@ -1434,7 +1434,15 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 return False
             with open(REBOOT_CAUSE_FILE, 'r') as f:
                 cause = f.read().strip().lower()
-            return any(kw in cause for kw in NPU_CRASH_REBOOT_CAUSE_KEYWORDS)
+
+            # Match explicit crash signals only. This avoids classifying
+            # normal operator-initiated reboot strings as crashes.
+            if 'kernel panic' in cause:
+                return True
+
+            # Keep supporting legacy "unknown" reboot-cause content, but only
+            # as the full value/prefix (not arbitrary substring matches).
+            return cause == 'unknown' or cause.startswith('unknown:') or cause.startswith('unknown ')
         except Exception as e:
             self.log_warning("Failed to read {}: {}".format(REBOOT_CAUSE_FILE, e))
             return False
