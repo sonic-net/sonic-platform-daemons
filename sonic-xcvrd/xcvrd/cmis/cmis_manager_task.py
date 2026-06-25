@@ -1168,6 +1168,13 @@ class CmisManagerTask(threading.Thread):
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
             elif state == CMIS_STATE_DP_INIT:
                 if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
+                    if self.is_decomm_pending(lport):
+                        self.log_notice("{}: DECOMMISSION: failed for physical port {}".format(
+                                                lport, self.port_dict[lport]['index']))
+                        self.clear_decomm_pending(lport)
+                        self.force_cmis_reinit(lport, retries + 1)
+                        return
+
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'ConfigSuccess', current ConfigStatus: "
                                         "{}".format(lport, list(api.get_config_datapath_hostlane_status().values())))
@@ -1176,7 +1183,8 @@ class CmisManagerTask(threading.Thread):
 
                 # Clear decommission status and invoke CMIS reinit so that normal CMIS initialization can begin
                 if self.is_decomm_pending(lport):
-                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(lport, self.port_dict[lport]['index']))
+                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(
+                                        lport, self.port_dict[lport]['index']))
                     self.clear_decomm_pending(lport)
                     self.force_cmis_reinit(lport)
                     return
