@@ -194,13 +194,15 @@ class TestNpuCrashDetection:
              patch("builtins.open", mock_open(read_data="Kernel Panic - not syncing")):
             assert updater._npu_crash_on_last_boot() is True
 
-    def test_detects_unknown_cause(self):
+    def test_unknown_cause_not_crash(self):
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
 
+        # An "unknown" reboot cause is reported on first boot and must NOT be
+        # classified as a crash, otherwise every fresh boot would power-cycle.
         with patch("os.path.isfile", return_value=True), \
              patch("builtins.open", mock_open(read_data="Unknown")):
-            assert updater._npu_crash_on_last_boot() is True
+            assert updater._npu_crash_on_last_boot() is False
 
     def test_normal_reboot_not_crash(self):
         chassis = create_chassis_with_dpus(1)
@@ -1695,12 +1697,16 @@ class TestHardwareOfflineDuringRecovery:
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
 
-    def test_hardware_offline_from_offline_state_triggers_recovery(self):
-        """oper_status=Offline from Offline state + admin-up → hardware-offline
-        branch fires (Offline is NOT in the exclusion list), triggering power-cycle."""
+    def test_hardware_offline_from_admin_down_restarts_booting(self):
+        """admin-up + current_state still AdminDown + stale oper_status=Offline
+        must take the clean AdminDown -> Booting restart path, NOT the
+        hardware-offline power-cycle path. Only a previously-Ready DPU treats
+        Offline as a new hardware failure, so this avoids the `module startup`
+        race that would otherwise power-cycle (and bump reset_count)."""
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
         updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_ADMIN_DOWN
+        updater.dpu_recovery_state["DPU0"]['reset_count'] = 0
 
         set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
         chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
@@ -1710,9 +1716,10 @@ class TestHardwareOfflineDuringRecovery:
              patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
 
-        # Offline is not in the hardware-offline exclusion list, so the
-        # hardware-offline branch fires and triggers a power-cycle
-        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
+        # AdminDown falls through to the clean restart path instead of being
+        # treated as a hardware failure; reset_count is left untouched.
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
+        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
 
 
 # ============================================================================
@@ -2760,7 +2767,7 @@ class TestUpdateRecoveryStateIntegration:
         updater.device_metadata_table = mock_device_metadata_table
 
         with patch("os.path.isfile", return_value=True), \
-             patch("builtins.open", mock_open(read_data="Unknown")):
+             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")):
             updater.init_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_MANUAL_INTERVENTION

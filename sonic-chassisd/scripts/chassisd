@@ -146,7 +146,6 @@ MINIMUM_SELF_RECOVERY_POLL_COUNT = 3
 
 # Reboot cause file used to detect NPU kernel crash on chassisd startup
 REBOOT_CAUSE_FILE = "/host/reboot-cause/reboot-cause.txt"
-NPU_CRASH_REBOOT_CAUSE_KEYWORDS = ("kernel panic")
 
 # Internal recovery dict key for tracking prior Unrecoverable state
 WAS_UNRECOVERABLE_KEY = 'was_unrecoverable'
@@ -1368,14 +1367,14 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         recovery['self_recovery_poll_count'] = 0
 
     def _should_handle_hw_offline(self, current_state):
-        """Return True if the DPU should react to oper_status Offline.
+        """Return True only if a previously-Ready DPU should treat
+        oper_status Offline as a new hardware failure.
 
-        States already handling failure (Booting, PowerCycle,
-        WaitForSelfRecovery, ManualIntervention) should not re-trigger.
+        Allow-list (Ready only) is fail-safe for future states and avoids a
+        `module startup` race where a stale Offline snapshot in AdminDown
+        would power-cycle instead of cleanly restarting.
         """
-        return current_state not in (
-            DPU_STATE_BOOTING, DPU_STATE_POWER_CYCLE,
-            DPU_STATE_WAIT_FOR_SELF_RECOVERY, DPU_STATE_MANUAL_INTERVENTION)
+        return current_state == DPU_STATE_READY
 
     def _handle_boot_timeout_expired(self, name, module_index, recovery,
                                      auto_recovery_enabled, context):
@@ -1426,7 +1425,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             self._enter_power_cycle_or_unrecoverable(name, module_index)
 
     def _npu_crash_on_last_boot(self):
-        """Return True if the last NPU reboot cause looks like a crash/OOM/unknown."""
+        """Return True if the last NPU reboot cause looks like a kernel crash."""
         try:
             if not os.path.isfile(REBOOT_CAUSE_FILE):
                 # No reboot-cause file means this is likely a fresh boot or the
@@ -1435,14 +1434,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             with open(REBOOT_CAUSE_FILE, 'r') as f:
                 cause = f.read().strip().lower()
 
-            # Match explicit crash signals only. This avoids classifying
-            # normal operator-initiated reboot strings as crashes.
-            if 'kernel panic' in cause:
-                return True
-
-            # Keep supporting legacy "unknown" reboot-cause content, but only
-            # as the full value/prefix (not arbitrary substring matches).
-            return cause == 'unknown' or cause.startswith('unknown:') or cause.startswith('unknown ')
+            # Match kernel crashes only. "unknown" is reported on first boot
+            # and must not trigger a power-cycle.
+            return 'kernel panic' in cause
         except Exception as e:
             self.log_warning("Failed to read {}: {}".format(REBOOT_CAUSE_FILE, e))
             return False
