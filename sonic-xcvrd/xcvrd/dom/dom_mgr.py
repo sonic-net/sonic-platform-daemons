@@ -40,7 +40,7 @@ class DomInfoUpdateBase(threading.Thread):
 
     name = ''
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event):
         threading.Thread.__init__(self)
         self.exc = None
         self.task_stopping_event = threading.Event()
@@ -48,7 +48,7 @@ class DomInfoUpdateBase(threading.Thread):
         self.helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_DOMINFOUPDATETASK, enable_runtime_config=True)
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
-        self.sfp_obj_dict = sfp_obj_dict
+        self.port_obj_dict = port_obj_dict
 
     def log_debug(self, message):
         self.helper_logger.log_debug("{}".format(message))
@@ -147,17 +147,17 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
     ]
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None):
-        super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None):
+        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event)
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.xcvrd_utils = XCVRDUtils(self.sfp_obj_dict, self.helper_logger)
-        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.xcvrd_utils = XCVRDUtils(self.port_obj_dict, self.helper_logger)
+        self.dom_db_utils = DOMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.db_utils = self.dom_db_utils
-        self.vdm_utils = VDMUtils(self.sfp_obj_dict, self.helper_logger)
-        self.vdm_db_utils = VDMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
-        self.status_db_utils = StatusDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.vdm_utils = VDMUtils(self.port_obj_dict, self.helper_logger)
+        self.vdm_db_utils = VDMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.status_db_utils = StatusDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.dom_update_interval = self.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS
         if dom_update_interval is not None:
              if dom_update_interval < 0:
@@ -329,6 +329,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                     self.log_notice("Stop event generated during DOM monitoring loop")
                     break
 
+                if physical_port not in self.port_obj_dict:
+                    continue
+
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
                 logical_port_name = logical_ports[0]
@@ -443,6 +446,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         if self.task_stopping_event.is_set():
             return
 
+        if physical_port not in self.port_obj_dict:
+            return
+
         logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
         if logical_port_list is None:
             self.log_warning("Update DB diagnostics during link change: Unknown physical port index {}".format(physical_port))
@@ -523,14 +529,19 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
 
+
+class CpoDomInfoUpdateTask(DomInfoUpdateTask):
+    name = "CpoDomInfoUpdateTask"
+
+
 class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     name = 'DomThermalInfoUpdateTask'
 
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, poll_interval):
-        super().__init__(namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event)
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, poll_interval):
+        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event)
         self.poll_interval = poll_interval
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.dom_db_utils = DOMDBUtils(self.sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.dom_db_utils = DOMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def task_worker(self):
         self.log_notice("Start DOM thermal monitoring loop")
@@ -551,6 +562,9 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
                continue
 
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
+                if physical_port not in self.port_obj_dict:
+                    continue
+
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
                 logical_port_name = logical_ports[0]

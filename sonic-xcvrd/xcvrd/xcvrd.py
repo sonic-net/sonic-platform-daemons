@@ -28,8 +28,9 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
+    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask, CpoDomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
+    from .cpo.cpo_manager_task import CpoManagerTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -875,17 +876,19 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, dom_temperature_poll_interval=None, dom_update_interval=None):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, dom_temperature_poll_interval=None, dom_update_interval=None, skip_cpo_mgr=False):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.skip_cpo_mgr = skip_cpo_mgr
         self.enable_sff_mgr = enable_sff_mgr
         self.dom_temperature_poll_interval = dom_temperature_poll_interval
         self.dom_update_interval = dom_update_interval
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
+        self.cpo_obj_dict = {}
 
     def update_loggers_log_level(self):
         """
@@ -958,30 +961,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 self.log_notice("Port init control: Initialized NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(lport))
 
         self.log_notice("XCVRD INIT: Port init control fields initialized in STATE_DB PORT_TABLE")
-
-    def initialize_sfp_obj_dict(self, port_mapping_data):
-        """
-        Create a dictionary mapping physical ports to their corresponding SFP objects.
-
-        Args:
-            port_mapping_data (PortMapping): The port mapping data.
-
-        Returns:
-            Dict[int, Sfp]: A dictionary mapping physical ports to SFP objects.
-        """
-        if port_mapping_data is None or port_mapping_data.physical_to_logical is None:
-            self.log_error("SFP OBJ INIT: Failed to get port mapping data")
-            return {}
-
-        physical_port_list = port_mapping_data.physical_to_logical.keys()
-        sfp_obj_dict = {}
-        for physical_port in physical_port_list:
-            try:
-                sfp_obj_dict[physical_port] = platform_chassis.get_sfp(physical_port)
-            except Exception as e:
-                self.log_error(f"SFP OBJ INIT: Failed to get SFP object for port {physical_port} due to {repr(e)}")
-
-        return sfp_obj_dict
 
     def remove_stale_transceiver_info(self, port_mapping_data):
         """
@@ -1068,7 +1047,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
-        self.sfp_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
+        self.sfp_obj_dict = common.get_pluggable_obj_dict(port_mapping_data)
+        self.cpo_obj_dict = common.get_cpo_obj_dict(port_mapping_data)
 
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
         # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
@@ -1157,14 +1137,28 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the CMIS manager
         cmis_manager = None
         if not self.skip_cmis_mgr:
-            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr, platform_chassis=platform_chassis)
+            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr)
             cmis_manager.start()
             self.threads.append(cmis_manager)
+
+        # Start the CPO manager
+        cpo_manager = None
+        if self.cpo_obj_dict and not self.skip_cpo_mgr:
+            cpo_manager = CpoManagerTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, skip_cpo_mgr=self.skip_cpo_mgr)
+            cpo_manager.start()
+            self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
         dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
+
+        # Start the CPO dom sensor info update thread
+        cpo_dom_info_update = None
+        if self.cpo_obj_dict:
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
+            cpo_dom_info_update.start()
+            self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
@@ -1245,13 +1239,15 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
+    parser.add_argument('--skip_cpo_mgr', action='store_true')
     parser.add_argument('--enable_sff_mgr', action='store_true')
     parser.add_argument('--dom_temperature_poll_interval', default=None, type=int)
     parser.add_argument('--dom_update_interval', default=None, type=int)
 
     args = parser.parse_args()
     xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
-                        args.dom_temperature_poll_interval, args.dom_update_interval)
+                        args.dom_temperature_poll_interval, args.dom_update_interval,
+                        args.skip_cpo_mgr)
     xcvrd.run()
 
 

@@ -112,6 +112,65 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_sw_tbl.set(logical_port_name, fvs)
 
+def get_port_device(physical_port):
+    if platform_chassis is None:
+        return None
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    try:
+        return platform_chassis.get_sfp(physical_port)
+    except (NotImplementedError, AttributeError, IndexError):
+        return None
+
+def is_cpo_port(physical_port):
+    if platform_chassis is None:
+        return False
+    try:
+        return platform_chassis.get_cpo(physical_port) is not None
+    except (NotImplementedError, AttributeError, IndexError):
+        return False
+
+def is_pluggable_port(physical_port):
+    return not is_cpo_port(physical_port)
+
+def _get_port_obj_dict(port_mapping_data, port_filter):
+    """
+    Create a dictionary mapping physical ports to their corresponding device objects,
+    restricted to the ports accepted by port_filter.
+
+    Args:
+        port_mapping_data (PortMapping): The port mapping data.
+        port_filter (Callable[[int], bool]): Predicate selecting the physical ports to include.
+
+    Returns:
+        Dict[int, object]: A dictionary mapping physical ports to device objects.
+    """
+    if port_mapping_data is None or port_mapping_data.physical_to_logical is None:
+        helper_logger.log_error("PORT OBJ INIT: Failed to get port mapping data")
+        return {}
+
+    obj_dict = {}
+    for physical_port in port_mapping_data.physical_to_logical.keys():
+        try:
+            if port_filter(physical_port):
+                obj_dict[physical_port] = get_port_device(physical_port)
+        except Exception as e:
+            helper_logger.log_error(f"PORT OBJ INIT: Failed to get device object for port {physical_port} due to {repr(e)}")
+
+    return obj_dict
+
+def get_cpo_obj_dict(port_mapping_data):
+    """Create a dictionary mapping physical ports to their corresponding CPO objects."""
+    return _get_port_obj_dict(port_mapping_data, is_cpo_port)
+
+def get_pluggable_obj_dict(port_mapping_data):
+    """Create a dictionary mapping physical ports to their corresponding SFP objects."""
+    return _get_port_obj_dict(port_mapping_data, is_pluggable_port)
+
 def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
@@ -125,7 +184,9 @@ def _wrapper_get_presence(physical_port):
     """Wrapper function to get SFP presence status"""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_presence()
+            device = get_port_device(physical_port)
+            if device is not None:
+                return device.get_presence()
         except NotImplementedError:
             pass
     if platform_sfputil is not None:
