@@ -968,9 +968,13 @@ class CmisManagerTask(threading.Thread):
             # Ensure that Tx is OFF
             # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
             # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
-            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
+            # Rarely, a ModuleReady module may enter DataPathInit as part of the hardware initialization flow before
+            # explicitly setting the datapath deinit
+            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated',
+                                                                    'DataPathInitialized',
+                                                                    'DataPathInit']):
                 if self.is_timer_expired(expired):
-                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
+                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized/DataPathInit'".format(lport))
                     self.force_cmis_reinit(lport, retries + 1)
                 return False
             self.port_dict[lport]['forced_tx_disabled'] = False

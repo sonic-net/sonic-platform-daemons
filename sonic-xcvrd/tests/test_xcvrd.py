@@ -3800,6 +3800,50 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+    @pytest.mark.parametrize("dp_state, timer_expired, expect_reinit, expect_forced_tx_cleared, expect_continue", [
+        ('DataPathDeactivated', False, False, True, True),
+        ('DataPathInitialized', False, False, True, True),
+        ('DataPathInit', False, False, True, True),
+        ('DataPathActivated', True, True, False, False),
+    ])
+    def test_CmisManagerTask_dp_pre_init_check_forced_tx_disabled_datapath_states(
+            self, dp_state, timer_expired, expect_reinit, expect_forced_tx_cleared, expect_continue):
+        """When forced_tx_disabled is set, DP_PRE_INIT_CHECK accepts DataPathInit as a valid Tx-off state."""
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value=gen_cmis_dp_state_dict(dp_state))
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.port_dict['Ethernet0'] = {
+            'api': mock_xcvr_api,
+            'host_lanes_mask': 0xFF,
+            'appl': 1,
+            'cmis_expired': time.time() + 100,
+            'cmis_retries': 0,
+            'forced_tx_disabled': True,
+        }
+        task.is_cmis_application_update_required = MagicMock(return_value=True)
+        task.is_timer_expired = MagicMock(return_value=timer_expired)
+        task.force_cmis_reinit = MagicMock()
+        task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
+
+        assert task.handle_cmis_dp_pre_init_check_state('Ethernet0') == expect_continue
+
+        if expect_reinit:
+            task.force_cmis_reinit.assert_called_once_with('Ethernet0', 1)
+        else:
+            task.force_cmis_reinit.assert_not_called()
+
+        assert task.port_dict['Ethernet0']['forced_tx_disabled'] == (not expect_forced_tx_cleared)
+
+        if expect_continue:
+            task.update_port_transceiver_status_table_sw_cmis_state.assert_called_once_with(
+                'Ethernet0', CMIS_STATE_DP_DEINIT)
+        else:
+            task.update_port_transceiver_status_table_sw_cmis_state.assert_not_called()
+
     @pytest.mark.parametrize("ifname, expected", [
         ('1.6TBASE-CR8 (Clause179)', 1600000),
         ('1.6TAUI-8 (Annex176E)', 1600000),
