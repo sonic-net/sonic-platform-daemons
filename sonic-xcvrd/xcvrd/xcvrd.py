@@ -28,8 +28,9 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
+    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask, CpoDomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
+    from .cpo.cpo_manager_task import CpoManagerTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -886,6 +887,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
+        self.cpo_obj_dict = {}
 
     def update_loggers_log_level(self):
         """
@@ -977,9 +979,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_obj_dict = {}
         for physical_port in physical_port_list:
             try:
-                sfp_obj_dict[physical_port] = platform_chassis.get_sfp(physical_port)
+                sfp_obj_dict[physical_port] = common.get_port_device(physical_port)
             except Exception as e:
-                self.log_error(f"SFP OBJ INIT: Failed to get SFP object for port {physical_port} due to {repr(e)}")
+                self.log_error(f"SFP OBJ INIT: Failed to get device object for port {physical_port} due to {repr(e)}")
 
         return sfp_obj_dict
 
@@ -1068,7 +1070,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
-        self.sfp_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
+        full_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
+        self.sfp_obj_dict = common.get_pluggable_obj_dict(full_obj_dict)
+        self.cpo_obj_dict = common.get_cpo_obj_dict(full_obj_dict)
 
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
         # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
@@ -1161,10 +1165,24 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             cmis_manager.start()
             self.threads.append(cmis_manager)
 
+        # Start the CPO manager
+        cpo_manager = None
+        if self.cpo_obj_dict:
+            cpo_manager = CpoManagerTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event)
+            cpo_manager.start()
+            self.threads.append(cpo_manager)
+
         # Start the dom sensor info update thread
         dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
+
+        # Start the CPO dom sensor info update thread
+        cpo_dom_info_update = None
+        if self.cpo_obj_dict:
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
+            cpo_dom_info_update.start()
+            self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None

@@ -112,6 +112,37 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_sw_tbl.set(logical_port_name, fvs)
 
+def get_port_device(physical_port):
+    if platform_chassis is None:
+        return None
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    try:
+        return platform_chassis.get_sfp(physical_port)
+    except (NotImplementedError, AttributeError, IndexError):
+        return None
+
+def is_cpo_port(physical_port):
+    if platform_chassis is None:
+        return False
+    try:
+        return platform_chassis.get_cpo(physical_port) is not None
+    except (NotImplementedError, AttributeError, IndexError):
+        return False
+
+def is_pluggable_port(physical_port):
+    return not is_cpo_port(physical_port)
+
+def get_cpo_obj_dict(sfp_obj_dict):
+    return {pport: obj for pport, obj in sfp_obj_dict.items() if is_cpo_port(pport)}
+
+def get_pluggable_obj_dict(sfp_obj_dict):
+    return {pport: obj for pport, obj in sfp_obj_dict.items() if is_pluggable_port(pport)}
+
 def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
@@ -125,7 +156,9 @@ def _wrapper_get_presence(physical_port):
     """Wrapper function to get SFP presence status"""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_presence()
+            device = get_port_device(physical_port)
+            if device is not None:
+                return device.get_presence()
         except NotImplementedError:
             pass
     if platform_sfputil is not None:

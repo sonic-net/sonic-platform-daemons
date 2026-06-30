@@ -515,6 +515,11 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
 
+
+class CpoDomInfoUpdateTask(DomInfoUpdateTask):
+    name = "CpoDomInfoUpdateTask"
+
+
 class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     name = 'DomThermalInfoUpdateTask'
 
