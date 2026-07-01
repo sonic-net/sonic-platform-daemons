@@ -258,13 +258,19 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event,
+                 skip_cmis_mgr=False, enable_sff_mgr=False):
         threading.Thread.__init__(self)
         self.name = "SfpStateUpdateTask"
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.sfp_error_event = sfp_error_event
+        # Whether the CMIS / SFF managers run on this platform. When the manager that would
+        # own a given transceiver type is not running, SfpStateUpdateTask publishes
+        # SI_SETTINGS_UNAVAIL for that port so orchagent does not wait for SI settings forever.
+        self.skip_cmis_mgr = skip_cmis_mgr
+        self.enable_sff_mgr = enable_sff_mgr
         self.port_mapping = copy.deepcopy(port_mapping)
         # A set to hold those logical port name who fail to read EEPROM
         self.retry_eeprom_set = set()
@@ -333,10 +339,7 @@ class SfpStateUpdateTask(threading.Thread):
             is_warm_start = warm_start_status.get(namespace, False)
 
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
-            if rc != SFP_EEPROM_NOT_READY:
-                if is_warm_start == False:
-                    media_settings_parser.notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
-            else:
+            if rc == SFP_EEPROM_NOT_READY:
                 retry_eeprom_set.add(logical_port_name)
         
         dom_thresholds_cache = {}
@@ -349,6 +352,8 @@ class SfpStateUpdateTask(threading.Thread):
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_thresholds_cache)
                 # Read the VDM thresholds and post them to the DB
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_thresholds_cache)
+                self.notify_si_settings_unavailable(
+                    logical_port_name, port_mapping.get_asic_id_for_logical_port(logical_port_name))
 
         return retry_eeprom_set
 
@@ -568,8 +573,7 @@ class SfpStateUpdateTask(threading.Thread):
                                 if rc != SFP_EEPROM_NOT_READY:
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-
-                                    media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                                    self.notify_si_settings_unavailable(logical_port, asic_index)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 # Remove the SFP API object for this physical port
@@ -579,8 +583,12 @@ class SfpStateUpdateTask(threading.Thread):
                                 except (NotImplementedError, AttributeError) as e:
                                     helper_logger.log_error(f"Failed to remove xcvr api for port {key}: {str(e)}")
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
-                                state_port_table = self.xcvr_table_helper.get_state_port_tbl(asic_index)
-                                state_port_table.set(logical_port, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_DEFAULT_VALUE)])
+                                # Reset si_settings_notification in APPL_DB for the logical port
+                                next_number = self.xcvr_table_helper.get_next_si_notification_number(logical_port, asic_index)
+                                si_default_value = f"SI_SETTINGS_DEFAULT:{next_number}"
+                                app_port_table = self.xcvr_table_helper.get_app_port_tbl(asic_index)
+                                app_port_table.set(logical_port, [("si_settings_notification", si_default_value)])
+
                                 common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                                 helper_logger.log_notice("{}: received plug out and update port sfp status table.".format(logical_port))
@@ -785,15 +793,11 @@ class SfpStateUpdateTask(threading.Thread):
         #  3. SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
         status_sw_tbl = self.xcvr_table_helper.get_status_sw_tbl(port_change_event.asic_id)
         int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
-        # Initialize the NPU_SI_SETTINGS_SYNC_STATUS to default value
         state_port_table = self.xcvr_table_helper.get_state_port_tbl(port_change_event.asic_id)
         found, state_port_table_fvs = state_port_table.get(port_change_event.port_name)
         if not found:
             helper_logger.log_notice("Add logical port: Creating STATE_DB PORT_TABLE as unable to find for lport {}".format(port_change_event.port_name))
             state_port_table_fvs = []
-        state_port_table.set(port_change_event.port_name, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY,
-                                                      NPU_SI_SETTINGS_DEFAULT_VALUE)])
-        helper_logger.log_notice("Add logical port: Initialized NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(port_change_event.port_name))
 
         error_description = 'N/A'
         status = None
@@ -829,7 +833,9 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                self.notify_si_settings_unavailable(
+                    port_change_event.port_name,
+                    self.port_mapping.get_asic_id_for_logical_port(port_change_event.port_name))
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         common.update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
@@ -856,12 +862,37 @@ class SfpStateUpdateTask(threading.Thread):
             if rc != SFP_EEPROM_NOT_READY:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-
-                media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                self.notify_si_settings_unavailable(logical_port, asic_index)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
+
+    def notify_si_settings_unavailable(self, logical_port, asic_index):
+        """Publish SI_SETTINGS_UNAVAIL when the manager that would own this transceiver type is
+        not running, so orchagent does not hold the port waiting for SI settings that will never
+        arrive. CMIS modules are owned by CmisManagerTask (off iff skip_cmis_mgr); all other
+        modules by SffManagerTask (off iff not enable_sff_mgr). No-op when the relevant manager
+        is running, or when no transceiver is present.
+        """
+        physical_port_list = self.port_mapping.logical_port_name_to_physical_port_list(logical_port)
+        if not physical_port_list or platform_chassis is None:
+            return
+        physical_port = physical_port_list[0]
+        if not common._wrapper_get_presence(physical_port):
+            return
+        try:
+            api = platform_chassis.get_sfp(physical_port).get_xcvr_api()
+        except (NotImplementedError, AttributeError):
+            api = None
+        is_cmis = common.is_cmis_api(api)
+        unmanaged = (is_cmis and self.skip_cmis_mgr) or (not is_cmis and not self.enable_sff_mgr)
+        if not unmanaged:
+            return
+        self.xcvr_table_helper.get_app_port_tbl(asic_index).set(
+            logical_port, [("si_settings_notification", "SI_SETTINGS_UNAVAIL")])
+        helper_logger.log_notice("{}: no SI settings manager running for this transceiver type; "
+                                 "publishing SI_SETTINGS_UNAVAIL".format(logical_port))
 
     def update_log_level(self):
         """Call the logger's update log level method.
@@ -933,31 +964,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             (key, op, fvp) = port_tbl.pop()
             if key in ["PortConfigDone", "PortInitDone"]:
                 break
-
-    """
-    Initialize NPU_SI_SETTINGS_SYNC_STATUS_KEY field in STATE_DB PORT_TABLE|<lport>
-    if not already present for a port.
-    """
-    def initialize_port_init_control_fields_in_port_table(self, port_mapping_data):
-        logical_port_list = port_mapping_data.logical_port_list
-        for lport in logical_port_list:
-            asic_index = port_mapping_data.get_asic_id_for_logical_port(lport)
-            state_port_table  = self.xcvr_table_helper.get_state_port_tbl(asic_index)
-            if state_port_table is None:
-                helper_logger.log_error("Port init control: state_port_tbl is None for lport {}".format(lport))
-                continue
-
-            found, state_port_table_fvs = state_port_table.get(lport)
-            if not found:
-                self.log_notice("Port init control: Creating STATE_DB PORT_TABLE as unable to find for lport {}".format(lport))
-                state_port_table_fvs = []
-            state_port_table_fvs_dict = dict(state_port_table_fvs)
-            if NPU_SI_SETTINGS_SYNC_STATUS_KEY not in state_port_table_fvs_dict:
-                state_port_table.set(lport, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY,
-                                              NPU_SI_SETTINGS_DEFAULT_VALUE)])
-                self.log_notice("Port init control: Initialized NPU_SI_SETTINGS_SYNC_STATUS for lport {}".format(lport))
-
-        self.log_notice("XCVRD INIT: Port init control fields initialized in STATE_DB PORT_TABLE")
 
     def initialize_sfp_obj_dict(self, port_mapping_data):
         """
@@ -1067,7 +1073,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_notice("XCVRD INIT: After port config is done")
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
 
-        self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
         self.sfp_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
 
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
@@ -1148,7 +1153,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the SFF manager
         sff_manager = None
         if self.enable_sff_mgr:
-            sff_manager = SffManagerTask(self.namespaces, self.stop_event, platform_chassis, helper_logger)
+            sff_manager = SffManagerTask(self.namespaces, port_mapping_data, self.stop_event, platform_chassis, helper_logger)
             sff_manager.start()
             self.threads.append(sff_manager)
         else:
@@ -1175,7 +1180,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(dom_thermal_info_update)
 
         # Start the sfp state info update thread
-        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
+        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event,
+                                              skip_cmis_mgr=self.skip_cmis_mgr, enable_sff_mgr=self.enable_sff_mgr)
         sfp_state_update.start()
         self.threads.append(sfp_state_update)
 
