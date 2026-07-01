@@ -855,6 +855,22 @@ class BmcEventHandler(EventLogger):
         self.sel.addSelectable(self.rack_mgr_alert_sub)
         self.sel.addSelectable(self.system_leak_sub)
 
+    def seed_chassis_module_admin_status(self):
+        """
+        Record the current CONFIG admin_status before the event loop starts.
+
+        SubscriberStateTable replays existing CHASSIS_MODULE rows on subscribe. Without
+        seeding, the replay can look like a new admin transition and enqueue
+        ACTION_POWER_ON before HOST_STATE is synchronized and before the main-thread
+        action loop is ready to process the queue.
+        """
+        admin_status = self.policy_reader._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, "")
+        if admin_status:
+            self._last_chassis_module_admin_status[SWITCH_HOST_MODULE_KEY] = admin_status
+            self.log_info(
+                "Seeded CHASSIS_MODULE admin_status dedup for {}: {}".format(
+                    SWITCH_HOST_MODULE_KEY, admin_status))
+
     # ---- public ----
 
     def run_event_loop(self):
@@ -1293,21 +1309,30 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         """
         Called once by the main loop.  Startup flow:
 
-          1. If Switch-Host is already ONLINE (daemon restart): skip boot
-             sequence, refresh STATE_DB, enter action loop immediately.
-          2. Non-liquid-cooled: power on immediately, no boot delay or
-             leak/alert checks, then enter action loop.
-          3. Liquid-cooled (normal boot): run _initial_power_on_sequence
-             (boot delay + leak check), then enter action loop.
+          1. Sync HOST_STATE from live oper_status and seed CONFIG dedup state.
+          2. Start the BmcEventHandler thread (CLI admin up/down, Rack Manager, leaks).
+          3. If Switch-Host is already ONLINE: skip boot power-on sequence.
+          4. Non-liquid-cooled + OFFLINE + admin_status=up: power on immediately.
+          5. Liquid-cooled + OFFLINE: run _initial_power_on_sequence (boot delay).
+          6. Enter the action processing loop.
 
-        The BmcEventHandler thread is always started first so CLI admin
-        commands are captured regardless of the startup path.
+        HOST_STATE sync and CONFIG dedup (step 1) run before the event thread so
+        SubscriberStateTable replays are treated as already handled and do not
+        enqueue ACTION_POWER_ON ahead of action-loop readiness. The BmcEventHandler
+        thread (step 2) is started before the boot sequence so CLI admin commands
+        and other CONFIG/STATE events are captured regardless of the startup path.
+        startup power-on or the action loop.
 
         Returns False to terminate the outer while-loop.
         """
         self._event_log.log_notice("bmcctld starting up")
 
-        # Always start the event thread — it handles CLI admin up/down commands
+        # Publish HOST_STATE and seed CONFIG dedup before SubscriberStateTable
+        # replays can enqueue ACTION_POWER_ON before the action loop is ready.
+        self.controller.init_host_state()
+        self.event_handler.seed_chassis_module_admin_status()
+
+        # Start the event thread — it handles CLI admin up/down commands
         # (CHASSIS_MODULE admin_status) regardless of cooling type.
         event_thread = threading.Thread(
             target=self.event_handler.run_event_loop,
@@ -1321,11 +1346,18 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
                                        "skipping boot sequence")
-            self.controller.init_host_state()
         elif not self.chassis.is_liquid_cooled():
-            self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
-                                       "immediate power_on, no additional checks")
-            self.controller.power_on()
+            admin_status = self.policy_reader.get_switch_host_admin_status()
+            if admin_status != ADMIN_UP:
+                self._event_log.log_notice(
+                    "STARTUP: SWITCH-HOST admin_status='{}'; "
+                    "Switch-Host will remain powered off. "
+                    "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
+                        admin_status))
+            else:
+                self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
+                                           "immediate power_on, no additional checks")
+                self.controller.power_on()
         else:
             # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
             # leaks/alerts, then power on if safe.
