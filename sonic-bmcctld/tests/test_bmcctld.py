@@ -680,6 +680,26 @@ class TestBmcEventHandlerChassisModule:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_ON
 
+    def test_seed_chassis_module_admin_status_ignores_config_replay(self, event_handler, controller):
+        """CONFIG replay after seed must not enqueue ACTION_POWER_ON."""
+        event_handler.policy_reader._get_chassis_module_entry = MagicMock(
+            return_value={bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP})
+        _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
+                         {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
+
+        event_handler.seed_chassis_module_admin_status()
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_seed_chassis_module_admin_status_noop_when_config_missing(self, event_handler):
+        event_handler.policy_reader._get_chassis_module_entry = MagicMock(return_value={})
+        event_handler.seed_chassis_module_admin_status()
+        assert event_handler._last_chassis_module_admin_status == {}
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - System leak events
@@ -1283,10 +1303,12 @@ class TestBmcctldDaemonRun:
         with patch('sonic_platform.platform.Platform') as MockPlatform:
             MockPlatform.return_value.get_chassis.return_value = chassis
             daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+            daemon.policy_reader.get_switch_host_admin_status = MagicMock(
+                return_value=bmcctld.ADMIN_UP)
         return daemon
 
     def test_run_not_liquid_cooled_powers_on_immediately(self, chassis):
-        """Non-liquid-cooled: power_on is called immediately, no boot delay or leak checks."""
+        """Non-liquid-cooled + admin up: power_on is called immediately."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller.power_on = MagicMock(return_value=True)
@@ -1296,6 +1318,20 @@ class TestBmcctldDaemonRun:
         result = daemon.run()
         assert result is False
         daemon.controller.power_on.assert_called_once()
+        daemon._run_action_loop.assert_called_once()
+
+    def test_run_not_liquid_cooled_skips_power_on_when_admin_down(self, chassis):
+        """Non-liquid-cooled + admin down: Switch-Host stays off at BMC reboot."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_switch_host_admin_status = MagicMock(
+            return_value=bmcctld.ADMIN_DOWN)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon._run_action_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock()
+        chassis.set_liquid_cooled(False)
+        daemon.run()
+        daemon.controller.power_on.assert_not_called()
         daemon._run_action_loop.assert_called_once()
 
     def test_run_not_liquid_cooled_skips_initial_sequence_but_starts_event_thread(self, chassis):
@@ -1327,6 +1363,30 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
         daemon._run_action_loop.assert_called_once()
+
+    def test_run_initializes_host_state_before_event_thread(self, chassis):
+        """HOST_STATE sync and CONFIG dedup happen before the event thread starts."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        call_order = []
+
+        def track_init():
+            call_order.append("init_host_state")
+
+        def track_seed():
+            call_order.append("seed")
+
+        def track_event_loop():
+            call_order.append("event_loop")
+
+        daemon.controller.init_host_state = MagicMock(side_effect=track_init)
+        daemon.event_handler.seed_chassis_module_admin_status = MagicMock(side_effect=track_seed)
+        daemon.event_handler.run_event_loop = MagicMock(side_effect=track_event_loop)
+        daemon._run_action_loop = MagicMock()
+        chassis.set_liquid_cooled(True)
+        daemon.run()
+        assert call_order.index("init_host_state") < call_order.index("seed")
+        assert call_order.index("seed") < call_order.index("event_loop")
 
     def test_run_liquid_cooled_runs_full_sequence(self, chassis):
         """Liquid-cooled: event thread and initial power-on sequence are both invoked."""
