@@ -46,19 +46,20 @@ class CmisManagerTask(threading.Thread):
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False, platform_chassis=None):
+    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
         self.name = "CmisManagerTask"
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
         self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
+        self.port_mapping = port_mapping
         self.decomm_pending_dict = {}
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
-        self.platform_chassis = platform_chassis
+        self.sfp_obj_dict = sfp_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         self._is_fast_reboot_enabled = None
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
@@ -116,6 +117,9 @@ class CmisManagerTask(threading.Thread):
             return
 
         if port_change_event.port_dict is None:
+            return
+
+        if pport not in self.sfp_obj_dict:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
@@ -1265,10 +1269,13 @@ class CmisManagerTask(threading.Thread):
         if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
             return
 
+        if pport not in self.sfp_obj_dict:
+            return
+
         host_lane_count = self.get_host_lane_count(lport, lanes)
 
         # double-check the HW presence before moving forward
-        sfp = self.platform_chassis.get_sfp(pport)
+        sfp = self.sfp_obj_dict[pport]
         if not sfp.get_presence():
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
             return
@@ -1344,8 +1351,8 @@ class CmisManagerTask(threading.Thread):
         self.log_notice("Stopped")
 
     def run(self):
-        if self.platform_chassis is None:
-            self.log_notice("Platform chassis is not available, stopping...")
+        if not self.sfp_obj_dict:
+            self.log_notice("No SFP objects are available, stopping...")
             return
 
         if self.skip_cmis_mgr:
@@ -1359,7 +1366,9 @@ class CmisManagerTask(threading.Thread):
                 self.wait_for_port_config_done(namespace)
 
             for lport in self.port_dict.keys():
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+                pports = self.port_mapping.get_logical_to_physical(lport)
+                if pports and pports[0] in self.sfp_obj_dict:
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
 
             self.task_worker()
         except Exception as e:

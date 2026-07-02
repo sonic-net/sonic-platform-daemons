@@ -313,6 +313,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                     # If periodic db update is not needed, skip the rest of the loop
                     continue
 
+                if physical_port not in self.sfp_obj_dict:
+                    continue
+
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
                 logical_port_name = logical_ports[0]
@@ -429,6 +432,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         if self.task_stopping_event.is_set():
             return
 
+        if physical_port not in self.sfp_obj_dict:
+            return
+
         logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
         if logical_port_list is None:
             self.log_warning("Update DB diagnostics during link change: Unknown physical port index {}".format(physical_port))
@@ -509,6 +515,11 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
 
+
+class CpoDomInfoUpdateTask(DomInfoUpdateTask):
+    name = "CpoDomInfoUpdateTask"
+
+
 class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     name = 'DomThermalInfoUpdateTask'
 
@@ -537,6 +548,9 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
                continue
 
             for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
+                if physical_port not in self.sfp_obj_dict:
+                    continue
+
                 # Get the first logical port name since it corresponds to the first subport
                 # of the breakout group
                 logical_port_name = logical_ports[0]
