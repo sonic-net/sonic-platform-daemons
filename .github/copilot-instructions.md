@@ -21,6 +21,7 @@ sonic-platform-daemons/
 ├── sonic-thermalctld/    # Thermal control daemon
 │   ├── scripts/thermalctld
 │   ├── tests/
+│   │   └── testbed/     # Physical testbed verification scripts
 │   └── setup.py
 ├── sonic-ledd/           # LED daemon
 │   ├── scripts/ledd
