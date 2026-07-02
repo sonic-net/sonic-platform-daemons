@@ -18,6 +18,7 @@ try:
     import json
     import glob
     from datetime import datetime, timezone
+    from typing import NamedTuple
 
     from sonic_py_common import daemon_base, logger, device_info
     from sonic_py_common.task_base import ProcessTaskBase
@@ -105,13 +106,16 @@ MODULE_ADMIN_UP = 1
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
+# DPU_STATE table in CHASSIS_STATE_DB
+DPU_STATE_TABLE = 'DPU_STATE'
+
 DP_STATE = 'dpu_data_plane_state'
 DP_UPDATE_TIME = 'dpu_data_plane_time'
 CP_STATE = 'dpu_control_plane_state'
 CP_UPDATE_TIME = 'dpu_control_plane_time'
 MP_STATE = 'dpu_midplane_link_state'
 
-# New DPU recovery DB fields (CHASSIS_STATE_DB DPU_STATE table)
+# DPU recovery DB fields (CHASSIS_STATE_DB DPU_STATE table)
 READY_STATUS = 'ready_status'
 RECOVERY_STATUS = 'recovery_status'
 RESET_COUNT = 'reset_count'
@@ -122,11 +126,16 @@ LAST_READY_TIME = 'last_ready_time'
 RECOVERY_RECOVERABLE = 'recoverable'
 RECOVERY_UNRECOVERABLE = 'unrecoverable'
 
-# DPU auto-recovery feature name in CONFIG_DB FEATURE table
-DPU_AUTO_RECOVERY_FEATURE = 'dpu-auto-recovery'
-DPU_AUTO_RECOVERY_STATE_ENABLED = 'enabled'
-DPU_AUTO_RECOVERY_STATE_DISABLED = 'disabled'
-DPU_AUTO_RECOVERY_STATE_ALWAYS_DISABLED = 'always_disabled'
+# DPU auto-recovery field in CONFIG_DB DEVICE_METADATA|localhost
+DPU_AUTO_RECOVERY_FIELD = 'dpu_auto_recovery'
+DPU_AUTO_RECOVERY_ENABLED = 'enable'
+DPU_AUTO_RECOVERY_DISABLED = 'disable'
+
+# Platform.json field names for recovery thresholds
+PLATFORM_CFG_DPU_REBOOT_TIMEOUT = 'dpu_reboot_timeout'
+PLATFORM_CFG_DPU_RESET_LIMIT = 'dpu_reset_limit'
+PLATFORM_CFG_DPU_BOOT_TIMEOUT = 'dpu_boot_timeout'
+PLATFORM_CFG_DPU_SELF_RECOVERY_TIMEOUT = 'dpu_self_recovery_timeout'
 
 # Default thresholds (configurable via platform.json)
 DEFAULT_DPU_BOOT_TIMEOUT = 600
@@ -137,10 +146,12 @@ MINIMUM_SELF_RECOVERY_POLL_COUNT = 3
 
 # Reboot cause file used to detect NPU kernel crash on chassisd startup
 REBOOT_CAUSE_FILE = "/host/reboot-cause/reboot-cause.txt"
-NPU_CRASH_REBOOT_CAUSE_KEYWORDS = ("kernel panic", "unknown")
 
-# Planned operation tracking (STATE_DB CHASSIS_MODULE_TABLE)
-STATE_TRANSITION_IN_PROGRESS = 'state_transition_in_progress'
+# Internal recovery dict key for tracking prior Unrecoverable state
+WAS_UNRECOVERABLE_KEY = 'was_unrecoverable'
+
+# Transition type value used by chassisd when acquiring the state-transition lock
+TRANSITION_TYPE_RECOVERY = 'recovery'
 
 # DPU recovery states
 DPU_STATE_BOOTING = 'Booting'
@@ -148,8 +159,15 @@ DPU_STATE_READY = 'Ready'
 DPU_STATE_WAIT_FOR_SELF_RECOVERY = 'WaitForSelfRecovery'
 DPU_STATE_POWER_CYCLE = 'PowerCycle'
 DPU_STATE_MANUAL_INTERVENTION = 'ManualIntervention'
-DPU_STATE_OFFLINE = 'Offline'
+DPU_STATE_ADMIN_DOWN = 'AdminDown'
 DPU_STATE_UNRECOVERABLE = 'Unrecoverable'
+
+
+class DpuStates(NamedTuple):
+    """Container for DPU plane states to avoid positional confusion."""
+    mp_state: str
+    cp_state: str
+    dp_state: str
 
 
 # This daemon should return non-zero exit code so that supervisord will
@@ -752,9 +770,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         self.hostname_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_HOSTNAME_TABLE)
         self.module_reboot_table = swsscommon.Table(self.chassis_state_db, CHASSIS_MODULE_REBOOT_INFO_TABLE)
-        self.dpu_state_table = swsscommon.Table(self.chassis_state_db, 'DPU_STATE')
+        self.dpu_state_table = swsscommon.Table(self.chassis_state_db, DPU_STATE_TABLE)
         self.down_modules = {}
         self.chassis_app_db_clean_sha = None
+
+        # Cache CONFIG_DB DEVICE_METADATA for auto-recovery checks
+        self.config_db = daemon_base.db_connect("CONFIG_DB")
+        self.device_metadata_table = swsscommon.Table(self.config_db, 'DEVICE_METADATA')
 
         self.midplane_initialized = try_get(chassis.init_midplane_switch, default=False)
         if not self.midplane_initialized:
@@ -771,10 +793,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             try:
                 with open(PLATFORM_JSON_FILE, 'r') as f:
                     platform_cfg = json.load(f)
-                self.dpu_reboot_timeout = int(platform_cfg.get("dpu_reboot_timeout", DEFAULT_DPU_REBOOT_TIMEOUT))
-                self.reset_limit = int(platform_cfg.get("dpu_reset_limit", DEFAULT_DPU_RESET_LIMIT))
-                self.dpu_boot_timeout = int(platform_cfg.get("dpu_boot_timeout", DEFAULT_DPU_BOOT_TIMEOUT))
-                self.dpu_self_recovery_timeout = int(platform_cfg.get("dpu_self_recovery_timeout", DEFAULT_DPU_SELF_RECOVERY_TIMEOUT))
+                self.dpu_reboot_timeout = int(platform_cfg.get(PLATFORM_CFG_DPU_REBOOT_TIMEOUT, DEFAULT_DPU_REBOOT_TIMEOUT))
+                self.reset_limit = int(platform_cfg.get(PLATFORM_CFG_DPU_RESET_LIMIT, DEFAULT_DPU_RESET_LIMIT))
+                self.dpu_boot_timeout = int(platform_cfg.get(PLATFORM_CFG_DPU_BOOT_TIMEOUT, DEFAULT_DPU_BOOT_TIMEOUT))
+                self.dpu_self_recovery_timeout = int(platform_cfg.get(PLATFORM_CFG_DPU_SELF_RECOVERY_TIMEOUT, DEFAULT_DPU_SELF_RECOVERY_TIMEOUT))
             except (json.JSONDecodeError, ValueError) as e:
                 self.log_error("Error parsing {}: {}".format(PLATFORM_JSON_FILE, e))
             except Exception as e:
@@ -1164,7 +1186,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 self.log_notice("Module {} midplane connectivity is up".format(module_key))
 
             # Update midplane state in the chassisStateDB DPU_STATE table
-            key = "DPU_STATE|" + module_key
+            key = DPU_STATE_TABLE + "|" + module_key
             dpu_mp_state = self.get_dpu_midplane_state(key)
             if midplane_access and dpu_mp_state != 'up':
                 self.update_dpu_state(key, 'up')
@@ -1188,37 +1210,34 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 keys = self.chassis_state_db.keys(pattern)
                 if keys:
                     for key in keys:
-                        if not "DPU_STATE" in key and not "REBOOT_CAUSE" in key:
+                        if DPU_STATE_TABLE not in key and "REBOOT_CAUSE" not in key:
                             self.chassis_state_db.delete(key)
         return
 
     def _is_auto_recovery_enabled(self):
-        """Check if dpu-auto-recovery feature is enabled in CONFIG_DB FEATURE table.
+        """Check if dpu_auto_recovery is enabled in CONFIG_DB DEVICE_METADATA|localhost.
 
-        Returns True only when ``state == 'enabled'``. Both ``'disabled'`` and
-        ``'always_disabled'`` suppress automatic power-cycle recovery; chassisd
-        still updates DPU state fields in CHASSIS_STATE_DB but will not
-        initiate a power-cycle.
+        Returns True when the field is 'enable'.
+        Returns False otherwise.
         """
         try:
-            config_db = daemon_base.db_connect("CONFIG_DB")
-            feature_table = swsscommon.Table(config_db, 'FEATURE')
-            fvs = feature_table.get(DPU_AUTO_RECOVERY_FEATURE)
+            fvs = self.device_metadata_table.get('localhost')
             if isinstance(fvs, list) and fvs[0] is True:
                 fvs = dict(fvs[-1])
-                state = fvs.get('state', DPU_AUTO_RECOVERY_STATE_ENABLED)
-                return state == DPU_AUTO_RECOVERY_STATE_ENABLED
+                state = fvs.get(DPU_AUTO_RECOVERY_FIELD, DPU_AUTO_RECOVERY_DISABLED)
+                return state == DPU_AUTO_RECOVERY_ENABLED
         except Exception as e:
-            self.log_error("Failed to read dpu-auto-recovery feature state: {}".format(e))
+            self.log_error("Failed to read {} from DEVICE_METADATA: {}".format(
+                DPU_AUTO_RECOVERY_FIELD, e))
         return False  # Default to disabled
 
     def _get_dpu_states(self, module_name):
         """Get current DPU states from CHASSIS_STATE_DB."""
-        dpu_key = "DPU_STATE|" + module_name
+        dpu_key = DPU_STATE_TABLE + "|" + module_name
         mp_state = self.get_dpu_midplane_state(dpu_key)
         _, cp_state = self.dpu_state_table.hget(module_name, CP_STATE)
         _, dp_state = self.dpu_state_table.hget(module_name, DP_STATE)
-        return mp_state, cp_state, dp_state
+        return DpuStates(mp_state=mp_state, cp_state=cp_state, dp_state=dp_state)
 
     def _set_ready_status(self, module_name, status):
         """Set ready_status for a DPU in CHASSIS_STATE_DB."""
@@ -1240,45 +1259,133 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         """Set last_ready_time for a DPU in CHASSIS_STATE_DB."""
         self.dpu_state_table.hset(module_name, LAST_READY_TIME, get_formatted_time())
 
-    def _is_planned_transition_in_progress(self, module_name):
+    def _is_planned_transition_in_progress(self, module_name, module_index):
         """Check if a planned operation (shutdown/reboot) is in progress for this DPU.
 
-        Reads ``state_transition_in_progress`` from STATE_DB CHASSIS_MODULE_TABLE.
-        Returns True when a planned transition is active, suppressing auto-recovery.
+        Uses the platform API get_module_state_transition() which handles
+        timeout-based auto-clearing. Returns True when a non-recovery
+        transition is active, suppressing auto-recovery.
+        Ignores transition_type == TRANSITION_TYPE_RECOVERY so chassisd does not suppress itself.
         """
+        module = self.chassis.get_module(module_index)
+        in_progress = try_get(module.get_module_state_transition, module_name, default=False)
+        if not in_progress:
+            return False
+        # Check transition_type — only suppress for non-recovery transitions
         try:
             fvs = self.module_table.get(module_name)
             if isinstance(fvs, list) and fvs[0] is True:
                 fvs = dict(fvs[-1])
-                return fvs.get(STATE_TRANSITION_IN_PROGRESS, 'False') == 'True'
-        except Exception as e:
-            self.log_warning("{}: Failed to read state_transition_in_progress: {}".format(
-                module_name, e))
-        return False
+                return fvs.get('transition_type') != TRANSITION_TYPE_RECOVERY
+        except Exception:
+            pass
+        return True
 
-    def _power_cycle_dpu(self, module_name, module_index):
-        """Power-cycle a DPU and increment reset_count."""
+    def _enter_power_cycle_or_unrecoverable(self, module_name, module_index):
+        """Attempt power-cycle; mark unrecoverable if reset_limit is reached."""
         recovery = self.dpu_recovery_state[module_name]
-        recovery['reset_count'] += 1
-        self._set_reset_count(module_name, recovery['reset_count'])
-        self.log_warning("{}: Initiating power-cycle (reset_count={})".format(
-            module_name, recovery['reset_count']))
 
-        try:
-            module = self.chassis.get_module(module_index)
-            try_get(module.set_admin_state, MODULE_ADMIN_DOWN, default=False)
-            try_get(module.set_admin_state, MODULE_ADMIN_UP, default=False)
-        except Exception as e:
-            self.log_error("{}: Power-cycle failed: {}".format(module_name, e))
-
+        # Check limit before issuing power-cycle
         if recovery['reset_count'] >= self.reset_limit:
             recovery['state'] = DPU_STATE_UNRECOVERABLE
             self._set_recovery_status(module_name, RECOVERY_UNRECOVERABLE)
             self.log_error("{}: Reached reset_limit ({}). Marking as unrecoverable.".format(
                 module_name, self.reset_limit))
-        else:
+            return
+
+        recovery['reset_count'] += 1
+        self._set_reset_count(module_name, recovery['reset_count'])
+        self.log_warning("{}: Initiating power-cycle (reset_count={}/{})".format(
+            module_name, recovery['reset_count'], self.reset_limit))
+
+        module = self.chassis.get_module(module_index)
+
+        # Acquire state transition lock to prevent concurrent planned
+        # shutdown/reboot from operating on this DPU during power-cycle.
+        # If the lock cannot be acquired (another operation holds it),
+        # abort the power-cycle — the other operation owns this DPU.
+        lock_acquired = try_get(module.set_module_state_transition, module_name, TRANSITION_TYPE_RECOVERY, default=False)
+        if not lock_acquired:
+            self.log_warning("{}: Cannot acquire state transition lock; "
+                            "another operation in progress — skipping power-cycle".format(module_name))
+            recovery['reset_count'] -= 1
+            self._set_reset_count(module_name, recovery['reset_count'])
             recovery['state'] = DPU_STATE_POWER_CYCLE
             recovery['boot_start_time'] = time.time()
+            return
+
+        # Re-check transition_in_progress after acquiring our lock to close
+        # the TOCTOU window where gnoi/CLI sets transition_in_progress
+        # between _is_planned_transition_in_progress() and here.
+        if self._is_planned_transition_in_progress(module_name, module_index):
+            self.log_warning("{}: transition_in_progress detected "
+                            "after lock acquisition — aborting power-cycle".format(module_name))
+            try_get(module.clear_module_state_transition, module_name, default=False)
+            recovery['reset_count'] -= 1
+            self._set_reset_count(module_name, recovery['reset_count'])
+            recovery['state'] = DPU_STATE_POWER_CYCLE
+            recovery['boot_start_time'] = time.time()
+            return
+
+        try:
+            # Keep the same graceful sequence as module_base:
+            # pre-shutdown -> admin down -> admin up -> post-startup.
+            # Treat NotImplemented pre/post hooks as no-op success.
+            if not try_get(module.module_pre_shutdown, default=True):
+                self.log_warning("{}: module_pre_shutdown() failed".format(module_name))
+
+            try_get(module.set_admin_state, MODULE_ADMIN_DOWN, default=False)
+            try_get(module.set_admin_state, MODULE_ADMIN_UP, default=False)
+
+            if not try_get(module.module_post_startup, default=True):
+                self.log_warning("{}: module_post_startup() failed".format(module_name))
+        except Exception as e:
+            self.log_error("{}: Power-cycle failed: {}".format(module_name, e))
+        finally:
+            try_get(module.clear_module_state_transition, module_name, default=False)
+
+        recovery['state'] = DPU_STATE_POWER_CYCLE
+        recovery['boot_start_time'] = time.time()
+
+    def _enter_booting(self, name, recovery):
+        """Transition a DPU into the Booting state."""
+        recovery['state'] = DPU_STATE_BOOTING
+        recovery['boot_start_time'] = time.time()
+        recovery.pop('boot_dp_warning_logged', None)
+
+    def _enter_ready(self, name, recovery, context_msg):
+        """Transition a DPU into the Ready state."""
+        recovery['state'] = DPU_STATE_READY
+        self._set_ready_status(name, 'true')
+        self._set_last_ready_time(name)
+        self.log_info("{}: {}".format(name, context_msg))
+
+    def _enter_wait_for_self_recovery(self, name, recovery):
+        """Transition a DPU into the WaitForSelfRecovery state."""
+        recovery['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
+        recovery['self_recovery_start_time'] = time.time()
+        recovery['self_recovery_poll_count'] = 0
+
+    def _should_handle_hw_offline(self, current_state):
+        """Return True only if a previously-Ready DPU should treat
+        oper_status Offline as a new hardware failure.
+
+        Allow-list (Ready only) is fail-safe for future states and avoids a
+        `module startup` race where a stale Offline snapshot in AdminDown
+        would power-cycle instead of cleanly restarting.
+        """
+        return current_state == DPU_STATE_READY
+
+    def _handle_boot_timeout_expired(self, name, module_index, recovery,
+                                     auto_recovery_enabled, context):
+        """Handle boot timeout expiry — power-cycle or manual intervention."""
+        self.log_warning("{}: Boot timeout ({}s) expired {}".format(
+            name, self.dpu_boot_timeout, context))
+        self._set_ready_status(name, 'false')
+        if auto_recovery_enabled:
+            self._enter_power_cycle_or_unrecoverable(name, module_index)
+        else:
+            recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
 
     def init_dpu_recovery_state(self):
         """Initialize recovery DB fields for all DPUs on chassisd startup.
@@ -1300,32 +1407,36 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             self._set_recovery_status(name, RECOVERY_RECOVERABLE)
             self._set_reset_count(name, 0)
             self._set_last_down_time(name)
-            self.dpu_recovery_state[name]['state'] = DPU_STATE_BOOTING
+            self._enter_booting(name, self.dpu_recovery_state[name])
             self.dpu_recovery_state[name]['reset_count'] = 0
-            self.dpu_recovery_state[name]['boot_start_time'] = time.time()
 
             if not npu_crash:
                 continue
 
             # NPU kernel crash recovery: unconditionally power-cycle
             # admin-up DPUs to guarantee a known-good starting state.
-            oper_status = self.get_module_current_status(name)
-            if oper_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
-                # Admin-down DPU; leave powered off
+            admin_status = self.get_module_admin_status(name)
+            if admin_status == 'down':
+                # Admin-down DPU; leave powered off.
                 continue
             if not self._is_auto_recovery_enabled():
                 self.dpu_recovery_state[name]['state'] = DPU_STATE_MANUAL_INTERVENTION
                 continue
-            self._power_cycle_dpu(name, module_index)
+            self._enter_power_cycle_or_unrecoverable(name, module_index)
 
     def _npu_crash_on_last_boot(self):
-        """Return True if the last NPU reboot cause looks like a crash/OOM/unknown."""
+        """Return True if the last NPU reboot cause looks like a kernel crash."""
         try:
             if not os.path.isfile(REBOOT_CAUSE_FILE):
+                # No reboot-cause file means this is likely a fresh boot or the
+                # file was not written — assume no crash to avoid false positives.
                 return False
             with open(REBOOT_CAUSE_FILE, 'r') as f:
                 cause = f.read().strip().lower()
-            return any(kw in cause for kw in NPU_CRASH_REBOOT_CAUSE_KEYWORDS)
+
+            # Match kernel crashes only. "unknown" is reported on first boot
+            # and must not trigger a power-cycle.
+            return 'kernel panic' in cause
         except Exception as e:
             self.log_warning("Failed to read {}: {}".format(REBOOT_CAUSE_FILE, e))
             return False
@@ -1340,7 +1451,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         DPU transitions to ManualIntervention and waits for operator action.
 
         Recovery is suppressed while a planned operation (shutdown/reboot) is
-        in progress for a DPU (state_transition_in_progress == True).
+        in progress for a DPU (transition_in_progress == True).
         """
         auto_recovery_enabled = self._is_auto_recovery_enabled()
 
@@ -1348,181 +1459,170 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             name = try_get(self.chassis.get_module(module_index).get_name)
             if name not in self.dpu_recovery_state:
                 continue
+            self._process_single_dpu_recovery(name, module_index, auto_recovery_enabled)
 
-            recovery = self.dpu_recovery_state[name]
-            current_state = recovery['state']
-            mp_state, cp_state, dp_state = self._get_dpu_states(name)
-            oper_status = self.get_module_current_status(name)
-            admin_status = self.get_module_admin_status(name)
+    def _process_single_dpu_recovery(self, name, module_index, auto_recovery_enabled):
+        """Process recovery state machine for a single DPU."""
+        recovery = self.dpu_recovery_state[name]
+        current_state = recovery['state']
+        states = self._get_dpu_states(name)
+        oper_status = self.get_module_current_status(name)
+        admin_status = self.get_module_admin_status(name)
 
-            all_up = (mp_state == 'up' and cp_state == 'up' and dp_state == 'up')
+        all_up = (states.mp_state == 'up' and states.cp_state == 'up' and states.dp_state == 'up')
 
-            # DPU is administratively down — no automatic recovery; just
-            # reflect the offline state and wait for `module startup`.
-            # This check must precede the Unrecoverable check so that an
-            # operator can shut down an unrecoverable DPU and then restart it.
-            if admin_status == 'down':
-                if current_state != DPU_STATE_OFFLINE:
-                    if current_state == DPU_STATE_UNRECOVERABLE:
-                        recovery['was_unrecoverable'] = True
-                    recovery['state'] = DPU_STATE_OFFLINE
-                    self._set_ready_status(name, 'false')
-                continue
+        # DPU is administratively down — no automatic recovery; just
+        # reflect the offline state and wait for `module startup`.
+        # This check must precede the Unrecoverable check so that an
+        # operator can shut down an unrecoverable DPU and then restart it.
+        if admin_status == 'down':
+            if current_state != DPU_STATE_ADMIN_DOWN:
+                if current_state == DPU_STATE_UNRECOVERABLE:
+                    recovery[WAS_UNRECOVERABLE_KEY] = True
+                recovery['state'] = DPU_STATE_ADMIN_DOWN
+                self._set_ready_status(name, 'false')
+            return
 
-            # Terminal: requires chassisd reset or operator action
-            if current_state == DPU_STATE_UNRECOVERABLE:
-                continue
+        # Terminal: requires operator to set admin-down then admin-up,
+        # which triggers the admin-down check above and transitions to
+        # AdminDown state, clearing the Unrecoverable condition.
+        if current_state == DPU_STATE_UNRECOVERABLE:
+            return
 
-            # Suppress recovery while a planned operation (shutdown/reboot)
-            # is in progress. The control plane goes down during planned
-            # operations; we must not misinterpret that as a failure.
-            if self._is_planned_transition_in_progress(name):
-                continue
+        # Suppress recovery while a planned operation (shutdown/reboot)
+        # is in progress. The control plane goes down during planned
+        # operations; we must not misinterpret that as a failure.
+        if self._is_planned_transition_in_progress(name, module_index):
+            return
 
-            # Admin-up DPU went Offline at the hardware level — treat as a
-            # hardware failure.
-            if oper_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and \
-                    current_state not in (DPU_STATE_BOOTING, DPU_STATE_POWER_CYCLE,
-                                          DPU_STATE_WAIT_FOR_SELF_RECOVERY,
-                                          DPU_STATE_MANUAL_INTERVENTION):
-                self.log_warning(
-                    "{}: Hardware failure detected (oper_status: Offline)".format(name))
+        # Admin-up DPU went Offline at the hardware level — treat as a
+        # hardware failure.
+        if oper_status == str(ModuleBase.MODULE_STATUS_OFFLINE) and \
+                self._should_handle_hw_offline(current_state):
+            self.log_warning(
+                "{}: Hardware failure detected (oper_status: Offline)".format(name))
+            self._set_ready_status(name, 'false')
+            self._set_last_down_time(name)
+            if auto_recovery_enabled:
+                self._enter_power_cycle_or_unrecoverable(name, module_index)
+            else:
+                recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
+            return
+
+        # Admin transitioned from down -> up (DPU must be admin-up if
+        # execution reaches here); restart the recovery FSM.
+        # If DPU was previously Unrecoverable, operator module startup
+        # resets recovery_status and reset_count.
+        if current_state == DPU_STATE_ADMIN_DOWN:
+            if recovery.pop(WAS_UNRECOVERABLE_KEY, False):
+                recovery['reset_count'] = 0
+                self._set_reset_count(name, 0)
+                self._set_recovery_status(name, RECOVERY_RECOVERABLE)
+                self.log_notice("{}: Operator module startup — resetting recovery state".format(name))
+            self._enter_booting(name, recovery)
+            return
+
+        if current_state == DPU_STATE_BOOTING:
+            if all_up:
+                self._enter_ready(name, recovery, "DPU is ready (all states up)")
+            elif time.time() - recovery.get('boot_start_time', time.time()) >= self.dpu_boot_timeout:
+                # Boot timeout expired. Per HLD, only trigger power-cycle
+                # if CP or midplane is still down. If CP is up but DP
+                # hasn't converged, just log a warning — the DPU SONiC
+                # stack is running but the data plane pipeline hasn't come up.
+                if states.cp_state == 'up' and states.mp_state == 'up':
+                    # Data plane not ready but control plane is up — warning only.
+                    if not recovery.get('boot_dp_warning_logged'):
+                        self.log_warning("{}: data plane not up after {}s".format(
+                            name, self.dpu_boot_timeout))
+                        recovery['boot_dp_warning_logged'] = True
+                else:
+                    # CP or midplane still down — genuine boot failure.
+                    self._handle_boot_timeout_expired(
+                        name, module_index, recovery,
+                        auto_recovery_enabled, "without reaching Ready")
+            return
+
+        if current_state == DPU_STATE_READY:
+            # Per HLD: midplane down or control-plane down triggers
+            # recovery. Data-plane-down alone does not trigger recovery.
+            if states.mp_state == 'down' or states.cp_state == 'down':
+                self.log_warning("{}: failure detected (mp={}, cp={})".format(
+                    name, states.mp_state, states.cp_state))
                 self._set_ready_status(name, 'false')
                 self._set_last_down_time(name)
                 if auto_recovery_enabled:
-                    self._power_cycle_dpu(name, module_index)
+                    # Enter WaitForSelfRecovery with a grace period.
+                    self._enter_wait_for_self_recovery(name, recovery)
                 else:
+                    # Per HLD: skip self-recovery wait when auto-recovery
+                    # is disabled; go directly to ManualIntervention.
                     recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
-                continue
-
-            # Admin transitioned from down -> up; restart the recovery FSM.
-            # If DPU was previously Unrecoverable, operator module startup
-            # resets recovery_status and reset_count.
-            if current_state == DPU_STATE_OFFLINE:
-                if recovery.pop('was_unrecoverable', False):
-                    recovery['reset_count'] = 0
-                    self._set_reset_count(name, 0)
-                    self._set_recovery_status(name, RECOVERY_RECOVERABLE)
-                    self.log_notice("{}: Operator module startup — resetting recovery state".format(name))
-                recovery['state'] = DPU_STATE_BOOTING
-                recovery['boot_start_time'] = time.time()
-                continue
-
-            if current_state == DPU_STATE_BOOTING:
-                if all_up:
-                    recovery['state'] = DPU_STATE_READY
-                    self._set_ready_status(name, 'true')
-                    self._set_last_ready_time(name)
-                    self.log_info("{}: DPU is ready (all states up)".format(name))
-                elif time.time() - recovery.get('boot_start_time', time.time()) >= self.dpu_boot_timeout:
-                    # Boot timeout expired. Per HLD, only trigger power-cycle
-                    # if CP or midplane is still down. If CP is up but DP
-                    # hasn't converged, just log a warning — the DPU SONiC
-                    # stack is running but the data plane pipeline hasn't come up.
-                    if cp_state == 'up' and mp_state == 'up':
-                        # Data plane not ready but control plane is up — warning only.
-                        if not recovery.get('boot_dp_warning_logged'):
-                            self.log_warning("{}: data plane not up after {}s".format(
-                                name, self.dpu_boot_timeout))
-                            recovery['boot_dp_warning_logged'] = True
-                    else:
-                        # CP or midplane still down — genuine boot failure.
-                        self.log_warning("{}: Boot timeout ({}s) expired without reaching Ready".format(
-                            name, self.dpu_boot_timeout))
-                        self._set_ready_status(name, 'false')
-                        self._set_last_down_time(name)
-                        if auto_recovery_enabled:
-                            self._power_cycle_dpu(name, module_index)
-                        else:
-                            recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
-                continue
-
-            if current_state == DPU_STATE_READY:
-                # Per HLD: midplane down or control-plane down triggers
-                # entry into WaitForSelfRecovery with a grace period.
-                # Data-plane-down alone does not trigger recovery.
-                if mp_state == 'down' or cp_state == 'down':
-                    self.log_warning("{}: failure detected (mp={}, cp={}); entering WaitForSelfRecovery".format(
-                        name, mp_state, cp_state))
-                    recovery['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-                    recovery['self_recovery_start_time'] = time.time()
-                    recovery['self_recovery_poll_count'] = 0
+            elif states.dp_state == 'down':
+                # Data plane down only: mark not ready but no recovery.
+                # Only write to DB on transition to avoid redundant writes.
+                if recovery.get('dp_was_down') is not True:
                     self._set_ready_status(name, 'false')
                     self._set_last_down_time(name)
-                elif dp_state == 'down':
-                    # Data plane down only: mark not ready but no recovery.
-                    # Only write to DB on transition to avoid redundant writes.
-                    if recovery.get('dp_was_down') is not True:
-                        self._set_ready_status(name, 'false')
-                        self._set_last_down_time(name)
-                        recovery['dp_was_down'] = True
+                    recovery['dp_was_down'] = True
+            else:
+                # All states up — steady state. Only write on transition
+                # back from dp-down to avoid redundant writes every cycle.
+                if recovery.get('dp_was_down') is True:
+                    self._set_ready_status(name, 'true')
+                    self._set_last_ready_time(name)
+                    recovery['dp_was_down'] = False
+            return
+
+        if current_state == DPU_STATE_WAIT_FOR_SELF_RECOVERY:
+            # Grace period: allow the DPU to self-recover from transient
+            # failures (process restart, HW watchdog reboot) without
+            # external intervention.
+            # Minimal grace: wait at least 30s or 3 polling intervals
+            # before evaluating recovery conditions.
+            elapsed = time.time() - recovery.get('self_recovery_start_time', time.time())
+            recovery['self_recovery_poll_count'] = recovery.get('self_recovery_poll_count', 0) + 1
+            if elapsed < MINIMUM_SELF_RECOVERY_GRACE_PERIOD and \
+                    recovery['self_recovery_poll_count'] < MINIMUM_SELF_RECOVERY_POLL_COUNT:
+                return
+            if states.mp_state == 'up' or states.cp_state == 'up':
+                # DPU is self-recovering — transition to Booting and wait
+                # for full readiness (all planes up) within dpu_boot_timeout.
+                self.log_notice("{}: self-recovering (mp={}, cp={}); entering Booting".format(
+                    name, states.mp_state, states.cp_state))
+                self._enter_booting(name, recovery)
+            elif elapsed >= self.dpu_self_recovery_timeout:
+                # Timeout expired and both CP and midplane still down.
+                self.log_warning("{}: self-recovery timeout ({}s) expired; "
+                                 "both cp and midplane still down".format(
+                                     name, self.dpu_self_recovery_timeout))
+                if auto_recovery_enabled:
+                    self._enter_power_cycle_or_unrecoverable(name, module_index)
                 else:
-                    # All states up — steady state. Only write on transition
-                    # back from dp-down to avoid redundant writes every cycle.
-                    if recovery.get('dp_was_down') is True:
-                        self._set_ready_status(name, 'true')
-                        self._set_last_ready_time(name)
-                        recovery['dp_was_down'] = False
-                continue
+                    recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
+            return
 
-            if current_state == DPU_STATE_WAIT_FOR_SELF_RECOVERY:
-                # Grace period: allow the DPU to self-recover from transient
-                # failures (process restart, HW watchdog reboot) without
-                # external intervention.
-                # Minimal grace: wait at least 30s or 3 polling intervals
-                # before evaluating recovery conditions.
-                elapsed = time.time() - recovery.get('self_recovery_start_time', time.time())
-                recovery['self_recovery_poll_count'] = recovery.get('self_recovery_poll_count', 0) + 1
-                if elapsed < MINIMUM_SELF_RECOVERY_GRACE_PERIOD and \
-                        recovery['self_recovery_poll_count'] < MINIMUM_SELF_RECOVERY_POLL_COUNT:
-                    continue
-                if mp_state == 'up' or cp_state == 'up':
-                    # DPU is self-recovering — transition to Booting and wait
-                    # for full readiness (all planes up) within dpu_boot_timeout.
-                    self.log_notice("{}: self-recovering (mp={}, cp={}); entering Booting".format(
-                        name, mp_state, cp_state))
-                    recovery['state'] = DPU_STATE_BOOTING
-                    recovery['boot_start_time'] = time.time()
-                    recovery.pop('boot_dp_warning_logged', None)
-                elif elapsed >= self.dpu_self_recovery_timeout:
-                    # Timeout expired and both CP and midplane still down.
-                    self.log_warning("{}: self-recovery timeout ({}s) expired; "
-                                     "both cp and midplane still down".format(
-                                         name, self.dpu_self_recovery_timeout))
-                    if auto_recovery_enabled:
-                        self._power_cycle_dpu(name, module_index)
-                    else:
-                        recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
-                continue
+        if current_state == DPU_STATE_POWER_CYCLE:
+            if all_up:
+                self._enter_ready(name, recovery, "DPU recovered after power-cycle")
+            elif time.time() - recovery.get('boot_start_time', time.time()) >= self.dpu_boot_timeout:
+                # DPU did not recover within dpu_boot_timeout after power-cycle
+                self._handle_boot_timeout_expired(
+                    name, module_index, recovery,
+                    auto_recovery_enabled, "after power-cycle")
+            return
 
-            if current_state == DPU_STATE_POWER_CYCLE:
-                if all_up:
-                    recovery['state'] = DPU_STATE_READY
-                    self._set_ready_status(name, 'true')
-                    self._set_last_ready_time(name)
-                    self.log_info("{}: DPU recovered after power-cycle".format(name))
-                elif time.time() - recovery.get('boot_start_time', time.time()) >= self.dpu_boot_timeout:
-                    # DPU did not recover within dpu_boot_timeout after power-cycle
-                    self.log_warning("{}: Boot timeout ({}s) expired after power-cycle".format(
-                        name, self.dpu_boot_timeout))
-                    if auto_recovery_enabled:
-                        self._power_cycle_dpu(name, module_index)
-                    else:
-                        recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
-                continue
-
-            if current_state == DPU_STATE_MANUAL_INTERVENTION:
-                # Operator may have recovered the DPU manually.
-                if all_up:
-                    recovery['state'] = DPU_STATE_READY
-                    self._set_ready_status(name, 'true')
-                    self._set_last_ready_time(name)
-                    self.log_info("{}: DPU recovered (manual intervention)".format(name))
-                elif auto_recovery_enabled:
-                    # Auto-recovery was re-enabled while the DPU is still
-                    # down — start a power-cycle.
-                    self._power_cycle_dpu(name, module_index)
-                continue
+        if current_state == DPU_STATE_MANUAL_INTERVENTION:
+            # Operator may have recovered the DPU manually, or can
+            # set admin-down (caught by admin-down check above) to
+            # transition to AdminDown state.
+            if all_up:
+                self._enter_ready(name, recovery, "DPU recovered (manual intervention)")
+            elif auto_recovery_enabled:
+                # Auto-recovery was re-enabled while the DPU is still
+                # down — start a power-cycle.
+                self._enter_power_cycle_or_unrecoverable(name, module_index)
+            return
 
 
 #
@@ -1661,7 +1761,7 @@ class DpuStateUpdater(logger.Logger):
         self.id = self.chassis.get_dpu_id()
         self.name = f'DPU{self.id}'
 
-        self.dpu_state_table = swsscommon.Table(self.chassis_state_db, 'DPU_STATE')
+        self.dpu_state_table = swsscommon.Table(self.chassis_state_db, DPU_STATE_TABLE)
 
     def _get_data_plane_state_common(self):
         port_table = swsscommon.Table(self.app_db, 'PORT_TABLE')
@@ -1782,7 +1882,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
-                dpu_state_key = "DPU_STATE|" + module_name
+                dpu_state_key = DPU_STATE_TABLE + "|" + module_name
                 if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
                     op_state = 'up'
                 else:
