@@ -1019,6 +1019,21 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         except FileNotFoundError:
             return None
 
+    def retrieve_dpu_reboot_user(self, module):
+        """Retrieve the user who issued a user-initiated DPU reboot/shutdown.
+
+        Returns "N/A" for hardware or auto-detected reboots where no user is
+        recorded (matching the NPU default in determine-reboot-cause).
+        """
+        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_user.txt")
+
+        try:
+            with open(path, 'r') as f:
+                user = f.read().strip()
+                return user if user else "N/A"
+        except FileNotFoundError:
+            return "N/A"
+
     def persist_dpu_reboot_cause(self, reboot_cause, module):
         """Persist the reboot cause information and handle file rotation."""
         # Extract cause and comment from the reboot_cause
@@ -1037,11 +1052,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if prev_reboot_time is None:
             prev_reboot_time = self._get_current_time_str()
 
+        reboot_user = self.retrieve_dpu_reboot_user(module)
+
         file_name = f"{prev_reboot_time}_reboot_cause.json"
         prev_reboot_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
+        prev_reboot_user_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_user.txt")
 
         if os.path.exists(prev_reboot_path):
             os.remove(prev_reboot_path)
+        if os.path.exists(prev_reboot_user_path):
+            os.remove(prev_reboot_user_path)
 
         file_path = self._get_history_path(module, file_name)
         try:
@@ -1053,6 +1073,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             "cause": cause,
             "comment": comment,
             "device": module,
+            "user": reboot_user,
             "time": formatted_time,
             "name": prev_reboot_time,
         }
