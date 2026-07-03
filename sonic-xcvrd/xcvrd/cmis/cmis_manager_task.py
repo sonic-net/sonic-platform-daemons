@@ -928,6 +928,8 @@ class CmisManagerTask(threading.Thread):
             if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                 self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
             else:
+                self.log_notice("{} DEINIT datapath".format(lport))
+                api.set_datapath_deinit(host_lanes_mask)
                 self.log_notice("{} Forcing Tx laser OFF".format(lport))
                 # Force DataPath re-init
                 api.tx_disable_channel(media_lanes_mask, True)
@@ -968,13 +970,9 @@ class CmisManagerTask(threading.Thread):
             # Ensure that Tx is OFF
             # Transceiver will remain in DataPathDeactivated state while it is in Low Power Mode (even if Tx is disabled)
             # Transceiver will enter DataPathInitialized state if Tx was disabled after CMIS initialization was completed
-            # Rarely, a ModuleReady module may enter DataPathInit as part of the hardware initialization flow before
-            # explicitly setting the datapath deinit
-            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated',
-                                                                    'DataPathInitialized',
-                                                                    'DataPathInit']):
+            if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated', 'DataPathInitialized']):
                 if self.is_timer_expired(expired):
-                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized/DataPathInit'".format(lport))
+                    self.log_notice("{}: timeout for 'DataPathDeactivated/DataPathInitialized'".format(lport))
                     self.force_cmis_reinit(lport, retries + 1)
                 return False
             self.port_dict[lport]['forced_tx_disabled'] = False
