@@ -1703,7 +1703,7 @@ class TestShouldUpdateThermal(object):
         updater = thermalctld.TemperatureUpdater(
             chassis, threading.Event(), default_interval=1)
         updater._should_update_thermal('Unknown Thermal')
-        updater._last_thermal_update_times['Unknown Thermal'] = time.time() - 2
+        updater._last_thermal_update_times['Unknown Thermal'] = time.monotonic() - 2
         assert updater._should_update_thermal('Unknown Thermal') is True
 
     def test_true_on_first_call(self):
@@ -1725,7 +1725,7 @@ class TestShouldUpdateThermal(object):
             chassis, threading.Event(), thermal_intervals={'CPU Temp': 1})
         updater._should_update_thermal('CPU Temp')
         # Fake that last update was 2 seconds ago
-        updater._last_thermal_update_times['CPU Temp'] = time.time() - 2
+        updater._last_thermal_update_times['CPU Temp'] = time.monotonic() - 2
         assert updater._should_update_thermal('CPU Temp') is True
 
     def test_explicit_interval_overrides_default(self):
@@ -1735,7 +1735,7 @@ class TestShouldUpdateThermal(object):
             thermal_intervals={'CPU Temp': 5}, default_interval=60)
         updater._should_update_thermal('CPU Temp')
         # CPU Temp uses explicit 5s, not default 60s
-        updater._last_thermal_update_times['CPU Temp'] = time.time() - 6
+        updater._last_thermal_update_times['CPU Temp'] = time.monotonic() - 6
         assert updater._should_update_thermal('CPU Temp') is True
 
 
@@ -1780,7 +1780,7 @@ class TestPsuIntervalGating(object):
         updater._refresh_temperature_status.reset_mock()
 
         # Fake that last PSU update was 2 seconds ago
-        updater._last_psu_thermal_update = time.time() - 2
+        updater._last_psu_thermal_update = time.monotonic() - 2
         updater.update()
         assert updater._refresh_temperature_status.call_count > 0
 
@@ -1869,7 +1869,7 @@ class TestThermalMonitorPollingIntervals(object):
         monitor.fan_updater.update.reset_mock()
 
         # Fake that last fan update was 2 seconds ago
-        monitor._last_fan_update = time.time() - 2
+        monitor._last_fan_update = time.monotonic() - 2
         monitor.main()
         assert monitor.fan_updater.update.call_count == 1
 
@@ -1890,7 +1890,7 @@ class TestThermalMonitorPollingIntervals(object):
         assert monitor.fan_updater.update.call_count == 0
 
         # After interval elapses, should update again
-        monitor._last_fan_update = time.time() - 61
+        monitor._last_fan_update = time.monotonic() - 61
         monitor.main()
         assert monitor.fan_updater.update.call_count == 1
 
@@ -2246,4 +2246,11 @@ class TestThermalMonitorSwitchHostCritical(object):
             assert 'CRITICAL chassis thermal: Thermal X' in contents
             assert '110.0' in contents
         finally:
-            os.unlink(tmp_log)
+            if hasattr(tm, '_sw_host_thermal_event_logger') and tm._sw_host_thermal_event_logger:
+                for h in list(tm._sw_host_thermal_event_logger._file_logger.handlers):
+                    h.close()
+                    tm._sw_host_thermal_event_logger._file_logger.removeHandler(h)
+            try:
+                os.unlink(tmp_log)
+            except OSError:
+                pass

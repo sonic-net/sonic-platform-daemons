@@ -35,3 +35,17 @@ class FieldValuePairs:
     def __init__(self, fvs):
         self.fv_dict = dict(fvs)
         pass
+
+class ConfigDBConnector:
+    def __init__(self, *args, **kwargs):
+        pass
+    def connect(self, *args, **kwargs):
+        pass
+    def get_table(self, *args, **kwargs):
+        return {}
+
+class SonicV2Connector:
+    def __init__(self, *args, **kwargs):
+        pass
+    def connect(self, *args, **kwargs):
+        pass
