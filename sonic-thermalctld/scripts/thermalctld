@@ -679,7 +679,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
-                        if max_minor_secs < inf:
+                        # A value of 0 (or negative) means the platform does not support
+                        # time-based escalation from MINOR to CRITICAL; skip escalation.
+                        if 0 < max_minor_secs < inf:
                             max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
                             if max_minor <= now:
                                 sensor_leak_severity = LeakSeverity.CRITICAL
@@ -728,6 +730,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             leaking = 'N/A' if not sensor_is_ok else 'Yes' if sensor_is_leak else 'No'
             sensor_type = try_get(sensor.get_leak_sensor_type, 'unknown')
             sensor_location = try_get(sensor.get_leak_sensor_location, 'unknown')
+            # Add the timestamp to the leak sensor entry to track when leak occured
+            # But don't include in fvs_tuple which is used for comparing values
+            # Hence create a new one fvs_with_ts for updating sesor_table
             fvs_tuple = (
                 ('name', sensor_name),
                 ('leaking', leaking),
@@ -740,7 +745,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('leak_severity', str(sensor_leak_severity)),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
-                self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(list(fvs_tuple)))
+                fvs_with_ts = list(fvs_tuple) + [
+                    ('timestamp', now.strftime('%Y%m%d %H:%M:%S')),
+                ]
+                self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(fvs_with_ts))
                 self.last_sensor_fvs[sensor_name] = fvs_tuple
 
         if status == LeakSeverity.CRITICAL and self.last_leak_status != LeakSeverity.CRITICAL:

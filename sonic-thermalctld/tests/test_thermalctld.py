@@ -435,6 +435,9 @@ class TestLiquidCoolingUpdater(object):
             sensor_name, fvp = call[0]
             assert sensor_name in ["leakage1", "leakage2"]
             assert fvp.fv_dict['leaking'] == 'No'
+            # timestamp must be present on the initial create write
+            assert 'timestamp' in fvp.fv_dict
+            assert fvp.fv_dict['timestamp']  # non-empty
 
         calls_sys = liquid_cooling_updater.system_table.set.call_args_list
         for call in calls_sys:
@@ -556,6 +559,44 @@ class TestLiquidCoolingUpdater(object):
                 assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
 
     @mock.patch('thermalctld.try_get')
+    def test_refresh_status_minor_no_escalation_when_duration_zero(self, mock_try_get):
+        """A get_leak_max_minor_duration_sec() value of 0 means the platform does
+        not support time-based escalation from MINOR to CRITICAL. The severity
+        must stay MINOR even after the leak has persisted across polls."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        mock_profile = mock.MagicMock()
+        mock_profile.get_leak_max_minor_duration_sec = mock.MagicMock(return_value=0)
+        mock_profile.get_type = mock.MagicMock(return_value='mock_sensor')
+        sensor.get_leak_profile = mock.MagicMock(return_value=mock_profile)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+        # Poll again after a short delay; even after wall-clock advances, a value
+        # of 0 must NOT be treated as "immediately escalate".
+        time.sleep(1.1)
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+        # No "escalated from MINOR to CRITICAL" error should have been logged.
+        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
+            assert 'escalated from MINOR to CRITICAL' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
     def test_refresh_status_with_long_leak(self, mock_try_get):
         """Test _refresh_leak_status when one sensor leaks for an extended period"""
         mock_chassis = MockChassis()
@@ -649,6 +690,80 @@ class TestLiquidCoolingUpdater(object):
         for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
             assert 'CRITICAL leak reported' not in call[0][0]
             assert 'escalated from MINOR to CRITICAL' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_timestamp_on_transitions_only(self, mock_try_get):
+        """Timestamp is written on initial create and on real state changes,
+        but not rewritten on unchanged polls (row is skipped entirely)."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        # Long max-minor so time-based escalation cannot fire
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+        liquid_cooling_updater.last_sensor_fvs = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: initial create — both sensors written, timestamp present
+        liquid_cooling_updater._refresh_leak_status()
+        assert liquid_cooling_updater.sensor_table.set.call_count == 2
+        first_calls = {c[0][0]: dict(c[0][1].fv_dict) for c in
+                       liquid_cooling_updater.sensor_table.set.call_args_list}
+        assert 'timestamp' in first_calls['leakage1']
+        ts1_leak1 = first_calls['leakage1']['timestamp']
+        assert first_calls['leakage1']['leak_severity'] == str(LeakSeverity.MINOR)
+
+        # Cycle 2: nothing changed — no write at all (diff-gate skips)
+        liquid_cooling_updater.sensor_table.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        assert liquid_cooling_updater.sensor_table.set.call_count == 0, \
+            "unchanged poll must not rewrite the sensor row"
+
+        # Cycle 3: platform escalates severity — write triggers with fresh timestamp
+        liquid_cooling_updater.sensor_table.reset_mock()
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        # Ensure a distinct timestamp value (strftime resolution = 1s)
+        import time as _time
+        _time.sleep(1.1)
+        liquid_cooling_updater._refresh_leak_status()
+        # Only the changed sensor (leakage1) is rewritten; leakage2 unchanged
+        assert liquid_cooling_updater.sensor_table.set.call_count == 1
+        name, fvp = liquid_cooling_updater.sensor_table.set.call_args_list[0][0]
+        assert name == 'leakage1'
+        assert fvp.fv_dict['leak_severity'] == str(LeakSeverity.CRITICAL)
+        assert 'timestamp' in fvp.fv_dict
+        assert fvp.fv_dict['timestamp'] != ts1_leak1, \
+            "escalation must record a fresh timestamp"
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_timestamp_not_in_diff_cache(self, mock_try_get):
+        """last_sensor_fvs cache must exclude 'timestamp' so unchanged polls
+        aren't triggered by the ever-advancing clock."""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+        liquid_cooling_updater.last_sensor_fvs = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+        for sensor_name, cached_tuple in liquid_cooling_updater.last_sensor_fvs.items():
+            fields = dict(cached_tuple)
+            assert 'timestamp' not in fields, \
+                "timestamp must not be in the diff cache for {}".format(sensor_name)
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_platform_severity_downgrade(self, mock_try_get):
