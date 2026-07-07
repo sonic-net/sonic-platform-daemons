@@ -4648,9 +4648,14 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_task_worker_host_tx_ready_false_to_true(self, mock_chassis, mock_get_status_sw_tbl):
         mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
         mock_xcvr_api = MagicMock()
-        mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
+        dp_deinit_tx_disable_calls = []
+        mock_xcvr_api.set_datapath_deinit = MagicMock(
+            side_effect=lambda *args, **kwargs: dp_deinit_tx_disable_calls.append('set_datapath_deinit') or True
+        )
         mock_xcvr_api.set_datapath_init = MagicMock(return_value=True)
-        mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
+        mock_xcvr_api.tx_disable_channel = MagicMock(
+            side_effect=lambda *args, **kwargs: dp_deinit_tx_disable_calls.append('tx_disable_channel') or True
+        )
         mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
         mock_xcvr_api.set_application = MagicMock(return_value=True)
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
@@ -4814,7 +4819,9 @@ class TestXcvrdScript(object):
         task.task_worker()
 
         assert task.post_port_active_apsel_to_db.call_count == 1
+        assert mock_xcvr_api.set_datapath_deinit.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
+        assert dp_deinit_tx_disable_calls == ['set_datapath_deinit', 'tx_disable_channel']
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_READY
         assert task.port_dict['Ethernet0']['forced_tx_disabled'] == True
 
