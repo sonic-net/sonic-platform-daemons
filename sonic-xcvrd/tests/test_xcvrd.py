@@ -582,7 +582,7 @@ class TestXcvrdThreadException(object):
         mock_init.return_value = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.enable_sff_mgr = True
-        xcvrd.dom_temperature_poll_interval = 10
+        xcvrd.config.dom_temperature_poll_interval = 10
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
         xcvrd.run()
@@ -6942,27 +6942,26 @@ class TestXcvrdScript(object):
         # Test 5: Verify that DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS is not modified
         assert DomInfoUpdateTask.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS == 60
 
-    def test_DaemonXcvrd_dom_update_interval_parameter(self):
-        """Test that DaemonXcvrd correctly handles and passes dom_update_interval parameter"""
-        # Test 1: When dom_update_interval is None
-        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
-                            dom_temperature_poll_interval=None, dom_update_interval=None)
-        assert daemon.dom_update_interval is None
+    def test_DaemonXcvrd_resolves_config(self):
+        """DaemonXcvrd populates self.config from XcvrdConfig.resolve().
 
-        # Test 2: When dom_update_interval is 0
-        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
-                            dom_temperature_poll_interval=None, dom_update_interval=0)
-        assert daemon.dom_update_interval == 0
+        The resolution logic itself (platform-file layering, coercion, defaults)
+        is covered in tests/test_xcvrd_config.py; here we only verify the wiring.
+        """
+        resolved = MagicMock(dom_temperature_poll_interval=5, dom_update_interval=30)
+        with patch('xcvrd.xcvrd.XcvrdConfig.resolve', return_value=resolved) as mock_resolve:
+            daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False)
+        mock_resolve.assert_called_once()
+        assert daemon.config is resolved
+        assert daemon.config.dom_temperature_poll_interval == 5
+        assert daemon.config.dom_update_interval == 30
 
-        # Test 3: When dom_update_interval is a custom value
-        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
-                            dom_temperature_poll_interval=None, dom_update_interval=120)
-        assert daemon.dom_update_interval == 120
-
-        # Test 4: When dom_update_interval is 1000
-        daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False,
-                            dom_temperature_poll_interval=None, dom_update_interval=1000)
-        assert daemon.dom_update_interval == 1000
+    def test_DaemonXcvrd_config_defaults(self):
+        """With no platform overrides, dom_* tunables fall back to None defaults."""
+        with patch('xcvrd.xcvrd.XcvrdConfig.resolve', return_value=XcvrdConfig()):
+            daemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        assert daemon.config.dom_temperature_poll_interval is None
+        assert daemon.config.dom_update_interval is None
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
