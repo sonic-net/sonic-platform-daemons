@@ -656,7 +656,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             sensor_is_leak = sensor.is_leak()
             sensor_leak_severity = sensor.get_leak_severity()
 
-            now = datetime.now()
+            now = time.monotonic()
 
             if not sensor_is_ok:
                 if sensor_name not in self.faulty_sensors:
@@ -680,8 +680,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         profile = sensor.get_leak_profile()
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
                         if max_minor_secs < inf:
-                            max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
-                            if max_minor <= now:
+                            if leak_start_time + max_minor_secs <= now:
                                 sensor_leak_severity = LeakSeverity.CRITICAL
                                 escalated_to_critical = True
 
@@ -1049,7 +1048,7 @@ class TemperatureUpdater(logger.Logger):
         if interval is None:
             return True
         if now is None:
-            now = time.time()
+            now = time.monotonic()
         last = self._last_thermal_update_times.get(name, 0)
         if now - last >= interval:
             self._last_thermal_update_times[name] = now
@@ -1084,7 +1083,7 @@ class TemperatureUpdater(logger.Logger):
         """
         self.log_debug("Start temperature updating")
         if now is None:
-            now = time.time()
+            now = time.monotonic()
         available_thermals = set()
 
         if not self._collect_thermals(available_thermals, CHASSIS_INFO_KEY, self.chassis.get_all_thermals(), now=now):
@@ -1378,7 +1377,7 @@ class ThermalMonitor(ThreadTaskBase):
             del self._switch_host_thermal_state[stale]
 
     def main(self):
-        begin = time.time()
+        begin = time.monotonic()
 
         if self._fan_update_interval is None or (begin - self._last_fan_update) >= self._fan_update_interval:
             self.fan_updater.update()
@@ -1386,7 +1385,7 @@ class ThermalMonitor(ThreadTaskBase):
 
         self.temperature_updater.update(now=begin)
         self._check_switch_host_thermals()
-        elapsed = time.time() - begin
+        elapsed = time.monotonic() - begin
         if elapsed < self.update_interval:
             self.wait_time = self.update_interval - elapsed
         else:
@@ -1543,7 +1542,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             # We received a fatal signal
             return False
 
-        begin = time.time()
+        begin = time.monotonic()
         try:
             if self.thermal_manager:
                 self.thermal_manager.run_policy(self.chassis)
@@ -1551,7 +1550,7 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
             self.log_error('Caught exception while running thermal policy - {}'.format(repr(e)))
 
         interval = self.thermal_manager.get_interval() if self.thermal_manager else self.INTERVAL
-        elapsed = time.time() - begin
+        elapsed = time.monotonic() - begin
         if elapsed < interval:
             self.wait_time = interval - elapsed
         else:
