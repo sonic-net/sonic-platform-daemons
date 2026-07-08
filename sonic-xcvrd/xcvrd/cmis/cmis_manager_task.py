@@ -226,7 +226,7 @@ class CmisManagerTask(threading.Thread):
         Get maximum host lanes mask based on module type
         """
         module_type = api.get_module_type_abbreviation()
-        
+
         # QSFP+C has 4 lanes, all others have 8
         return 0x0f if module_type == 'QSFP+C' else 0xff
 
@@ -1033,8 +1033,8 @@ class CmisManagerTask(threading.Thread):
         retries = port_info.get('cmis_retries', 0)
         deinit_host_lanes_mask = port_info.get('host_lanes_mask', 0)
         disable_media_lanes_mask = port_info['media_lanes_mask']
-        # Deinit and disable all lanes if we are in ModuleLowPwr to avoid unintentional 
-        # initialization of other datapaths during transition to ModuleReady 
+        # Deinit and disable all lanes if we are in ModuleLowPwr to avoid unintentional
+        # initialization of other datapaths during transition to ModuleReady
         if self.check_module_state(api, ['ModuleLowPwr']):
             self.log_notice("{}: ModuleLowPwr detected, set datapath deinit and disable Tx output for all lanes".format(lport))
             deinit_host_lanes_mask = self.port_dict[lport]['max_host_lanes_mask']
@@ -1107,8 +1107,8 @@ class CmisManagerTask(threading.Thread):
                 if not self.handle_cmis_dp_deinit_state(lport):
                     return
             elif state == CMIS_STATE_AP_CONF:
-                # Explicit control bit to apply custom Host SI settings. 
-                # It will be set to 1 and applied via set_application if 
+                # Explicit control bit to apply custom Host SI settings.
+                # It will be set to 1 and applied via set_application if
                 # custom SI settings is applicable
                 ec = 0
 
@@ -1173,12 +1173,17 @@ class CmisManagerTask(threading.Thread):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'ConfigSuccess', current ConfigStatus: "
                                         "{}".format(lport, list(api.get_config_datapath_hostlane_status().values())))
+                        if self.is_decomm_pending(lport):
+                            self.log_notice("{}: DECOMMISSION: failed for physical port {}".format(
+                                                lport, self.port_dict[lport]['index']))
+                            self.clear_decomm_pending(lport)
                         self.force_cmis_reinit(lport, retries + 1)
                     return
 
                 # Clear decommission status and invoke CMIS reinit so that normal CMIS initialization can begin
                 if self.is_decomm_pending(lport):
-                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(lport, self.port_dict[lport]['index']))
+                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(
+                                        lport, self.port_dict[lport]['index']))
                     self.clear_decomm_pending(lport)
                     self.force_cmis_reinit(lport)
                     return
