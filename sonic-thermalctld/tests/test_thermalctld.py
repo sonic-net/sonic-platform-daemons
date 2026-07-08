@@ -720,7 +720,7 @@ class TestLiquidCoolingUpdater(object):
                        liquid_cooling_updater.sensor_table.set.call_args_list}
         assert 'timestamp' in first_calls['leakage1']
         ts1_leak1 = first_calls['leakage1']['timestamp']
-        assert first_calls['leakage1']['leak_severity'] == str(LeakSeverity.MINOR)
+        assert first_calls['leakage1']['leak_severity'] == LeakSeverity.MINOR.value
 
         # Cycle 2: nothing changed — no write at all (diff-gate skips)
         liquid_cooling_updater.sensor_table.reset_mock()
@@ -739,7 +739,7 @@ class TestLiquidCoolingUpdater(object):
         assert liquid_cooling_updater.sensor_table.set.call_count == 1
         name, fvp = liquid_cooling_updater.sensor_table.set.call_args_list[0][0]
         assert name == 'leakage1'
-        assert fvp.fv_dict['leak_severity'] == str(LeakSeverity.CRITICAL)
+        assert fvp.fv_dict['leak_severity'] == LeakSeverity.CRITICAL.value
         assert 'timestamp' in fvp.fv_dict
         assert fvp.fv_dict['timestamp'] != ts1_leak1, \
             "escalation must record a fresh timestamp"
