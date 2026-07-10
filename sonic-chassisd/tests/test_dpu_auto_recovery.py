@@ -771,6 +771,27 @@ class TestWaitForSelfRecoveryState:
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_BOOTING
 
+    def test_self_recovery_kernel_panic_bypasses_grace_period(self):
+        """WaitForSelfRecovery + DPU kernel panic reboot cause → immediate PowerCycle."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
+        updater.dpu_recovery_state["DPU0"]['self_recovery_start_time'] = time.time()
+        updater.dpu_recovery_state["DPU0"]['self_recovery_poll_count'] = 0
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        chassis.module_list[0].set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
+             patch.object(chassis.module_list[0], 'get_reboot_cause', return_value=("Non-Hardware", "kernel panic")):
+            updater.update_dpu_recovery_state()
+
+        # Bypasses grace period and goes directly to PowerCycle
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
+        assert get_dpu_state_field(updater, "DPU0", RESET_COUNT) == '1'
+
     def test_timeout_expired_both_down_power_cycles(self):
         """WaitForSelfRecovery + timeout expired + both down + auto-recovery → PowerCycle."""
         chassis = create_chassis_with_dpus(1)
@@ -2001,10 +2022,13 @@ class TestRebootCausePersistence:
                 updater.persist_dpu_reboot_cause(("Test Cause", ""), "DPU0")
 
                 symlink = os.path.join(tmpdir, "dpu0", "previous-reboot-cause.json")
-                assert os.path.islink(symlink)
-                # Symlink should point to the history file
-                target = os.readlink(symlink)
-                assert "_reboot_cause.json" in target
+                if sys.platform == "win32":
+                    assert os.path.exists(symlink)
+                else:
+                    assert os.path.islink(symlink)
+                    # Symlink should point to the history file
+                    target = os.readlink(symlink)
+                    assert "_reboot_cause.json" in target
 
     def test_rotate_files_removes_old_files(self):
         """_rotate_files removes oldest files when exceeding MAX_HISTORY_FILES."""

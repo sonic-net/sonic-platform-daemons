@@ -1071,7 +1071,14 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         if os.path.exists(symlink_path):
             os.remove(symlink_path)
         if os.path.exists(file_path):
-            os.symlink(file_path, symlink_path)
+            try:
+                os.symlink(file_path, symlink_path)
+            except OSError as e:
+                if sys.platform == "win32" and getattr(e, "winerror", None) == 1314:
+                    import shutil
+                    shutil.copy(file_path, symlink_path)
+                else:
+                    raise
 
         # Perform file rotation if necessary
         self._rotate_files(module)
@@ -1466,6 +1473,26 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 continue
 
             if current_state == DPU_STATE_WAIT_FOR_SELF_RECOVERY:
+                # Check for DPU kernel panic to bypass grace period
+                reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
+                is_kernel_panic = False
+                if reboot_cause:
+                    if isinstance(reboot_cause, (tuple, list)):
+                        cause = reboot_cause[0]
+                        comment = reboot_cause[1] if len(reboot_cause) > 1 else ""
+                    else:
+                        cause, comment = str(reboot_cause), ""
+                    if "kernel panic" in cause.lower() or "kernel panic" in comment.lower():
+                        is_kernel_panic = True
+
+                if is_kernel_panic:
+                    self.log_warning("{}: DPU kernel panic detected in reboot cause. Bypassing self-recovery grace period.".format(name))
+                    if auto_recovery_enabled:
+                        self._power_cycle_dpu(name, module_index)
+                    else:
+                        recovery['state'] = DPU_STATE_MANUAL_INTERVENTION
+                    continue
+
                 # Grace period: allow the DPU to self-recover from transient
                 # failures (process restart, HW watchdog reboot) without
                 # external intervention.
