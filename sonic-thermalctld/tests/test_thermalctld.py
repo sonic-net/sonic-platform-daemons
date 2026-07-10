@@ -397,7 +397,83 @@ class TestFanUpdater(object):
         fan_updater.update()
         assert fan_updater._collect_fans.call_count == 1
 
+# swsscommon.FieldValuePairs only accepts vector<pair<string,string>>; passing None
+# (e.g. from an unimplemented platform API) raises TypeError at runtime. The mock in
+# tests/mocked_libs/swsscommon/swsscommon.py enforces the same contract in unit tests.
+FIELD_VALUE_PAIRS_STRING_CONTRACT_ERROR = (
+    "FieldValuePairs only accepts string values"
+)
+
+# LiquidCoolingUpdater STATE_DB table attributes. Add new table names here when
+# _refresh_leak_status() writes to additional tables.
+LIQUID_COOLING_DB_TABLE_ATTRS = [
+    'table',
+    'sensor_table',
+    'system_table',
+    'profile_table',
+]
+
+# Platform sensor methods that may return None when not implemented. When adding a
+# new such method to LiquidCoolingUpdater._refresh_leak_status(), register it here
+# as (method_name, db_field_name). The test mocks each method to return None and
+# verifies the value written to FieldValuePairs is str(None), not bare None.
+LIQUID_COOLING_NONE_CAPABLE_SENSOR_FIELDS = [
+    ('get_leak_sensor_type', 'type'),
+    ('get_leak_sensor_location', 'location'),
+]
+
+
+def _mock_liquid_cooling_db_tables(updater):
+    """Replace LiquidCoolingUpdater DB tables with mocks for contract testing."""
+    tables = []
+    for attr in LIQUID_COOLING_DB_TABLE_ATTRS:
+        table = mock.MagicMock()
+        setattr(updater, attr, table)
+        tables.append((attr, table))
+    return tables
+
+
+def _assert_field_value_pairs_string_contract(table_mock, table_name=''):
+    """Assert every value written via table.set satisfies the swsscommon str contract."""
+    label = " in table '{}'".format(table_name) if table_name else ''
+    for call in table_mock.set.call_args_list:
+        entry_name, fvp = call[0]
+        for field, value in fvp.fv_dict.items():
+            assert isinstance(value, str), (
+                "{}; field '{}' for entry '{}'{} has type {}. "
+                "Wrap platform API return values with str() before writing to STATE_DB."
+                .format(
+                    FIELD_VALUE_PAIRS_STRING_CONTRACT_ERROR,
+                    field, entry_name, label, type(value).__name__
+                )
+            )
+
+
+def _assert_none_platform_values_are_str_none(table_mock, none_capable_fields):
+    """For registered fields present in DB writes, verify None was converted via str()."""
+    for call in table_mock.set.call_args_list:
+        _, fvp = call[0]
+        for method_name, field_name in none_capable_fields:
+            if field_name not in fvp.fv_dict:
+                continue
+            assert fvp.fv_dict[field_name] == 'None', (
+                "Platform method {}() returned None; field '{}' must be written as "
+                "str(None), got {!r}. Use str({}()) when building FieldValuePairs."
+                .format(
+                    method_name, field_name, fvp.fv_dict[field_name], method_name
+                )
+            )
+
+
 class TestLiquidCoolingUpdater(object):
+    def test_swsscommon_field_value_pairs_rejects_non_string_values(self):
+        """
+        Document the swsscommon constraint guarded by
+        test_refresh_leak_status_unimplemented_sensor_metadata.
+        """
+        with pytest.raises(TypeError, match=FIELD_VALUE_PAIRS_STRING_CONTRACT_ERROR):
+            thermalctld.swsscommon.FieldValuePairs([('type', None)])
+
     def test_update(self):
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
@@ -877,6 +953,46 @@ class TestLiquidCoolingUpdater(object):
         assert liquid_cooling_updater.sensor_table.set.call_count == 2
         assert len(liquid_cooling_updater.leaking_sensors) == 0
         assert len(liquid_cooling_updater.faulty_sensors) == 0
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_unimplemented_sensor_metadata(self, mock_try_get):
+        """
+        Guard: platform methods registered in LIQUID_COOLING_NONE_CAPABLE_SENSOR_FIELDS
+        may return None when not implemented. _refresh_leak_status() must convert every
+        such value to str before passing it to swsscommon.FieldValuePairs.
+
+        When adding a new platform API call that may return None, register it in
+        LIQUID_COOLING_NONE_CAPABLE_SENSOR_FIELDS. If the value is passed without str(),
+        the mocked FieldValuePairs raises the same TypeError as production swsscommon.
+        """
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = []
+        db_tables = _mock_liquid_cooling_db_tables(liquid_cooling_updater)
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        for sensor in mock_chassis.get_liquid_cooling().leakage_sensors:
+            for method_name, _ in LIQUID_COOLING_NONE_CAPABLE_SENSOR_FIELDS:
+                setattr(sensor, method_name, mock.MagicMock(return_value=None))
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        total_writes = sum(table.set.call_count for _, table in db_tables)
+        assert total_writes > 0, (
+            "_refresh_leak_status() must write to at least one STATE_DB table"
+        )
+
+        for table_name, table_mock in db_tables:
+            if table_mock.set.call_count == 0:
+                continue
+            _assert_field_value_pairs_string_contract(table_mock, table_name)
+            _assert_none_platform_values_are_str_none(
+                table_mock, LIQUID_COOLING_NONE_CAPABLE_SENSOR_FIELDS
+            )
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_sensor_unavailable(self, mock_try_get):
