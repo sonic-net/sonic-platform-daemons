@@ -1952,37 +1952,6 @@ class TestPowerCycleFailure:
         # operation (gnoi shutdown/reboot) to complete.
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
 
-    def test_power_cycle_aborted_when_legacy_field_set_after_lock(self):
-        """If transition_in_progress appears after lock acquired, abort."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_WAIT_FOR_SELF_RECOVERY
-        updater.dpu_recovery_state["DPU0"]['reset_count'] = 0
-
-        module = chassis.module_list[0]
-        module.set_module_state_transition = MagicMock(return_value=True)
-        module.clear_module_state_transition = MagicMock(return_value=True)
-        module.set_admin_state = MagicMock()
-        module.pci_detach = MagicMock()
-        module.pci_reattach = MagicMock()
-
-        # Simulate legacy field being set (gnoi started a shutdown concurrently)
-        updater._is_planned_transition_in_progress = MagicMock(return_value=True)
-
-        updater._enter_power_cycle_or_unrecoverable("DPU0", 0)
-
-        # Lock was acquired but then released due to legacy field detection
-        module.set_module_state_transition.assert_called_once_with("DPU0", TRANSITION_TYPE_RECOVERY)
-        module.clear_module_state_transition.assert_called_once_with("DPU0")
-        # Power-cycle should NOT have been executed
-        module.pci_detach.assert_not_called()
-        module.set_admin_state.assert_not_called()
-        # reset_count should be rolled back to 0
-        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
-        # State should have entered POWER_CYCLE to wait for the in-progress
-        # operation (gnoi shutdown/reboot) to complete.
-        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_POWER_CYCLE
-
 
 # ============================================================================
 # Test: DB setter methods

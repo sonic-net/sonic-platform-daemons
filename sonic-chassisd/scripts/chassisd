@@ -1314,19 +1314,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             recovery['boot_start_time'] = time.time()
             return
 
-        # Re-check transition_in_progress after acquiring our lock to close
-        # the TOCTOU window where gnoi/CLI sets transition_in_progress
-        # between _is_planned_transition_in_progress() and here.
-        if self._is_planned_transition_in_progress(module_name, module_index):
-            self.log_warning("{}: transition_in_progress detected "
-                            "after lock acquisition — aborting power-cycle".format(module_name))
-            try_get(module.clear_module_state_transition, module_name, default=False)
-            recovery['reset_count'] -= 1
-            self._set_reset_count(module_name, recovery['reset_count'])
-            recovery['state'] = DPU_STATE_POWER_CYCLE
-            recovery['boot_start_time'] = time.time()
-            return
-
         try:
             # Keep the same graceful sequence as module_base:
             # pre-shutdown -> admin down -> admin up -> post-startup.
