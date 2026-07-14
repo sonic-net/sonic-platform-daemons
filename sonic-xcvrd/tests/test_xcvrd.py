@@ -1386,7 +1386,11 @@ class TestXcvrdScript(object):
                                                                               'prefec_ber_max': '0.0006833674050752236',
                                                                               'uncorr_frames_avg': '0.0',
                                                                               'uncorr_frames_min': '0.0',
-                                                                              'uncorr_frames_max': '0.0', }))
+                                                                              'uncorr_frames_max': '0.0',
+                                                                              'rx_bits_pm': '1000000',
+                                                                              'rx_corr_bits_pm': '1000',
+                                                                              'tx_bits_pm': '2000000',
+                                                                              'tx_frames_pm': '20000', }))
     def test_post_port_pm_info_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
@@ -1395,9 +1399,14 @@ class TestXcvrdScript(object):
         mock_cmis_manager = MagicMock()
         dom_info_update = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
         pm_tbl = Table("STATE_DB", TRANSCEIVER_PM_TABLE)
+        pm_counters_tbl = Table("STATE_DB", TRANSCEIVER_PM_COUNTERS_TABLE)
         assert pm_tbl.get_size() == 0
-        dom_info_update.post_port_pm_info_to_db(logical_port_name, port_mapping, pm_tbl, stop_event)
+        assert pm_counters_tbl.get_size() == 0
+        dom_info_update.post_port_pm_info_to_db(logical_port_name, port_mapping, pm_tbl, pm_counters_tbl, stop_event)
+        # Non-counter fields (6 preFEC ratios) go to TRANSCEIVER_PM.
         assert pm_tbl.get_size_for_key(logical_port_name) == 6
+        # Raw FEC counters (2 rx + 2 tx) go to TRANSCEIVER_PM_COUNTERS.
+        assert pm_counters_tbl.get_size_for_key(logical_port_name) == 4
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))

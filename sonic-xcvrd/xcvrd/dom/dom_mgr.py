@@ -36,6 +36,23 @@ SYSLOG_IDENTIFIER_DOMINFOUPDATETASK = "DomInfoUpdateTask"
 PORT_UPDATE_EVENT_SELECT_TIMEOUT_MSECS = 1000
 PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS = 10
 
+# Raw FEC counter fields from get_transceiver_pm() that are published to the
+# TRANSCEIVER_PM_COUNTERS table instead of TRANSCEIVER_PM. This is a positive list:
+# any field not named here (calculated ratios, optical metrics) stays in TRANSCEIVER_PM.
+PM_COUNTER_FIELDS = frozenset({
+    # media (page 34h) RX FEC counters
+    'rx_bits_pm', 'rx_bits_subint_pm', 'rx_corr_bits_pm',
+    'rx_min_corr_bits_subint_pm', 'rx_max_corr_bits_subint_pm',
+    'rx_frames_pm', 'rx_frames_subint_pm', 'rx_frames_uncorr_err_pm',
+    'rx_min_frames_uncorr_err_subint_pm', 'rx_max_frames_uncorr_err_subint_pm',
+    # host (page 3Ah) TX FEC counters
+    'tx_bits_pm', 'tx_bits_subint_pm', 'tx_corr_bits_pm',
+    'tx_min_corr_bits_subint_pm', 'tx_max_corr_bits_subint_pm',
+    'tx_frames_pm', 'tx_frames_subint_pm', 'tx_frames_uncorr_err_pm',
+    'tx_min_frames_uncorr_err_subint_pm', 'tx_max_frames_uncorr_err_subint_pm',
+    'tx_corrected_frames_pm', 'tx_corrected_frames_subint_pm',
+})
+
 class DomInfoUpdateBase(threading.Thread):
 
     name = ''
@@ -235,7 +252,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                 sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
 
     # Update port pm info in db
-    def post_port_pm_info_to_db(self, logical_port_name, port_mapping, table, stop_event=threading.Event(), pm_info_cache=None):
+    def post_port_pm_info_to_db(self, logical_port_name, port_mapping, pm_table, pm_counters_table, stop_event=threading.Event(), pm_info_cache=None):
         for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
             if stop_event.is_set():
                 break
@@ -259,8 +276,14 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                 if not pm_info_dict:
                     continue
                 self.db_utils.beautify_info_dict(pm_info_dict)
-                fvs = swsscommon.FieldValuePairs([(k, v) for k, v in pm_info_dict.items()])
-                table.set(physical_port_name, fvs)
+                # Route raw FEC counters to TRANSCEIVER_PM_COUNTERS; everything else
+                # (calculated ratios, optical metrics) stays in TRANSCEIVER_PM.
+                pm_dict = {k: v for k, v in pm_info_dict.items() if k not in PM_COUNTER_FIELDS}
+                pm_counters_dict = {k: v for k, v in pm_info_dict.items() if k in PM_COUNTER_FIELDS}
+                if pm_dict:
+                    pm_table.set(physical_port_name, swsscommon.FieldValuePairs(list(pm_dict.items())))
+                if pm_counters_dict:
+                    pm_counters_table.set(physical_port_name, swsscommon.FieldValuePairs(list(pm_counters_dict.items())))
             else:
                 return xcvrd.SFP_EEPROM_NOT_READY
 
@@ -395,7 +418,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                     except (KeyError, TypeError) as e:
                                         self.log_warning("Got exception {} while processing vdm statistic values for port {}, ignored".format(repr(e), logical_port_name))
                                     try:
-                                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
+                                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.xcvr_table_helper.get_pm_counters_tbl(asic_index), self.task_stopping_event)
                                     except (KeyError, TypeError) as e:
                                         self.log_warning("Got exception {} while posting pm info to DB for port {}, ignored".format(repr(e), logical_port_name))
 
@@ -520,6 +543,7 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       self.xcvr_table_helper.get_status_flag_set_time_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_status_flag_clear_time_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
+                                      self.xcvr_table_helper.get_pm_counters_tbl(port_change_event.asic_id),
                                       self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
                                       ])
 
