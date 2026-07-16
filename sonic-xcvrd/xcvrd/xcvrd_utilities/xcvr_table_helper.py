@@ -45,11 +45,8 @@ TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME
 TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
-<<<<<<< HEAD
-=======
 TRANSCEIVER_PM_COUNTERS_TABLE = 'TRANSCEIVER_PM_COUNTERS'
 TRANSCEIVER_CMIS_STATE_TIMESTAMPS_TABLE = 'TRANSCEIVER_CMIS_STATE_TIMESTAMPS'
->>>>>>> b3e8fd9 (NOS-11257: Updated STATE_DB tables for C-CMIS PM pages 34h, 35h, 3Ah (#208))
 
 NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
 NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
@@ -74,11 +71,8 @@ class XcvrTableHelper:
         self.status_flag_set_time_tbl = {}
         self.status_flag_clear_time_tbl = {}
         self.status_sw_tbl = {}
-<<<<<<< HEAD
-=======
         self.cmis_state_timestamps_tbl = {}
         self.pm_counters_tbl = {}
->>>>>>> b3e8fd9 (NOS-11257: Updated STATE_DB tables for C-CMIS PM pages 34h, 35h, 3Ah (#208))
         self.vdm_real_value_tbl = {}
         VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
         self.vdm_threshold_tbl = {f'vdm_{t}_threshold_tbl': {} for t in VDM_THRESHOLD_TYPES}
