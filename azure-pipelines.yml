@@ -135,12 +135,12 @@ jobs:
 
     - script: |
         set -xe
-        sudo pip3 install swsssdk-2.0.1-py3-none-any.whl
-        sudo pip3 install sonic_py_common-1.0-py3-none-any.whl
-        sudo pip3 install sonic_yang_mgmt-1.0-py3-none-any.whl
-        sudo pip3 install sonic_yang_models-1.0-py3-none-any.whl
-        sudo pip3 install sonic_config_engine-1.0-py3-none-any.whl
-        sudo pip3 install sonic_platform_common-1.0-py3-none-any.whl
+        uv pip install --system swsssdk-2.0.1-py3-none-any.whl
+        uv pip install --system sonic_py_common-1.0-py3-none-any.whl
+        uv pip install --system sonic_yang_mgmt-1.0-py3-none-any.whl
+        uv pip install --system sonic_yang_models-1.0-py3-none-any.whl
+        uv pip install --system sonic_config_engine-1.0-py3-none-any.whl
+        uv pip install --system sonic_platform_common-1.0-py3-none-any.whl
       workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/python-wheels/trixie/
       displayName: 'Install Python dependencies'
 
@@ -169,8 +169,8 @@ jobs:
                   exit 1
                 fi
             fi
-            pip3 install ".[testing]"
-            pip3 uninstall --yes sonic-platform-daemons
+            uv pip install --system ".[testing]"
+            uv pip uninstall --system --yes sonic-platform-daemons
             pytest
           workingDirectory: ${{ project.root_dir }}
           displayName: '${{ project.name }}(Py3) Test'
