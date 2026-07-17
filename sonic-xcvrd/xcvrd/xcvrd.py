@@ -917,6 +917,16 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Connect to APPL_DB and subscribe to PORT table notifications
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
 
+        # PortConfigDone/PortInitDone is a one-time pub/sub notification from
+        # portsyncd, emitted when swss finishes port bring-up. If this daemon
+        # (re)starts after that notification already fired (e.g. a crash
+        # restart, or a manual restart independent of swss), the
+        # SubscriberStateTable below will never see it and this loop blocks
+        # forever, even though the key itself is a normal, still-present
+        # entry in APPL_DB. Check for it directly before subscribing.
+        if appl_db.exists("PORT_TABLE:PortConfigDone") or appl_db.exists("PORT_TABLE:PortInitDone"):
+            return
+
         sel = swsscommon.Select()
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
         sel.addSelectable(port_tbl)

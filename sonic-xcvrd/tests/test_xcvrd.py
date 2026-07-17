@@ -2656,8 +2656,25 @@ class TestXcvrdScript(object):
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.wait_for_port_config_done('')
+        # Neither PortConfigDone nor PortInitDone exist yet in APPL_DB: must
+        # fall through to the subscribe-and-wait path below.
+        with patch('sonic_py_common.daemon_base.db_connect') as mock_db_connect:
+            mock_db_connect.return_value.exists = MagicMock(return_value=False)
+            xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
+
+    def test_DaemonXcvrd_wait_for_port_config_done_fast_path(self):
+        # If PortConfigDone/PortInitDone already exist in APPL_DB (daemon
+        # (re)started independently of swss, after the one-time pub/sub
+        # notification already fired), wait_for_port_config_done() must
+        # return immediately instead of blocking on a notification that
+        # will never repeat.
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        with patch('sonic_py_common.daemon_base.db_connect') as mock_db_connect, \
+             patch('swsscommon.swsscommon.Select.select') as mock_select:
+            mock_db_connect.return_value.exists = MagicMock(return_value=True)
+            xcvrd.wait_for_port_config_done('')
+        mock_select.assert_not_called()
 
     def test_DaemonXcvrd_initialize_port_init_control_fields_in_port_table(self):
         port_mapping = PortMapping()
