@@ -452,6 +452,40 @@ class TestXcvrdThreadException(object):
         assert("sonic-xcvrd/xcvrd/cmis/cmis_manager_task.py" in str(trace))
         assert("update_port_transceiver_status_table_sw_cmis_state" in str(trace))
 
+    @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
+    @patch('swsscommon.swsscommon.SubscriberStateTable')
+    @patch('swsscommon.swsscommon.Select.select')
+    def test_CmisManagerTask_wait_for_port_config_done(self, mock_select, mock_sub_table):
+        mock_selectable = MagicMock()
+        mock_selectable.pop = MagicMock(
+            side_effect=[('Ethernet0', swsscommon.SET_COMMAND, (('index', '1'), )), ('PortConfigDone', None, None)])
+        mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
+        mock_sub_table.return_value = mock_selectable
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        # Neither PortConfigDone nor PortInitDone exist yet in APPL_DB: must
+        # fall through to the subscribe-and-wait path below.
+        with patch('sonic_py_common.daemon_base.db_connect') as mock_db_connect:
+            mock_db_connect.return_value.exists = MagicMock(return_value=False)
+            cmis_manager.wait_for_port_config_done('')
+        assert swsscommon.Select.select.call_count == 2
+
+    def test_CmisManagerTask_wait_for_port_config_done_fast_path(self):
+        # If PortConfigDone/PortInitDone already exist in APPL_DB (daemon
+        # (re)started independently of swss, after the one-time pub/sub
+        # notification already fired), wait_for_port_config_done() must
+        # return immediately instead of blocking on a notification that
+        # will never repeat.
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        with patch('sonic_py_common.daemon_base.db_connect') as mock_db_connect, \
+             patch('swsscommon.swsscommon.Select.select') as mock_select:
+            mock_db_connect.return_value.exists = MagicMock(return_value=True)
+            cmis_manager.wait_for_port_config_done('')
+        mock_select.assert_not_called()
+
     @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
