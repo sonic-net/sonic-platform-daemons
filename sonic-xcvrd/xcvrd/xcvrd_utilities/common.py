@@ -151,6 +151,7 @@ def is_fast_reboot_enabled(namespace=''):
     fastboot_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
     if isinstance(fastboot_enabled, str):
         return fastboot_enabled.strip().lower() == "true"
+    return False
 
 def is_warm_reboot_enabled():
     """Check if warm reboot is enabled"""
