@@ -46,10 +46,6 @@ TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
-NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
-NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
-NPU_SI_SETTINGS_NOTIFIED_VALUE = 'NPU_SI_SETTINGS_NOTIFIED'
-
 VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
 
 class XcvrTableHelper:
@@ -58,6 +54,7 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.appl_db = {}
+        self.app_port_read_tbl = {}
         self.cfg_db = {}
         self.dom_temperature_tbl = {}
         self.dom_flag_tbl = {}
@@ -98,6 +95,7 @@ class XcvrTableHelper:
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
+            self.app_port_read_tbl[asic_id] = swsscommon.Table(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
             self.vdm_real_value_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_VDM_REAL_VALUE_TABLE)
@@ -177,6 +175,33 @@ class XcvrTableHelper:
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
 
+    def get_appl_db(self, asic_id):
+        return self.appl_db[asic_id]
+
+    def get_app_port_read_tbl(self, asic_id):
+        return self.app_port_read_tbl[asic_id]
+
+    def get_next_si_notification_number(self, port_name, asic_id):
+        """
+        Return the next SI notification number for port_name by reading the
+        current si_settings_notification from APPL_DB and incrementing its counter.
+        Returns 1 if no prior value exists or the format is unrecognised.
+        """
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        if not found:
+            return 1
+        fvs_dict = dict(fvs)
+        current_value = fvs_dict.get('si_settings_notification')
+        if not current_value:
+            return 1
+        try:
+            parts = current_value.split(':')
+            if len(parts) == 2:
+                return int(parts[1]) + 1
+        except (ValueError, IndexError):
+            pass
+        return 1
+
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
 
@@ -185,66 +210,6 @@ class XcvrTableHelper:
 
     def get_state_port_tbl(self, asic_id):
         return self.state_port_tbl[asic_id]
-
-    def get_state_db_port_table_val_by_key(self, lport, port_mapping, key):
-        """
-        Retrieves the value of a key from STATE_DB PORT_TABLE|<lport> for the given logical port
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-            key:
-                key for the corresponding value to be retrieved
-        Returns:
-            The value of the key if the key is found in STATE_DB PORT_TABLE|<lport>
-            None otherwise
-        """
-
-        if port_mapping is None:
-            helper_logger.log_error("Get value by key from STATE_DB: port_mapping is None "
-                                    "for lport {}".format(lport))
-            return None
-
-        asic_index = port_mapping.get_asic_id_for_logical_port(lport)
-        state_port_table = self.get_state_port_tbl(asic_index)
-        if state_port_table is None:
-            helper_logger.log_error("Get value by key from STATE_DB: state_db is None with asic_index {} "
-                                    "for lport {}".format(asic_index, lport))
-            return None
-
-        found, state_port_table_fvs = state_port_table.get(lport)
-        if not found:
-            helper_logger.log_error("Get value by key from STATE_DB: Unable to find lport {}".format(lport))
-            return None
-
-        state_port_table_fvs_dict = dict(state_port_table_fvs)
-        if key not in state_port_table_fvs_dict:
-            helper_logger.log_error("Get value by key from STATE_DB: Unable to find key {} "
-                                    "state_port_table_fvs_dict {} for lport {}".format(key, state_port_table_fvs_dict, lport))
-            return None
-
-        return state_port_table_fvs_dict[key]
-
-    def is_npu_si_settings_update_required(self, lport, port_mapping):
-        """
-        Checks if NPU SI settings update is required for a module
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-        Returns:
-            True if NPU_SI_SETTINGS_SYNC_STATUS_KEY is
-                - not present/accessible from STATE_DB or
-                - set to NPU_SI_SETTINGS_DEFAULT_VALUE
-            False otherwise
-        """
-        npu_si_settings_sync_val = self.get_state_db_port_table_val_by_key(lport,
-                                                                            port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY)
-
-        # If npu_si_settings_sync_val is None, it can also mean that the key is not present in the table
-        return npu_si_settings_sync_val is None or npu_si_settings_sync_val == NPU_SI_SETTINGS_DEFAULT_VALUE
 
     def get_gearbox_line_lanes_dict(self):
         """
