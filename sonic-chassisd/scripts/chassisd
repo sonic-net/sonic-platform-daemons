@@ -697,7 +697,7 @@ class ModuleUpdater(logger.Logger):
         # Chassis app db cleanup of all asics of the module
 
         # Get the module key and host name from down_modules key
-        module, lc = re.split('\|', module_host)
+        module, lc = re.split(r'\|', module_host)
 
         if lc == '':
             # Host name is not available for this module. No clean up is needed
