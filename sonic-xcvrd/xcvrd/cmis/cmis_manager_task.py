@@ -1028,6 +1028,10 @@ class CmisManagerTask(threading.Thread):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'ConfigSuccess', current ConfigStatus: "
                                         "{}".format(lport, list(api.get_config_datapath_hostlane_status().values())))
+                        if self.is_decomm_pending(lport):
+                            self.log_notice("{}: DECOMMISSION: failed for physical port {}".format(
+                                                lport, self.port_dict[lport]['index']))
+                            self.clear_decomm_pending(lport)
                         self.force_cmis_reinit(lport, retries + 1)
                     return
 

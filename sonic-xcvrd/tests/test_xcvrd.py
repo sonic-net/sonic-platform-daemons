@@ -4052,7 +4052,7 @@ class TestXcvrdScript(object):
         # Reset is_decommission_required() to start decommission from scratch
         task.is_decommission_required = MagicMock(side_effect=[True]*2 + [False]*10)
 
-        # ===== Test failed decommission case =====
+        # ===== Test decommission failure is ignored and CMIS state machine continues =====
 
         # Force config status check to failed
         mock_xcvr_api.get_config_datapath_hostlane_status.return_value = gen_cmis_config_status_dict('ConfigRejected')
@@ -4062,27 +4062,34 @@ class TestXcvrdScript(object):
         # Insert 1st subport event
         port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'1,2', 'subport': '1'})
         task.on_port_update_event(port_change_event)
-        # Make sure to give enough iterations so that task worker runs to the end
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False]*50 + [True]*2)
-        task.task_worker()
-        assert task.is_decomm_lead_lport('Ethernet0')
-        # 1st subport should fail on 'ConfigSuccess' check and fall into failed state after retries
+        # Make sure to give enough iterations so that the task worker runs to the end,
+        # exhausting cmis_retries even after the decommission failure is ignored.
+        for _ in range(3):
+            task.task_stopping_event.is_set = MagicMock(side_effect=[False]*50 + [True]*2)
+            task.task_worker()
+        # Decommission failure should no longer be latched: once the 'ConfigSuccess' check times
+        # out while decommission is pending, decommission is abandoned and normal CMIS
+        # initialization continues (and eventually fails/retries independently of decommission).
+        assert not task.is_decomm_lead_lport('Ethernet0')
+        assert not task.is_decomm_pending('Ethernet0')
+        assert not task.is_decomm_failed('Ethernet0')
+        # 1st subport keeps failing the 'ConfigSuccess' check (unrelated to decommission) and
+        # eventually falls into failed state after exhausting cmis_retries
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
-        assert task.is_decomm_failed('Ethernet0')
 
         # Insert 2nd subport event
         port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed':'100000', 'lanes':'3,4', 'subport': '2'})
         task.on_port_update_event(port_change_event)
-        task.task_stopping_event.is_set = MagicMock(side_effect=[False]*10 + [True]*2)
-        task.task_worker()
+        for _ in range(3):
+            task.task_stopping_event.is_set = MagicMock(side_effect=[False]*50 + [True]*2)
+            task.task_worker()
         # 1st subport should stay in failed state
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_FAILED
-        assert task.is_decomm_failed('Ethernet0')
-        assert task.is_decomm_lead_lport('Ethernet0')
-        # 2nd subport is waiting for decommission to complete, and should also fall into failed state
+        # 2nd subport is no longer gated by decommission (already abandoned) and fails
+        # independently on the same 'ConfigSuccess' check after exhausting cmis_retries
         assert common.get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_FAILED
-        assert task.is_decomm_pending('Ethernet2')
-        assert task.is_decomm_failed('Ethernet2')
+        assert not task.is_decomm_pending('Ethernet2')
+        assert not task.is_decomm_failed('Ethernet2')
 
         # Delete the config for 1st subport
         port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_DEL, {}, db_name='CONFIG_DB', table_name='PORT')
