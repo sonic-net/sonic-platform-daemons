@@ -37,7 +37,7 @@ os.environ["CHASSISD_UNIT_TESTING"] = "1"
 @pytest.fixture(autouse=True)
 def mock_dpu_boot_id():
     """Return a deterministic boot ID instead of reading the test host."""
-    with mock.patch.object(DpuStateUpdater, 'get_boot_id', return_value=TEST_BOOT_ID):
+    with mock.patch('chassisd.DpuStateUpdater.get_boot_id', return_value=TEST_BOOT_ID):
         yield
 
 
@@ -224,20 +224,30 @@ def test_dpu_chassis_daemon():
                 # Wait for thread to start and update DB
                 time.sleep(3)
 
-                assert chassis_state_db == {'DPU1':
-                    {'dpu_data_plane_state': 'up', 'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
-                    'dpu_control_plane_state': 'up', 'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
-                    'boot_id': TEST_BOOT_ID}}
+                assert chassis_state_db == {
+                    'DPU1': {
+                        'dpu_data_plane_state': 'up',
+                        'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                        'dpu_control_plane_state': 'up',
+                        'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                        'boot_id': TEST_BOOT_ID,
+                    }
+                }
 
                 daemon_chassisd.signal_handler(signal.SIGINT, None)
                 daemon_chassisd.stop.wait.return_value = True
 
                 thread.join()
 
-                assert chassis_state_db == {'DPU1':
-                    {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
-                    'dpu_control_plane_state': 'down', 'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
-                    'boot_id': TEST_BOOT_ID}}
+                assert chassis_state_db == {
+                    'DPU1': {
+                        'dpu_data_plane_state': 'down',
+                        'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                        'dpu_control_plane_state': 'down',
+                        'dpu_control_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
+                        'boot_id': TEST_BOOT_ID,
+                    }
+                }
     with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
         daemon_chassisd = DpuChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
         daemon_chassisd.CHASSIS_INFO_UPDATE_PERIOD_SECS = MagicMock(return_value=1)
@@ -395,10 +405,12 @@ def test_dpu_state_manager_avoid_duplicate_updates():
         chassis_state_db[key][field] = value
 
     # Test with same state update
+    event = ('DPU0', 'SET', (('dpu_data_plane_state', 'up'),
+                             ('dpu_control_plane_state', 'up'),
+                             ('boot_id', TEST_BOOT_ID)))
     with mock.patch.object(swsscommon.Table, 'hset', side_effect=hset):
         with mock.patch.object(swsscommon.SubscriberStateTable, 'pop',
-            return_value=('DPU0', 'SET', (('dpu_data_plane_state', 'up'), ('dpu_control_plane_state', 'up'),
-                                         ('boot_id', TEST_BOOT_ID)))):
+                               return_value=event):
             with mock.patch.object(swsscommon.Select, 'select',
                 side_effect=[(swsscommon.Select.OBJECT, None), (swsscommon.Select.OBJECT, None), KeyboardInterrupt]):
 
