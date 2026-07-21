@@ -2050,7 +2050,7 @@ def _isolate_midplane_reason_dir(tmp_path):
 def test_resolve_midplane_down_reason_unplanned(platform_reason, expected):
     """Unplanned down: platform reason tuple is rendered as Unplanned: '<reason>'."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
-    module.set_module_state_transition(False)
+    module.clear_module_state_transition("DPU0")
     module.set_midplane_down_reason(platform_reason)
 
     reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
@@ -2060,7 +2060,7 @@ def test_resolve_midplane_down_reason_unplanned(platform_reason, expected):
 def test_resolve_midplane_down_reason_unplanned_unknown():
     """Unplanned down: no platform reason falls back to Unknown."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
-    module.set_module_state_transition(False)
+    module.clear_module_state_transition("DPU0")
     module.set_midplane_down_reason(None)
 
     reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
@@ -2070,7 +2070,7 @@ def test_resolve_midplane_down_reason_unplanned_unknown():
 def test_resolve_midplane_down_reason_planned():
     """Planned down: transition flag set -> Planned: '<transition_type>'."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
-    module.set_module_state_transition(True)
+    module.set_module_state_transition("DPU0", "shutdown")
 
     module_updater.state_db.hget = MagicMock(return_value="shutdown")
     reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
@@ -2081,7 +2081,7 @@ def test_resolve_midplane_down_reason_planned():
 def test_midplane_down_reason_persisted_in_db():
     """check_midplane_reachability records the midplane-down reason in CHASSIS_STATE_DB."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
-    module.set_module_state_transition(False)
+    module.clear_module_state_transition("DPU0")
     module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_THERMAL_OVERLOAD_OTHER, ""))
 
     chassis_state_db = {}
@@ -2112,7 +2112,7 @@ def test_midplane_down_reason_persisted_in_db():
 def test_midplane_down_reason_persisted_to_file_and_cleared():
     """Full lifecycle: down persists the reason to file, restart reads it back, up clears it."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
-    module.set_module_state_transition(False)
+    module.clear_module_state_transition("DPU0")
     module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_THERMAL_OVERLOAD_ASIC, ""))
     path = module_updater._midplane_reason_path("DPU0")
 
@@ -2137,7 +2137,7 @@ def test_midplane_down_reason_persisted_to_file_and_cleared():
         assert chassis_state_db[key]["dpu_midplane_link_reason"] == "Unplanned: 'Thermal Overload: ASIC'"
 
         restarted_updater, restarted_module = _make_smartswitch_updater_with_dpu()
-        restarted_module.set_module_state_transition(False)
+        restarted_module.clear_module_state_transition("DPU0")
         restarted_module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_HARDWARE_OTHER, "boom"))
         resolved = restarted_updater._resolve_midplane_down_reason(restarted_module, "DPU0")
         assert resolved == "Unplanned: 'Thermal Overload: ASIC'"
