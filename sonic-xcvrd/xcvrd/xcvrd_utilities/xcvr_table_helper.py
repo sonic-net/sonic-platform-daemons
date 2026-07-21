@@ -45,6 +45,8 @@ TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LALARM_FLAG_CLEAR_TIME
 TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
+TRANSCEIVER_PM_COUNTERS_TABLE = 'TRANSCEIVER_PM_COUNTERS'
+TRANSCEIVER_CMIS_STATE_TIMESTAMPS_TABLE = 'TRANSCEIVER_CMIS_STATE_TIMESTAMPS'
 
 NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
 NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
@@ -69,6 +71,8 @@ class XcvrTableHelper:
         self.status_flag_set_time_tbl = {}
         self.status_flag_clear_time_tbl = {}
         self.status_sw_tbl = {}
+        self.cmis_state_timestamps_tbl = {}
+        self.pm_counters_tbl = {}
         self.vdm_real_value_tbl = {}
         VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
         self.vdm_threshold_tbl = {f'vdm_{t}_threshold_tbl': {} for t in VDM_THRESHOLD_TYPES}
@@ -94,6 +98,7 @@ class XcvrTableHelper:
             self.status_flag_clear_time_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_FLAG_CLEAR_TIME_TABLE)
             self.status_sw_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_STATUS_SW_TABLE)
             self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
+            self.pm_counters_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_COUNTERS_TABLE)
             self.firmware_info_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_FIRMWARE_INFO_TABLE)
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
@@ -170,6 +175,9 @@ class XcvrTableHelper:
 
     def get_pm_tbl(self, asic_id):
         return self.pm_tbl[asic_id]
+
+    def get_pm_counters_tbl(self, asic_id):
+        return self.pm_counters_tbl[asic_id]
 
     def get_firmware_info_tbl(self, asic_id):
         return self.firmware_info_tbl[asic_id]
