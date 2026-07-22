@@ -431,7 +431,7 @@ class SfpStateUpdateTask(threading.Thread):
         #       - else
         #             max retry reached, treat as fatal, transition to EXIT
         #     - NORMAL
-        #         Treat as an error, transition to INIT
+        #         Treat as fatal, transition to EXIT
         # 2. SYSTEM_BECOME_READY
         #     - INIT
         #         transition to NORMAL
@@ -460,7 +460,7 @@ class SfpStateUpdateTask(threading.Thread):
         # NORMAL          SYSTEM BECOME READY NORMAL
         # NORMAL          SYSTEM FAIL         INIT
         # INIT/NORMAL     NORMAL EVENT        NORMAL
-        # NORMAL          SYSTEM NOT READY    INIT
+        # NORMAL          SYSTEM NOT READY    EXIT
         # EXIT            -
 
         retry = 0
