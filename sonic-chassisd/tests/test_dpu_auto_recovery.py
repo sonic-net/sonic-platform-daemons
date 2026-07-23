@@ -2143,41 +2143,6 @@ class TestRebootCausePersistence:
                 updater._rotate_files("DPU0")
                 assert len(os.listdir(history_dir)) == 3
 
-    def test_retrieve_dpu_reboot_info_valid(self):
-        """retrieve_dpu_reboot_info returns cause, time, and boot ID from JSON file."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                data = {
-                    "cause": "Kernel Panic",
-                    "name": "2026_05_19_10_00_00",
-                    "boot_id": "test-boot-id",
-                }
-                with open(os.path.join(mod_dir, "previous-reboot-cause.json"), 'w') as f:
-                    json.dump(data, f)
-
-                cause, time_str, boot_id = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause == "Kernel Panic"
-                assert time_str == "2026_05_19_10_00_00"
-                assert boot_id == "test-boot-id"
-
-    def test_retrieve_dpu_reboot_info_missing_file(self):
-        """retrieve_dpu_reboot_info returns three None values when the file is absent."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                cause, time_str, boot_id = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause is None
-                assert time_str is None
-                assert boot_id is None
-
-
 # ============================================================================
 # Test: update_dpu_reboot_cause_to_db
 # ============================================================================

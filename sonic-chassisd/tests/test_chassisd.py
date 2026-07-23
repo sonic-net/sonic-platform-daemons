@@ -312,6 +312,19 @@ def test_check_dpu_boot_id_change_unknown_module():
         mock_persist.assert_not_called()
         mock_update_db.assert_not_called()
 
+
+def test_load_persisted_boot_ids_populates_cache():
+    """_load_persisted_boot_ids reads each DPU's persisted boot_id into the cache."""
+    updater = _make_boot_id_updater()
+    updater.dpu_boot_id = {}
+
+    with patch.object(updater, 'retrieve_dpu_reboot_info',
+                      return_value=("Kernel Panic", "2026_05_19_10_00_00", "persisted-boot-id")):
+        updater._load_persisted_boot_ids()
+
+    assert updater.dpu_boot_id == {"DPU0": "persisted-boot-id"}
+
+
 def test_retrieve_dpu_reboot_info_success():
     class DummyChassis:
         def get_num_modules(self): return 0
@@ -337,6 +350,58 @@ def test_retrieve_dpu_reboot_info_file_missing():
         assert cause is None
         assert time_str is None
         assert boot_id is None
+
+
+def test_reboot_cause_subscriber_processes_boot_id():
+    """Subscriber initializes and forwards a valid boot_id event."""
+    module_updater = MagicMock(spec=SmartSwitchModuleUpdater)
+    subscriber = RebootCauseSubscriberTask(SYSLOG_IDENTIFIER, module_updater)
+    subscriber_db = MagicMock()
+    updater_db = MagicMock()
+    mock_select = MagicMock()
+    mock_sst = MagicMock()
+    select_object = swsscommon.Select.OBJECT
+    select_timeout = swsscommon.Select.TIMEOUT
+
+    mock_select.select.side_effect = [(select_object, None), KeyboardInterrupt]
+    mock_sst.pop.return_value = ("DPU0", "SET", (("boot_id", "new-boot-id"),))
+
+    with patch("chassisd.daemon_base.db_connect",
+               side_effect=[subscriber_db, updater_db]) as mock_db_connect, \
+         patch("chassisd.swsscommon.Select", return_value=mock_select) as mock_select_class, \
+         patch("chassisd.swsscommon.SubscriberStateTable", return_value=mock_sst) as mock_sst_class:
+        mock_select_class.TIMEOUT = select_timeout
+        mock_select_class.OBJECT = select_object
+        subscriber.task_worker()
+
+    assert mock_db_connect.call_count == 2
+    assert module_updater.chassis_state_db is updater_db
+    module_updater._load_persisted_boot_ids.assert_called_once_with()
+    mock_sst_class.assert_called_once_with(subscriber_db, "DPU_STATE")
+    mock_select.addSelectable.assert_called_once_with(mock_sst)
+    module_updater.check_dpu_boot_id_change.assert_called_once_with("DPU0", "new-boot-id")
+
+
+def test_get_boot_id_reads_kernel_boot_id():
+    """get_boot_id returns the stripped kernel boot ID."""
+    updater = DpuStateUpdater.__new__(DpuStateUpdater)
+    updater._syslog = MagicMock()
+
+    with patch("builtins.open", mock_open(read_data="test-boot-id\n")):
+        assert updater.get_boot_id() == "test-boot-id"
+
+
+def test_get_boot_id_returns_none_on_oserror():
+    """get_boot_id returns None and logs a warning when the file cannot be read."""
+    updater = DpuStateUpdater.__new__(DpuStateUpdater)
+    updater._syslog = MagicMock()
+    updater.log_warning = MagicMock()
+
+    with patch("builtins.open", side_effect=OSError("boot ID unavailable")):
+        assert updater.get_boot_id() is None
+
+    updater.log_warning.assert_called_once()
+
 
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
