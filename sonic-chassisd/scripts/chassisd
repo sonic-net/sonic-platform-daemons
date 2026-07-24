@@ -81,7 +81,6 @@ CHASSIS_MODULE_REBOOT_TIMESTAMP_FIELD = 'timestamp'
 CHASSIS_MODULE_REBOOT_REBOOT_FIELD = 'reboot'
 DEFAULT_LINECARD_REBOOT_TIMEOUT = 180
 DEFAULT_DPU_REBOOT_TIMEOUT = 360
-MAX_DPU_REBOOT_DURATION = 800
 PLATFORM_ENV_CONF_FILE = "/usr/share/sonic/platform/platform_env.conf"
 PLATFORM_JSON_FILE = "/usr/share/sonic/platform/platform.json"
 
@@ -162,6 +161,9 @@ DPU_STATE_MANUAL_INTERVENTION = 'ManualIntervention'
 DPU_STATE_ADMIN_DOWN = 'AdminDown'
 DPU_STATE_UNRECOVERABLE = 'Unrecoverable'
 
+# DPU boot_id fields
+BOOT_ID = 'boot_id'
+BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id'
 
 class DpuStates(NamedTuple):
     """Container for DPU plane states to avoid positional confusion."""
@@ -695,7 +697,7 @@ class ModuleUpdater(logger.Logger):
         # Chassis app db cleanup of all asics of the module
 
         # Get the module key and host name from down_modules key
-        module, lc = re.split('\|', module_host)
+        module, lc = re.split(r'\|', module_host)
 
         if lc == '':
             # Host name is not available for this module. No clean up is needed
@@ -756,10 +758,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         self.chassis = chassis
         self.num_modules = self.chassis.get_num_modules()
         # Connect to STATE_DB and create chassis info tables
-        state_db = daemon_base.db_connect("STATE_DB")
-        self.chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
-        self.module_table = swsscommon.Table(state_db, CHASSIS_MODULE_INFO_TABLE)
-        self.midplane_table = swsscommon.Table(state_db, CHASSIS_MIDPLANE_INFO_TABLE)
+        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.chassis_table = swsscommon.Table(self.state_db, CHASSIS_INFO_TABLE)
+        self.module_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
+        self.midplane_table = swsscommon.Table(self.state_db, CHASSIS_MIDPLANE_INFO_TABLE)
         self.info_dict_keys = [CHASSIS_MODULE_INFO_NAME_FIELD,
                                CHASSIS_MODULE_INFO_DESC_FIELD,
                                CHASSIS_MODULE_INFO_SLOT_FIELD,
@@ -813,6 +815,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 'boot_start_time': time.time(),
             }
 
+        # DPU boot_id tracking
+        self.dpu_boot_id = {}
+
     def deinit(self):
         """
         Destructor of ModuleUpdater
@@ -844,24 +849,66 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             return ModuleBase.MODULE_STATUS_EMPTY
 
-    def retrieve_dpu_reboot_info(self, module):
+    def retrieve_dpu_reboot_info(self, module_name):
         """
-        Retrieve the most recent reboot cause and time from previous-reboot-cause.json.
-        Returns (cause_string, time_string), or (None, None) if unavailable.
+        Retrieve the most recent reboot cause, time and boot_id from
+        previous-reboot-cause.json.
+        Returns (cause_string, time_string, boot_id), or (None, None, None)
+        if unavailable.
         """
         try:
-            path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
+            path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module_name.lower(), "previous-reboot-cause.json")
             if os.path.exists(path):
                 with open(path, 'r') as f:
                     data = json.load(f)
                     cause = data.get("cause")
                     time_str = data.get("name")  # Format: "YYYY_MM_DD_HH_MM_SS"
-                    return cause, time_str
+                    boot_id = data.get("boot_id")
+                    return cause, time_str, boot_id
             else:
-                self.log_debug(f"{module}: previous-reboot-cause.json not found")
+                self.log_debug(f"{module_name}: previous-reboot-cause.json not found")
         except Exception as e:
-            self.log_error(f"{module}: Failed to read previous-reboot-cause.json: {e}")
-        return None, None
+            self.log_error(f"{module_name}: Failed to read previous-reboot-cause.json: {e}")
+        return None, None, None
+
+    def _load_persisted_boot_ids(self):
+        """Load boot_id from each DPU's previous-reboot-cause.json."""
+        for module_index in range(0, self.num_modules):
+            module = self.chassis.get_module(module_index)
+            module_name = try_get(module.get_name)
+            _, _, boot_id = self.retrieve_dpu_reboot_info(module_name)
+            if boot_id:
+                self.dpu_boot_id[module_name] = boot_id
+
+    def check_dpu_boot_id_change(self, module_name, current_boot_id):
+        """
+        Capture the reboot cause for a single DPU when its boot_id changes.
+
+        Args:
+            module_name: DPU name, e.g. "DPU0" (the DPU_STATE row key).
+            current_boot_id: boot_id reported for that DPU in CHASSIS_STATE_DB.
+        """
+        try:
+            if not current_boot_id:
+                return
+
+            # No change since the last captured boot -> nothing to do.
+            if self.dpu_boot_id.get(module_name) == current_boot_id:
+                return
+
+            module_index = try_get(self.chassis.get_module_index, module_name, default=INVALID_MODULE_INDEX)
+            if module_index < 0:
+                self.log_error("Unable to get module-index for {} to capture reboot cause".format(module_name))
+                return
+            module = self.chassis.get_module(module_index)
+
+            self.log_notice("{}: new boot_id {} detected, capturing reboot cause".format(module_name, current_boot_id))
+            reboot_cause = try_get(module.get_reboot_cause)
+            self.persist_dpu_reboot_cause(reboot_cause, module_name, boot_id=current_boot_id)
+            self.update_dpu_reboot_cause_to_db(module_name)
+            self.dpu_boot_id[module_name] = current_boot_id
+        except Exception as e:
+            self.log_error("Failed to process boot_id for {}: {}".format(module_name, e))
 
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
@@ -878,54 +925,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                                                   (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
-
-                # Get a copy of the previous operational status of the module
-                prev_status = self.get_module_current_status(key)
                 self.module_table.set(key, fvs)
-
-                # Get a copy of the current operational status of the module
-                current_status = module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
-
-                # Operational status transitioning to offline
-                if prev_status != ModuleBase.MODULE_STATUS_EMPTY and prev_status != str(ModuleBase.MODULE_STATUS_OFFLINE) and current_status == str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice("{} operational status transitioning to offline".format(key))
-
-                    # Persist dpu down time
-                    self.persist_dpu_reboot_time(key)
-                    # persist reboot cause
-                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-                    self.persist_dpu_reboot_cause(reboot_cause, key)
-                    # publish reboot cause to db
-                    self.update_dpu_reboot_cause_to_db(key)
-
-                elif (prev_status == ModuleBase.MODULE_STATUS_EMPTY or prev_status == str(ModuleBase.MODULE_STATUS_OFFLINE)) and current_status != str(ModuleBase.MODULE_STATUS_OFFLINE):
-                    self.log_notice(f"{key} operational status transitioning to online")
-
-                    reboot_cause = try_get(self.chassis.get_module(module_index).get_reboot_cause)
-                    if isinstance(reboot_cause, (tuple, list)):
-                        current_cause = reboot_cause[0]
-                    else:
-                        current_cause = reboot_cause
-
-                    stored_cause, stored_time_str = self.retrieve_dpu_reboot_info(key)
-
-                    is_reboot = False
-                    if current_cause and stored_cause and stored_time_str:
-                        try:
-                            stored_dt = datetime.strptime(stored_time_str, "%Y_%m_%d_%H_%M_%S").replace(tzinfo=timezone.utc)
-                            now = datetime.now(timezone.utc)
-                            delta_sec = (now - stored_dt).total_seconds()
-
-                            if current_cause == stored_cause and delta_sec <  MAX_DPU_REBOOT_DURATION:
-                                self.log_info(f"{key}: is_reboot=True — same reboot cause within {int(delta_sec)}s")
-                                is_reboot = True
-                        except Exception as e:
-                            self.log_error(f"{key}: Reboot cause/time comparison failed: {e}")
-
-                    if not is_reboot and (stored_time_str is not None or self._is_first_boot(key)):
-                        # persist reboot cause and publish to db
-                        self.persist_dpu_reboot_cause(reboot_cause, key)
-                        self.update_dpu_reboot_cause_to_db(key)
 
     def _get_module_info(self, module_index):
         """
@@ -950,10 +950,79 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         return module_info_dict
 
 
-    def update_dpu_state(self, key, state):
+    def _resolve_midplane_down_reason(self, module, module_name):
+        """
+        Build the dpu_midplane_link_reason for an up->down midplane transition.
+
+        Planned   : a graceful admin operation set the transition flag, so the
+                    'transition_type' field is read from STATE_DB
+                    CHASSIS_MODULE_TABLE and reported as Planned: '<type>'.
+        Unplanned : no transition flag is set, so the platform is queried via
+                    get_midplane_down_reason() and reported as Unplanned: '<reason>'.
+        """
+        # If the reason is stored in a file, return it.
+        cached = self._read_midplane_down_reason(module_name)
+        if cached:
+            return cached
+
+        reason_str = None
+        # Planned operation (graceful shutdown/startup/reset) in progress?
+        if try_get(module.get_module_state_transition, module_name, default=False):
+            try:
+                module_key = "{}|{}".format(CHASSIS_MODULE_INFO_TABLE, module_name.upper())
+                transition_type = self.state_db.hget(module_key, "transition_type")
+                reason_str = "Planned: '{}'".format(transition_type or "unknown")
+            except Exception as e:
+                self.log_error("{}: failed to read transition_type: {}".format(module_name, e))
+
+        if reason_str is None:
+            # Unplanned down: ask the platform for the hardware reason.
+            reason = try_get(module.get_midplane_down_reason, default=None)
+            if isinstance(reason, (tuple, list)):
+                parts = [str(p) for p in reason if p not in (None, "")]
+                detail = ", ".join(parts) if parts else "Unknown"
+            else:
+                detail = reason or "Unknown"
+            reason_str = "Unplanned: '{}'".format(detail)
+
+        self._write_midplane_down_reason(module_name, reason_str)
+        return reason_str
+
+    def _midplane_reason_path(self, module_name):
+        return os.path.join(MODULE_REBOOT_CAUSE_DIR, module_name.lower(), "midplane-down-reason.txt")
+
+    def _read_midplane_down_reason(self, module_name):
+        try:
+            with open(self._midplane_reason_path(module_name)) as f:
+                return f.read().strip() or None
+        except FileNotFoundError:
+            return None
+        except Exception as e:
+            self.log_error("{}: read midplane reason failed: {}".format(module_name, e))
+            return None
+
+    def _write_midplane_down_reason(self, module_name, reason):
+        path = self._midplane_reason_path(module_name)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w') as f:
+                f.write((reason or "") + "\n")
+        except Exception as e:
+            self.log_error("{}: persist midplane reason failed: {}".format(module_name, e))
+
+    def _clear_midplane_down_reason(self, module_name):
+        try:
+            os.remove(self._midplane_reason_path(module_name))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            self.log_error("{}: clear midplane reason failed: {}".format(module_name, e))
+
+    def update_dpu_state(self, key, state, reason=None):
         """
         Update specific DPU state fields in chassisStateDB using the given key.
-        If state is 'down', set control plane, data plane states to down as well.
+        If state is 'down', set control plane, data plane states to down as well
+        and record the midplane-down reason.
         """
         try:
             # Connect to the CHASSIS_STATE_DB using daemon_base
@@ -961,10 +1030,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
 
 
-            # Prepare the fields to update
+            # Prepare the fields to update. Coerce reason to "" so the 'up'
+            # path (reason=None) never writes a None into the DB.
             updates = {
                 "dpu_midplane_link_state": state,
-                "dpu_midplane_link_reason": "",
+                "dpu_midplane_link_reason": reason or "",
                 "dpu_midplane_link_time": get_formatted_time(),
             }
             # If midplane state is down, set control plane, data plane states to down as well
@@ -1011,38 +1081,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         """Generates the full path for history files."""
         return os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
 
-    def _is_first_boot(self, module):
-        """Checks if the reboot-cause file indicates a first boot."""
-        file_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
-
-        try:
-            with open(file_path, 'r') as f:
-                content = f.read().strip()
-                return content == "First boot"
-        except FileNotFoundError:
-                return False
-
-    def persist_dpu_reboot_time(self, module):
-        """Persist the current reboot time to a file."""
-        time_str = self._get_current_time_str()
-        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
-
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w') as f:
-            f.write(time_str)
-
-    def retrieve_dpu_reboot_time(self, module):
-        """Retrieve the persisted reboot time from a file."""
-        path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
-
-        try:
-            with open(path, 'r') as f:
-                return f.read().strip()
-        except FileNotFoundError:
-            return None
-
-    def persist_dpu_reboot_cause(self, reboot_cause, module):
-        """Persist the reboot cause information and handle file rotation."""
+    def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None):
+        """Persist the reboot cause information, boot_id and handle file rotation."""
         # Extract cause and comment from the reboot_cause
         if reboot_cause:
             try:
@@ -1055,19 +1095,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         else:
             cause, comment = "Unknown", "N/A"
 
-        prev_reboot_time = self.retrieve_dpu_reboot_time(module)
-        if prev_reboot_time is None:
-            prev_reboot_time = self._get_current_time_str()
-
-        file_name = f"{prev_reboot_time}_reboot_cause.json"
-        prev_reboot_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "prev_reboot_time.txt")
-
-        if os.path.exists(prev_reboot_path):
-            os.remove(prev_reboot_path)
-
+        reboot_time = self._get_current_time_str()
+        file_name = f"{reboot_time}_reboot_cause.json"
         file_path = self._get_history_path(module, file_name)
         try:
-            formatted_time = get_formatted_time(datetimeobj=datetime.strptime(prev_reboot_time, "%Y_%m_%d_%H_%M_%S"))
+            formatted_time = get_formatted_time(datetimeobj=datetime.strptime(reboot_time, "%Y_%m_%d_%H_%M_%S"))
         except ValueError:
             formatted_time = get_formatted_time()
 
@@ -1076,7 +1108,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             "comment": comment,
             "device": module,
             "time": formatted_time,
-            "name": prev_reboot_time,
+            "name": reboot_time,
+            "boot_id": boot_id or "",
         }
 
         with open(file_path, 'w') as f:
@@ -1188,10 +1221,13 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # Update midplane state in the chassisStateDB DPU_STATE table
             key = DPU_STATE_TABLE + "|" + module_key
             dpu_mp_state = self.get_dpu_midplane_state(key)
-            if midplane_access and dpu_mp_state != 'up':
-                self.update_dpu_state(key, 'up')
+            if midplane_access:
+                if dpu_mp_state != 'up':
+                    self.update_dpu_state(key, "up")
+                self._clear_midplane_down_reason(module_key)
             elif not midplane_access and dpu_mp_state != 'down':
-                self.update_dpu_state(key, "down")
+                midplane_down_reason = self._resolve_midplane_down_reason(module, module_key)
+                self.update_dpu_state(key, "down", midplane_down_reason)
 
             # Update db with midplane information
             fvs = swsscommon.FieldValuePairs([(CHASSIS_MIDPLANE_INFO_IP_FIELD, midplane_ip),
@@ -1713,6 +1749,57 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
 
             self.config_updater.module_config_update(key, admin_state)
 
+
+#
+# Reboot-cause subscriber task =============================================
+#
+
+
+class RebootCauseSubscriberTask(ProcessTaskBase):
+    """ Capture DPU reboot-cause on a boot_id change. """
+
+    def __init__(self, log_identifier, module_updater):
+        super(RebootCauseSubscriberTask, self).__init__()
+        self.logger = logger.Logger(log_identifier)
+        self.module_updater = module_updater
+
+    def task_worker(self):
+        self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+        self.module_updater.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
+        self.module_updater._load_persisted_boot_ids()
+
+        sel = swsscommon.Select()
+        sst = swsscommon.SubscriberStateTable(self.chassis_state_db, "DPU_STATE")
+        sel.addSelectable(sst)
+
+        # Listen indefinitely for DPU_STATE changes in CHASSIS_STATE_DB
+        try:
+            while True:
+                # Use timeout so SIGTERM (handled in the parent) can stop us
+                (state, c) = sel.select(SELECT_TIMEOUT)
+
+                if state == swsscommon.Select.TIMEOUT:
+                    continue
+                if state != swsscommon.Select.OBJECT:
+                    self.logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                    continue
+
+                result = sst.pop()
+                if result is None:
+                    continue
+                (key, op, fvp) = result
+                if op != "SET" or fvp is None:
+                    continue
+
+                fvp_dict = dict(fvp)
+                # check if the boot_id has changed for the DPU
+                if BOOT_ID in fvp_dict:
+                    self.module_updater.check_dpu_boot_id_change(key, fvp_dict[BOOT_ID])
+
+        except KeyboardInterrupt:
+            pass
+
+
 #
 # State Manager task ========================================================
 #
@@ -1780,14 +1867,24 @@ class DpuStateUpdater(logger.Logger):
         self.dpu_state_table.hset(self.name, CP_STATE, state)
         self.dpu_state_table.hset(self.name, CP_UPDATE_TIME, self._time_now())
 
+    def _update_boot_id(self, boot_id):
+        self.dpu_state_table.hset(self.name, BOOT_ID, boot_id)
+
     def get_dp_state(self):
         return 'up' if self._get_dp_state() else 'down'
 
     def get_cp_state(self):
         return 'up' if self._get_cp_state() else 'down'
 
-    def update_state(self):
+    def get_boot_id(self):
+        try:
+            with open(BOOT_ID_PATH) as f:
+                return f.read().strip()
+        except OSError as err:
+            self.log_warning(f"Failed to read boot_id from {BOOT_ID_PATH}: {err}")
+            return None
 
+    def update_state(self):
         dp_current_state = self.get_dp_state()
         _, dp_prev_state = self.dpu_state_table.hget(self.name, DP_STATE)
 
@@ -1799,7 +1896,14 @@ class DpuStateUpdater(logger.Logger):
 
         if cp_current_state != cp_prev_state:
             self._update_cp_dpu_state(cp_current_state)
-        return [dp_current_state, cp_current_state]
+
+        current_boot_id = self.get_boot_id()
+        if current_boot_id:
+            _, prev_boot_id = self.dpu_state_table.hget(self.name, BOOT_ID)
+            if current_boot_id != prev_boot_id:
+                self._update_boot_id(current_boot_id)
+
+        return [dp_current_state, cp_current_state, current_boot_id]
 
     def deinit(self):
         self._update_dp_dpu_state('down')
@@ -1912,18 +2016,21 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 self.log_error("Chassisd not supported for this platform")
                 sys.exit(CHASSIS_NOT_SUPPORTED)
 
+        self.config_manager = None
+        self.reboot_cause_subscriber = None
+
         try:
-            # Start configuration manager task
+            # Start configuration manager and reboot cause subscriber tasks
             if self.smartswitch:
                 self.set_initial_dpu_admin_state()
                 self.module_updater.init_dpu_recovery_state()
                 self.config_manager = SmartSwitchConfigManagerTask()
                 self.config_manager.task_run()
+                self.reboot_cause_subscriber = RebootCauseSubscriberTask(SYSLOG_IDENTIFIER, self.module_updater)
+                self.reboot_cause_subscriber.task_run()
             elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
                 self.config_manager = ConfigManagerTask()
                 self.config_manager.task_run()
-            else:
-                self.config_manager = None
 
             # Start main loop
             self.log_info("Start daemon main loop")
@@ -1943,6 +2050,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
             # https://github.com/sonic-net/sonic-buildimage/issues/24775
             if self.config_manager is not None:
                 self.config_manager.task_stop()
+            if self.reboot_cause_subscriber is not None:
+                self.reboot_cause_subscriber.task_stop()
 
         # Delete all the information from DB and then exit
         self.module_updater.deinit()
@@ -1962,7 +2071,8 @@ class DpuStateManagerTask(ProcessTaskBase):
         self.chassis_state_db = daemon_base.db_connect('CHASSIS_STATE_DB')
         self.current_dp_state = None
         self.current_cp_state = None
-
+        self.current_boot_id = self.dpu_state_updater.get_boot_id()
+        
     def task_worker(self):
         sel = swsscommon.Select()
         selectable = [
@@ -1973,6 +2083,10 @@ class DpuStateManagerTask(ProcessTaskBase):
 
         for s in selectable:
             sel.addSelectable(s)
+
+        # write boot_id into DPU_STATE table before entering the loop
+        if self.current_boot_id:
+            self.dpu_state_updater._update_boot_id(self.current_boot_id)
 
         try:
             while True:
@@ -2002,7 +2116,8 @@ class DpuStateManagerTask(ProcessTaskBase):
                             fvs = dict(fvp)
                             # No need to update if the state is the same as the current state
                             if ('dpu_data_plane_state' in fvs and fvs['dpu_data_plane_state'] == self.current_dp_state) and \
-                                ('dpu_control_plane_state' in fvs and fvs['dpu_control_plane_state'] == self.current_cp_state):
+                                ('dpu_control_plane_state' in fvs and fvs['dpu_control_plane_state'] == self.current_cp_state) and \
+                                ('boot_id' in fvs and fvs['boot_id'] == self.current_boot_id):
                                 update_required = False
                                 continue
                         self.logger.log_info(f"DPU_STATE change detected: operation={op}, key={key}")
@@ -2012,7 +2127,7 @@ class DpuStateManagerTask(ProcessTaskBase):
                         break
 
                 if update_required:
-                    [self.current_dp_state, self.current_cp_state] = self.dpu_state_updater.update_state()
+                    [self.current_dp_state, self.current_cp_state, self.current_boot_id] = self.dpu_state_updater.update_state()
 
         except KeyboardInterrupt:
             pass

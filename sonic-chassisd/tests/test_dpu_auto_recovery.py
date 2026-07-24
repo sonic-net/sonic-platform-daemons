@@ -2021,46 +2021,6 @@ class TestDBSetterMethods:
 class TestRebootCausePersistence:
     """Test reboot cause file I/O, symlink management, and history rotation."""
 
-    def test_persist_dpu_reboot_time(self):
-        """persist_dpu_reboot_time writes formatted time to file."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                updater.persist_dpu_reboot_time("DPU0")
-
-                path = os.path.join(tmpdir, "dpu0", "prev_reboot_time.txt")
-                assert os.path.exists(path)
-                content = open(path).read().strip()
-                # Format: YYYY_MM_DD_HH_MM_SS
-                assert len(content.split('_')) == 6
-
-    def test_retrieve_dpu_reboot_time_exists(self):
-        """retrieve_dpu_reboot_time returns stored time."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "prev_reboot_time.txt"), 'w') as f:
-                    f.write("2026_05_19_10_30_00")
-
-                result = updater.retrieve_dpu_reboot_time("DPU0")
-                assert result == "2026_05_19_10_30_00"
-
-    def test_retrieve_dpu_reboot_time_missing(self):
-        """retrieve_dpu_reboot_time returns None when file doesn't exist."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                result = updater.retrieve_dpu_reboot_time("DPU0")
-                assert result is None
-
     def test_persist_dpu_reboot_cause_creates_history_file(self):
         """persist_dpu_reboot_cause creates JSON history file."""
         chassis = create_chassis_with_dpus(1)
@@ -2182,35 +2142,6 @@ class TestRebootCausePersistence:
 
                 updater._rotate_files("DPU0")
                 assert len(os.listdir(history_dir)) == 3
-
-    def test_retrieve_dpu_reboot_info_valid(self):
-        """retrieve_dpu_reboot_info returns (cause, time) from JSON file."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                data = {"cause": "Kernel Panic", "name": "2026_05_19_10_00_00"}
-                with open(os.path.join(mod_dir, "previous-reboot-cause.json"), 'w') as f:
-                    json.dump(data, f)
-
-                cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause == "Kernel Panic"
-                assert time_str == "2026_05_19_10_00_00"
-
-    def test_retrieve_dpu_reboot_info_missing_file(self):
-        """retrieve_dpu_reboot_info returns (None, None) when file doesn't exist."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause is None
-                assert time_str is None
-
 
 # ============================================================================
 # Test: update_dpu_reboot_cause_to_db
@@ -2406,48 +2337,6 @@ class TestMultipleDpuAdvanced:
              patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_WAIT_FOR_SELF_RECOVERY
-
-
-# ============================================================================
-# Test: _is_first_boot helper
-# ============================================================================
-
-class TestIsFirstBoot:
-    """Test _is_first_boot() helper method."""
-
-    def test_first_boot_detected(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "reboot-cause.txt"), 'w') as f:
-                    f.write("First boot")
-
-                assert updater._is_first_boot("DPU0") is True
-
-    def test_not_first_boot(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "reboot-cause.txt"), 'w') as f:
-                    f.write("Watchdog")
-
-                assert updater._is_first_boot("DPU0") is False
-
-    def test_missing_file_returns_false(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                assert updater._is_first_boot("DPU0") is False
 
 
 # ============================================================================
