@@ -10,6 +10,7 @@ import importlib.machinery
 
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
+from sonic_platform_base.chassis_base import ChassisBase
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
@@ -2102,14 +2103,14 @@ def _isolate_midplane_reason_dir(tmp_path):
 
 @pytest.mark.parametrize("platform_reason, expected", [
     # (major, "") -> only the major part is rendered
-    ((ModuleBase.MIDPLANE_DOWN_REASON_THERMAL_OVERLOAD_ASIC, ""),
+    ((ChassisBase.REBOOT_CAUSE_THERMAL_OVERLOAD_ASIC, ""),
      "Unplanned: 'Thermal Overload: ASIC'"),
     # (major, minor) -> both parts are rendered
-    ((ModuleBase.MIDPLANE_DOWN_REASON_HARDWARE_OTHER, "kernel panic"),
+    ((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "kernel panic"),
      "Unplanned: 'Hardware - Other, kernel panic'"),
     # falsy-but-valid minor (0) is kept; guards against `if minor` truthiness,
     # only None/"" should omit the minor part.
-    ((ModuleBase.MIDPLANE_DOWN_REASON_HARDWARE_OTHER, 0),
+    ((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, 0),
      "Unplanned: 'Hardware - Other, 0'"),
 ])
 def test_resolve_midplane_down_reason_unplanned(platform_reason, expected):
@@ -2147,7 +2148,7 @@ def test_midplane_down_reason_persisted_in_db():
     """check_midplane_reachability records the midplane-down reason in CHASSIS_STATE_DB."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
     module.clear_module_state_transition("DPU0")
-    module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_THERMAL_OVERLOAD_OTHER, ""))
+    module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_THERMAL_OVERLOAD_OTHER, ""))
 
     chassis_state_db = {}
 
@@ -2178,7 +2179,7 @@ def test_midplane_down_reason_persisted_to_file_and_cleared():
     """Full lifecycle: down persists the reason to file, restart reads it back, up clears it."""
     module_updater, module = _make_smartswitch_updater_with_dpu()
     module.clear_module_state_transition("DPU0")
-    module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_THERMAL_OVERLOAD_ASIC, ""))
+    module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_THERMAL_OVERLOAD_ASIC, ""))
     path = module_updater._midplane_reason_path("DPU0")
 
     chassis_state_db = {}
@@ -2203,7 +2204,7 @@ def test_midplane_down_reason_persisted_to_file_and_cleared():
 
         restarted_updater, restarted_module = _make_smartswitch_updater_with_dpu()
         restarted_module.clear_module_state_transition("DPU0")
-        restarted_module.set_midplane_down_reason((ModuleBase.MIDPLANE_DOWN_REASON_HARDWARE_OTHER, "boom"))
+        restarted_module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "boom"))
         resolved = restarted_updater._resolve_midplane_down_reason(restarted_module, "DPU0")
         assert resolved == "Unplanned: 'Thermal Overload: ASIC'"
 
