@@ -415,7 +415,7 @@ class TestXcvrdThreadException(object):
     def test_CmisManagerTask_task_run_with_exception(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), stop_event)
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
         cmis_manager.wait_for_port_config_done = MagicMock(side_effect = NotImplementedError)
         exception_received = None
         trace = None
@@ -434,7 +434,7 @@ class TestXcvrdThreadException(object):
 
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), stop_event)
+        cmis_manager = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
         cmis_manager.wait_for_port_config_done = MagicMock() #no-op
         cmis_manager.update_port_transceiver_status_table_sw_cmis_state = MagicMock(side_effect = NotImplementedError)
         exception_received = None
@@ -583,6 +583,9 @@ class TestXcvrdThreadException(object):
         xcvrd.dom_temperature_poll_interval = 10
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
+        # init() is mocked out, so populate the pluggable port dict directly.
+        # CmisManagerTask is only created when there is at least one pluggable port.
+        xcvrd.sfp_obj_dict = {1: MagicMock()}
         xcvrd.run()
 
         assert len(xcvrd.threads) == 5
@@ -3166,7 +3169,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_handle_port_change_event(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
 
         assert not task.isPortConfigDone
         port_change_event = PortChangeEvent('PortConfigDone', -1, 0, PortChangeEvent.PORT_SET)
@@ -5087,7 +5090,7 @@ class TestXcvrdScript(object):
         mock_sub_table.return_value = mock_selectable
 
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {'1': MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
@@ -5145,7 +5148,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
     def test_DomInfoUpdateTask_task_worker_vdm_failure(self, mock_post_pm_info):
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {'1': MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
@@ -5296,7 +5299,7 @@ class TestXcvrdScript(object):
     def test_DomInfoUpdateTask_task_worker_vdm_freeze_conditions(self, mock_post_pm_info):
         """Test various need_freeze condition combinations"""
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {'1': MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
 
@@ -5444,7 +5447,7 @@ class TestXcvrdScript(object):
         expected_logs,
     ):
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {physical_port: MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
@@ -5829,6 +5832,7 @@ class TestXcvrdScript(object):
         mock_object = MagicMock()
         mock_object.get_presence = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         from xcvrd.xcvrd_utilities.common import _wrapper_get_presence
         assert _wrapper_get_presence(1)
 
@@ -6705,7 +6709,7 @@ class TestXcvrdScript(object):
         - If wrong: update doesn't trigger yet (61 < 65), which we can detect
         """
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager)
