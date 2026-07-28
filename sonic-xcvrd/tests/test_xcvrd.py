@@ -2777,6 +2777,33 @@ class TestXcvrdScript(object):
         assert mock_deinit.call_count == 1
         assert mock_init.call_count == 1
 
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.is_alive', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.join', MagicMock())
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.start', MagicMock())
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.is_alive', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.join', MagicMock())
+    @patch('xcvrd.xcvrd.DomInfoUpdateTask.start', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.is_alive', MagicMock(return_value=False))
+    @patch('xcvrd.cmis.CmisManagerTask.join', MagicMock())
+    @patch('xcvrd.cmis.CmisManagerTask.start', MagicMock())
+    @patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock())
+    @patch('xcvrd.xcvrd.DaemonXcvrd.init')
+    def test_DaemonXcvrd_run_creates_cpo_and_pluggable_tasks(self, mock_init):
+        mock_init.return_value = PortMapping()
+        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrd.load_feature_flags = MagicMock()
+        xcvrd.stop_event.wait = MagicMock()
+        # init() is mocked out, so populate the port dicts it would normally build
+        xcvrd.sfp_obj_dict = {1: MagicMock()}
+        xcvrd.cpo_obj_dict = {2: MagicMock()}
+        xcvrd.run()
+
+        # A mix of pluggable and CPO ports must yield both sets of tasks
+        names = [thread.name for thread in xcvrd.threads]
+        for expected in ('CmisManagerTask', 'DomInfoUpdateTask', 'SfpStateUpdateTask',
+                         'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
+            assert expected in names
+
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
         task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
