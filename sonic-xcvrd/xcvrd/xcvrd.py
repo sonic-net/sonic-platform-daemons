@@ -259,7 +259,7 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
         threading.Thread.__init__(self)
         self.name = "SfpStateUpdateTask"
         self.exc = None
@@ -276,11 +276,11 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_error_dict = {}
         self.sfp_insert_events = {}
         self.namespaces = namespaces
-        self.sfp_obj_dict = sfp_obj_dict
+        self.port_obj_dict = port_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.dom_db_utils = DOMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
-        self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+        self.dom_db_utils = DOMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+        self.vdm_db_utils = VDMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
