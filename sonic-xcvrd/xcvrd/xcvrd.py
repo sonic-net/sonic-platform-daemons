@@ -870,6 +870,12 @@ class SfpStateUpdateTask(threading.Thread):
         return self.logger.update_log_level()
 
 
+class CpoStateUpdateTask(SfpStateUpdateTask):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
+        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event)
+        self.name = "CpoStateUpdateTask"
+
+
 #
 # Daemon =======================================================================
 #
@@ -1173,6 +1179,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update.start()
         self.threads.append(sfp_state_update)
 
+        # Start the CPO state info update thread
+        cpo_state_update = None
+        if self.cpo_obj_dict:
+            cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
+            cpo_state_update.start()
+            self.threads.append(cpo_state_update)
+
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
         for thread in self.threads:
@@ -1206,9 +1219,19 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             if cmis_manager.is_alive():
                 cmis_manager.join()
 
+        # Stop the CPO manager
+        if cpo_manager is not None:
+            if cpo_manager.is_alive():
+                cpo_manager.join()
+
         # Stop the dom sensor info update thread
         if dom_info_update.is_alive():
             dom_info_update.join()
+
+        # Stop the CPO dom sensor info update thread
+        if cpo_dom_info_update is not None:
+            if cpo_dom_info_update.is_alive():
+                cpo_dom_info_update.join()
 
         # Stop the dom thermal sensor info update thread
         if dom_thermal_info_update is not None:
@@ -1219,6 +1242,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if sfp_state_update.is_alive():
             sfp_state_update.raise_exception()
             sfp_state_update.join()
+
+        # Stop the CPO state info update thread
+        if cpo_state_update is not None:
+            if cpo_state_update.is_alive():
+                cpo_state_update.raise_exception()
+                cpo_state_update.join()
 
         # Start daemon deinitialization sequence
         self.deinit()
