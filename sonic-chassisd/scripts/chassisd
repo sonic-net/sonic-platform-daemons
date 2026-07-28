@@ -105,6 +105,9 @@ MODULE_ADMIN_UP = 1
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
+# Comment marker for DPU reboot cause when no previous boot_id was available
+NO_PREVIOUS_BOOT_ID_COMMENT = "no previous boot_id"
+
 # DPU_STATE table in CHASSIS_STATE_DB
 DPU_STATE_TABLE = 'DPU_STATE'
 
@@ -815,9 +818,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 'boot_start_time': time.time(),
             }
 
-        # DPU boot_id tracking
-        self.dpu_boot_id = {}
-
     def deinit(self):
         """
         Destructor of ModuleUpdater
@@ -871,44 +871,60 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             self.log_error(f"{module_name}: Failed to read previous-reboot-cause.json: {e}")
         return None, None, None
 
-    def _load_persisted_boot_ids(self):
-        """Load boot_id from each DPU's previous-reboot-cause.json."""
-        for module_index in range(0, self.num_modules):
-            module = self.chassis.get_module(module_index)
-            module_name = try_get(module.get_name)
-            _, _, boot_id = self.retrieve_dpu_reboot_info(module_name)
-            if boot_id:
-                self.dpu_boot_id[module_name] = boot_id
-
-    def check_dpu_boot_id_change(self, module_name, current_boot_id):
+    def dpu_boot_id_update(self, module_name, current_boot_id):
         """
-        Capture the reboot cause for a single DPU when its boot_id changes.
+        Update the reboot cause and boot_id for a single DPU when new boot_id is detected.
 
         Args:
             module_name: DPU name, e.g. "DPU0" (the DPU_STATE row key).
             current_boot_id: boot_id reported for that DPU in CHASSIS_STATE_DB.
         """
+        # No boot_id -> nothing to capture.
+        if not current_boot_id:
+            return
+        # Get the previous boot_id from the previous-reboot-cause.json file.
+        _, _, previous_boot_id = self.retrieve_dpu_reboot_info(module_name)
+        # Same boot_id as the one already recorded -> nothing to capture.
+        if previous_boot_id == current_boot_id:
+            return
+        # Get the module from module_name.
         try:
-            if not current_boot_id:
-                return
-
-            # No change since the last captured boot -> nothing to do.
-            if self.dpu_boot_id.get(module_name) == current_boot_id:
-                return
-
             module_index = try_get(self.chassis.get_module_index, module_name, default=INVALID_MODULE_INDEX)
+            # get_module(-1) would return the last module instead of failing
             if module_index < 0:
-                self.log_error("Unable to get module-index for {} to capture reboot cause".format(module_name))
+                self.log_error(f"Unable to get module-index for {module_name} to capture reboot cause")
                 return
             module = self.chassis.get_module(module_index)
-
-            self.log_notice("{}: new boot_id {} detected, capturing reboot cause".format(module_name, current_boot_id))
-            reboot_cause = try_get(module.get_reboot_cause)
-            self.persist_dpu_reboot_cause(reboot_cause, module_name, boot_id=current_boot_id)
-            self.update_dpu_reboot_cause_to_db(module_name)
-            self.dpu_boot_id[module_name] = current_boot_id
         except Exception as e:
-            self.log_error("Failed to process boot_id for {}: {}".format(module_name, e))
+            self.log_error(f"Failed to look up module {module_name} to capture reboot cause: {e}")
+            return
+        if module is None:
+            self.log_error(f"No module object for {module_name} to capture reboot cause")
+            return
+        self.log_notice(f"{module_name}: new boot_id {current_boot_id} detected, capturing reboot cause")
+
+        # Get the reboot cause from the module.
+        try:
+            reboot_cause = try_get(module.get_reboot_cause)
+        except Exception as e:
+            self.log_error(f"Failed to get reboot cause for {module_name}: {e}")
+            return
+
+        # Persist the reboot cause and boot_id to the file.
+        try:
+            self.persist_dpu_reboot_cause(reboot_cause, module_name, boot_id=current_boot_id,
+                                          no_previous_boot_id=not previous_boot_id)
+        except Exception as e:
+            self.log_error(f"Failed to persist reboot cause for {module_name}: {e}")
+            return
+
+        # Update the reboot cause to the DB.
+        try:
+            self.update_dpu_reboot_cause_to_db(module_name)
+        except Exception as e:
+            self.log_error(f"Failed to update reboot cause to DB for {module_name}: {e}. "
+                           "The boot_id and reboot cause is stored in json file.")
+            return
 
     def module_db_update(self):
         for module_index in range(0, self.num_modules):
@@ -917,8 +933,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 key = module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD]
 
                 if not key.startswith(ModuleBase.MODULE_TYPE_DPU):
-                    self.log_error("Incorrect module-name {}. Should start with {} ".format(key,
-                                                            ModuleBase.MODULE_TYPE_DPU))
+                    self.log_error(f"Incorrect module-name {key}. Should start with {ModuleBase.MODULE_TYPE_DPU} ")
                     continue
 
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
@@ -1005,8 +1020,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         path = self._midplane_reason_path(module_name)
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w') as f:
-                f.write((reason or "") + "\n")
+            self._atomic_write_text(path, (reason or "") + "\n")
         except Exception as e:
             self.log_error("{}: persist midplane reason failed: {}".format(module_name, e))
 
@@ -1081,7 +1095,44 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         """Generates the full path for history files."""
         return os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
 
-    def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None):
+    @staticmethod
+    def _atomic_write(file_path, write_fn):
+        """Let write_fn fill a temporary file in the same directory, then rename it into place."""
+        tmp_path = "{}.tmp".format(file_path)
+        try:
+            with open(tmp_path, 'w') as f:
+                write_fn(f)
+            os.replace(tmp_path, file_path)
+        except Exception:
+            if os.path.lexists(tmp_path):
+                os.remove(tmp_path)
+            raise
+
+    @classmethod
+    def _atomic_write_json(cls, file_path, content):
+        """Write content to file_path as JSON, atomically."""
+        cls._atomic_write(file_path, lambda f: json.dump(content, f))
+
+    @classmethod
+    def _atomic_write_text(cls, file_path, text):
+        """Write text to file_path atomically."""
+        cls._atomic_write(file_path, lambda f: f.write(text))
+
+    @staticmethod
+    def _atomic_replace_symlink(target_path, symlink_path):
+        """Point symlink_path at target_path without ever leaving symlink_path absent."""
+        tmp_path = "{}.tmp".format(symlink_path)
+        if os.path.lexists(tmp_path):
+            os.remove(tmp_path)
+        os.symlink(target_path, tmp_path)
+        try:
+            os.replace(tmp_path, symlink_path)
+        except Exception:
+            if os.path.lexists(tmp_path):
+                os.remove(tmp_path)
+            raise
+
+    def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None, no_previous_boot_id=False):
         """Persist the reboot cause information, boot_id and handle file rotation."""
         # Extract cause and comment from the reboot_cause
         if reboot_cause:
@@ -1094,6 +1145,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 comment = "N/A"
         else:
             cause, comment = "Unknown", "N/A"
+
+        if no_previous_boot_id:
+            comment = "{} ({})".format(comment or NOT_AVAILABLE, NO_PREVIOUS_BOOT_ID_COMMENT)
 
         reboot_time = self._get_current_time_str()
         file_name = f"{reboot_time}_reboot_cause.json"
@@ -1112,21 +1166,10 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             "boot_id": boot_id or "",
         }
 
-        with open(file_path, 'w') as f:
-            json.dump(reboot_cause_dict, f)
-
-        # Write the reboot_cause content to the reboot-cause.txt file, overwriting it
-        reboot_cause_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "reboot-cause.txt")
-        os.makedirs(os.path.dirname(reboot_cause_path), exist_ok=True)
-        with open(reboot_cause_path, 'w') as cause_file:
-            cause_file.write(json.dumps(reboot_cause) + '\n')
-
-        # Update symlink to the latest reboot cause file
+        # write reboot_cause_dict to the file and replace the symlink to the latest reboot cause file.
+        self._atomic_write_json(file_path, reboot_cause_dict)
         symlink_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
-        if os.path.exists(symlink_path):
-            os.remove(symlink_path)
-        if os.path.exists(file_path):
-            os.symlink(file_path, symlink_path)
+        self._atomic_replace_symlink(file_path, symlink_path)
 
         # Perform file rotation if necessary
         self._rotate_files(module)
@@ -1136,7 +1179,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         history_dir = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history")
         os.makedirs(history_dir, exist_ok=True)
         try:
-            files = sorted(os.listdir(history_dir))
+            files = sorted(f for f in os.listdir(history_dir) if f.endswith("_reboot_cause.json"))
         except FileNotFoundError:
             return
 
@@ -1758,15 +1801,15 @@ class SmartSwitchConfigManagerTask(ProcessTaskBase):
 class RebootCauseSubscriberTask(ProcessTaskBase):
     """ Capture DPU reboot-cause on a boot_id change. """
 
-    def __init__(self, log_identifier, module_updater):
-        super(RebootCauseSubscriberTask, self).__init__()
-        self.logger = logger.Logger(log_identifier)
-        self.module_updater = module_updater
+    def __init__(self):
+        super().__init__()
+        self.logger = logger.Logger(SYSLOG_IDENTIFIER)
 
     def task_worker(self):
+        # Construct the updater after ProcessTaskBase forks so none of its platform or
+        # database objects are inherited from the parent process.
+        self.module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, get_chassis())
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
-        self.module_updater.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
-        self.module_updater._load_persisted_boot_ids()
 
         sel = swsscommon.Select()
         sst = swsscommon.SubscriberStateTable(self.chassis_state_db, "DPU_STATE")
@@ -1794,7 +1837,7 @@ class RebootCauseSubscriberTask(ProcessTaskBase):
                 fvp_dict = dict(fvp)
                 # check if the boot_id has changed for the DPU
                 if BOOT_ID in fvp_dict:
-                    self.module_updater.check_dpu_boot_id_change(key, fvp_dict[BOOT_ID])
+                    self.module_updater.dpu_boot_id_update(key, fvp_dict[BOOT_ID])
 
         except KeyboardInterrupt:
             pass
@@ -2026,7 +2069,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                 self.module_updater.init_dpu_recovery_state()
                 self.config_manager = SmartSwitchConfigManagerTask()
                 self.config_manager.task_run()
-                self.reboot_cause_subscriber = RebootCauseSubscriberTask(SYSLOG_IDENTIFIER, self.module_updater)
+                self.reboot_cause_subscriber = RebootCauseSubscriberTask()
                 self.reboot_cause_subscriber.task_run()
             elif self.module_updater.supervisor_slot == self.module_updater.my_slot:
                 self.config_manager = ConfigManagerTask()
