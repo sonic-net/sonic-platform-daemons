@@ -572,7 +572,56 @@ class CmisManagerTask(threading.Thread):
                 if conf_state[name] != 'ConfigSuccess':
                     skip = False
                     break
+            if skip and not self.is_active_apsel_matching_desired(api, app_new, host_lanes_mask):
+                self.log_notice("Forcing application update since the module has not "
+                                "activated the desired application {}...".format(app_new))
+                skip = False
             return (not skip)
+        return True
+
+    def is_active_apsel_matching_desired(self, api, appl, host_lanes_mask):
+        """
+        Check whether the module has actually activated the desired application.
+
+        get_application() reads the staged control set, which reflects what was
+        requested rather than what the module is running. A module can accept a
+        staged application and report ConfigSuccess while leaving the Active
+        Control Set unchanged, in which case the media side keeps running the
+        previous application. Comparing against the active application select
+        code detects that case.
+
+        Args:
+            api:
+                XcvrApi object
+            appl:
+                Integer, the desired transceiver-specific application code
+            host_lanes_mask:
+                Integer, a bitmask of the lanes on the host side
+                e.g. 0x5 for lane 0 and lane 2.
+
+        Returns:
+            Boolean, true if the active application matches the desired one on
+            every host lane of the mask, or if the active application code
+            cannot be read.
+        """
+        active_apsel = api.get_active_apsel_hostlane()
+        if not active_apsel:
+            return True
+
+        for lane in range(self.CMIS_MAX_HOST_LANES):
+            if ((1 << lane) & host_lanes_mask) == 0:
+                continue
+            active = active_apsel.get("ActiveAppSelLane{}".format(lane + 1))
+            # The active application code is not always readable, e.g. on flat
+            # memory modules it is reported as 'N/A'. Skip the check instead of
+            # forcing a needless datapath reinitialization.
+            if not isinstance(active, int):
+                return True
+            if active != appl:
+                self.log_error("Active application {} on host lane {} does not match "
+                               "the desired application {}".format(active, lane + 1, appl))
+                return False
+
         return True
 
     def force_cmis_reinit(self, lport, retries=0):
@@ -1238,6 +1287,15 @@ class CmisManagerTask(threading.Thread):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'DataPathActivated'".format(lport))
                         self.force_cmis_reinit(lport, retries + 1)
+                    return
+
+                # A module can report ConfigSuccess and activate its datapath while
+                # still running a different application than the one requested. Verify
+                # the active application before declaring the port ready, otherwise the
+                # module silently stays on the wrong media interface.
+                if not self.is_active_apsel_matching_desired(api, appl, host_lanes_mask):
+                    self.log_error("{}: module did not activate application {}".format(lport, appl))
+                    self.force_cmis_reinit(lport, retries + 1)
                     return
 
                 self.log_notice("{}: READY".format(lport))

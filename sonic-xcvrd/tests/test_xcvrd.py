@@ -3800,6 +3800,57 @@ class TestXcvrdScript(object):
 
         assert task.is_cmis_application_update_required(mock_xcvr_api, app_new, host_lanes_mask) == expected
 
+    @pytest.mark.parametrize("appl, host_lanes_mask, active_apsel, expected", [
+        # The module activated the desired application
+        (1, 0x0F, {'ActiveAppSelLane1': 1, 'ActiveAppSelLane2': 1,
+                   'ActiveAppSelLane3': 1, 'ActiveAppSelLane4': 1}, True),
+        # The module is running a different application than the desired one
+        (12, 0x0F, {'ActiveAppSelLane1': 4, 'ActiveAppSelLane2': 4,
+                    'ActiveAppSelLane3': 4, 'ActiveAppSelLane4': 4}, False),
+        # Only a subset of the host lanes failed to activate the desired application
+        (12, 0x0F, {'ActiveAppSelLane1': 12, 'ActiveAppSelLane2': 12,
+                    'ActiveAppSelLane3': 12, 'ActiveAppSelLane4': 4}, False),
+        # Host lanes outside of the mask are ignored
+        (12, 0x03, {'ActiveAppSelLane1': 12, 'ActiveAppSelLane2': 12,
+                    'ActiveAppSelLane3': 4, 'ActiveAppSelLane4': 4}, True),
+        # The active application code is not readable
+        (12, 0x0F, {'ActiveAppSelLane1': 'N/A', 'ActiveAppSelLane2': 'N/A',
+                    'ActiveAppSelLane3': 'N/A', 'ActiveAppSelLane4': 'N/A'}, True),
+        (12, 0x0F, {}, True),
+    ])
+    def test_CmisManagerTask_is_active_apsel_matching_desired(self, appl, host_lanes_mask, active_apsel, expected):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value=active_apsel)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+
+        assert task.is_active_apsel_matching_desired(mock_xcvr_api, appl, host_lanes_mask) == expected
+
+    def test_CmisManagerTask_is_cmis_application_update_required_active_apsel_mismatch(self):
+        """
+        A module can accept the staged application and report ConfigSuccess without
+        ever updating the Active Control Set. The staged application then matches the
+        desired one and the datapath looks healthy, while the module keeps running the
+        previous application, so an update still has to be forced.
+        """
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
+        mock_xcvr_api.get_application = MagicMock(return_value=12)
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value=self.DEFAULT_DP_STATE)
+        mock_xcvr_api.get_config_datapath_hostlane_status = MagicMock(return_value=self.DEFAULT_CONFIG_STATUS)
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane1': 4, 'ActiveAppSelLane2': 4,
+            'ActiveAppSelLane3': 4, 'ActiveAppSelLane4': 4
+        })
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+
+        assert task.is_cmis_application_update_required(mock_xcvr_api, 12, 0x0F) == True
+
     @pytest.mark.parametrize("ifname, expected", [
         ('1.6TBASE-CR8 (Clause179)', 1600000),
         ('1.6TAUI-8 (Annex176E)', 1600000),
