@@ -3294,6 +3294,111 @@ class TestXcvrdScript(object):
         # Verify state transitioned to FAILED
         assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_FAILED
 
+    @pytest.mark.parametrize("info, expected", [
+        ({'index': 1, 'speed': '400000', 'lanes': '1,2,3,4', 'subport': 0}, True),
+        ({'index': -1, 'speed': '400000', 'lanes': '1,2,3,4', 'subport': 0}, False),
+        ({'speed': '400000', 'lanes': '1,2,3,4', 'subport': 0}, False),
+        ({'index': 1, 'speed': '0', 'lanes': '1,2,3,4', 'subport': 0}, False),
+        ({'index': 1, 'lanes': '1,2,3,4', 'subport': 0}, False),
+        ({'index': 1, 'speed': '400000', 'lanes': '', 'subport': 0}, False),
+        ({'index': 1, 'speed': '400000', 'subport': 0}, False),
+        ({'index': 1, 'speed': '400000', 'lanes': '1,2,3,4', 'subport': -1}, False),
+        ({'index': 'N/A', 'speed': '400000', 'lanes': '1,2,3,4', 'subport': 0}, False),
+    ])
+    def test_CmisManagerTask_is_port_config_complete(self, info, expected):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+
+        assert task.is_port_config_complete(info) == expected
+
+    def test_CmisManagerTask_on_port_update_event_always_records_index(self):
+        """
+        A PORT_SET event without an 'index' field must still leave a physical index
+        behind, otherwise consumers indexing into port_dict raise KeyError.
+        """
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task.xcvr_table_helper = MagicMock()
+
+        # port_event_helper defaults a missing 'index' field to -1
+        port_change_event = PortChangeEvent('Ethernet0', -1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed': '400000', 'lanes': '1,2,3,4'})
+        task.on_port_update_event(port_change_event)
+
+        assert task.port_dict['Ethernet0']['index'] == -1
+        assert task.is_decomm_pending('Ethernet0') == False
+
+        # A later event carrying a valid index must take effect
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed': '400000', 'lanes': '1,2,3,4'})
+        task.on_port_update_event(port_change_event)
+
+        assert task.port_dict['Ethernet0']['index'] == 1
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_CmisManagerTask_process_single_lport_bootstraps_missing_cmis_state(self, mock_chassis, mock_get_status_sw_tbl):
+        """
+        A port only enters the CMIS state machine when a PORT_SET event assigns it an
+        initial state. If that event is missed, for instance when the port is created
+        by a dynamic port breakout after the port map was built, the port has no CMIS
+        state. An absent state reads back as UNKNOWN and used to be skipped forever,
+        leaving the port unmanaged until xcvrd was restarted.
+        """
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_port_admin_status = MagicMock(return_value='up')
+
+        # The port is fully configured but never received a PORT_SET event
+        task.port_dict['Ethernet0'] = {'asic_id': 0, 'index': 1, 'speed': '400000',
+                                       'lanes': '1,2,3,4,5,6,7,8', 'subport': 0}
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_UNKNOWN
+
+        task._gearbox_lanes_dict = {}
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        # The state machine is bootstrapped instead of the port being skipped
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) != CMIS_STATE_UNKNOWN
+        assert mock_sfp.get_presence.called
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    def test_CmisManagerTask_process_single_lport_skips_incomplete_config(self, mock_chassis, mock_get_status_sw_tbl):
+        """A port without a usable configuration must not be bootstrapped."""
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=mock_chassis)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+
+        # No physical index, so the port cannot be driven yet
+        task.port_dict['Ethernet0'] = {'asic_id': 0, 'index': -1, 'speed': '400000',
+                                       'lanes': '1,2,3,4,5,6,7,8', 'subport': 0}
+
+        task._gearbox_lanes_dict = {}
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_UNKNOWN
+        assert not mock_sfp.get_presence.called
+
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
