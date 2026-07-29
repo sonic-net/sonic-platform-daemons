@@ -10,9 +10,11 @@ try:
     import subprocess
     import traceback
     import threading
+    from typing import Callable, Dict
     from swsscommon import swsscommon
     from sonic_py_common import syslogger, daemon_base, multi_asic
     from . import sfp_status_helper
+    from .port_event_helper import PortMapping
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
@@ -137,7 +139,8 @@ def is_cpo_port(physical_port):
 def is_pluggable_port(physical_port):
     return not is_cpo_port(physical_port)
 
-def _get_port_obj_dict(port_mapping_data, port_filter):
+def _get_port_obj_dict(port_mapping_data: PortMapping | None,
+                       port_filter: Callable[[int], bool]) -> Dict[int, object]:
     """
     Create a dictionary mapping physical ports to their corresponding device objects,
     restricted to the ports accepted by port_filter.

@@ -1,14 +1,9 @@
-import sys
-
-if sys.version_info >= (3, 3):
-    from unittest.mock import MagicMock, patch
-else:
-    from mock import MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from xcvrd.xcvrd_utilities import common
 
 
-class TestPortDeviceResolver(object):
+class TestPortDeviceResolver:
     def test_is_cpo_port_no_chassis(self):
         with patch.object(common, 'platform_chassis', None):
             assert common.is_cpo_port(0) is False
@@ -53,7 +48,7 @@ class TestPortDeviceResolver(object):
             assert common.get_port_device(1) is None
 
 
-class TestObjDictAccessors(object):
+class TestObjDictAccessors:
     def _make_port_mapping(self, physical_ports=(0, 1, 2)):
         port_mapping = MagicMock()
         port_mapping.physical_to_logical = {p: ['Ethernet{}'.format(p * 4)] for p in physical_ports}
@@ -61,22 +56,6 @@ class TestObjDictAccessors(object):
 
     def _make_obj_dict(self):
         return {0: MagicMock(), 1: MagicMock(), 2: MagicMock()}
-
-    def test_get_cpo_obj_dict(self):
-        objs = self._make_obj_dict()
-        with patch.object(common, 'is_cpo_port', side_effect=lambda p: p in (1,)), \
-             patch.object(common, 'get_port_device', side_effect=lambda p: objs[p]):
-            cpo = common.get_cpo_obj_dict(self._make_port_mapping())
-        assert set(cpo.keys()) == {1}
-        assert cpo[1] is objs[1]
-
-    def test_get_pluggable_obj_dict_excludes_cpo(self):
-        objs = self._make_obj_dict()
-        with patch.object(common, 'is_cpo_port', side_effect=lambda p: p in (1,)), \
-             patch.object(common, 'get_port_device', side_effect=lambda p: objs[p]):
-            pluggable = common.get_pluggable_obj_dict(self._make_port_mapping())
-        assert set(pluggable.keys()) == {0, 2}
-        assert pluggable[0] is objs[0]
 
     def test_accessors_are_complementary(self):
         objs = self._make_obj_dict()
@@ -87,6 +66,8 @@ class TestObjDictAccessors(object):
             pluggable = common.get_pluggable_obj_dict(port_mapping)
         assert set(cpo) | set(pluggable) == set(objs)
         assert set(cpo) & set(pluggable) == set()
+        assert set(cpo) == {1}
+        assert cpo[1] is objs[1]
 
     def test_all_pluggable_when_no_cpo(self):
         objs = self._make_obj_dict()
