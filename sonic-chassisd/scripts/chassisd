@@ -986,7 +986,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             try:
                 module_key = "{}|{}".format(CHASSIS_MODULE_INFO_TABLE, module_name.upper())
                 transition_type = self.state_db.hget(module_key, "transition_type")
-                reason_str = "Planned: '{}'".format(transition_type or "unknown")
+                if transition_type:
+                    reason_str = "Planned: '{}'".format(transition_type)
             except Exception as e:
                 self.log_error("{}: failed to read transition_type: {}".format(module_name, e))
 
@@ -1047,7 +1048,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # Prepare the fields to update. Coerce reason to "" so the 'up'
             # path (reason=None) never writes a None into the DB.
             updates = {
-                "dpu_midplane_link_state": state,
                 "dpu_midplane_link_reason": reason or "",
                 "dpu_midplane_link_time": get_formatted_time(),
             }
@@ -1055,6 +1055,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             if state == "down":
                 updates[CP_STATE] = "down"
                 updates[DP_STATE] = "down"
+
+            # Write the state last so a partial update is retried on the next poll.
+            updates["dpu_midplane_link_state"] = state
 
             # Update each field directly
             for field, value in updates.items():
@@ -2021,7 +2024,13 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     op_state = 'up'
                 else:
                     op_state = 'down'
-                self.module_updater.update_dpu_state(dpu_state_key, op_state)
+                persisted_reason = None
+                if op_state == 'down':
+                    persisted_reason = self.module_updater._read_midplane_down_reason(module_name)
+                if persisted_reason:
+                    self.module_updater.update_dpu_state(dpu_state_key, op_state, persisted_reason)
+                else:
+                    self.module_updater.update_dpu_state(dpu_state_key, op_state)
 
                 if op is not None:
                     # Create and start a thread for the DPU logic
