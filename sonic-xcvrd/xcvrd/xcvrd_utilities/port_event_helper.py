@@ -113,7 +113,7 @@ class PortChangeObserver:
                                      port_tbl, list(d.values())[0], namespace))
         self.sel, self.asic_context = sel, asic_context
 
-    def handle_port_update_event(self):
+    def handle_port_update_event(self, timeout=SELECT_TIMEOUT_MSECS):
         """
         Select PORT update events, notify the observers upon a port update in CONFIG_DB
         or a XCVR insertion/removal in STATE_DB
@@ -123,7 +123,7 @@ class PortChangeObserver:
         """
         has_event = False
         if not self.stop_event.is_set():
-            (state, _) = self.sel.select(SELECT_TIMEOUT_MSECS)
+            (state, _) = self.sel.select(timeout)
             if state == swsscommon.Select.TIMEOUT:
                 return has_event
             if state != swsscommon.Select.OBJECT:
