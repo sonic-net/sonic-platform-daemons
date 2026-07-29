@@ -928,6 +928,8 @@ class CmisManagerTask(threading.Thread):
             if is_fast_reboot and self.check_datapath_state(api, host_lanes_mask, ['DataPathActivated']):
                 self.log_notice("{} Skip datapath re-init in fast-reboot".format(lport))
             else:
+                self.log_notice("{} DEINIT datapath".format(lport))
+                api.set_datapath_deinit(host_lanes_mask)
                 self.log_notice("{} Forcing Tx laser OFF".format(lport))
                 # Force DataPath re-init
                 api.tx_disable_channel(media_lanes_mask, True)
