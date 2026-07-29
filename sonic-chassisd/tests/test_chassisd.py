@@ -257,73 +257,165 @@ def _make_boot_id_updater():
     return updater
 
 
-def test_check_dpu_boot_id_change_new_boot():
-    """New boot_id -> reboot cause captured and cache updated."""
-    updater = _make_boot_id_updater()
-    updater.dpu_boot_id = {"DPU0": "old-boot-id"}
+def _patch_persisted_boot_id(updater, boot_id):
+    """Make the persisted record report boot_id as the baseline."""
+    return patch.object(updater, 'retrieve_dpu_reboot_info',
+                        return_value=("Kernel Panic", "2026_05_19_10_00_00", boot_id))
 
-    with patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+
+def test_dpu_boot_id_update_new_boot():
+    """New boot_id -> reboot cause captured."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
-        updater.check_dpu_boot_id_change("DPU0", "new-boot-id")
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
 
         mock_persist.assert_called_once()
         # boot_id must be forwarded to persist so it lands in the json/db.
         assert mock_persist.call_args.kwargs.get("boot_id") == "new-boot-id"
         mock_update_db.assert_called_once_with("DPU0")
-        # Cache advanced so the same boot is not re-captured.
-        assert updater.dpu_boot_id["DPU0"] == "new-boot-id"
 
 
-def test_check_dpu_boot_id_change_same_boot():
+def test_dpu_boot_id_update_same_boot():
     """Unchanged boot_id -> nothing captured (avoids duplicate on every event)."""
     updater = _make_boot_id_updater()
-    updater.dpu_boot_id = {"DPU0": "same-boot-id"}
 
-    with patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+    with _patch_persisted_boot_id(updater, "same-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
-        updater.check_dpu_boot_id_change("DPU0", "same-boot-id")
+        updater.dpu_boot_id_update("DPU0", "same-boot-id")
 
         mock_persist.assert_not_called()
         mock_update_db.assert_not_called()
 
 
 @pytest.mark.parametrize("boot_id", [None, ""])
-def test_check_dpu_boot_id_change_no_boot_id(boot_id):
+def test_dpu_boot_id_update_no_boot_id(boot_id):
     """Empty/None boot_id -> nothing captured."""
     updater = _make_boot_id_updater()
-    updater.dpu_boot_id = {}
 
-    with patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
-        updater.check_dpu_boot_id_change("DPU0", boot_id)
+        updater.dpu_boot_id_update("DPU0", boot_id)
 
         mock_persist.assert_not_called()
         mock_update_db.assert_not_called()
 
 
-def test_check_dpu_boot_id_change_unknown_module():
+@pytest.mark.parametrize("persisted, expect_marker", [
+    (None, True),
+    ("", True),
+    ("old-boot-id", False),
+])
+def test_dpu_boot_id_update_missing_baseline_marker(persisted, expect_marker):
+    """The record is flagged as having no known baseline only when no usable boot_id was stored."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, persisted), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db'):
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_persist.assert_called_once()
+        assert mock_persist.call_args.kwargs.get("no_previous_boot_id") is expect_marker
+
+
+def test_dpu_boot_id_update_db_failure_keeps_record(tmp_path):
+    """A failed DB refresh is logged, and the record it persisted still becomes the baseline.
+
+    retrieve_dpu_reboot_info is left unmocked and the record is written to a real directory, so
+    the second event has to read the file back from disk. Feeding the baseline in from a mock
+    would assert nothing about whether the DB failure cost us the record.
+    """
+    updater = _make_boot_id_updater()
+    history_dir = tmp_path / "dpu0" / "history"
+    history_dir.mkdir(parents=True)
+
+    with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", str(tmp_path)), \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db', side_effect=Exception("db down")), \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        assert mock_log_error.called
+        records = list(history_dir.glob("*_reboot_cause.json"))
+        assert len(records) == 1
+        assert json.loads(records[0].read_text())["boot_id"] == "new-boot-id"
+
+    # The same boot_id again: the record on disk is now the baseline, so nothing is re-captured
+    # even though the DB never received the first one. Those rows are restored by the next
+    # capture or at NPU boot.
+    with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", str(tmp_path)), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_persist.assert_not_called()
+
+
+def test_dpu_boot_id_update_unknown_module():
     """Unknown DPU name (no module index) -> nothing captured."""
     updater = _make_boot_id_updater()
-    updater.dpu_boot_id = {}
 
-    with patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
          patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
-        updater.check_dpu_boot_id_change("DPU_NONEXISTENT", "new-boot-id")
+        updater.dpu_boot_id_update("DPU_NONEXISTENT", "new-boot-id")
 
         mock_persist.assert_not_called()
         mock_update_db.assert_not_called()
 
 
-def test_load_persisted_boot_ids_populates_cache():
-    """_load_persisted_boot_ids reads each DPU's persisted boot_id into the cache."""
+@pytest.mark.parametrize("lookup, expected_log", [
+    ({"target": "get_module_index", "side_effect": KeyError("DPU0")}, "Failed to look up module"),
+    ({"target": "get_module_index", "side_effect": RuntimeError("platform not ready")}, "Failed to look up module"),
+    ({"target": "get_module", "side_effect": IndexError("out of range")}, "Failed to look up module"),
+    ({"target": "get_module", "return_value": None}, "No module object"),
+])
+def test_dpu_boot_id_update_module_lookup_failure_is_contained(lookup, expected_log):
+    """A platform lookup that raises or yields no module is logged, never propagated.
+
+    The subscriber loop that calls this has no exception boundary, so an escaping exception
+    would silently end DPU reboot-cause capture for the rest of the daemon's lifetime.
+
+    A platform that returns no module must be reported as such: without an explicit check it
+    surfaces one step later as an AttributeError blamed on reading the reboot cause.
+    """
     updater = _make_boot_id_updater()
-    updater.dpu_boot_id = {}
+    behavior = dict(lookup)
+    target = behavior.pop("target")
 
-    with patch.object(updater, 'retrieve_dpu_reboot_info',
-                      return_value=("Kernel Panic", "2026_05_19_10_00_00", "persisted-boot-id")):
-        updater._load_persisted_boot_ids()
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater.chassis, target, **behavior), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db, \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
 
-    assert updater.dpu_boot_id == {"DPU0": "persisted-boot-id"}
+        mock_persist.assert_not_called()
+        mock_update_db.assert_not_called()
+        assert expected_log in mock_log_error.call_args.args[0]
+
+
+@pytest.mark.parametrize("failing_call, expected_log", [
+    ("module.get_reboot_cause", "Failed to get reboot cause"),
+    ("updater.persist_dpu_reboot_cause", "Failed to persist reboot cause"),
+])
+def test_dpu_boot_id_update_capture_failure_is_contained(failing_call, expected_log):
+    """A failing capture step is logged and abandons the capture, leaving the DB untouched."""
+    updater = _make_boot_id_updater()
+    owner_name, attr = failing_call.split(".")
+    owner = updater if owner_name == "updater" else updater.chassis.get_module(0)
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(owner, attr, side_effect=Exception("boom")), \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db, \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_update_db.assert_not_called()
+        assert expected_log in mock_log_error.call_args.args[0]
 
 
 def test_retrieve_dpu_reboot_info_success():
@@ -354,11 +446,11 @@ def test_retrieve_dpu_reboot_info_file_missing():
 
 
 def test_reboot_cause_subscriber_processes_boot_id():
-    """Subscriber initializes and forwards a valid boot_id event."""
+    """Subscriber creates its updater in the child and forwards a valid boot_id event."""
     module_updater = MagicMock(spec=SmartSwitchModuleUpdater)
-    subscriber = RebootCauseSubscriberTask(SYSLOG_IDENTIFIER, module_updater)
+    chassis = MagicMock()
+    subscriber = RebootCauseSubscriberTask()
     subscriber_db = MagicMock()
-    updater_db = MagicMock()
     mock_select = MagicMock()
     mock_sst = MagicMock()
     select_object = swsscommon.Select.OBJECT
@@ -367,20 +459,68 @@ def test_reboot_cause_subscriber_processes_boot_id():
     mock_select.select.side_effect = [(select_object, None), KeyboardInterrupt]
     mock_sst.pop.return_value = ("DPU0", "SET", (("boot_id", "new-boot-id"),))
 
-    with patch("chassisd.daemon_base.db_connect",
-               side_effect=[subscriber_db, updater_db]) as mock_db_connect, \
+    with patch("chassisd.get_chassis", return_value=chassis) as mock_get_chassis, \
+         patch("chassisd.SmartSwitchModuleUpdater", return_value=module_updater) as mock_updater_class, \
+         patch("chassisd.daemon_base.db_connect", return_value=subscriber_db) as mock_db_connect, \
          patch("chassisd.swsscommon.Select", return_value=mock_select) as mock_select_class, \
          patch("chassisd.swsscommon.SubscriberStateTable", return_value=mock_sst) as mock_sst_class:
         mock_select_class.TIMEOUT = select_timeout
         mock_select_class.OBJECT = select_object
         subscriber.task_worker()
 
-    assert mock_db_connect.call_count == 2
-    assert module_updater.chassis_state_db is updater_db
-    module_updater._load_persisted_boot_ids.assert_called_once_with()
+    mock_get_chassis.assert_called_once_with()
+    mock_updater_class.assert_called_once_with(SYSLOG_IDENTIFIER, chassis)
+    mock_db_connect.assert_called_once_with("CHASSIS_STATE_DB")
     mock_sst_class.assert_called_once_with(subscriber_db, "DPU_STATE")
     mock_select.addSelectable.assert_called_once_with(mock_sst)
-    module_updater.check_dpu_boot_id_change.assert_called_once_with("DPU0", "new-boot-id")
+    module_updater.dpu_boot_id_update.assert_called_once_with("DPU0", "new-boot-id")
+
+def test_atomic_write_json_replaces_content(tmp_path):
+    """The final path holds the new content and no temporary file is left behind."""
+    target = tmp_path / "record.json"
+    target.write_text('{"cause": "old"}')
+
+    SmartSwitchModuleUpdater._atomic_write_json(str(target), {"cause": "new"})
+
+    assert json.loads(target.read_text()) == {"cause": "new"}
+    assert list(p.name for p in tmp_path.iterdir()) == ["record.json"]
+
+
+def test_atomic_write_json_keeps_previous_content_on_failure(tmp_path):
+    """A failed write leaves the previous record intact and removes the temporary file."""
+    target = tmp_path / "record.json"
+    target.write_text('{"cause": "old"}')
+
+    with patch("builtins.open", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            SmartSwitchModuleUpdater._atomic_write_json(str(target), {"cause": "new"})
+
+    assert json.loads(target.read_text()) == {"cause": "old"}
+    assert not (tmp_path / "record.json.tmp").exists()
+
+
+def test_atomic_replace_symlink_never_leaves_link_absent(tmp_path):
+    """Replacing the link repoints it in one step instead of removing and recreating it."""
+    old_record = tmp_path / "old_reboot_cause.json"
+    new_record = tmp_path / "new_reboot_cause.json"
+    old_record.write_text("{}")
+    new_record.write_text("{}")
+    link = tmp_path / "previous-reboot-cause.json"
+    os.symlink(str(old_record), str(link))
+
+    removed = []
+    real_remove = os.remove
+
+    def tracking_remove(path):
+        removed.append(path)
+        real_remove(path)
+
+    with patch("chassisd.os.remove", side_effect=tracking_remove):
+        SmartSwitchModuleUpdater._atomic_replace_symlink(str(new_record), str(link))
+
+    assert os.path.realpath(str(link)) == os.path.realpath(str(new_record))
+    # Removing the live link, even briefly, would lose the persisted baseline on a crash.
+    assert str(link) not in removed
 
 
 def test_get_boot_id_reads_kernel_boot_id():

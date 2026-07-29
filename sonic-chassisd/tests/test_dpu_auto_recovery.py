@@ -58,6 +58,7 @@ from chassisd import (
     MODULE_ADMIN_UP,
     MODULE_REBOOT_CAUSE_DIR,
     MAX_HISTORY_FILES,
+    NO_PREVIOUS_BOOT_ID_COMMENT,
     REBOOT_CAUSE_FILE,
     WAS_UNRECOVERABLE_KEY,
     TRANSITION_TYPE_RECOVERY,
@@ -2100,6 +2101,61 @@ class TestRebootCausePersistence:
                 # Symlink should point to the history file
                 target = os.readlink(symlink)
                 assert "_reboot_cause.json" in target
+
+    @pytest.mark.parametrize("reboot_cause, no_previous_boot_id, expected_cause, expected_comment", [
+        # An existing description is annotated with the marker.
+        (("Power Loss", "Unexpected"), True, "Power Loss",
+         "Unexpected ({})".format(NO_PREVIOUS_BOOT_ID_COMMENT)),
+        # No reboot cause at all: both fields fall back to placeholders.
+        (None, True, "Unknown", "N/A ({})".format(NO_PREVIOUS_BOOT_ID_COMMENT)),
+        # A platform reporting no description must not produce a literal 'None'.
+        (("Power Loss", None), True, "Power Loss", "N/A ({})".format(NO_PREVIOUS_BOOT_ID_COMMENT)),
+        # Without the flag the comment is left untouched.
+        (("Power Loss", "Unexpected"), False, "Power Loss", "Unexpected"),
+    ])
+    def test_persist_dpu_reboot_cause_missing_baseline_marker(self, reboot_cause, no_previous_boot_id,
+                                                             expected_cause, expected_comment):
+        """The marker is appended to the comment only when no previous boot_id was known."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
+                history_dir = os.path.join(tmpdir, "dpu0", "history")
+                os.makedirs(history_dir)
+
+                updater.persist_dpu_reboot_cause(reboot_cause, "DPU0", boot_id="boot-1",
+                                                 no_previous_boot_id=no_previous_boot_id)
+
+                files = os.listdir(history_dir)
+                with open(os.path.join(history_dir, files[0])) as f:
+                    data = json.load(f)
+                assert data['cause'] == expected_cause
+                assert data['comment'] == expected_comment
+                assert data['boot_id'] == 'boot-1'
+
+    def test_persist_dpu_reboot_cause_write_failure_keeps_previous_baseline(self):
+        """A failed record write leaves the previous baseline intact and no partial file behind."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
+                history_dir = os.path.join(tmpdir, "dpu0", "history")
+                os.makedirs(history_dir)
+                symlink = os.path.join(tmpdir, "dpu0", "previous-reboot-cause.json")
+
+                updater._get_current_time_str = MagicMock(return_value="2026_01_01_00_00_00")
+                updater.persist_dpu_reboot_cause(("First", ""), "DPU0", boot_id="boot-1")
+
+                updater._get_current_time_str = MagicMock(return_value="2026_01_01_00_00_01")
+                with patch("chassisd.json.dump", side_effect=OSError("disk full")):
+                    with pytest.raises(OSError):
+                        updater.persist_dpu_reboot_cause(("Second", ""), "DPU0", boot_id="boot-2")
+
+                # Baseline still resolves to the first record, so the second boot is re-captured later.
+                assert os.readlink(symlink).endswith("2026_01_01_00_00_00_reboot_cause.json")
+                assert os.listdir(history_dir) == ["2026_01_01_00_00_00_reboot_cause.json"]
 
     def test_rotate_files_removes_old_files(self):
         """_rotate_files removes oldest files when exceeding MAX_HISTORY_FILES."""

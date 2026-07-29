@@ -142,6 +142,28 @@ def test_dpu_state_update(dpu_id, dp_state, cp_state, expected_state):
                  'boot_id': TEST_BOOT_ID}}
 
 
+def test_dpu_state_update_skips_unchanged_boot_id():
+    """An already-published boot_id must not be rewritten.
+
+    Rewriting it would hand the NPU consumer a DPU_STATE event for a boot it already captured.
+    Publishing a boot_id that differs from the stored one is covered by test_dpu_state_update.
+    """
+    chassis = MockDpuChassis()
+
+    chassis.get_dpu_id = MagicMock(return_value=0)
+    chassis.get_dataplane_state = MagicMock(return_value=True)
+    chassis.get_controlplane_state = MagicMock(return_value=True)
+
+    dpu_updater = DpuStateUpdater(SYSLOG_IDENTIFIER, chassis)
+    dpu_updater._time_now = MagicMock(return_value='Sat Jan 01 12:00:00 AM UTC 2000')
+    dpu_updater.dpu_state_table.hset('DPU0', BOOT_ID, TEST_BOOT_ID)
+
+    with mock.patch.object(dpu_updater, '_update_boot_id') as mock_update_boot_id:
+        dpu_updater.update_state()
+
+        mock_update_boot_id.assert_not_called()
+
+
 @pytest.mark.parametrize('dpu_id, dp_state, cp_state, expected_state', [
     (0, False, False, {'DPU0':
         {'dpu_data_plane_state': 'down', 'dpu_data_plane_time': 'Sat Jan 01 12:00:00 AM UTC 2000',
