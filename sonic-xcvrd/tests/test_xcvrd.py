@@ -2804,6 +2804,49 @@ class TestXcvrdScript(object):
                          'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
             assert expected in names
 
+    def test_CmisManagerTask_on_port_update_event_without_index(self):
+        port_mapping = PortMapping()
+        for lport, pport in (('Ethernet0', 1), ('Ethernet8', 2)):
+            port_mapping.handle_port_change_event(
+                PortChangeEvent(lport, pport, 0, PortChangeEvent.PORT_ADD))
+
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.force_cmis_reinit = MagicMock()
+
+        task.on_port_update_event(PortChangeEvent('Ethernet0', -1, 0, PortChangeEvent.PORT_SET,
+                                                  {'host_tx_ready': 'true'}))
+        assert task.port_dict['Ethernet0']['host_tx_ready'] == 'true'
+        assert task.force_cmis_reinit.call_count == 1
+
+        task.on_port_update_event(PortChangeEvent('Ethernet8', -1, 0, PortChangeEvent.PORT_SET,
+                                                  {'host_tx_ready': 'true'}))
+        assert 'host_tx_ready' not in task.port_dict.get('Ethernet8', {})
+        assert task.force_cmis_reinit.call_count == 1
+
+        task.on_port_update_event(PortChangeEvent('Ethernet996', -1, 0, PortChangeEvent.PORT_SET,
+                                                  {'host_tx_ready': 'true'}))
+        assert 'Ethernet996' not in task.port_dict
+        assert task.force_cmis_reinit.call_count == 1
+
+    def test_CmisManagerTask_on_port_update_event_after_breakout(self):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(
+            PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.force_cmis_reinit = MagicMock()
+
+        task.on_port_update_event(PortChangeEvent('Ethernet2', 1, 0, PortChangeEvent.PORT_SET,
+                                                  {'speed': '200000', 'lanes': '3,4',
+                                                   'subport': '2'}))
+        assert task.port_dict['Ethernet2']['index'] == 1
+
+        task.on_port_update_event(PortChangeEvent('Ethernet2', -1, 0, PortChangeEvent.PORT_SET,
+                                                  {'host_tx_ready': 'true'}))
+        assert task.port_dict['Ethernet2']['host_tx_ready'] == 'true'
+
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
         task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)

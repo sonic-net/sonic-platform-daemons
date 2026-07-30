@@ -52,8 +52,13 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
-        self.port_mapping = port_mapping
+        self.port_dict = {}
+        for lport, asic_id in port_mapping.logical_to_asic.items():
+            entry = {"asic_id": asic_id}
+            pports = port_mapping.get_logical_to_physical(lport)
+            if pports:
+                entry["index"] = pports[0]
+            self.port_dict[lport] = entry
         self.decomm_pending_dict = {}
         self.isPortInitDone = False
         self.isPortConfigDone = False
@@ -119,7 +124,8 @@ class CmisManagerTask(threading.Thread):
         if port_change_event.port_dict is None:
             return
 
-        if pport not in self.port_obj_dict:
+        owner_pport = pport if pport >= 0 else self.port_dict.get(lport, {}).get('index')
+        if owner_pport not in self.port_obj_dict:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
@@ -1373,8 +1379,7 @@ class CmisManagerTask(threading.Thread):
                 self.wait_for_port_config_done(namespace)
 
             for lport in self.port_dict.keys():
-                pports = self.port_mapping.get_logical_to_physical(lport)
-                if pports and pports[0] in self.port_obj_dict:
+                if self.port_dict[lport].get('index') in self.port_obj_dict:
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
 
             self.task_worker()
