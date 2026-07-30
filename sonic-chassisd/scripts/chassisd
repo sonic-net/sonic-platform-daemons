@@ -105,9 +105,6 @@ MODULE_ADMIN_UP = 1
 MODULE_REBOOT_CAUSE_DIR = "/host/reboot-cause/module/"
 MAX_HISTORY_FILES = 10
 
-# Comment marker for DPU reboot cause when no previous boot_id was available
-NO_PREVIOUS_BOOT_ID_COMMENT = "no previous boot_id"
-
 # DPU_STATE table in CHASSIS_STATE_DB
 DPU_STATE_TABLE = 'DPU_STATE'
 
@@ -912,8 +909,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         # Persist the reboot cause and boot_id to the file.
         try:
-            self.persist_dpu_reboot_cause(reboot_cause, module_name, boot_id=current_boot_id,
-                                          no_previous_boot_id=not previous_boot_id)
+            self.persist_dpu_reboot_cause(reboot_cause, module_name, boot_id=current_boot_id)
         except Exception as e:
             self.log_error(f"Failed to persist reboot cause for {module_name}: {e}")
             return
@@ -1135,7 +1131,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 os.remove(tmp_path)
             raise
 
-    def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None, no_previous_boot_id=False):
+    def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None):
         """Persist the reboot cause information, boot_id and handle file rotation."""
         # Extract cause and comment from the reboot_cause
         if reboot_cause:
@@ -1148,9 +1144,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 comment = "N/A"
         else:
             cause, comment = "Unknown", "N/A"
-
-        if no_previous_boot_id:
-            comment = "{} ({})".format(comment or NOT_AVAILABLE, NO_PREVIOUS_BOOT_ID_COMMENT)
 
         reboot_time = self._get_current_time_str()
         file_name = f"{reboot_time}_reboot_cause.json"

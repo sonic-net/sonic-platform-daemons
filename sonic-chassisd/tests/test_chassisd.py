@@ -305,24 +305,6 @@ def test_dpu_boot_id_update_no_boot_id(boot_id):
         mock_update_db.assert_not_called()
 
 
-@pytest.mark.parametrize("persisted, expect_marker", [
-    (None, True),
-    ("", True),
-    ("old-boot-id", False),
-])
-def test_dpu_boot_id_update_missing_baseline_marker(persisted, expect_marker):
-    """The record is flagged as having no known baseline only when no usable boot_id was stored."""
-    updater = _make_boot_id_updater()
-
-    with _patch_persisted_boot_id(updater, persisted), \
-         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
-         patch.object(updater, 'update_dpu_reboot_cause_to_db'):
-        updater.dpu_boot_id_update("DPU0", "new-boot-id")
-
-        mock_persist.assert_called_once()
-        assert mock_persist.call_args.kwargs.get("no_previous_boot_id") is expect_marker
-
-
 def test_dpu_boot_id_update_db_failure_keeps_record(tmp_path):
     """A failed DB refresh is logged, and the record it persisted still becomes the baseline.
 
