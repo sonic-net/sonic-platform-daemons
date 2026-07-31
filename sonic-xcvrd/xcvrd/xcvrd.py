@@ -28,9 +28,10 @@ try:
 
     from .xcvrd_utilities import sfp_status_helper
     from .sff_mgr import SffManagerTask
-    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask, CpoDomInfoUpdateTask
+    from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .cpo.cpo_manager_task import CpoManagerTask
+    from .cpo.dom import CpoDomInfoUpdateTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -870,12 +871,6 @@ class SfpStateUpdateTask(threading.Thread):
         return self.logger.update_log_level()
 
 
-class CpoStateUpdateTask(SfpStateUpdateTask):
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
-        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event)
-        self.name = "CpoStateUpdateTask"
-
-
 #
 # Daemon =======================================================================
 #
@@ -1182,6 +1177,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Start the CPO state info update thread
         cpo_state_update = None
         if self.cpo_obj_dict:
+            from .cpo.cpo_state_task import CpoStateUpdateTask
             cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
             cpo_state_update.start()
             self.threads.append(cpo_state_update)

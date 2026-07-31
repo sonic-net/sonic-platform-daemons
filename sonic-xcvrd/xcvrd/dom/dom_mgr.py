@@ -530,10 +530,6 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                                       ])
 
 
-class CpoDomInfoUpdateTask(DomInfoUpdateTask):
-    name = "CpoDomInfoUpdateTask"
-
-
 class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     name = 'DomThermalInfoUpdateTask'
 
