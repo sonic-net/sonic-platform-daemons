@@ -37,8 +37,8 @@ PORT_UPDATE_EVENT_SELECT_TIMEOUT_MSECS = 1000
 PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS = 10
 
 # Raw FEC counter fields from get_transceiver_pm() that are published to the
-# TRANSCEIVER_PM_COUNTERS table instead of TRANSCEIVER_PM. This is a positive list:
-# any field not named here (calculated ratios, optical metrics) stays in TRANSCEIVER_PM.
+# TRANSCEIVER_PM_COUNTERS table. This is a positive list: any field not named 
+# here (calculated ratios, optical metrics) stays in TRANSCEIVER_PM.
 PM_COUNTER_FIELDS = frozenset({
     # media (page 34h) RX FEC counters
     'rx_bits_pm', 'rx_bits_subint_pm', 'rx_corr_bits_pm',
@@ -252,10 +252,11 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                 sys.exit(xcvrd.NOT_IMPLEMENTED_ERROR)
 
     # Update port pm info in db
-    def post_port_pm_info_to_db(self, logical_port_name, port_mapping, pm_table, pm_counters_table, stop_event=threading.Event(), pm_info_cache=None):
+    def post_port_pm_info_to_db(self, logical_port_name, port_mapping, pm_table, pm_counters_table, stop_event=None, pm_info_cache=None):
+        if stop_event is None:
+            stop_event = threading.Event()
+
         for physical_port, physical_port_name in common.get_physical_port_name_dict(logical_port_name, port_mapping).items():
-            if stop_event.is_set():
-                break
 
             if not common._wrapper_get_presence(physical_port):
                 continue
@@ -276,12 +277,11 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                 if not pm_info_dict:
                     continue
                 self.db_utils.beautify_info_dict(pm_info_dict)
-                # Route raw FEC counters to TRANSCEIVER_PM_COUNTERS; everything else
-                # (calculated ratios, optical metrics) stays in TRANSCEIVER_PM.
-                pm_dict = {k: v for k, v in pm_info_dict.items() if k not in PM_COUNTER_FIELDS}
+                # Publish all PM fields and counters to TRANSCEIVER_PM.
+                # Additionally publish the raw FEC counters to TRANSCEIVER_PM_COUNTERS.
                 pm_counters_dict = {k: v for k, v in pm_info_dict.items() if k in PM_COUNTER_FIELDS}
-                if pm_dict:
-                    pm_table.set(physical_port_name, swsscommon.FieldValuePairs(list(pm_dict.items())))
+                if pm_info_dict:
+                    pm_table.set(physical_port_name, swsscommon.FieldValuePairs(list(pm_info_dict.items())))
                 if pm_counters_dict:
                     pm_counters_table.set(physical_port_name, swsscommon.FieldValuePairs(list(pm_counters_dict.items())))
             else:
@@ -521,9 +521,10 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         Args:
             port_change_event (object): port change event
         """
-        # To avoid race condition, remove the entry TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table.
-        # This thread only updates TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM and HW section of TRANSCEIVER_STATUS table,
-        # so we don't have to remove entries from TRANSCEIVER_INFO, TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
+        # To avoid race condition, remove the entry TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM, TRANSCEIVER_PM_COUNTERS, 
+        # and HW section of TRANSCEIVER_STATUS table. This thread only updates TRANSCEIVER_FIRMWARE_INFO, TRANSCEIVER_DOM_SENSOR, TRANSCEIVER_PM,
+        # TRANSCEIVER_PM_COUNTERS and HW section of TRANSCEIVER_STATUS table, so we don't have to remove entries from TRANSCEIVER_INFO, 
+        # TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
         common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping,
                                       [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),

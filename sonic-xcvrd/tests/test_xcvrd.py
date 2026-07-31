@@ -1403,9 +1403,10 @@ class TestXcvrdScript(object):
         assert pm_tbl.get_size() == 0
         assert pm_counters_tbl.get_size() == 0
         dom_info_update.post_port_pm_info_to_db(logical_port_name, port_mapping, pm_tbl, pm_counters_tbl, stop_event)
-        # Non-counter fields (6 preFEC ratios) go to TRANSCEIVER_PM.
-        assert pm_tbl.get_size_for_key(logical_port_name) == 6
-        # Raw FEC counters (2 rx + 2 tx) go to TRANSCEIVER_PM_COUNTERS.
+        # All fields (6 preFEC ratios + 4 raw FEC counters) go to TRANSCEIVER_PM
+        # for backward compatibility with existing streaming telemetry consumers.
+        assert pm_tbl.get_size_for_key(logical_port_name) == 10
+        # Raw FEC counters (2 rx + 2 tx) are additionally posted to TRANSCEIVER_PM_COUNTERS.
         assert pm_counters_tbl.get_size_for_key(logical_port_name) == 4
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
@@ -1417,9 +1418,11 @@ class TestXcvrdScript(object):
         dom_threshold_tbl = Table("STATE_DB", TRANSCEIVER_DOM_THRESHOLD_TABLE)
         init_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
         pm_tbl = Table("STATE_DB", TRANSCEIVER_PM_TABLE)
+        pm_counters_tbl = Table("STATE_DB", TRANSCEIVER_PM_COUNTERS_TABLE)
         firmware_info_tbl = Table("STATE_DB", TRANSCEIVER_FIRMWARE_INFO_TABLE)
-        common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, [init_tbl, dom_tbl, dom_threshold_tbl, pm_tbl, firmware_info_tbl])
+        common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, [init_tbl, dom_tbl, dom_threshold_tbl, pm_tbl, pm_counters_tbl, firmware_info_tbl])
         assert dom_tbl.get_size() == 0
+        assert pm_counters_tbl.get_size() == 0
 
     @pytest.mark.parametrize("mock_found, mock_state, expected_cmis_state", [
         (True, CMIS_STATE_INSERTED, CMIS_STATE_INSERTED),

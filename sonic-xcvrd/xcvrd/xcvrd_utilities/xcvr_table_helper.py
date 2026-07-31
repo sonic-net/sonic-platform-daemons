@@ -46,7 +46,6 @@ TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 TRANSCEIVER_PM_COUNTERS_TABLE = 'TRANSCEIVER_PM_COUNTERS'
-TRANSCEIVER_CMIS_STATE_TIMESTAMPS_TABLE = 'TRANSCEIVER_CMIS_STATE_TIMESTAMPS'
 
 NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
 NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
@@ -71,7 +70,6 @@ class XcvrTableHelper:
         self.status_flag_set_time_tbl = {}
         self.status_flag_clear_time_tbl = {}
         self.status_sw_tbl = {}
-        self.cmis_state_timestamps_tbl = {}
         self.pm_counters_tbl = {}
         self.vdm_real_value_tbl = {}
         VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
