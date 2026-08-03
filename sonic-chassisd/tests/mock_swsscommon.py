@@ -100,3 +100,17 @@ class ConfigDBConnector:
 
     def get_table(*args, **kwargs):
         pass
+
+class SonicV2Connector:
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def connect(self, *args, **kwargs):
+        pass
+
+    def get(self, *args, **kwargs):
+        pass
+
+    def keys(self, *args, **kwargs):
+        return []
