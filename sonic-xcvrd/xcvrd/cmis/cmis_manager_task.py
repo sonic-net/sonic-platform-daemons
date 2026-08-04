@@ -83,7 +83,11 @@ class CmisManagerTask(threading.Thread):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
-        status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))
+        # get_asic_id() reports -1 for a port that is no longer tracked, which is not a
+        # valid key for the per-ASIC tables, so resolve it before indexing rather than
+        # letting the lookup raise out of this thread and terminate the daemon.
+        asic_id = self.get_asic_id(lport)
+        status_table = self.xcvr_table_helper.get_status_sw_tbl(asic_id) if asic_id >= 0 else None
         if status_table is None:
             helper_logger.log_error("status_table is None while updating "
                                     "sw CMIS state for lport {}".format(lport))

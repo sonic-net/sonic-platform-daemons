@@ -3399,6 +3399,32 @@ class TestXcvrdScript(object):
         assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_UNKNOWN
         assert not mock_sfp.get_presence.called
 
+    def test_CmisManagerTask_update_sw_cmis_state_for_untracked_port(self):
+        """
+        An event can arrive for a port that is no longer in port_dict, for instance a
+        stale STATE_DB entry left behind by a dynamic port breakout. get_asic_id() then
+        reports -1, which is not a key of the per-ASIC tables. The lookup must not raise
+        out of the CmisManagerTask thread, because that terminates the whole daemon.
+        """
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+
+        # Per-ASIC tables are dicts keyed by asic_id, so -1 would raise KeyError.
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.get_status_sw_tbl = MagicMock(side_effect=lambda asic_id: {0: MagicMock()}[asic_id])
+
+        assert 'Ethernet0' not in task.port_dict
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_INSERTED)
+
+        # The unknown asic_id is resolved before indexing, so the table is never queried
+        task.xcvr_table_helper.get_status_sw_tbl.assert_not_called()
+
+        # A tracked port still reaches its table
+        task.port_dict['Ethernet0'] = {'asic_id': 0}
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_INSERTED)
+        task.xcvr_table_helper.get_status_sw_tbl.assert_called_once_with(0)
+
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
