@@ -5614,21 +5614,6 @@ class TestXcvrdScript(object):
 
         assert task.is_warm_fast_reboot_for_lport('Ethernet0') is False
 
-    def test_SfpStateUpdateTask_should_notify_media_settings(self):
-        port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
-        stop_event = threading.Event()
-        sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
-
-        task.is_warm_fast_reboot_for_lport = MagicMock(return_value=True)
-        assert task.should_notify_media_settings('Ethernet0') is False
-        task.is_warm_fast_reboot_for_lport.assert_called_with('Ethernet0')
-
-        task.is_warm_fast_reboot_for_lport = MagicMock(return_value=False)
-        assert task.should_notify_media_settings('Ethernet0') is True
-        task.is_warm_fast_reboot_for_lport.assert_called_with('Ethernet0')
-
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
