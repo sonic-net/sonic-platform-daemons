@@ -296,9 +296,6 @@ class SfpStateUpdateTask(threading.Thread):
         namespace = common.get_namespace_from_asic_id(asic_index)
         return self.warm_fast_reboot_status.get(namespace, False)
 
-    def should_notify_media_settings(self, logical_port):
-        return not self.is_warm_fast_reboot_for_lport(logical_port)
-
     def _mapping_event_from_change_event(self, status, port_dict):
         """
         mapping from what get_transceiver_change_event returns to event defined in the state machine
@@ -581,7 +578,7 @@ class SfpStateUpdateTask(threading.Thread):
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
-                                    if self.should_notify_media_settings(logical_port):
+                                    if not self.is_warm_fast_reboot_for_lport(logical_port):
                                         media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
@@ -842,7 +839,7 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                if self.should_notify_media_settings(port_change_event.port_name):
+                if not self.is_warm_fast_reboot_for_lport(port_change_event.port_name):
                     media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
@@ -871,7 +868,7 @@ class SfpStateUpdateTask(threading.Thread):
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
-                if self.should_notify_media_settings(logical_port):
+                if not self.is_warm_fast_reboot_for_lport(logical_port):
                     media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
@@ -1068,8 +1065,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
-        media_settings_parser.load_media_settings()
-        optics_si_parser.load_optics_si_settings()
+        if all(common.is_fast_reboot_enabled(ns) for ns in self.namespaces):
+            self.log_notice("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
+        else:
+            media_settings_parser.load_media_settings()
+            optics_si_parser.load_optics_si_settings()
 
         # Make sure this daemon started after all port configured
         self.log_notice("XCVRD INIT: Wait for port config is done")
