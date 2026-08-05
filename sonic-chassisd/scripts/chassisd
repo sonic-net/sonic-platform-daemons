@@ -410,6 +410,13 @@ class ModuleUpdater(logger.Logger):
             return fvs.get(CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, ModuleBase.MODULE_STATUS_EMPTY)
         return ModuleBase.MODULE_STATUS_EMPTY
 
+    def get_module_current_presence(self, key):
+        fvs = self.module_table.get(key)
+        if isinstance(fvs, list) and fvs[0] is True:
+            fvs = dict(fvs[-1])
+            return fvs.get(CHASSIS_MODULE_INFO_PRESENCE_FIELD, 'False')
+        return None
+
     def get_module_admin_status(self, chassis_module_name):
         config_db = daemon_base.db_connect("CONFIG_DB")
         vtable = swsscommon.Table(config_db, CHASSIS_CFG_TABLE)
@@ -419,6 +426,23 @@ class ModuleUpdater(logger.Logger):
             return fvs[CHASSIS_MODULE_ADMIN_STATUS]
         else:
             return 'up'
+
+    def replay_saved_module_admin_down(self, module_index, module_name):
+        """Apply persisted admin down from CONFIG_DB to a present fabric/line module."""
+        if not (module_name.startswith(ModuleBase.MODULE_TYPE_FABRIC) or
+                module_name.startswith(ModuleBase.MODULE_TYPE_LINE)):
+            return False
+
+        if self.get_module_admin_status(module_name) != 'down':
+            return False
+
+        module = self.chassis.get_module(module_index)
+        if not try_get(module.get_presence, default=False):
+            return False
+
+        self.log_info("Replaying admin down state for module {}".format(module_name))
+        try_get(module.set_admin_state, MODULE_ADMIN_DOWN, default=False)
+        return True
 
     def module_db_update(self):
         notOnlineModules = []
@@ -453,9 +477,15 @@ class ModuleUpdater(logger.Logger):
 
 
                 prev_status = self.get_module_current_status(key)
+                prev_presence = self.get_module_current_presence(key)
                 self.module_table.set(key, fvs)
 
-                if module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD].lower() == "true":
+                new_presence = module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD].lower() == "true"
+                prev_was_absent = (prev_presence is None or prev_presence.lower() == 'false')
+                if self._is_supervisor() and prev_was_absent and new_presence:
+                    self.replay_saved_module_admin_down(module_index, key)
+
+                if new_presence:
                     update_entity_info(self.phy_entity_table,
                                        "chassis {}".format(1),
                                        key,
@@ -1894,21 +1924,8 @@ class ChassisdDaemon(daemon_base.DaemonBase):
         """Replay saved admin down state for fabric/line modules after reboot."""
         for module_index in range(0, self.module_updater.num_modules):
             try:
-                module = self.platform_chassis.get_module(module_index)
-                module_name = module.get_name()
-
-                if not (module_name.startswith(ModuleBase.MODULE_TYPE_FABRIC) or
-                        module_name.startswith(ModuleBase.MODULE_TYPE_LINE)):
-                    continue
-
-                if self.module_updater.get_module_admin_status(module_name) != 'down':
-                    continue
-
-                if not try_get(module.get_presence, default=False):
-                    continue
-
-                self.log_info("Replaying admin down state for module {} at boot".format(module_name))
-                try_get(module.set_admin_state, MODULE_ADMIN_DOWN, default=False)
+                module_name = self.platform_chassis.get_module(module_index).get_name()
+                self.module_updater.replay_saved_module_admin_down(module_index, module_name)
             except Exception as e:
                 self.log_error("Error replaying admin state for module index {}: {}".format(
                     module_index, str(e)))
