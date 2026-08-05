@@ -2071,3 +2071,73 @@ def test_chassis_daemon_assertion():
         time.sleep(1)
     else:
         assert False, "config_manager thread never died"
+
+def test_set_initial_module_admin_state_down():
+    """Replay admin down for present fabric/line modules at boot."""
+    fabric = MockModule(0, "FABRIC-CARD1", "Fabric card", ModuleBase.MODULE_TYPE_FABRIC,
+                        10, "FC1000101")
+    fabric.set_presence(True)
+    line = MockModule(1, "LINE-CARD0", "Line card", ModuleBase.MODULE_TYPE_LINE,
+                      1, "LC1000101")
+    line.set_presence(True)
+
+    chassis = MockChassis()
+    chassis.get_supervisor_slot = Mock(return_value=16)
+    chassis.get_my_slot = Mock(return_value=16)
+    chassis.module_list.extend([fabric, line])
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, 16, 16)
+    module_updater.modules_num_update()
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = False
+
+    with patch.object(module_updater, 'get_module_admin_status', return_value='down'), \
+         patch.object(fabric, 'set_admin_state') as mock_fabric_set_admin_state, \
+         patch.object(line, 'set_admin_state') as mock_line_set_admin_state:
+        daemon_chassisd.set_initial_module_admin_state()
+
+        mock_fabric_set_admin_state.assert_called_once_with(MODULE_ADMIN_DOWN)
+        mock_line_set_admin_state.assert_called_once_with(MODULE_ADMIN_DOWN)
+
+
+def test_set_initial_module_admin_state_up():
+    """Skip replay for up, absent, and non fabric/line modules."""
+    fabric_up = MockModule(0, "FABRIC-CARD1", "Fabric card", ModuleBase.MODULE_TYPE_FABRIC,
+                           10, "FC1000101")
+    fabric_up.set_presence(True)
+    fabric_absent = MockModule(1, "FABRIC-CARD2", "Fabric card", ModuleBase.MODULE_TYPE_FABRIC,
+                               11, "FC1000102")
+    fabric_absent.set_presence(False)
+    supervisor = MockModule(2, "SUPERVISOR0", "Supervisor", ModuleBase.MODULE_TYPE_SUPERVISOR,
+                            16, "RP1000101")
+    supervisor.set_presence(True)
+
+    chassis = MockChassis()
+    chassis.get_supervisor_slot = Mock(return_value=16)
+    chassis.get_my_slot = Mock(return_value=16)
+    chassis.module_list.extend([fabric_up, fabric_absent, supervisor])
+
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, 16, 16)
+    module_updater.modules_num_update()
+
+    daemon_chassisd = ChassisdDaemon(SYSLOG_IDENTIFIER, chassis)
+    daemon_chassisd.module_updater = module_updater
+    daemon_chassisd.platform_chassis = chassis
+    daemon_chassisd.smartswitch = False
+
+    def admin_status_side_effect(module_name):
+        return 'up' if module_name == "FABRIC-CARD1" else 'down'
+
+    with patch.object(module_updater, 'get_module_admin_status',
+                      side_effect=admin_status_side_effect), \
+         patch.object(fabric_up, 'set_admin_state') as mock_fabric_up, \
+         patch.object(fabric_absent, 'set_admin_state') as mock_fabric_absent, \
+         patch.object(supervisor, 'set_admin_state') as mock_supervisor:
+        daemon_chassisd.set_initial_module_admin_state()
+
+        mock_fabric_up.assert_not_called()
+        mock_fabric_absent.assert_not_called()
+        mock_supervisor.assert_not_called()
