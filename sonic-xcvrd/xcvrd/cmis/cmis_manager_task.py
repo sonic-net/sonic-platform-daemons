@@ -43,7 +43,6 @@ class CmisManagerTask(threading.Thread):
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
     CMIS_SI_SETTINGS_WAIT_TIMEOUT = 10 # seconds, timeout for waiting SI settings to be applied on ASIC
-    CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C', 'CPO']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
 
@@ -729,17 +728,16 @@ class CmisManagerTask(threading.Thread):
         found, admin_status = cfg_port_tbl.hget(lport, 'admin_status')
         return admin_status if found else 'down'
 
-    def check_si_settings_app_status(self, lport):
+    def check_si_settings_ack_status(self, lport):
         """
-        Check if SI settings have been applied on the ASIC by reading from STATE_DB
+        Return orchagent's SI settings ack by reading si_settings_ack from STATE_DB PORT_TABLE.
 
         Args:
             lport:
                 Logical port name
 
         Returns:
-            String, the current SI settings sync status value from STATE_DB,
-            or None if not found
+            String, the current si_settings_ack value from STATE_DB, or None if not found
         """
         state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
 
@@ -768,7 +766,9 @@ class CmisManagerTask(threading.Thread):
                 if expected_number is not None and completed_number == expected_number:
                     return True
                 elif expected_number is None:
-                    self.log_error("{}: SI sync check failed - no expected notification number stored".format(lport))
+                    # No notification is outstanding for this port (e.g. nothing was notified this
+                    # session), so there is nothing to match - not an error.
+                    self.log_debug("{}: no expected SI notification number to match".format(lport))
                     return False
                 else:
                     # Number mismatch, keep waiting (might be from previous notification)
@@ -979,8 +979,22 @@ class CmisManagerTask(threading.Thread):
         # applying SI) bounces the SM back to INSERTED; without this check we would re-notify
         # and force an unnecessary re-program.
         last_si_number = port_info.get('si_notification_number')
-        if last_si_number is not None and \
-                self.check_si_sync_done_match(lport, self.check_si_settings_app_status(lport), last_si_number):
+        asic_id = self.get_asic_id(lport)
+        if last_si_number is None:
+            # Restart / warm reboot: in-memory tracking is gone. Recover it from the retained
+            # DB so we neither re-notify an already-synced module nor race past an outstanding
+            # (un-acked) notification that orchagent still needs to apply.
+            if self.xcvr_table_helper.is_si_settings_synced(lport, asic_id):
+                self.port_dict[lport]['si_settings_synced'] = True
+                self.port_dict[lport]['notify_si_settings'] = False
+            else:
+                outstanding = self.xcvr_table_helper.get_current_si_notification_number(lport, asic_id)
+                if outstanding is not None:
+                    # OA hasn't yet acked our last notification; adopt its number and wait for
+                    # the ack instead of publishing a fresh one.
+                    self.port_dict[lport]['si_notification_number'] = outstanding
+                    self.port_dict[lport]['notify_si_settings'] = False
+        elif self.check_si_sync_done_match(lport, self.check_si_settings_ack_status(lport), last_si_number):
             self.port_dict[lport]['si_settings_synced'] = True
             self.port_dict[lport]['notify_si_settings'] = False
 
@@ -1265,7 +1279,7 @@ class CmisManagerTask(threading.Thread):
         retries = port_info.get('cmis_retries', 0)
         expired = port_info.get('cmis_expired')
 
-        si_settings_status = self.check_si_settings_app_status(lport)
+        si_settings_status = self.check_si_settings_ack_status(lport)
         expected_notification_number = self.port_dict[lport].get('si_notification_number')
 
         # SI settings are considered applied when the status is "SI_SYNC_DONE:<number>"
@@ -1283,6 +1297,9 @@ class CmisManagerTask(threading.Thread):
         elif self.is_timer_expired(expired):
             self.log_notice("{}: timeout waiting for SI settings to be applied (status: {}, expected: {})".format(
                 lport, si_settings_status, expected_notification_number))
+            # Per HLD: reset APPL_DB to SI_SETTINGS_DEFAULT:<N+1> so OA reverts, then re-notify
+            # and reinit (consumes a retry).
+            self.xcvr_table_helper.reset_si_settings_notification_to_default(lport, self.get_asic_id(lport))
             self.port_dict[lport].pop('si_notification_number', None)
             self.port_dict[lport]['notify_si_settings'] = True
             self.force_cmis_reinit(lport, retries + 1)
@@ -1473,7 +1490,7 @@ class CmisManagerTask(threading.Thread):
 
             # Skip if it's not a CMIS module
             type = api.get_module_type_abbreviation()
-            if (type is None) or (type not in self.CMIS_MODULE_TYPES):
+            if (type is None) or (type not in common.CMIS_MODULE_TYPES):
                 self.log_notice("{}: skipping CMIS state machine for non-CMIS module with type {}".format(lport, type))
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                 return

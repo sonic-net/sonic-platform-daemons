@@ -48,6 +48,10 @@ TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
 VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
 
+# First SI notification number issued when no prior value exists.
+DEFAULT_NOTIFICATION_NUMBER = 1
+
+
 class XcvrTableHelper:
     def __init__(self, namespaces):
         self.int_tbl, self.dom_tbl, self.dom_threshold_tbl, self.status_tbl, self.app_port_tbl, \
@@ -55,6 +59,9 @@ class XcvrTableHelper:
         self.state_db = {}
         self.appl_db = {}
         self.app_port_read_tbl = {}
+        # (asic_id, port_name) -> last SI notification number issued this process
+        # (keeps get_next_si_notification_number monotonic despite the PORT_TABLE read lag).
+        self.last_si_notification_number = {}
         self.cfg_db = {}
         self.dom_temperature_tbl = {}
         self.dom_flag_tbl = {}
@@ -183,24 +190,82 @@ class XcvrTableHelper:
 
     def get_next_si_notification_number(self, port_name, asic_id):
         """
-        Return the next SI notification number for port_name by reading the
-        current si_settings_notification from APPL_DB and incrementing its counter.
-        Returns 1 if no prior value exists or the format is unrecognised.
+        Return the next SI notification number for port_name (asic_id: ASIC index).
+
+        Reads the current 'SI_SETTINGS_NOTIFIED:<N>' / 'SI_SETTINGS_DEFAULT:<N>' from APPL_DB
+        and reconciles it with the last number issued this process, so N stays monotonic even
+        when a back-to-back notify reads a stale PORT_TABLE (write lags via ProducerStateTable).
+
+        The in-memory map only guards that intra-process lag; APPL_DB is the source of truth
+        across a restart. On warm restart APPL_DB is retained, so N continues from the retained
+        value (and A's is_si_settings_synced check means we usually don't re-notify at all). On
+        cold restart / config reload APPL_DB is flushed and N restarts at 1 - safe, because OA
+        clears its si_settings_ack on the same event, so both sides re-baseline together.
+        """
+        db_number = DEFAULT_NOTIFICATION_NUMBER - 1
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        if found:
+            current_value = dict(fvs).get('si_settings_notification')
+            if current_value:
+                try:
+                    _, count = current_value.split(':', 1)
+                    db_number = int(count)
+                except ValueError:
+                    db_number = DEFAULT_NOTIFICATION_NUMBER - 1
+        last_issued = self.last_si_notification_number.get(
+            (asic_id, port_name), DEFAULT_NOTIFICATION_NUMBER - 1)
+        next_number = max(db_number, last_issued) + 1
+        self.last_si_notification_number[(asic_id, port_name)] = next_number
+        return next_number
+
+    def reset_si_settings_notification_to_default(self, port_name, asic_id):
+        """Publish si_settings_notification = SI_SETTINGS_DEFAULT:<next N> to APPL_DB and return
+        N. Used on transceiver removal and SI_SETTINGS_WAIT timeout to tell OA to revert."""
+        next_number = self.get_next_si_notification_number(port_name, asic_id)
+        self.app_port_tbl[asic_id].set(
+            port_name, [("si_settings_notification", "SI_SETTINGS_DEFAULT:{}".format(next_number))])
+        return next_number
+
+    def get_current_si_notification_number(self, port_name, asic_id):
+        """
+        Return the counter N currently published in APPL_DB si_settings_notification
+        (SI_SETTINGS_NOTIFIED:<N> / SI_SETTINGS_DEFAULT:<N>), or None when the field is
+        absent, counterless (SI_SETTINGS_UNAVAIL), or malformed. Unlike
+        get_next_si_notification_number this returns the value as-is (no +1).
         """
         found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
         if not found:
-            return 1
-        fvs_dict = dict(fvs)
-        current_value = fvs_dict.get('si_settings_notification')
-        if not current_value:
-            return 1
+            return None
+        value = dict(fvs).get('si_settings_notification')
+        if not value:
+            return None
         try:
-            parts = current_value.split(':')
-            if len(parts) == 2:
-                return int(parts[1]) + 1
-        except (ValueError, IndexError):
-            pass
-        return 1
+            _, count = value.split(':', 1)
+            return int(count)
+        except ValueError:
+            return None
+
+    def is_si_settings_synced(self, port_name, asic_id):
+        """
+        Return True when the retained APPL_DB si_settings_notification and STATE_DB
+        si_settings_ack agree on the same counter N, i.e. orchagent has already applied
+        the SI settings we last published. Used to avoid re-notifying / re-programming
+        across an xcvrd restart or warm reboot, where in-memory tracking is lost but DB
+        contents are retained.
+        """
+        notified = self.get_current_si_notification_number(port_name, asic_id)
+        if notified is None:
+            return False
+        found, ack = self.state_port_tbl[asic_id].hget(port_name, 'si_settings_ack')
+        if not found or not ack:
+            return False
+        try:
+            prefix, count = ack.split(':', 1)
+            # OA acks either SI_SYNC_DONE:<N> (real SI applied) or SI_SETTINGS_DEFAULT:<N>
+            # (defaults applied); both mean notification <N> has been fully processed.
+            return prefix in ('SI_SYNC_DONE', 'SI_SETTINGS_DEFAULT') and int(count) == notified
+        except ValueError:
+            return False
 
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]

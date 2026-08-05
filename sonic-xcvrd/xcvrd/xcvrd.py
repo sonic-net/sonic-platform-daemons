@@ -352,7 +352,7 @@ class SfpStateUpdateTask(threading.Thread):
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_thresholds_cache)
                 # Read the VDM thresholds and post them to the DB
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_thresholds_cache)
-                self.notify_si_settings_unavailable(
+                self.notify_media_setting_on_insert(
                     logical_port_name, port_mapping.get_asic_id_for_logical_port(logical_port_name))
 
         return retry_eeprom_set
@@ -573,7 +573,7 @@ class SfpStateUpdateTask(threading.Thread):
                                 if rc != SFP_EEPROM_NOT_READY:
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-                                    self.notify_si_settings_unavailable(logical_port, asic_index)
+                                    self.notify_media_setting_on_insert(logical_port, asic_index)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 # Remove the SFP API object for this physical port
@@ -584,10 +584,7 @@ class SfpStateUpdateTask(threading.Thread):
                                     helper_logger.log_error(f"Failed to remove xcvr api for port {key}: {str(e)}")
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
                                 # Reset si_settings_notification in APPL_DB for the logical port
-                                next_number = self.xcvr_table_helper.get_next_si_notification_number(logical_port, asic_index)
-                                si_default_value = f"SI_SETTINGS_DEFAULT:{next_number}"
-                                app_port_table = self.xcvr_table_helper.get_app_port_tbl(asic_index)
-                                app_port_table.set(logical_port, [("si_settings_notification", si_default_value)])
+                                self.xcvr_table_helper.reset_si_settings_notification_to_default(logical_port, asic_index)
 
                                 common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
@@ -793,11 +790,6 @@ class SfpStateUpdateTask(threading.Thread):
         #  3. SFP is not present. Only update TRANSCEIVER_STATUS_INFO table.
         status_sw_tbl = self.xcvr_table_helper.get_status_sw_tbl(port_change_event.asic_id)
         int_tbl = self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id)
-        state_port_table = self.xcvr_table_helper.get_state_port_tbl(port_change_event.asic_id)
-        found, state_port_table_fvs = state_port_table.get(port_change_event.port_name)
-        if not found:
-            helper_logger.log_notice("Add logical port: Creating STATE_DB PORT_TABLE as unable to find for lport {}".format(port_change_event.port_name))
-            state_port_table_fvs = []
 
         error_description = 'N/A'
         status = None
@@ -833,7 +825,7 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                self.notify_si_settings_unavailable(
+                self.notify_media_setting_on_insert(
                     port_change_event.port_name,
                     self.port_mapping.get_asic_id_for_logical_port(port_change_event.port_name))
         else:
@@ -862,18 +854,21 @@ class SfpStateUpdateTask(threading.Thread):
             if rc != SFP_EEPROM_NOT_READY:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-                self.notify_si_settings_unavailable(logical_port, asic_index)
+                self.notify_media_setting_on_insert(logical_port, asic_index)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
 
-    def notify_si_settings_unavailable(self, logical_port, asic_index):
-        """Publish SI_SETTINGS_UNAVAIL when the manager that would own this transceiver type is
-        not running, so orchagent does not hold the port waiting for SI settings that will never
-        arrive. CMIS modules are owned by CmisManagerTask (off iff skip_cmis_mgr); all other
-        modules by SffManagerTask (off iff not enable_sff_mgr). No-op when the relevant manager
-        is running, or when no transceiver is present.
+    def notify_media_setting_on_insert(self, logical_port, asic_index):
+        """Publish SI settings for a newly ready transceiver on the insert path.
+
+        CMIS modules are owned by CmisManagerTask; SFF modules by SffManagerTask, but
+        only when --enable_sff_mgr is set. For a non-CMIS module with the SFF manager
+        disabled, no always-on task would otherwise publish its SI settings, leaving
+        orchagent waiting. Publish them here so SI settings reach APPL_DB independent of
+        --enable_sff_mgr. notify_media_setting falls back to SI_SETTINGS_UNAVAIL
+        internally when no media settings match this transceiver.
         """
         physical_port_list = self.port_mapping.logical_port_name_to_physical_port_list(logical_port)
         if not physical_port_list or platform_chassis is None:
@@ -885,14 +880,22 @@ class SfpStateUpdateTask(threading.Thread):
             api = platform_chassis.get_sfp(physical_port).get_xcvr_api()
         except (NotImplementedError, AttributeError):
             api = None
-        is_cmis = common.is_cmis_api(api)
-        unmanaged = (is_cmis and self.skip_cmis_mgr) or (not is_cmis and not self.enable_sff_mgr)
-        if not unmanaged:
+        # CMIS modules are handled by CmisManagerTask, and SFF modules by SffManagerTask
+        # when it is enabled; only publish here for a non-CMIS module with the SFF manager off.
+        if common.is_cmis_api(api) or self.enable_sff_mgr:
             return
-        self.xcvr_table_helper.get_app_port_tbl(asic_index).set(
-            logical_port, [("si_settings_notification", "SI_SETTINGS_UNAVAIL")])
-        helper_logger.log_notice("{}: no SI settings manager running for this transceiver type; "
-                                 "publishing SI_SETTINGS_UNAVAIL".format(logical_port))
+        # Skip re-publishing across an xcvrd restart when OA already synced the retained value;
+        # a replayed / boot-scan insert must not re-notify an already-applied module.
+        if self.xcvr_table_helper.is_si_settings_synced(logical_port, asic_index):
+            return
+        try:
+            xcvr_info = platform_chassis.get_sfp(physical_port).get_transceiver_info()
+        except (NotImplementedError, AttributeError):
+            xcvr_info = None
+        if xcvr_info is None:
+            return
+        media_settings_parser.notify_media_setting(
+            logical_port, {physical_port: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
 
     def update_log_level(self):
         """Call the logger's update log level method.

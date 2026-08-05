@@ -39,6 +39,8 @@ CMIS_TERMINAL_STATES = {
     CMIS_STATE_REMOVED
 }
 
+CMIS_MODULE_TYPES = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C', 'CPO']
+
 # Global variables that will be injected from the parent module
 platform_chassis = None
 platform_sfputil = None

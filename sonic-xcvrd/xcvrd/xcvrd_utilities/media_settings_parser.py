@@ -551,7 +551,6 @@ def get_speed_lane_count_and_subport(port, cfg_port_tbl):
     return port_speed, lane_count, subport_num
 
 
-
 def notify_si_settings_unavailable(logical_port_name, xcvr_table_helper, port_mapping):
     """
     Publish si_settings_notification = SI_SETTINGS_UNAVAIL (counterless) to APPL_DB PORT_TABLE
@@ -652,22 +651,17 @@ def notify_media_setting(logical_port_name, transceiver_dict,
             notify_si_settings_unavailable(logical_port_name, xcvr_table_helper, port_mapping)
             return
 
-        # Extra entry for the SI settings notification count
-        fvs = swsscommon.FieldValuePairs(len(fvs_list) + 1)
+        # Append the SI settings notification counter to the media settings before building
+        # the FieldValuePairs, so the container size is just len(fvs_list).
+        notification_number = xcvr_table_helper.get_next_si_notification_number(port_name, asic_index)
+        fvs_list.append(("si_settings_notification",
+                         "SI_SETTINGS_NOTIFIED:{}".format(notification_number)))
 
+        fvs = swsscommon.FieldValuePairs(len(fvs_list))
         helper_logger.log_notice("Publishing SI setting for port {} in APP_DB:".format(logical_port_name))
         for index, (media_key, val_str) in enumerate(fvs_list):
             helper_logger.log_notice("{}:({},{}) ".format(index, str(media_key), str(val_str)))
             fvs[index] = (str(media_key), str(val_str))
-
-        # Get next notification number from APPL_DB for this port
-        notification_number = xcvr_table_helper.get_next_si_notification_number(port_name, asic_index)
-
-        # Add si_settings_notification as the extra entry in APPL_DB
-        notification_index = len(fvs_list)
-        si_settings_notification_value = "SI_SETTINGS_NOTIFIED:{}".format(notification_number)
-        fvs[notification_index] = ("si_settings_notification", si_settings_notification_value)
-        helper_logger.log_notice("{}:({},{}) ".format(notification_index, "si_settings_notification", si_settings_notification_value))
 
         xcvr_table_helper.get_app_port_tbl(asic_index).set(port_name, fvs)
         helper_logger.log_notice("Notify media setting: Published SI setting "

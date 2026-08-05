@@ -462,12 +462,18 @@ class SffManagerTask(threading.Thread):
 
                 if data.get('notify_si_settings'):
                     self.port_dict[lport]['notify_si_settings'] = False
-                    xcvr_info = sfp.get_transceiver_info()
-                    if xcvr_info is not None:
-                        media_settings_parser.notify_media_setting(
-                            lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+                    asic_id = data.get('asic_id')
+                    # Skip re-publishing across an xcvrd restart when OA already synced the
+                    # retained value; a replayed TRANSCEIVER_INFO must not re-notify.
+                    if asic_id is not None and self.xcvr_table_helper.is_si_settings_synced(lport, asic_id):
+                        self.log_notice("{}: SI settings already synced (retained DB), skip re-notify".format(lport))
                     else:
-                        self.log_error("{}: failed to read transceiver info for SI settings notify".format(lport))
+                        xcvr_info = sfp.get_transceiver_info()
+                        if xcvr_info is not None:
+                            media_settings_parser.notify_media_setting(
+                                lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+                        else:
+                            self.log_error("{}: failed to read transceiver info for SI settings notify".format(lport))
 
                 try:
                     # Skip if it's a copper cable
