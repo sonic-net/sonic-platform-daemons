@@ -1,3 +1,4 @@
+
 """
     SFF task manager
     Deterministic link bring-up task manager for SFF compliant modules, running
@@ -7,6 +8,7 @@
 try:
     import copy
     import sys
+    import time
     import threading
     import traceback
 
@@ -86,7 +88,8 @@ class SffManagerTask(threading.Thread):
 
     SFF_LOGGER_PREFIX = "SFF-MAIN: "
 
-    def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
+    def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger,
+                 hold_lpmode_tx_ready_time=None):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
         self.exc = None
@@ -103,6 +106,11 @@ class SffManagerTask(threading.Thread):
         self.port_dict_prev = {}
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.namespaces = namespaces
+        # extended time to hold transceiver in lpmode after host_tx_ready
+        # before bringing to high power
+        self.hold_lpmode_tx_ready_time = hold_lpmode_tx_ready_time
+        # Dictionary storing lport -> timestamp
+        self.pending_high_power_mode = {}
 
     def log_notice(self, message):
         self.helper_logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
@@ -325,6 +333,21 @@ class SffManagerTask(threading.Thread):
         except (AttributeError, NotImplementedError):
             pass
 
+    def xcvr_power_up(self, sfp, api, lport):
+        self.enable_high_power_class(api, lport)
+
+        if api.get_lpmode_support():
+            set_lp_success = (
+                sfp.set_lpmode(False)
+                if isinstance(api, Sff8472Api)
+                else api.set_lpmode(False)
+            )
+            if not set_lp_success:
+                self.log_error(
+                    "{}: Failed to take module out of low power mode.".format(
+                        lport)
+                )
+
     def task_worker(self):
         '''
         The main goal of sff_mgr is to make sure SFF compliant modules are
@@ -360,7 +383,7 @@ class SffManagerTask(threading.Thread):
             # operation in the DB tables. Upon process restart, messages will be
             # replayed for all fields, no need to explictly query the DB tables
             # here.
-            if not port_change_observer.handle_port_update_event():
+            if not port_change_observer.handle_port_update_event() and not self.pending_high_power_mode:
                 # In the case of no real update, go back to the beginning of the loop
                 continue
 
@@ -378,6 +401,7 @@ class SffManagerTask(threading.Thread):
                 xcvr_inserted = False
                 host_tx_ready_changed = False
                 admin_status_changed = False
+                lpmode_deassert_pending = lport in self.pending_high_power_mode
                 if pport < 0 or lanes_list is None:
                     continue
 
@@ -447,6 +471,7 @@ class SffManagerTask(threading.Thread):
                 # event, such as CONFIG_DB change other than admin_status field.
                 if ((not xcvr_inserted) and
                     (not host_tx_ready_changed) and
+                    (not lpmode_deassert_pending) and
                     (not admin_status_changed)):
                     continue
                 self.log_notice(("{}: xcvr=present(inserted={}), "
@@ -474,20 +499,26 @@ class SffManagerTask(threading.Thread):
                     # Skip if these essential routines are not available
                     continue
 
-                if xcvr_inserted or (admin_status_changed and data[self.ADMIN_STATUS] == "up"):
-                    self.enable_high_power_class(api, lport)
+                admin_changed_up = admin_status_changed and data[self.ADMIN_STATUS] == "up"
+                if self.hold_lpmode_tx_ready_time:
+                    # When this flag is asserted, the SFF-MGR will hold the module in lpmode
+                    # for DEASSERT_LPMODE_WAIT_TIME after the host tx signal is ready.
+                    xcvr_queue_power_up = (xcvr_inserted or
+                                               host_tx_ready_changed or
+                                               admin_changed_up)
 
-                    if api.get_lpmode_support():
-                        set_lp_success = (
-                            sfp.set_lpmode(False)
-                            if isinstance(api, Sff8472Api)
-                            else api.set_lpmode(False)
-                        )
-                        if not set_lp_success:
-                            self.log_error(
-                                "{}: Failed to take module out of low power mode.".format(
-                                    lport)
-                            )
+                    if (xcvr_queue_power_up and data[self.HOST_TX_READY] == "true" and
+                            not lpmode_deassert_pending):
+                        self.pending_high_power_mode[lport] = time.monotonic()
+
+                    if (lpmode_deassert_pending and time.monotonic() -
+                           self.pending_high_power_mode[lport] > self.hold_lpmode_tx_ready_time):
+                        del self.pending_high_power_mode[lport]
+                        self.xcvr_power_up(sfp, api, lport)
+                    else:
+                        continue
+                elif xcvr_inserted or admin_changed_up:
+                    self.xcvr_power_up(sfp, api, lport)
 
                 if active_lanes is None:
                     active_lanes = self.get_active_lanes_for_lport(lport, subport_idx,
