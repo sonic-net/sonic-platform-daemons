@@ -3241,7 +3241,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_mapping.logical_to_asic = {'Ethernet0': 1}
         stop_event = threading.Event()
-        task = CmisManagerTask(['asic1'], port_mapping, stop_event, platform_chassis=MagicMock())
+        task = CmisManagerTask(['asic1'], port_mapping, {1: MagicMock()}, stop_event)
         common.is_fast_reboot_enabled.reset_mock()
 
         assert task.is_fast_reboot_enabled_for_lport('Ethernet0') is True
@@ -3252,7 +3252,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_is_fast_reboot_enabled_for_lport_default_namespace(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
         # Ethernet999 not in port_dict -> asic_id -1 -> namespace ''
         with patch.object(common, 'get_namespace_from_asic_id', MagicMock()) as mock_get_ns:
             assert task.is_fast_reboot_enabled_for_lport('Ethernet999') is False
