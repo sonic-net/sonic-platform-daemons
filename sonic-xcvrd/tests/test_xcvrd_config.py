@@ -15,10 +15,12 @@ test_path = os.path.dirname(os.path.abspath(__file__))
 modules_path = os.path.dirname(test_path)
 sys.path.insert(0, modules_path)
 
-from xcvrd.xcvrd_utilities.xcvrd_config import XcvrdConfig, PMON_DAEMON_CONTROL_FILE
+from sonic_py_common.pmon_daemon_config import PMON_DAEMON_CONTROL_FILE
+from xcvrd.xcvrd_utilities.xcvrd_config import XcvrdConfig, MAX_INTERVAL_SECS
 
-# Path patched in _read_platform_section's module so no real device dir is touched.
-PATHS_FN = "xcvrd.xcvrd_utilities.xcvrd_config.device_info.get_paths_to_platform_and_hwsku_dirs"
+# Path patched in _read_platform_section's module so no real device dir is
+# touched. The read lives in the shared base, not in xcvrd's schema module.
+PATHS_FN = "sonic_py_common.pmon_daemon_config.device_info.get_paths_to_platform_and_hwsku_dirs"
 
 
 def write_control_file(directory, payload):
@@ -174,3 +176,59 @@ class TestResolveEndToEnd:
             cfg = XcvrdConfig.resolve()
         assert cfg.dom_temperature_poll_interval is None
         assert cfg.dom_update_interval is None
+
+
+class TestRangeValidation:
+    """Values that coerce cleanly but are not valid configuration are rejected.
+
+    A rejected value keeps the built-in default and logs a warning; it never
+    stops xcvrd from starting.
+    """
+
+    def test_negative_dom_temperature_poll_interval_keeps_default(self):
+        # This is the case the range check exists for: DomThermalInfoUpdateTask
+        # never validated poll_interval, so a negative value left its next-poll
+        # time permanently in the past and the sweep ran back-to-back instead of
+        # once a minute. Default None means the thermal thread is not started.
+        cfg = XcvrdConfig.resolve(platform_section={"dom_temperature_poll_interval": -60})
+        assert cfg.dom_temperature_poll_interval is None
+
+    def test_negative_dom_update_interval_keeps_default(self):
+        # DomInfoUpdateTask already guarded against this one and fell back to its
+        # 60s default; the check now happens once, before the value is handed out.
+        cfg = XcvrdConfig.resolve(platform_section={"dom_update_interval": -1})
+        assert cfg.dom_update_interval is None
+
+    def test_negative_interval_as_string_keeps_default(self):
+        # Validation runs after coercion, so the stringified form is caught too.
+        cfg = XcvrdConfig.resolve(platform_section={"dom_update_interval": "-1"})
+        assert cfg.dom_update_interval is None
+
+    def test_interval_above_maximum_keeps_default(self):
+        cfg = XcvrdConfig.resolve(platform_section={
+            "dom_update_interval": MAX_INTERVAL_SECS + 1})
+        assert cfg.dom_update_interval is None
+
+    def test_interval_boundaries_are_accepted(self):
+        # Bounds are inclusive; 0 stays meaningful (continuous polling).
+        assert XcvrdConfig.resolve(
+            platform_section={"dom_update_interval": 0}).dom_update_interval == 0
+        assert XcvrdConfig.resolve(
+            platform_section={"dom_update_interval": MAX_INTERVAL_SECS}
+        ).dom_update_interval == MAX_INTERVAL_SECS
+
+    def test_both_fields_are_bounded(self):
+        cfg = XcvrdConfig.resolve(platform_section={
+            "dom_temperature_poll_interval": MAX_INTERVAL_SECS + 1,
+            "dom_update_interval": MAX_INTERVAL_SECS + 1,
+        })
+        assert cfg.dom_temperature_poll_interval is None
+        assert cfg.dom_update_interval is None
+
+    def test_one_rejected_field_does_not_drop_the_others(self):
+        cfg = XcvrdConfig.resolve(platform_section={
+            "dom_update_interval": -1,
+            "dom_temperature_poll_interval": 5,
+        })
+        assert cfg.dom_update_interval is None
+        assert cfg.dom_temperature_poll_interval == 5
