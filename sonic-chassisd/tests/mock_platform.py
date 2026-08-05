@@ -73,10 +73,10 @@ class MockModule(MockDevice):
             self.midplane_ip = '192.168.1.{}'.format(self.get_slot())
 
     def module_pre_shutdown(self):
-        pass
+        return self.pci_detach()
 
     def module_post_startup(self):
-        pass
+        return self.pci_reattach()
 
     def set_admin_state_gracefully(self, up):
         """Mock implementation of set_admin_state_gracefully"""
@@ -86,8 +86,24 @@ class MockModule(MockDevice):
         """Mock implementation of clear_module_state_transition"""
         return True
 
+    def set_module_state_transition(self, module_name, transition_type):
+        """Mock implementation of set_module_state_transition"""
+        return True
+
+    def get_module_state_transition(self, module_name):
+        """Mock implementation of get_module_state_transition"""
+        return False
+
     def clear_module_gnoi_halt_in_progress(self):
         """Mock implementation of clear_module_gnoi_halt_in_progress"""
+        return True
+
+    def pci_detach(self):
+        """Mock implementation of pci_detach"""
+        return True
+
+    def pci_reattach(self):
+        """Mock implementation of pci_reattach"""
         return True
 
     def is_midplane_reachable(self):
@@ -225,7 +241,7 @@ class MockSmartSwitchChassis:
 
     def is_smartswitch(self):
         return self._is_smartswitch
- 
+
     def get_dataplane_state(self):
         raise NotImplementedError
 

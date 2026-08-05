@@ -284,8 +284,23 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_obj_dict = sfp_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
         self.dom_db_utils = DOMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
         self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+
+    def initialize_warm_fast_reboot_status(self):
+        warm_fast_reboot_status = {}
+        for namespace in self.namespaces:
+            warm_fast_reboot_status[namespace] = bool(common.is_syncd_warm_restore_complete(namespace) or
+                                                      common.is_fast_reboot_enabled(namespace))
+        return warm_fast_reboot_status
+
+    def is_warm_fast_reboot_for_lport(self, logical_port):
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
+        if asic_index is None:
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_index)
+        return self.warm_fast_reboot_status.get(namespace, False)
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -317,11 +332,6 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        # Pre-fetch warm start status for all namespaces/ASICs
-        warm_start_status = {}
-        for namespace in self.namespaces:
-            warm_start_status[namespace] = common.is_syncd_warm_restore_complete(namespace)
-
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -334,9 +344,9 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored while posting SFP info during boot-up".format(logical_port_name))
                 continue
 
-            # Get warm start status for this ASIC's namespace
+            # Get warm/fast reboot status for this ASIC's namespace
             namespace = common.get_namespace_from_asic_id(asic_index)
-            is_warm_start = warm_start_status.get(namespace, False)
+            is_warm_fast_reboot = self.warm_fast_reboot_status.get(namespace, False)
 
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc == SFP_EEPROM_NOT_READY:
@@ -352,8 +362,9 @@ class SfpStateUpdateTask(threading.Thread):
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_thresholds_cache)
                 # Read the VDM thresholds and post them to the DB
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_thresholds_cache)
-                self.notify_media_setting_on_insert(
-                    logical_port_name, port_mapping.get_asic_id_for_logical_port(logical_port_name))
+                if not self.is_warm_fast_reboot_for_lport(logical_port_name):
+                    self.notify_media_setting_on_insert(
+                        logical_port_name, port_mapping.get_asic_id_for_logical_port(logical_port_name))
 
         return retry_eeprom_set
 
@@ -573,7 +584,8 @@ class SfpStateUpdateTask(threading.Thread):
                                 if rc != SFP_EEPROM_NOT_READY:
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-                                    self.notify_media_setting_on_insert(logical_port, asic_index)
+                                    if not self.is_warm_fast_reboot_for_lport(logical_port):
+                                        self.notify_media_setting_on_insert(logical_port, asic_index)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 # Remove the SFP API object for this physical port
@@ -825,9 +837,10 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                self.notify_media_setting_on_insert(
-                    port_change_event.port_name,
-                    self.port_mapping.get_asic_id_for_logical_port(port_change_event.port_name))
+                if not self.is_warm_fast_reboot_for_lport(port_change_event.port_name):
+                    self.notify_media_setting_on_insert(
+                        port_change_event.port_name,
+                        self.port_mapping.get_asic_id_for_logical_port(port_change_event.port_name))
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         common.update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
@@ -854,7 +867,8 @@ class SfpStateUpdateTask(threading.Thread):
             if rc != SFP_EEPROM_NOT_READY:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
-                self.notify_media_setting_on_insert(logical_port, asic_index)
+                if not self.is_warm_fast_reboot_for_lport(logical_port):
+                    self.notify_media_setting_on_insert(logical_port, asic_index)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
@@ -1062,8 +1076,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
-        if common.is_fast_reboot_enabled():
-            self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
+        if all(common.is_fast_reboot_enabled(ns) for ns in self.namespaces):
+            self.log_notice("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             media_settings_parser.load_media_settings()
             optics_si_parser.load_optics_si_settings()
@@ -1091,10 +1105,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Start daemon deinit...")
 
         # Pre-fetch warm/fast reboot status for all namespaces/ASICs
-        is_fast_reboot = common.is_fast_reboot_enabled()
         warm_fast_reboot_status = {}
         for namespace in self.namespaces:
-            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or is_fast_reboot
+            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
