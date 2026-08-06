@@ -1,9 +1,17 @@
 import contextlib
+import threading
 
 from unittest.mock import MagicMock, patch
 
 from sonic_py_common import device_info
+from xcvrd import xcvrd  # noqa: F401
+from xcvrd.cmis import cmis_manager_task
+from xcvrd.cmis.cmis_manager_task import CmisManagerTask
+from xcvrd.cpo.cpo_manager_task import CpoManagerTask
 from xcvrd.xcvrd_utilities import common
+from xcvrd.xcvrd_utilities.port_event_helper import PortChangeEvent, PortMapping
+
+DEFAULT_NAMESPACE = ['']
 
 
 class TestPortDeviceResolver:
@@ -130,6 +138,21 @@ PLATFORM_DATA = {
     },
 }
 
+# All three interfaces share the very same optical engine
+SINGLE_OE_CPO_DATA = {
+    'devices': {
+        'OE1': {'device_type': 'optical_engine', 'max_banks': 3},
+    },
+    'interfaces': {
+        'Ethernet0': {'associated_devices': [{'device_id': 'OE1', 'bank': 0}]},
+        'Ethernet8': {'associated_devices': [{'device_id': 'OE1', 'bank': 1}]},
+        'Ethernet16': {'associated_devices': [{'device_id': 'OE1', 'bank': 2}]},
+    },
+}
+
+# Logical port to physical port mapping matching PLATFORM_DATA
+CPO_PORTS = (('Ethernet0', 1), ('Ethernet8', 2), ('Ethernet16', 3))
+
 
 @contextlib.contextmanager
 def patched_topology(cpo_data=CPO_DATA, platform_data=PLATFORM_DATA):
@@ -175,4 +198,173 @@ class TestCpoTopology:
         with patched_topology(cpo_data=None):
             assert common.get_oe_sibling_pports(1) == {1}
             assert common.get_elsfp_sibling_pports(1) == {1}
+
+
+class TestCpoManager:
+    def _make_cpo_obj(self, module_type='CPO', tx_disable_ok=True):
+        api = MagicMock()
+        api.get_module_type_abbreviation.return_value = module_type
+        api.tx_disable_channel.return_value = tx_disable_ok
+        cpo = MagicMock()
+        cpo.get_xcvr_api.return_value = api
+        return cpo
+
+    def _make_cpo_manager_task(self, port_obj_dict, *, ports=CPO_PORTS, skip_cpo_mgr=False):
+        port_mapping = PortMapping()
+        for lport, pport in ports:
+            port_mapping.handle_port_change_event(PortChangeEvent(lport, pport, 0, PortChangeEvent.PORT_ADD))
+
+        with patch.object(cmis_manager_task, 'XcvrTableHelper'), \
+             patch.object(common, 'is_fast_reboot_enabled', return_value=False):
+            return CpoManagerTask(DEFAULT_NAMESPACE, port_mapping, port_obj_dict,
+                                  threading.Event(), skip_cpo_mgr=skip_cpo_mgr)
+
+    def test_returns_false_when_lport_is_unknown(self):
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet64') is False
+
+    def test_returns_false_when_physical_port_is_unknown(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling})
+        task.port_dict['Ethernet0'].pop('index')
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+        sibling.get_xcvr_api.assert_not_called()
+
+    def test_port_alone_on_its_optical_engine_is_a_noop(self):
+        # Ethernet16 (physical port 3) is the only interface of OE2
+        objs = {1: self._make_cpo_obj(), 2: self._make_cpo_obj(), 3: self._make_cpo_obj()}
+        task = self._make_cpo_manager_task(objs)
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet16') is True
+        for cpo in objs.values():
+            cpo.get_xcvr_api.return_value.set_datapath_deinit.assert_not_called()
+            cpo.get_xcvr_api.return_value.tx_disable_channel.assert_not_called()
+
+    def test_all_lanes_of_sibling_are_deinitialized(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling, 3: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is True
+
+        sibling_api = sibling.get_xcvr_api.return_value
+        sibling_api.set_datapath_deinit.assert_called_once_with(0xff)
+        sibling_api.tx_disable_channel.assert_called_once_with(0xff, True)
+
+        # The lanes of the physical port of lport itself are left to the superclass CMIS logic,
+        # and physical port 3 belongs to another optical engine
+        for untouched in (cpo, task.port_obj_dict[3]):
+            untouched.get_xcvr_api.return_value.set_datapath_deinit.assert_not_called()
+            untouched.get_xcvr_api.return_value.tx_disable_channel.assert_not_called()
+
+    def test_returns_false_when_sibling_object_is_missing(self):
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+    def test_returns_false_when_sibling_has_no_api(self):
+        sibling = self._make_cpo_obj()
+        sibling.get_xcvr_api.return_value = None
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: sibling})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+    def test_returns_false_when_tx_disable_fails(self):
+        sibling = self._make_cpo_obj(tx_disable_ok=False)
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: sibling})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+        # The datapath was still deinitialized before the Tx output failed to turn off
+        sibling.get_xcvr_api.return_value.set_datapath_deinit.assert_called_once_with(0xff)
+
+    def test_remaining_siblings_are_deinitialized_after_a_failure(self):
+        broken, healthy = self._make_cpo_obj(), self._make_cpo_obj()
+        broken.get_xcvr_api.return_value.set_datapath_deinit.side_effect = Exception('I2C error')
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: broken, 3: healthy})
+
+        with patched_topology(cpo_data=SINGLE_OE_CPO_DATA), \
+             patch.object(common, 'log_exception_traceback') as mock_traceback:
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+        mock_traceback.assert_called_once()
+
+        # The deinit of the broken sibling was attempted and raised, so its Tx output
+        # was never turned off
+        broken_api = broken.get_xcvr_api.return_value
+        broken_api.set_datapath_deinit.assert_called_once_with(0xff)
+        broken_api.tx_disable_channel.assert_not_called()
+
+        healthy_api = healthy.get_xcvr_api.return_value
+        healthy_api.set_datapath_deinit.assert_called_once_with(0xff)
+        healthy_api.tx_disable_channel.assert_called_once_with(0xff, True)
+
+    def test_siblings_are_untouched_outside_low_power(self):
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleReady'
+
+        task = self._make_cpo_manager_task({1: cpo, 2: self._make_cpo_obj()})
+        task.port_dict['Ethernet0']['api'] = api
+        task.deinit_oe_sibling_pports = MagicMock()
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is True
+
+        task.deinit_oe_sibling_pports.assert_not_called()
+        mock_parent.assert_called_once_with(task, 'Ethernet0')
+        assert 'cmis_retries' not in task.port_dict['Ethernet0']
+
+    def test_low_power_deinitializes_siblings_before_delegating(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        api, sibling_api = cpo.get_xcvr_api(), sibling.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling})
+        task.port_dict['Ethernet0']['api'] = api
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is True
+
+        sibling_api.set_datapath_deinit.assert_called_once_with(0xff)
+        sibling_api.tx_disable_channel.assert_called_once_with(0xff, True)
+        mock_parent.assert_called_once_with(task, 'Ethernet0')
+
+    def test_sibling_deinit_failure_retries_without_advancing(self):
+        # No CPO object for sibling physical port 2, so the deinit of the optical engine fails
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo})
+        task.port_dict['Ethernet0']['api'] = api
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is False
+
+        mock_parent.assert_not_called()
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 1
+
+    def test_sibling_deinit_failure_increments_existing_retries(self):
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo})
+        task.port_dict['Ethernet0']['api'] = api
+        task.port_dict['Ethernet0']['cmis_retries'] = 2
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True), \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is False
+
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 3
 
