@@ -1,5 +1,8 @@
+import contextlib
+
 from unittest.mock import MagicMock, patch
 
+from sonic_py_common import device_info
 from xcvrd.xcvrd_utilities import common
 
 
@@ -100,3 +103,76 @@ class TestObjDictAccessors:
              patch.object(common, 'get_port_device', side_effect=mock_get_port_device):
             pluggable = common.get_pluggable_obj_dict(self._make_port_mapping())
         assert set(pluggable.keys()) == {0, 1}
+
+
+# Ethernet0 and Ethernet8 share OE1, while ELS1 is shared by all three interfaces
+CPO_DATA = {
+    'devices': {
+        'OE1': {'device_type': 'optical_engine', 'max_banks': 2},
+        'OE2': {'device_type': 'optical_engine', 'max_banks': 1},
+        'ELS1': {'device_type': 'external_laser_source', 'max_banks': 3, 'lasers': 8},
+    },
+    'interfaces': {
+        'Ethernet0': {'associated_devices': [{'device_id': 'OE1', 'bank': 0},
+                                             {'device_id': 'ELS1', 'bank': 0}]},
+        'Ethernet8': {'associated_devices': [{'device_id': 'OE1', 'bank': 1},
+                                             {'device_id': 'ELS1', 'bank': 1}]},
+        'Ethernet16': {'associated_devices': [{'device_id': 'OE2', 'bank': 0},
+                                              {'device_id': 'ELS1', 'bank': 2}]},
+    },
+}
+
+PLATFORM_DATA = {
+    'interfaces': {
+        'Ethernet0': {'index': '1,1,1,1,1,1,1,1'},
+        'Ethernet8': {'index': '2,2,2,2,2,2,2,2'},
+        'Ethernet16': {'index': '3,3,3,3,3,3,3,3'},
+    },
+}
+
+
+@contextlib.contextmanager
+def patched_topology(cpo_data=CPO_DATA, platform_data=PLATFORM_DATA):
+    """Serve the given platform topology, with the memoized topology cleared."""
+    common._build_cpo_topology.cache_clear()
+    try:
+        with patch.object(device_info, 'get_cpo_data', return_value=cpo_data, create=True) as mock_get_cpo_data, \
+             patch.object(device_info, 'get_platform_json_data', return_value=platform_data):
+            yield mock_get_cpo_data
+    finally:
+        common._build_cpo_topology.cache_clear()
+
+
+class TestCpoTopology:
+    def test_devices_of_pport_are_grouped_per_device(self):
+        with patched_topology():
+            assert common.get_cpo_devices_of_pport(1, common.CPO_DEVICE_TYPE_OE) == {'OE1': {1, 2}}
+            assert common.get_cpo_devices_of_pport(3, common.CPO_DEVICE_TYPE_OE) == {'OE2': {3}}
+            assert common.get_cpo_devices_of_pport(1, common.CPO_DEVICE_TYPE_ELSFP) == {'ELS1': {1, 2, 3}}
+
+            # No device of the requested type, and no device at all
+            assert common.get_cpo_devices_of_pport(1, 'no_such_device_type') == {}
+            assert common.get_cpo_devices_of_pport(99, common.CPO_DEVICE_TYPE_OE) == {}
+
+    def test_sibling_pports_grouped_per_device(self):
+        with patched_topology():
+            # OE1 drives physical ports 1 and 2, OE2 drives physical port 3
+            assert common.get_oe_sibling_pports(1) == {1, 2}
+            assert common.get_oe_sibling_pports(2) == {1, 2}
+            assert common.get_oe_sibling_pports(3) == {3}
+
+            # ELS1 provides the lasers for all three physical ports
+            assert common.get_elsfp_sibling_pports(1) == {1, 2, 3}
+            assert common.get_elsfp_sibling_pports(3) == {1, 2, 3}
+
+    def test_topology_is_memoized(self):
+        with patched_topology() as mock_get_cpo_data:
+            common.get_oe_sibling_pports(1)
+            common.get_elsfp_sibling_pports(1)
+            assert mock_get_cpo_data.call_count == 1
+
+    def test_only_self_returned_without_cpo_data(self):
+        with patched_topology(cpo_data=None):
+            assert common.get_oe_sibling_pports(1) == {1}
+            assert common.get_elsfp_sibling_pports(1) == {1}
+
