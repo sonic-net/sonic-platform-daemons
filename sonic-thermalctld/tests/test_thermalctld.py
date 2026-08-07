@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import threading
@@ -2452,12 +2453,14 @@ class TestThermalMonitorSwitchHostCritical(object):
         with tempfile.NamedTemporaryFile(suffix='.log', delete=False) as f:
             tmp_log = f.name
         try:
-            # Clear the THERMALCTLD_UNIT_TESTING gate so the file handler is
-            # actually attached for this test, then restore on exit.
+            # Clear the THERMALCTLD_UNIT_TESTING gate and pretend Switch-BMC
+            # so the file handler is actually attached; restore on exit.
             prev = os.environ.pop('THERMALCTLD_UNIT_TESTING', None)
             try:
-                tm._sw_host_thermal_event_logger = thermalctld.EventLogger(
-                    'thermalctld-test', log_file=tmp_log)
+                with mock.patch.object(thermalctld.device_info, 'is_switch_bmc',
+                                       return_value=True):
+                    tm._sw_host_thermal_event_logger = thermalctld.EventLogger(
+                        'thermalctld-test', log_file=tmp_log)
             finally:
                 if prev is not None:
                     os.environ['THERMALCTLD_UNIT_TESTING'] = prev
@@ -2478,3 +2481,25 @@ class TestThermalMonitorSwitchHostCritical(object):
             assert '110.0' in contents
         finally:
             os.unlink(tmp_log)
+
+    def test_event_logger_skips_file_tee_when_not_switch_bmc(self):
+        """Non-Switch-BMC must not attach FileHandler or log open failures."""
+        # Path whose parent does not exist so FileHandler would fail without the guard.
+        missing_log = '/tmp/thermalctld-no-such-dir/event.log'
+        logger_name = 'thermalctld-non-bmc-test.event_log'
+        logging.getLogger(logger_name).handlers.clear()
+
+        prev = os.environ.pop('THERMALCTLD_UNIT_TESTING', None)
+        try:
+            with mock.patch.object(thermalctld.device_info, 'is_switch_bmc',
+                                   return_value=False), \
+                 mock.patch.object(thermalctld.EventLogger, 'log_error') as mock_log_error:
+                event_logger = thermalctld.EventLogger(
+                    'thermalctld-non-bmc-test', log_file=missing_log)
+
+            assert event_logger._file_logger.handlers == []
+            mock_log_error.assert_not_called()
+        finally:
+            if prev is not None:
+                os.environ['THERMALCTLD_UNIT_TESTING'] = prev
+            logging.getLogger(logger_name).handlers.clear()
