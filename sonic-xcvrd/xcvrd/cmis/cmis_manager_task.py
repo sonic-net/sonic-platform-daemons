@@ -94,7 +94,11 @@ class CmisManagerTask(threading.Thread):
         return self.fast_reboot_status.get(namespace, False)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
-        status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))
+        # get_asic_id() reports -1 for a port that is no longer tracked, which is not a
+        # valid key for the per-ASIC tables, so resolve it before indexing rather than
+        # letting the lookup raise out of this thread and terminate the daemon.
+        asic_id = self.get_asic_id(lport)
+        status_table = self.xcvr_table_helper.get_status_sw_tbl(asic_id) if asic_id >= 0 else None
         if status_table is None:
             helper_logger.log_error("status_table is None while updating "
                                     "sw CMIS state for lport {}".format(lport))
@@ -137,6 +141,9 @@ class CmisManagerTask(threading.Thread):
             if lport not in self.port_dict:
                 self.port_dict[lport] = {"asic_id": port_change_event.asic_id,
                                          "forced_tx_disabled": False}
+            # Always record a physical index, even when it is still unknown, so that
+            # the consumers indexing into port_dict do not have to handle its absence.
+            self.port_dict[lport].setdefault('index', -1)
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
@@ -1263,8 +1270,41 @@ class CmisManagerTask(threading.Thread):
             common.log_exception_traceback()
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
+    def is_port_config_complete(self, info):
+        """
+        Check whether a port has all the configuration the CMIS state machine needs.
+
+        Args:
+            info:
+                Dictionary, the port_dict entry of a logical port
+
+        Returns:
+            Boolean, true if the physical index, speed, lanes and subport are all
+            present and valid.
+        """
+        try:
+            pport = int(info.get('index', "-1"))
+            speed = int(info.get('speed', "0"))
+            subport = int(info.get('subport', 0))
+        except (TypeError, ValueError):
+            return False
+
+        lanes = info.get('lanes', "").strip()
+        return pport >= 0 and speed != 0 and len(lanes) >= 1 and subport >= 0
+
     def process_single_lport(self, lport, info):
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
+        if state == CMIS_STATE_UNKNOWN and self.is_port_config_complete(info):
+            # A port only enters the state machine once a PORT_SET event assigns it an
+            # initial CMIS state. When that event is missed, for instance because the
+            # port was created by a dynamic port breakout after the port map was built,
+            # the port keeps an empty CMIS state. Since an empty state reads back as
+            # UNKNOWN, and UNKNOWN is skipped below, the port would stay unmanaged until
+            # xcvrd is restarted. Bootstrap the state machine instead.
+            self.log_notice("{}: no CMIS state found, starting the CMIS state machine".format(lport))
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_INSERTED)
+            state = CMIS_STATE_INSERTED
+
         if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
             if state != CMIS_STATE_READY:
                 self.port_dict[lport]['appl'] = 0
@@ -1283,7 +1323,7 @@ class CmisManagerTask(threading.Thread):
         speed = int(info.get('speed', "0"))
         lanes = info.get('lanes', "").strip()
         subport = info.get('subport', 0)
-        if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
+        if not self.is_port_config_complete(info):
             return
 
         if pport not in self.port_obj_dict:
