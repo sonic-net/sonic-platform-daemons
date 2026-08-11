@@ -13,7 +13,7 @@ try:
     import threading
     from dataclasses import dataclass
     from types import MappingProxyType
-    from typing import Any, Callable, Dict, FrozenSet, Mapping
+    from typing import Any, Callable, Dict, FrozenSet, Mapping, Set
     from swsscommon import swsscommon
     from sonic_py_common import syslogger, daemon_base, device_info, multi_asic
     from . import sfp_status_helper
@@ -207,10 +207,24 @@ def _build_cpo_topology() -> CpoTopology:
     Returns:
         CpoTopology: The platform topology, empty if cpo.json is not available.
     """
+    def freeze_topology(pports_by_device: Dict[str, Dict[str, Set[int]]],
+                        devices_by_pport: Dict[int, Set[str]]) -> CpoTopology:
+        """Convert the mutable topology accumulators into an immutable CpoTopology."""
+        frozen_pports_by_device = {}
+        for device_type, devices_of_type in pports_by_device.items():
+            frozen_devices_of_type = {device_id: frozenset(pports)
+                                      for device_id, pports in devices_of_type.items()}
+            frozen_pports_by_device[device_type] = MappingProxyType(frozen_devices_of_type)
+
+        frozen_devices_by_pport = {pport: frozenset(device_ids)
+                                   for pport, device_ids in devices_by_pport.items()}
+        return CpoTopology(MappingProxyType(frozen_pports_by_device),
+                           MappingProxyType(frozen_devices_by_pport))
+
     cpo_data = device_info.get_cpo_data()
     if not cpo_data:
         helper_logger.log_notice("CPO TOPOLOGY: no cpo.json data available")
-        return CpoTopology(MappingProxyType({}), MappingProxyType({}))
+        return freeze_topology({}, {})
 
     pports_by_device = {}
     devices_by_pport = {}
@@ -227,13 +241,7 @@ def _build_cpo_topology() -> CpoTopology:
             pports.setdefault(device_id, set()).add(pport)
             devices_by_pport.setdefault(pport, set()).add(device_id)
 
-    return CpoTopology(
-        pports_by_device=MappingProxyType({
-            device_type: MappingProxyType({device_id: frozenset(pports)
-                                           for device_id, pports in devices_of_type.items()})
-            for device_type, devices_of_type in pports_by_device.items()}),
-        devices_by_pport=MappingProxyType({pport: frozenset(device_ids)
-                                           for pport, device_ids in devices_by_pport.items()}))
+    return freeze_topology(pports_by_device, devices_by_pport)
 
 def get_cpo_devices_of_pport(physical_port: int, device_type: str) -> Dict[str, FrozenSet[int]]:
     """
