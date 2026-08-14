@@ -456,6 +456,14 @@ class TestCriticalEventChecker:
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_system_leak() is False
 
+    def test_mixed_case_critical_system_leak(self, critical_event_checker):
+        """A mixed-case 'Critical' leak is recognised by the power-on gate."""
+        tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
+        _set_table_entry(tbl, bmcctld.SYSTEM_LEAK_STATUS_KEY,
+                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: "Critical"})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_critical_system_leak() is True
+
     def test_has_critical_rack_mgr_alert(self, critical_event_checker):
         tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
         _set_table_entry(tbl, "Inlet_liquid_temperature",
@@ -475,6 +483,14 @@ class TestCriticalEventChecker:
         tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
         _set_table_entry(tbl, "Rack_level_leak",
                          {bmcctld.FIELD_LEAK: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_critical_rack_mgr_alert() is True
+
+    def test_mixed_case_critical_rack_mgr_alert(self, critical_event_checker):
+        """A mixed-case 'Critical' alert severity is recognised by the power-on gate."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_temperature",
+                         {bmcctld.FIELD_SEVERITY: "Critical"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_rack_mgr_alert() is True
 
@@ -585,9 +601,15 @@ class TestBmcEventHandlerRackMgrCommands:
         assert event_handler.action_queue.empty()
 
     def test_power_cycle_command_enqueues_power_cycle(self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         event_handler._handle_rack_mgr_command("CMD_4", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_CYCLE
+
+    def test_power_cycle_command_blocked_by_critical_leak(self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler._handle_rack_mgr_command("CMD_4b", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
+        assert event_handler.action_queue.empty()
 
     def test_already_processed_command_is_skipped(self, event_handler):
         event_handler._handle_rack_mgr_command(

@@ -651,7 +651,13 @@ class CriticalEventChecker(logger.Logger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
+            # Normalise to upper-case ASCII to match the ingest handler: producers
+            # may report the leak status in mixed case (Critical/Minor), but the
+            # STATE_DB schema and its consumers compare against upper-case
+            # constants. Normalise here so a mixed-case "Critical" leak is not
+            # silently missed by the power-on gate.
+            leak_status = str(fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS, "")).upper()
+            if leak_status == SYSTEM_LEAK_CRITICAL:
                 return True
         return False
 
@@ -662,8 +668,12 @@ class CriticalEventChecker(logger.Logger):
             result = tbl.get(alert_key)
             if result and result[0]:
                 d = fvs_to_dict(result[1])
-                # severity field for temperature/flow/pressure; leak field for rack-level leak
-                severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+                # severity field for temperature/flow/pressure; leak field for rack-level leak.
+                # Normalise to upper-case ASCII to match the ingest handler: redfish
+                # clients may send the severity in mixed case (Critical), but consumers
+                # compare against upper-case constants. Normalise here so a mixed-case
+                # "Critical" alert is not silently missed by the power-on gate.
+                severity = str(d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)).upper()
                 if severity == ALERT_SEVERITY_CRITICAL:
                     return True
         return False
@@ -920,7 +930,9 @@ class BmcEventHandler(EventLogger):
         self.log_notice("Rack Manager command: key={} command={}".format(key, command))
         self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
 
-        if command == CMD_POWER_ON:
+        if command in (CMD_POWER_ON, CMD_POWER_CYCLE):
+            # Both POWER_ON and POWER_CYCLE leave the Switch-Host ONLINE, so both
+            # must be blocked while a critical leak/alert is active.
             if self.critical_event_checker.has_any_critical_event():
                 self._event_log.log_warning(
                     "RACK_MGR_CMD FAILED: key={} command={} reason=CRITICAL_LEAK_PRESENT "
@@ -928,7 +940,7 @@ class BmcEventHandler(EventLogger):
                 self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
                 return
 
-        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
+        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT):
             self._event_log.log_warning(
                 "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
             self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
