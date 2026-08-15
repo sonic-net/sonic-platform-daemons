@@ -6257,15 +6257,20 @@ class TestXcvrdScript(object):
         assert not _wrapper_get_sfp_type(1)
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    def test_wrapper_get_sfp_error_description(self, mock_chassis):
+    def test_get_port_error_description(self, mock_chassis):
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+
         mock_object = MagicMock()
         mock_object.get_error_description = MagicMock(return_value='N/A')
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
-        from xcvrd.xcvrd import _wrapper_get_sfp_error_description
-        assert _wrapper_get_sfp_error_description(1) == 'N/A'
+        assert task._get_port_error_description(1) == 'N/A'
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
-        assert not _wrapper_get_sfp_error_description(1)
+        assert not task._get_port_error_description(1)
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory(self, mock_chassis):
