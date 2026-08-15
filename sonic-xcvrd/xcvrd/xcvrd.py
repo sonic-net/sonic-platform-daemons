@@ -166,14 +166,6 @@ def _wrapper_get_sfp_type(physical_port):
     return None
 
 
-def _wrapper_get_sfp_error_description(physical_port):
-    if platform_chassis:
-        try:
-            return platform_chassis.get_sfp(physical_port).get_error_description()
-        except NotImplementedError:
-            pass
-    return None
-
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
     time_diff = time_now - time_start
@@ -248,6 +240,14 @@ class SfpStateUpdateTask(threading.Thread):
 
         helper_logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
         return event
+
+    def _get_port_error_description(self, physical_port):
+        if platform_chassis:
+            try:
+                return platform_chassis.get_sfp(physical_port).get_error_description()
+            except NotImplementedError:
+                pass
+        return None
 
     # Update port sfp info in db
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,
@@ -629,7 +629,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         if error_dict:
                                             vendor_specific_error_description = error_dict.get(key)
                                         else:
-                                            vendor_specific_error_description = _wrapper_get_sfp_error_description(key)
+                                            vendor_specific_error_description = self._get_port_error_description(key)
                                         error_descriptions.append(vendor_specific_error_description)
 
                                     # Add error info to database
@@ -821,7 +821,7 @@ class SfpStateUpdateTask(threading.Thread):
                 if error_dict:
                     vendor_specific_error_description = error_dict.get(port_change_event.port_index)
                 else:
-                    vendor_specific_error_description = _wrapper_get_sfp_error_description(port_change_event.port_index)
+                    vendor_specific_error_description = self._get_port_error_description(port_change_event.port_index)
                 error_descriptions.append(vendor_specific_error_description)
 
             error_description = '|'.join(error_descriptions)
