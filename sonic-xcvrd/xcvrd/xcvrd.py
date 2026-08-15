@@ -174,79 +174,6 @@ def _wrapper_get_sfp_error_description(physical_port):
             pass
     return None
 
-# Update port sfp info in db
-
-
-def post_port_sfp_info_to_db(logical_port_name, port_mapping, table, transceiver_dict,
-                             stop_event=threading.Event()):
-    ganged_port = False
-    ganged_member_num = 1
-
-    physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
-    if physical_port_list is None:
-        helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
-        return PHYSICAL_PORT_NOT_EXIST
-
-    if len(physical_port_list) > 1:
-        ganged_port = True
-
-    for physical_port in physical_port_list:
-        if stop_event.is_set():
-            break
-
-        if not common._wrapper_get_presence(physical_port):
-            helper_logger.log_notice("Transceiver not present in port {}".format(logical_port_name))
-            continue
-
-        port_name = common.get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
-        ganged_member_num += 1
-
-        try:
-            if physical_port in transceiver_dict:
-                port_info_dict = transceiver_dict[physical_port]
-            else:
-                port_info_dict = _wrapper_get_transceiver_info(physical_port)
-                transceiver_dict[physical_port] = port_info_dict
-            if port_info_dict is not None:
-                is_replaceable = _wrapper_is_replaceable(physical_port)
-                # if cmis is supported by the module
-                if 'cmis_rev' in port_info_dict:
-                    fvs = swsscommon.FieldValuePairs(
-                        [(field, str(value)) for field, value in port_info_dict.items()] +
-                        [('is_replaceable', str(is_replaceable))]
-                    )
-                # else cmis is not supported by the module
-                else:
-                    fvs = swsscommon.FieldValuePairs([
-                        ('type', port_info_dict['type']),
-                        ('vendor_rev', port_info_dict['vendor_rev']),
-                        ('serial', port_info_dict['serial']),
-                        ('manufacturer', port_info_dict['manufacturer']),
-                        ('model', port_info_dict['model']),
-                        ('vendor_oui', port_info_dict['vendor_oui']),
-                        ('vendor_date', port_info_dict['vendor_date']),
-                        ('connector', port_info_dict['connector']),
-                        ('encoding', port_info_dict['encoding']),
-                        ('ext_identifier', port_info_dict['ext_identifier']),
-                        ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
-                        ('cable_type', port_info_dict['cable_type']),
-                        ('cable_length', str(port_info_dict['cable_length'])),
-                        ('specification_compliance', port_info_dict['specification_compliance']),
-                        ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
-                        ('application_advertisement', port_info_dict['application_advertisement']
-                        if 'application_advertisement' in port_info_dict else 'N/A'),
-                        ('is_replaceable', str(is_replaceable)),
-                        ('dom_capability', port_info_dict['dom_capability']
-                        if 'dom_capability' in port_info_dict else 'N/A')
-                    ])
-                table.set(port_name, fvs)
-            else:
-                return SFP_EEPROM_NOT_READY
-
-        except NotImplementedError:
-            helper_logger.log_error("This functionality is currently not implemented for this platform")
-            sys.exit(NOT_IMPLEMENTED_ERROR)
-
 def waiting_time_compensation_with_sleep(time_start, time_to_wait):
     time_now = time.time()
     time_diff = time_now - time_start
@@ -322,6 +249,77 @@ class SfpStateUpdateTask(threading.Thread):
         helper_logger.log_debug("mapping from {} {} to {}".format(status, port_dict, event))
         return event
 
+    # Update port sfp info in db
+    def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,
+                             stop_event=threading.Event()):
+        ganged_port = False
+        ganged_member_num = 1
+
+        physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
+        if physical_port_list is None:
+            helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
+            return PHYSICAL_PORT_NOT_EXIST
+
+        if len(physical_port_list) > 1:
+            ganged_port = True
+
+        for physical_port in physical_port_list:
+            if stop_event.is_set():
+                break
+
+            if not common._wrapper_get_presence(physical_port):
+                helper_logger.log_notice("Transceiver not present in port {}".format(logical_port_name))
+                continue
+
+            port_name = common.get_physical_port_name(logical_port_name, ganged_member_num, ganged_port)
+            ganged_member_num += 1
+
+            try:
+                if physical_port in transceiver_dict:
+                    port_info_dict = transceiver_dict[physical_port]
+                else:
+                    port_info_dict = _wrapper_get_transceiver_info(physical_port)
+                    transceiver_dict[physical_port] = port_info_dict
+                if port_info_dict is not None:
+                    is_replaceable = _wrapper_is_replaceable(physical_port)
+                    # if cmis is supported by the module
+                    if 'cmis_rev' in port_info_dict:
+                        fvs = swsscommon.FieldValuePairs(
+                            [(field, str(value)) for field, value in port_info_dict.items()] +
+                            [('is_replaceable', str(is_replaceable))]
+                        )
+                    # else cmis is not supported by the module
+                    else:
+                        fvs = swsscommon.FieldValuePairs([
+                            ('type', port_info_dict['type']),
+                            ('vendor_rev', port_info_dict['vendor_rev']),
+                            ('serial', port_info_dict['serial']),
+                            ('manufacturer', port_info_dict['manufacturer']),
+                            ('model', port_info_dict['model']),
+                            ('vendor_oui', port_info_dict['vendor_oui']),
+                            ('vendor_date', port_info_dict['vendor_date']),
+                            ('connector', port_info_dict['connector']),
+                            ('encoding', port_info_dict['encoding']),
+                            ('ext_identifier', port_info_dict['ext_identifier']),
+                            ('ext_rateselect_compliance', port_info_dict['ext_rateselect_compliance']),
+                            ('cable_type', port_info_dict['cable_type']),
+                            ('cable_length', str(port_info_dict['cable_length'])),
+                            ('specification_compliance', port_info_dict['specification_compliance']),
+                            ('nominal_bit_rate', str(port_info_dict['nominal_bit_rate'])),
+                            ('application_advertisement', port_info_dict['application_advertisement']
+                            if 'application_advertisement' in port_info_dict else 'N/A'),
+                            ('is_replaceable', str(is_replaceable)),
+                            ('dom_capability', port_info_dict['dom_capability']
+                            if 'dom_capability' in port_info_dict else 'N/A')
+                        ])
+                    table.set(port_name, fvs)
+                else:
+                    return SFP_EEPROM_NOT_READY
+
+            except NotImplementedError:
+                helper_logger.log_error("This functionality is currently not implemented for this platform")
+                sys.exit(NOT_IMPLEMENTED_ERROR)
+
     # Update port sfp info and dom threshold in db during xcvrd bootup
     def _post_port_sfp_info_and_dom_thr_to_db_once(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
         # Connect to STATE_DB and create transceiver dom/sfp info tables
@@ -344,7 +342,7 @@ class SfpStateUpdateTask(threading.Thread):
             namespace = common.get_namespace_from_asic_id(asic_index)
             is_warm_fast_reboot = self.warm_fast_reboot_status.get(namespace, False)
 
-            rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
+            rc = self.post_port_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
                 if is_warm_fast_reboot == False:
                     media_settings_parser.notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
@@ -567,12 +565,12 @@ class SfpStateUpdateTask(threading.Thread):
                                 common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
                                 helper_logger.log_notice("{}: received plug in and update port sfp status table.".format(logical_port))
-                                rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
+                                rc = self.post_port_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
                                 # If we didn't get the sfp info, assuming the eeprom is not ready, give a try again.
                                 if rc == SFP_EEPROM_NOT_READY:
                                     helper_logger.log_warning("{}: SFP EEPROM is not ready. One more try...".format(logical_port))
                                     time.sleep(TIME_FOR_SFP_READY_SECS)
-                                    rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
+                                    rc = self.post_port_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
                                     if rc == SFP_EEPROM_NOT_READY:
                                         # If still failed to read EEPROM, put it to retry set
                                         self.retry_eeprom_set.add(logical_port)
@@ -835,7 +833,7 @@ class SfpStateUpdateTask(threading.Thread):
         if common._wrapper_get_presence(port_change_event.port_index) and read_eeprom:
             transceiver_dict = {}
             status = sfp_status_helper.SFP_STATUS_INSERTED if not status else status
-            rc = post_port_sfp_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
+            rc = self.post_port_info_to_db(port_change_event.port_name, self.port_mapping, int_tbl, transceiver_dict)
             if rc == SFP_EEPROM_NOT_READY:
                 # Failed to read EEPROM, put it to retry set
                 self.retry_eeprom_set.add(port_change_event.port_name)
@@ -866,7 +864,7 @@ class SfpStateUpdateTask(threading.Thread):
         retry_success_set = set()
         for logical_port in self.retry_eeprom_set:
             asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
-            rc = post_port_sfp_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
+            rc = self.post_port_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
             if rc != SFP_EEPROM_NOT_READY:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
