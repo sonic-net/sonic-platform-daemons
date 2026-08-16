@@ -610,6 +610,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.leaking_sensors: Dict[str, datetime] = {}
         self.faulty_sensors: Dict[str, datetime] = {}
         self.critical_sensors: set = set()
+        # Sensors whose CRITICAL was restored across a restart; latched CRITICAL while
+        # still leaking so a lower live severity does not transiently downgrade them.
+        self.latched_critical_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
@@ -636,6 +639,63 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('device_leak_status', 'None'),
                 ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
             ]))
+
+        # Rebuild in-memory leak tracking so an ongoing leak survives a restart.
+        self._restore_state_from_db()
+
+    @staticmethod
+    def _row_to_dict(row):
+        """Normalise a Table.get() result to a field dict (or None).
+
+        Real swsscommon returns (found, fvs); the unit-test mock returns a plain dict.
+        """
+        if not row:
+            return None
+        if isinstance(row, dict):
+            return dict(row)
+        found, fvs = row[0], row[1]
+        return dict(fvs) if found else None
+
+    def _restore_state_from_db(self):
+        """Rebuild in-memory leak-tracking state from STATE_DB after a restart.
+
+        The escalation clock (leaking_sensors), critical set and last_leak_status live
+        only in memory; a restart would otherwise reset the MINOR timer and downgrade a
+        CRITICAL back to MINOR, transiently unblocking power-on gating. For each sensor
+        still recorded as leaking: seed the escalation clock from its recorded timestamp
+        (a MINOR sensor resumes its countdown) and latch a recorded CRITICAL so it stays
+        CRITICAL while leaking. A physical no-leak on the next refresh still clears it.
+        """
+        existing = self._row_to_dict(self.system_table.get('system'))
+        if existing:
+            try:
+                self.last_leak_status = LeakSeverity(existing.get('device_leak_status'))
+            except ValueError:
+                self.last_leak_status = None
+
+        for sensor_name in self.sensor_table.getKeys():
+            fields = self._row_to_dict(self.sensor_table.get(sensor_name))
+            if not fields or fields.get('leaking') != 'Yes':
+                continue
+            # Resume the escalation countdown from the recorded leak timestamp.
+            try:
+                leak_start = datetime.strptime(fields.get('timestamp', ''), '%Y%m%d %H:%M:%S')
+            except (TypeError, ValueError):
+                leak_start = datetime.now()
+            self.leaking_sensors[sensor_name] = leak_start
+            if fields.get('leak_severity') == LeakSeverity.CRITICAL.value:
+                self.critical_sensors.add(sensor_name)
+                self.latched_critical_sensors.add(sensor_name)
+            # Seed write-dedup so an unchanged row is not rewritten on first refresh.
+            self.last_sensor_fvs[sensor_name] = (
+                ('name', fields.get('name', sensor_name)),
+                ('leaking', fields.get('leaking', '')),
+                ('leak_status', fields.get('leak_status', '')),
+                ('leak_sensor_status', fields.get('leak_sensor_status', '')),
+                ('type', fields.get('type', '')),
+                ('location', fields.get('location', '')),
+                ('leak_severity', fields.get('leak_severity', '')),
+            )
 
     def __del__(self):
         try:
@@ -692,6 +752,11 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                                 sensor_leak_severity = LeakSeverity.CRITICAL
                                 escalated_to_critical = True
 
+                    # Latch a CRITICAL restored across a restart: keep it CRITICAL while
+                    # the sensor is still leaking, even if the platform now reports lower.
+                    if sensor_name in self.latched_critical_sensors:
+                        sensor_leak_severity = LeakSeverity.CRITICAL
+
                     # If the platform downgrades a CRITICAL sensor (and our time-based
                     # escalation didn't immediately re-bump it), prune it from
                     # critical_sensors so a subsequent re-CRITICAL is logged once.
@@ -724,6 +789,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 else:
                     if sensor_name in self.leaking_sensors:
                         del self.leaking_sensors[sensor_name]
+                        self.latched_critical_sensors.discard(sensor_name)
                         if sensor_name in self.critical_sensors:
                             self.critical_sensors.discard(sensor_name)
                             self.event_logger.log_notice(
