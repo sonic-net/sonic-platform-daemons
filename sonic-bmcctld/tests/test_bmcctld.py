@@ -620,6 +620,30 @@ class TestBmcEventHandlerRackMgrCommands:
         event_handler._handle_rack_mgr_command("CMD_6", self._cmd_fvs("INVALID_CMD"))
         assert event_handler.action_queue.empty()
 
+    def test_on_complete_success_deletes_command_entry(self, event_handler):
+        """On success the RACK_MANAGER_COMMAND entry is deleted (table stays bounded)."""
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_ON))
+            item = event_handler.action_queue.get_nowait()
+            item.on_complete(True)
+            assert tbl.get("CMD_1")[0] is False
+
+    def test_on_complete_failure_marks_failed(self, event_handler):
+        """On failure the entry is retained with FAILED/ERROR for debugging."""
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_ON))
+            item = event_handler.action_queue.get_nowait()
+            item.on_complete(False)
+            found, fvs = tbl.get("CMD_1")
+            assert found is True
+            entry = dict(fvs)
+            assert entry[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_FAILED
+            assert entry[bmcctld.FIELD_RESULT] == "ERROR"
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - Chassis module admin state
@@ -1198,86 +1222,69 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_off.assert_called_once()
 
     def test_rack_mgr_power_off_during_boot_delay_skips_auto_power_on(self, chassis):
-        """If Rack Manager POWER_OFF cmd executed during boot delay, automatic power-on is skipped."""
+        """A Rack Manager POWER_OFF executed during the boot delay sets the in-memory
+        marker so the subsequent automatic power-on is skipped (host left OFFLINE)."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+
+        def fake_power_off():
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+            return True
+        daemon.controller.power_off = MagicMock(side_effect=fake_power_off)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Rack Manager POWER_OFF arrives during the boot delay.
+        daemon.action_queue.put(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_OFF"))
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
+        # Host ended OFFLINE, but the marker must suppress the automatic power-on.
+        assert daemon._rack_mgr_power_cmd_during_boot is True
+        daemon.controller.power_on.assert_not_called()
+
+    def test_no_rack_mgr_cmd_during_boot_allows_auto_power_on(self, chassis):
+        """Without a Rack Manager power directive during the boot delay, an OFFLINE host
+        is powered on automatically."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
-        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
-        daemon.controller.power_on.assert_not_called()
+        assert daemon._rack_mgr_power_cmd_during_boot is False
+        daemon.controller.power_on.assert_called_once()
 
-    def test_rack_mgr_power_on_during_boot_delay_skips_auto_power_on(self, chassis):
-        """If Rack Manager POWER_ON cmd executed during boot delay, automatic power-on is skipped."""
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+    def test_rack_mgr_power_action_sets_boot_marker(self, chassis):
+        """_execute_action_item sets the boot marker for a Rack-Manager-originated
+        power directive."""
         daemon = self._make_daemon(chassis)
-        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
-        daemon.controller.power_on = MagicMock(return_value=True)
-        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
-        daemon._initial_power_on_sequence()
-        daemon.controller.power_on.assert_not_called()
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller.power_off = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_OFF"))
+        assert daemon._rack_mgr_power_cmd_during_boot is True
 
-    def test_rack_mgr_power_cmd_executed_detects_done_power_off(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when POWER_OFF is DONE in RACK_MANAGER_COMMAND."""
+    def test_non_rack_mgr_power_action_does_not_set_boot_marker(self, chassis):
+        """A non-Rack-Manager power action (e.g. CLI admin-down) does not set the marker."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "CHASSIS_MODULE:ADMIN_DOWN"))
+        assert daemon._rack_mgr_power_cmd_during_boot is False
 
-    def test_rack_mgr_power_cmd_executed_detects_in_progress_power_on(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when POWER_ON is IN_PROGRESS."""
+    def test_rack_mgr_power_cycle_does_not_set_boot_marker(self, chassis):
+        """A Rack Manager POWER_CYCLE does not set the marker (leaves host ONLINE)."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_ON),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_IN_PROGRESS),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
-
-    def test_rack_mgr_power_cmd_executed_ignores_power_cycle(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False for POWER_CYCLE (not POWER_ON/OFF/GRACEFUL_SHUT)."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_CYCLE),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
-
-    def test_rack_mgr_power_cmd_executed_detects_graceful_shut(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when GRACEFUL_SHUT is DONE."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_GRACEFUL_SHUT),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
-
-    def test_rack_mgr_power_cmd_executed_ignores_pending(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False when command is still PENDING."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_PENDING),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
-
-    def test_rack_mgr_power_cmd_executed_empty_table(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False when no commands exist."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller.power_cycle = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_CYCLE, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_CYCLE"))
+        assert daemon._rack_mgr_power_cmd_during_boot is False
 
     def test_cold_boot_applies_power_on_delay(self, chassis):
         """On a FULL POWER LOSS (cold boot), SWITCH_HOST_POWER_ON_DELAY must be applied."""

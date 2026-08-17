@@ -229,6 +229,9 @@ ACTION_POWER_OFF = "power_off"
 ACTION_POWER_ON = "power_on"
 ACTION_POWER_CYCLE = "power_cycle"
 
+# Prefix for ActionItem.event_desc of Rack-Manager-originated commands.
+RACK_MGR_CMD_EVENT_PREFIX = "RACK_MGR_CMD:"
+
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
 DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION = ACTION_POWER_OFF
@@ -954,12 +957,16 @@ class BmcEventHandler(EventLogger):
         }
 
         def on_complete(success, cmd_key=key, cmd=command):
-            self._set_cmd_status(cmd_key,
-                                 CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
-                                 "SUCCESS" if success else "ERROR")
+            # Delete entries in the RACK_MGR_CMD table whose state is SUCCESS to keep the table bounded.
+            # A CMD that fails is not deleted from the RACK_MGR_CMD table, to help with debugging.
+            if success:
+                self._delete_cmd_entry(cmd_key)
+            else:
+                self._set_cmd_status(cmd_key, CMD_STATUS_FAILED, "ERROR")
 
+        # Add the RACK_MGR_CMD_EVENT_PREFIX only for rack manager commands, to identify them.
         self.action_queue.put(ActionItem(action_map[command],
-                                         "RACK_MGR_CMD:{}".format(command),
+                                         "{}{}".format(RACK_MGR_CMD_EVENT_PREFIX, command),
                                          on_complete))
 
     def _handle_chassis_module(self, key, fvs):
@@ -1085,6 +1092,11 @@ class BmcEventHandler(EventLogger):
         ])
         tbl.set(cmd_id, fvs)
 
+    def _delete_cmd_entry(self, cmd_id):
+        """Remove a completed RACK_MANAGER_COMMAND entry to keep the table bounded."""
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+        tbl._del(cmd_id)
+
 
 # ============================================================
 # BmcctldDaemon
@@ -1121,6 +1133,10 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self.critical_event_checker = CriticalEventChecker(self.policy_reader)
         self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
         self.action_queue = queue.Queue()
+
+        # This flag is used to indicate if there was a Rack Manager power CMD during the initial boot delay.
+        self._rack_mgr_power_cmd_during_boot = False
+
         self.event_handler = BmcEventHandler(
             self.action_queue,
             self.policy_reader,
@@ -1156,25 +1172,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}'; ignoring".format(
                 SIGNALS_TO_NAMES_DICT.get(sig, sig)))
-
-    def _rack_mgr_power_cmd_executed(self):
-        """
-        Return True if any RACK_MANAGER_COMMAND entry for POWER_ON or POWER_OFF
-        has status IN_PROGRESS or DONE — indicating the Rack Manager issued an
-        explicit power directive during the boot delay.
-        """
-        tbl = swsscommon.Table(self.event_handler.state_db, RACK_MANAGER_COMMAND_TABLE)
-        for key in tbl.getKeys():
-            result = tbl.get(key)
-            if not (result and result[0]):
-                continue
-            entry = fvs_to_dict(result[1])
-            command = entry.get(FIELD_COMMAND, "")
-            status = entry.get(FIELD_STATUS, "")
-            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
-               status in (CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
-                return True
-        return False
 
     def _initial_power_on_sequence(self):
         """
@@ -1246,12 +1243,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             except queue.Empty:
                 continue
 
-        # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
-        # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
-        # table for any entry whose command is POWER_ON/POWER_OFF and whose status
-        # is IN_PROGRESS or DONE (set by the event handler and on_complete callback).
-        if self._rack_mgr_power_cmd_executed():
-            self.log_notice("STARTUP: Rack Manager POWER_ON/POWER_OFF command executed "
+        # A Rack Manager power CMD came in during the boot delay; honour it and skip the automatic power-on.
+        if self._rack_mgr_power_cmd_during_boot:
+            self.log_notice("STARTUP: Rack Manager power directive executed "
                                        "during boot delay; skipping automatic power-on")
             return
 
@@ -1312,6 +1306,12 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             return
         self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' "
                                    "success={}".format(item.action, item.event_desc, success))
+
+        # Mark Rack Manager power CMD for the boot-delay skip check.
+        if item.event_desc.startswith(RACK_MGR_CMD_EVENT_PREFIX) and item.action in (
+                ACTION_POWER_ON, ACTION_POWER_OFF, ACTION_GRACEFUL_SHUTDOWN):
+            self._rack_mgr_power_cmd_during_boot = True
+
         if item.on_complete:
             item.on_complete(success)
 
