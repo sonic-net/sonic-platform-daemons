@@ -620,15 +620,21 @@ class TestBmcEventHandlerRackMgrCommands:
         event_handler._handle_rack_mgr_command("CMD_6", self._cmd_fvs("INVALID_CMD"))
         assert event_handler.action_queue.empty()
 
-    def test_on_complete_success_deletes_command_entry(self, event_handler):
-        """On success the RACK_MANAGER_COMMAND entry is deleted (table stays bounded)."""
+    def test_on_complete_success_marks_done(self, event_handler):
+        """On success the RACK_MANAGER_COMMAND entry is marked DONE and recorded in
+        the bounded FIFO for later trimming."""
         event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_ON))
             item = event_handler.action_queue.get_nowait()
             item.on_complete(True)
-            assert tbl.get("CMD_1")[0] is False
+            found, fvs = tbl.get("CMD_1")
+            assert found is True
+            entry = dict(fvs)
+            assert entry[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_DONE
+            assert entry[bmcctld.FIELD_RESULT] == "SUCCESS"
+            assert "CMD_1" in event_handler._completed_cmd_keys
 
     def test_on_complete_failure_marks_failed(self, event_handler):
         """On failure the entry is retained with FAILED/ERROR for debugging."""
@@ -643,6 +649,75 @@ class TestBmcEventHandlerRackMgrCommands:
             entry = dict(fvs)
             assert entry[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_FAILED
             assert entry[bmcctld.FIELD_RESULT] == "ERROR"
+
+
+# --------------------------------------------------------------------------
+# Tests: BmcEventHandler - RACK_MANAGER_COMMAND table bounding
+# --------------------------------------------------------------------------
+
+class TestBmcEventHandlerCmdTableBounding:
+
+    def _seed(self, tbl, key, status, ts):
+        tbl.mock_dict[key] = {
+            bmcctld.FIELD_STATUS: status,
+            bmcctld.FIELD_LAST_CHANGE_TIMESTAMP: ts,
+        }
+
+    def test_record_evicts_oldest_beyond_cap(self, event_handler, monkeypatch):
+        """The FIFO caps retained entries; the oldest key is deleted from STATE_DB
+        once the cap is exceeded."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 3)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        for k in ("CMD_1", "CMD_2", "CMD_3", "CMD_4"):
+            tbl.mock_dict[k] = {bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_DONE}
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            for k in ("CMD_1", "CMD_2", "CMD_3", "CMD_4"):
+                event_handler._record_completed_cmd(k)
+        # Cap is 3 -> oldest (CMD_1) evicted from DB; last three retained in FIFO.
+        assert tbl.get("CMD_1")[0] is False
+        assert list(event_handler._completed_cmd_keys) == ["CMD_2", "CMD_3", "CMD_4"]
+
+    def test_record_under_cap_keeps_all(self, event_handler):
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl.mock_dict["CMD_1"] = {bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_DONE}
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._record_completed_cmd("CMD_1")
+        assert tbl.get("CMD_1")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_1"]
+
+    def test_startup_trims_oldest_terminal_and_seeds_fifo(self, event_handler, monkeypatch):
+        """Startup reconcile keeps the newest N terminal entries (by timestamp),
+        deletes older ones, and seeds the FIFO with the survivors."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 2)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        self._seed(tbl, "CMD_A", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:01")
+        self._seed(tbl, "CMD_B", bmcctld.CMD_STATUS_FAILED, "2026-01-01 00:00:02")
+        self._seed(tbl, "CMD_C", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:03")
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._bound_cmd_table_on_startup()
+        # Oldest (CMD_A) deleted; two newest survive and seed the FIFO in age order.
+        assert tbl.get("CMD_A")[0] is False
+        assert tbl.get("CMD_B")[0] is True
+        assert tbl.get("CMD_C")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_B", "CMD_C"]
+
+    def test_startup_never_deletes_in_flight(self, event_handler, monkeypatch):
+        """PENDING/IN_PROGRESS entries are never trimmed, even above the cap."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 1)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        self._seed(tbl, "CMD_P", bmcctld.CMD_STATUS_PENDING, "2026-01-01 00:00:01")
+        self._seed(tbl, "CMD_I", bmcctld.CMD_STATUS_IN_PROGRESS, "2026-01-01 00:00:02")
+        self._seed(tbl, "CMD_D1", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:03")
+        self._seed(tbl, "CMD_D2", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:04")
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._bound_cmd_table_on_startup()
+        # In-flight entries always survive.
+        assert tbl.get("CMD_P")[0] is True
+        assert tbl.get("CMD_I")[0] is True
+        # Only the newest terminal entry (cap=1) survives; older terminal deleted.
+        assert tbl.get("CMD_D1")[0] is False
+        assert tbl.get("CMD_D2")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_D2"]
 
 
 # --------------------------------------------------------------------------

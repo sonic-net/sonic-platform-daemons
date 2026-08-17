@@ -49,6 +49,7 @@ try:
     import threading
     import time
     from datetime import datetime
+    from collections import deque
 
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.chassis_base import ChassisBase
@@ -207,6 +208,10 @@ CMD_STATUS_PENDING = "PENDING"
 CMD_STATUS_IN_PROGRESS = "IN_PROGRESS"
 CMD_STATUS_DONE = "DONE"
 CMD_STATUS_FAILED = "FAILED"
+
+# Upper bound on retained RACK_MANAGER_COMMAND entries.
+# entries beyond this are trimmed oldest-first so the table stays bounded.
+MAX_RACK_MGR_CMD_ENTRIES = 100
 
 # Module admin status values (CHASSIS_MODULE table)
 ADMIN_UP = "up"
@@ -844,6 +849,11 @@ class BmcEventHandler(EventLogger):
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
+        # Bounded FIFO of completed (DONE/FAILED) RACK_MANAGER_COMMAND keys. On each
+        # completion the oldest is evicted from STATE_DB once the cap is exceeded,
+        # keeping the table bounded in O(1) without scanning it on the data path.
+        self._completed_cmd_keys = deque()
+
         # Act on RACK_MANAGER_ALERT severity changes only.
         # Rack Manager (redfish docker) may republish identical rows each cycle.
         self._last_rack_mgr_alert_severity = {}
@@ -966,12 +976,13 @@ class BmcEventHandler(EventLogger):
         }
 
         def on_complete(success, cmd_key=key, cmd=command):
-            # Delete entries in the RACK_MGR_CMD table whose state is SUCCESS to keep the table bounded.
-            # A CMD that fails is not deleted from the RACK_MGR_CMD table, to help with debugging.
-            if success:
-                self._delete_cmd_entry(cmd_key)
-            else:
-                self._set_cmd_status(cmd_key, CMD_STATUS_FAILED, "ERROR")
+            # Write the terminal status (DONE on success, FAILED on error), then record
+            # the key in the bounded FIFO so old entries are trimmed and the table stays
+            # bounded while the just-completed status remains readable.
+            self._set_cmd_status(cmd_key,
+                                 CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
+                                 "SUCCESS" if success else "ERROR")
+            self._record_completed_cmd(cmd_key)
 
         # Add the RACK_MGR_CMD_EVENT_PREFIX only for rack manager commands, to identify them.
         self.action_queue.put(ActionItem(action_map[command],
@@ -1101,10 +1112,36 @@ class BmcEventHandler(EventLogger):
         ])
         tbl.set(cmd_id, fvs)
 
-    def _delete_cmd_entry(self, cmd_id):
-        """Remove a completed RACK_MANAGER_COMMAND entry to keep the table bounded."""
+    def _record_completed_cmd(self, cmd_id):
+        """Track a completed command key in the bounded FIFO; evict the oldest
+        entry from STATE_DB once the cap is exceeded. O(1), no table scan."""
+        self._completed_cmd_keys.append(cmd_id)
+        while len(self._completed_cmd_keys) > MAX_RACK_MGR_CMD_ENTRIES:
+            oldest = self._completed_cmd_keys.popleft()
+            tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+            tbl._del(oldest)
+
+    def _bound_cmd_table_on_startup(self, max_entries=None):
+        """One-time reconcile at startup: the FIFO is in-memory and empty after a
+        restart, so scan the table once, delete terminal (DONE/FAILED) entries
+        beyond the newest max_entries (oldest first by timestamp), and seed the
+        FIFO with the survivors. In-flight (PENDING/IN_PROGRESS) entries are kept."""
+        if max_entries is None:
+            max_entries = MAX_RACK_MGR_CMD_ENTRIES
         tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
-        tbl._del(cmd_id)
+        terminal = []
+        for k in tbl.getKeys():
+            result = tbl.get(k)
+            if not (result and result[0]):
+                continue
+            entry = fvs_to_dict(result[1])
+            if entry.get(FIELD_STATUS) in (CMD_STATUS_DONE, CMD_STATUS_FAILED):
+                terminal.append((entry.get(FIELD_LAST_CHANGE_TIMESTAMP, ""), k))
+        terminal.sort()  # oldest timestamp first
+        survivors = terminal[-max_entries:] if max_entries else []
+        for _, k in terminal[:len(terminal) - len(survivors)]:
+            tbl._del(k)
+        self._completed_cmd_keys = deque(k for _, k in survivors)
 
 
 # ============================================================
@@ -1364,6 +1401,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         # replays can enqueue ACTION_POWER_ON before the action loop is ready.
         self.controller.init_host_state()
         self.event_handler.seed_chassis_module_admin_status()
+        # Reconcile the in-memory completed-command FIFO with STATE_DB and trim any
+        # stale RACK_MANAGER_COMMAND entries left over a restart.
+        self.event_handler._bound_cmd_table_on_startup()
 
         # Start the event thread — it handles CLI admin up/down commands
         # (CHASSIS_MODULE admin_status) regardless of cooling type.
