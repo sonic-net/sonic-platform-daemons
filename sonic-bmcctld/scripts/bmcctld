@@ -906,18 +906,27 @@ class BmcEventHandler(EventLogger):
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() returned unexpected state: {}".format(state))
+                # ERROR/SIGNALINT are transient, benign select() results (not a real
+                # event); handle silently at debug to avoid flooding the log.
+                self.log_debug("sel.select() returned non-object state: {}".format(state))
                 continue
             fd = selectable.getFd()
             entry = self._subscribers.get(fd)
             if entry is None:
-                self.log_warning("sel.select() returned unknown fd={}".format(fd))
+                self.log_debug("sel.select() returned unknown fd={}".format(fd))
                 continue
             table, handler = entry
-            key, op, fvs = table.pop()
-            if op != "SET":
+            try:
+                key, op, fvs = table.pop()
+                if op != "SET":
+                    continue
+                handler(key, fvs_to_dict(fvs))
+            except Exception as e:
+                # A single malformed event must not kill the event thread and leave
+                # the daemon deaf to leaks, alerts, admin and Rack Manager commands.
+                self.log_error("Error handling event on fd={}: {}; continuing".format(
+                    fd, repr(e)))
                 continue
-            handler(key, fvs_to_dict(fvs))
 
     # ---- internal event handlers ----
 

@@ -939,6 +939,77 @@ class TestBmcEventHandlerRackMgrAlerts:
 
 
 # --------------------------------------------------------------------------
+# Tests: BmcEventHandler - event loop robustness
+# --------------------------------------------------------------------------
+
+class _FakeSelectable:
+    def __init__(self, fd):
+        self._fd = fd
+
+    def getFd(self):
+        return self._fd
+
+
+class _FakeSelect:
+    """Yields each scripted selectable once as OBJECT, then sets stop_event and TIMEOUTs."""
+    def __init__(self, selectables, stop_event):
+        self._selectables = list(selectables)
+        self._stop_event = stop_event
+
+    def select(self, timeout=-1, interrupt_on_signal=False):
+        if self._selectables:
+            return bmcctld.swsscommon.Select.OBJECT, self._selectables.pop(0)
+        self._stop_event.set()
+        return bmcctld.swsscommon.Select.TIMEOUT, None
+
+
+class TestBmcEventHandlerEventLoopRobustness:
+
+    def _table(self, key):
+        tbl = MagicMock()
+        tbl.pop.return_value = (key, "SET", [])
+        return tbl
+
+    def test_malformed_event_does_not_kill_loop(self, event_handler):
+        """A handler exception on one event must be swallowed so the event thread
+        keeps running and processes subsequent events."""
+        eh = event_handler
+        eh.stop_event.clear()
+
+        def raising_handler(key, fvs):
+            raise ValueError("malformed event")
+
+        good_calls = []
+
+        def good_handler(key, fvs):
+            good_calls.append(key)
+
+        eh._subscribers = {
+            1: (self._table("BADKEY"), raising_handler),
+            2: (self._table("GOODKEY"), good_handler),
+        }
+        eh.sel = _FakeSelect([_FakeSelectable(1), _FakeSelectable(2)], eh.stop_event)
+
+        # Must not raise, and the good event after the bad one must still be handled.
+        eh.run_event_loop()
+        assert good_calls == ["GOODKEY"]
+
+    def test_pop_exception_does_not_kill_loop(self, event_handler):
+        """An exception from table.pop() (e.g. malformed fvs) must not kill the loop."""
+        eh = event_handler
+        eh.stop_event.clear()
+
+        bad_table = MagicMock()
+        bad_table.pop.side_effect = RuntimeError("bad fvs")
+        eh._subscribers = {1: (bad_table, lambda k, f: None)}
+        eh.sel = _FakeSelect([_FakeSelectable(1)], eh.stop_event)
+
+        # Loop should survive and exit cleanly once stop_event is set.
+        eh.run_event_loop()
+        assert eh.stop_event.is_set()
+
+
+# --------------------------------------------------------------------------
 # Tests: BmcctldDaemon - action loop
 # --------------------------------------------------------------------------
 
