@@ -738,7 +738,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_arms_notify_si_settings_only_on_transceiver_info(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
         task.force_cmis_reinit = MagicMock()
 
         def make_event(lport, table_name):
@@ -3620,7 +3620,7 @@ class TestXcvrdScript(object):
     def test_CmisManagerTask_handle_cmis_si_settings_wait_state(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
-        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, stop_event, platform_chassis=MagicMock())
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
 
         task.port_dict['Ethernet0'] = {
             'cmis_retries': 1,
