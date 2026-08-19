@@ -694,6 +694,26 @@ class TestXcvrdScript(object):
         mock_state_tbl.hget.return_value = (True, "SI_SYNC_DONE:5")
         assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
 
+        # Malformed notification counter → get_current returns None → not synced
+        mock_read_tbl.get.return_value = (True, [("si_settings_notification", "SI_SETTINGS_NOTIFIED:xyz")])
+        assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
+
+        # Valid notification but malformed ack → parse guard → not synced
+        mock_read_tbl.get.return_value = (True, [("si_settings_notification", "SI_SETTINGS_NOTIFIED:5")])
+        mock_state_tbl.hget.return_value = (True, "garbage")
+        assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
+
+    def test_notify_si_settings_unavailable_guards(self):
+        # Each early-return guard should no-op without raising.
+        media_settings_parser.notify_si_settings_unavailable('Ethernet0', None, MagicMock())
+        pm = MagicMock()
+        pm.get_asic_id_for_logical_port.return_value = None
+        media_settings_parser.notify_si_settings_unavailable('Ethernet0', MagicMock(), pm)
+        pm2 = MagicMock()
+        pm2.get_asic_id_for_logical_port.return_value = 0
+        pm2.logical_port_name_to_physical_port_list.return_value = None
+        media_settings_parser.notify_si_settings_unavailable('Ethernet0', MagicMock(), pm2)
+
     def test_reset_si_settings_notification_to_default(self):
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         asic_id = 0
@@ -734,6 +754,42 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper.is_si_settings_synced.return_value = False
         task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_called_once()
+
+        # xcvr_info unavailable → nothing to publish.
+        mock_notify.reset_mock()
+        mock_sfp.get_transceiver_info.return_value = None
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_not_called()
+        mock_sfp.get_transceiver_info.return_value = {'foo': 'bar'}
+
+        # SFF manager enabled → owned by SffManagerTask, skip here.
+        mock_notify.reset_mock()
+        task.enable_sff_mgr = True
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_not_called()
+        task.enable_sff_mgr = False
+
+        # CMIS module → owned by CmisManagerTask, skip here.
+        mock_notify.reset_mock()
+        with patch('xcvrd.xcvrd.common.is_cmis_api', return_value=True):
+            task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_not_called()
+
+        # get_xcvr_api raising → api treated as None (non-CMIS) → still publishes.
+        mock_notify.reset_mock()
+        task.xcvr_table_helper.is_si_settings_synced.return_value = False
+        mock_sfp.get_xcvr_api.side_effect = AttributeError
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_called_once()
+        mock_sfp.get_xcvr_api.side_effect = None
+        mock_sfp.get_xcvr_api.return_value = MagicMock()
+
+        # get_transceiver_info raising → xcvr_info None → nothing to publish.
+        mock_notify.reset_mock()
+        mock_sfp.get_transceiver_info.side_effect = NotImplementedError
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_not_called()
+        mock_sfp.get_transceiver_info.side_effect = None
 
     def test_CmisManagerTask_arms_notify_si_settings_only_on_transceiver_info(self):
         port_mapping = PortMapping()
@@ -3616,6 +3672,89 @@ class TestXcvrdScript(object):
         # The state should still progress (error is logged but not fatal)
         # Verify we moved to DP_DEINIT state (the state machine continues despite tx power config failure)
         assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_DP_DEINIT
+
+    def test_check_si_sync_done_match(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+
+        # None / non-SI_SYNC_DONE status -> False
+        assert task.check_si_sync_done_match('Ethernet0', None, 3) is False
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SETTINGS_DEFAULT:3', 3) is False
+        # SI_SYNC_DONE:<N> matching the expected number -> True
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SYNC_DONE:3', 3) is True
+        # No expected number stored (nothing outstanding) -> False
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SYNC_DONE:3', None) is False
+        # Number mismatch (stale ack from a previous notification) -> False
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SYNC_DONE:5', 3) is False
+        # Malformed value with no counter -> False
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SYNC_DONE', 3) is False
+        # Non-numeric counter -> False (parse exception path)
+        assert task.check_si_sync_done_match('Ethernet0', 'SI_SYNC_DONE:abc', 3) is False
+
+    def test_check_si_settings_ack_status(self):
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.get_asic_id = MagicMock(return_value=0)
+        mock_state_tbl = MagicMock()
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.get_state_port_tbl = MagicMock(return_value=mock_state_tbl)
+
+        # Ack present in STATE_DB -> returns the value
+        mock_state_tbl.hget.return_value = (True, 'SI_SYNC_DONE:3')
+        assert task.check_si_settings_ack_status('Ethernet0') == 'SI_SYNC_DONE:3'
+        # Ack absent -> None
+        mock_state_tbl.hget.return_value = (False, None)
+        assert task.check_si_settings_ack_status('Ethernet0') is None
+
+    def test_CmisManagerTask_inserted_state_restart_recovery(self):
+        """On restart the cached si_notification_number is gone; INSERTED must recover sync
+        state from the retained DB - already-synced skips re-notify, an outstanding number is
+        adopted - instead of re-notifying."""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+
+        api = MagicMock()
+        api.get_media_lane_count.return_value = 4
+        api.get_media_lane_assignment_option.return_value = 1
+
+        def seed():
+            task.port_dict['Ethernet0'] = {
+                'asic_id': 0, 'api': api, 'host_lane_count': 8, 'speed': '400000',
+                'subport': 0, 'pport': 1, 'index': 1,
+                'host_tx_ready': 'true', 'admin_status': 'up', 'forced_tx_disabled': False,
+            }
+
+        task.should_wait_for_dp_settle = MagicMock(return_value=False)
+        task.is_fast_reboot_enabled = MagicMock(return_value=False)
+        task.get_cmis_max_host_lanes_mask = MagicMock(return_value=0xFF)
+        task.get_cmis_host_lanes_mask = MagicMock(return_value=0xFF)
+        task.get_cmis_media_lanes_mask = MagicMock(return_value=0xFF)
+        task.is_decommission_required = MagicMock(return_value=False)
+        task.is_decomm_lead_lport = MagicMock(return_value=False)
+        task.is_decomm_pending = MagicMock(return_value=False)
+        task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
+        task.update_cmis_state_expiration_time = MagicMock()
+        task.get_asic_id = MagicMock(return_value=0)
+        task.xcvr_table_helper = MagicMock()
+
+        with patch('xcvrd.cmis.cmis_manager_task.common.get_cmis_application_desired', return_value=1):
+            # Branch A: retained DB already synced → mark synced, do not re-notify.
+            seed()
+            task.xcvr_table_helper.is_si_settings_synced.return_value = True
+            task.handle_cmis_inserted_state('Ethernet0')
+            assert task.port_dict['Ethernet0']['si_settings_synced'] is True
+            assert task.port_dict['Ethernet0']['notify_si_settings'] is False
+
+            # Branch B: not synced but an outstanding notification exists → adopt its number.
+            seed()
+            task.xcvr_table_helper.is_si_settings_synced.return_value = False
+            task.xcvr_table_helper.get_current_si_notification_number.return_value = 7
+            task.handle_cmis_inserted_state('Ethernet0')
+            assert task.port_dict['Ethernet0']['si_notification_number'] == 7
+            assert task.port_dict['Ethernet0']['notify_si_settings'] is False
 
     def test_CmisManagerTask_handle_cmis_si_settings_wait_state(self):
         port_mapping = PortMapping()
