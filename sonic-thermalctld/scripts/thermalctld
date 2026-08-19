@@ -49,7 +49,12 @@ class EventLogger(logger.Logger):
         py_name = "{}.{}".format(syslog_identifier,
                                  os.path.basename(log_file).replace(".", "_"))
         self._file_logger = logging.getLogger(py_name)
-        if not self._file_logger.handlers and os.getenv("THERMALCTLD_UNIT_TESTING") != "1":
+        # /host/bmc/event.log is only created on Switch-BMC (rc.local +
+        # switch_bmc=1). Skip the file tee elsewhere so non-BMC platforms
+        # do not spam open-failure errors; syslog still works via Logger.
+        if (not self._file_logger.handlers
+                and os.getenv("THERMALCTLD_UNIT_TESTING") != "1"
+                and device_info.is_switch_bmc()):
             try:
                 handler = logging.FileHandler(log_file)
                 handler.setFormatter(logging.Formatter(

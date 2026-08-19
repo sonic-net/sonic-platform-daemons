@@ -1575,3 +1575,40 @@ class TestChassisModuleInfo:
         cfg = dict(result[1])
         assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
 
+
+# --------------------------------------------------------------------------
+# Tests: EventLogger file target
+# --------------------------------------------------------------------------
+
+class TestEventLogger:
+    """EventLogger must not tee to a container-local, unrotated file."""
+
+    def test_no_default_log_file_constant(self):
+        """The /var/log/syslog tee target is gone."""
+        assert not hasattr(bmcctld, 'DEFAULT_LOG_FILE')
+        assert bmcctld.CRITICAL_EVENT_LOG_FILE == "/host/bmc/event.log"
+
+    def test_syslog_only_logger_has_no_file_handler(self):
+        """Omitting log_file leaves a non-propagating logger with no file target.
+
+        Only handlers[0] is inspected: pytest's logging plugin appends its own
+        capture handlers to every logger.
+        """
+        import logging as _logging
+        el = bmcctld.EventLogger(bmcctld.SYSLOG_IDENTIFIER)
+        assert el._file_logger.propagate is False
+        assert isinstance(el._file_logger.handlers[0], _logging.NullHandler)
+
+    def test_syslog_only_logger_still_logs(self):
+        """Log calls on a syslog-only instance do not raise."""
+        el = bmcctld.EventLogger(bmcctld.SYSLOG_IDENTIFIER)
+        el.log_debug("d")
+        el.log_info("i")
+        el.log_notice("n")
+        el.log_warning("w")
+        el.log_error("e")
+
+    def test_module_loggers_target_expected_files(self):
+        """_daemon_logger is syslog-only; _event_logger keeps the host file."""
+        assert bmcctld._daemon_logger._file_logger.name.endswith("syslog_only")
+        assert bmcctld._event_logger._file_logger.name.endswith("event_log")
