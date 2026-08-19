@@ -46,11 +46,11 @@ TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_HWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME = 'TRANSCEIVER_VDM_LWARN_FLAG_CLEAR_TIME'
 TRANSCEIVER_PM_TABLE = 'TRANSCEIVER_PM'
 
-NPU_SI_SETTINGS_SYNC_STATUS_KEY = 'NPU_SI_SETTINGS_SYNC_STATUS'
-NPU_SI_SETTINGS_DEFAULT_VALUE = 'NPU_SI_SETTINGS_DEFAULT'
-NPU_SI_SETTINGS_NOTIFIED_VALUE = 'NPU_SI_SETTINGS_NOTIFIED'
-
 VDM_THRESHOLD_TYPES = ['halarm', 'lalarm', 'hwarn', 'lwarn']
+
+# First SI notification number issued when no prior value exists.
+DEFAULT_NOTIFICATION_NUMBER = 1
+
 
 class XcvrTableHelper:
     def __init__(self, namespaces):
@@ -58,6 +58,10 @@ class XcvrTableHelper:
 		self.cfg_port_tbl, self.state_port_tbl, self.pm_tbl, self.firmware_info_tbl = {}, {}, {}, {}, {}, {}, {}, {}, {}
         self.state_db = {}
         self.appl_db = {}
+        self.app_port_read_tbl = {}
+        # (asic_id, port_name) -> last SI notification number issued this process
+        # (keeps get_next_si_notification_number monotonic despite the PORT_TABLE read lag).
+        self.last_si_notification_number = {}
         self.cfg_db = {}
         self.dom_temperature_tbl = {}
         self.dom_flag_tbl = {}
@@ -98,6 +102,7 @@ class XcvrTableHelper:
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
             self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
+            self.app_port_read_tbl[asic_id] = swsscommon.Table(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
             self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
             self.vdm_real_value_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_VDM_REAL_VALUE_TABLE)
@@ -177,6 +182,91 @@ class XcvrTableHelper:
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
 
+    def get_appl_db(self, asic_id):
+        return self.appl_db[asic_id]
+
+    def get_app_port_read_tbl(self, asic_id):
+        return self.app_port_read_tbl[asic_id]
+
+    def get_next_si_notification_number(self, port_name, asic_id):
+        """
+        Return the next SI notification number for port_name (asic_id: ASIC index).
+
+        Reads the current 'SI_SETTINGS_NOTIFIED:<N>' / 'SI_SETTINGS_DEFAULT:<N>' from APPL_DB
+        and reconciles it with the last number issued this process, so N stays monotonic even
+        when a back-to-back notify reads a stale PORT_TABLE (write lags via ProducerStateTable).
+
+        The in-memory map only guards that intra-process lag; APPL_DB is the source of truth
+        across a restart. On warm restart APPL_DB is retained, so N continues from the retained
+        value (and A's is_si_settings_synced check means we usually don't re-notify at all). On
+        cold restart / config reload APPL_DB is flushed and N restarts at 1 - safe, because OA
+        clears its si_settings_ack on the same event, so both sides re-baseline together.
+        """
+        db_number = DEFAULT_NOTIFICATION_NUMBER - 1
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        if found:
+            current_value = dict(fvs).get('si_settings_notification')
+            if current_value:
+                try:
+                    _, count = current_value.split(':', 1)
+                    db_number = int(count)
+                except ValueError:
+                    db_number = DEFAULT_NOTIFICATION_NUMBER - 1
+        last_issued = self.last_si_notification_number.get(
+            (asic_id, port_name), DEFAULT_NOTIFICATION_NUMBER - 1)
+        next_number = max(db_number, last_issued) + 1
+        self.last_si_notification_number[(asic_id, port_name)] = next_number
+        return next_number
+
+    def reset_si_settings_notification_to_default(self, port_name, asic_id):
+        """Publish si_settings_notification = SI_SETTINGS_DEFAULT:<next N> to APPL_DB and return
+        N. Used on transceiver removal and SI_SETTINGS_WAIT timeout to tell OA to revert."""
+        next_number = self.get_next_si_notification_number(port_name, asic_id)
+        self.app_port_tbl[asic_id].set(
+            port_name, [("si_settings_notification", "SI_SETTINGS_DEFAULT:{}".format(next_number))])
+        return next_number
+
+    def get_current_si_notification_number(self, port_name, asic_id):
+        """
+        Return the counter N currently published in APPL_DB si_settings_notification
+        (SI_SETTINGS_NOTIFIED:<N> / SI_SETTINGS_DEFAULT:<N>), or None when the field is
+        absent, counterless (SI_SETTINGS_UNAVAIL), or malformed. Unlike
+        get_next_si_notification_number this returns the value as-is (no +1).
+        """
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        if not found:
+            return None
+        value = dict(fvs).get('si_settings_notification')
+        if not value:
+            return None
+        try:
+            _, count = value.split(':', 1)
+            return int(count)
+        except ValueError:
+            return None
+
+    def is_si_settings_synced(self, port_name, asic_id):
+        """
+        Return True when the retained APPL_DB si_settings_notification and STATE_DB
+        si_settings_ack agree on the same counter N, i.e. orchagent has already applied
+        the SI settings we last published. Used to avoid re-notifying / re-programming
+        across an xcvrd restart or warm reboot, where in-memory tracking is lost but DB
+        contents are retained.
+        """
+        notified = self.get_current_si_notification_number(port_name, asic_id)
+        if notified is None:
+            return False
+        found, ack = self.state_port_tbl[asic_id].hget(port_name, 'si_settings_ack')
+        if not found or not ack:
+            return False
+        try:
+            prefix, count = ack.split(':', 1)
+            # OA acks either SI_SYNC_DONE:<N> (real SI applied) or SI_SETTINGS_DEFAULT:<N>
+            # (defaults applied); both mean notification <N> has been fully processed.
+            return prefix in ('SI_SYNC_DONE', 'SI_SETTINGS_DEFAULT') and int(count) == notified
+        except ValueError:
+            return False
+
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
 
@@ -185,66 +275,6 @@ class XcvrTableHelper:
 
     def get_state_port_tbl(self, asic_id):
         return self.state_port_tbl[asic_id]
-
-    def get_state_db_port_table_val_by_key(self, lport, port_mapping, key):
-        """
-        Retrieves the value of a key from STATE_DB PORT_TABLE|<lport> for the given logical port
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-            key:
-                key for the corresponding value to be retrieved
-        Returns:
-            The value of the key if the key is found in STATE_DB PORT_TABLE|<lport>
-            None otherwise
-        """
-
-        if port_mapping is None:
-            helper_logger.log_error("Get value by key from STATE_DB: port_mapping is None "
-                                    "for lport {}".format(lport))
-            return None
-
-        asic_index = port_mapping.get_asic_id_for_logical_port(lport)
-        state_port_table = self.get_state_port_tbl(asic_index)
-        if state_port_table is None:
-            helper_logger.log_error("Get value by key from STATE_DB: state_db is None with asic_index {} "
-                                    "for lport {}".format(asic_index, lport))
-            return None
-
-        found, state_port_table_fvs = state_port_table.get(lport)
-        if not found:
-            helper_logger.log_error("Get value by key from STATE_DB: Unable to find lport {}".format(lport))
-            return None
-
-        state_port_table_fvs_dict = dict(state_port_table_fvs)
-        if key not in state_port_table_fvs_dict:
-            helper_logger.log_error("Get value by key from STATE_DB: Unable to find key {} "
-                                    "state_port_table_fvs_dict {} for lport {}".format(key, state_port_table_fvs_dict, lport))
-            return None
-
-        return state_port_table_fvs_dict[key]
-
-    def is_npu_si_settings_update_required(self, lport, port_mapping):
-        """
-        Checks if NPU SI settings update is required for a module
-        Args:
-            lport:
-                logical port name
-            port_mapping:
-                A PortMapping object
-        Returns:
-            True if NPU_SI_SETTINGS_SYNC_STATUS_KEY is
-                - not present/accessible from STATE_DB or
-                - set to NPU_SI_SETTINGS_DEFAULT_VALUE
-            False otherwise
-        """
-        npu_si_settings_sync_val = self.get_state_db_port_table_val_by_key(lport,
-                                                                            port_mapping, NPU_SI_SETTINGS_SYNC_STATUS_KEY)
-
-        # If npu_si_settings_sync_val is None, it can also mean that the key is not present in the table
-        return npu_si_settings_sync_val is None or npu_si_settings_sync_val == NPU_SI_SETTINGS_DEFAULT_VALUE
 
     def get_gearbox_line_lanes_dict(self):
         """
