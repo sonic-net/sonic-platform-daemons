@@ -163,6 +163,17 @@ SYSTEM_LEAK_STATUS_TABLE = "SYSTEM_LEAK_STATUS"
 SYSTEM_LEAK_STATUS_KEY = "system"
 RACK_MANAGER_COMMAND_TABLE = "RACK_MANAGER_COMMAND"
 RACK_MANAGER_ALERT_TABLE = "RACK_MANAGER_ALERT"
+RACK_MANAGER_DATA_TABLE = "RACK_MANAGER_DATA"
+
+# Rack Manager telemetry (RACK_MANAGER_DATA) keys whose NORMAL reading clears the
+# matching RACK_MANAGER_ALERT. Mirrors CriticalEventChecker.ALERT_KEYS but is kept
+# separate so the telemetry-clear path can evolve independently of the alert list.
+RACK_MGR_TELEMETRY_KEYS = [
+    "Inlet_liquid_temperature",
+    "Inlet_liquid_flow_rate",
+    "Inlet_liquid_pressure",
+    "Rack_level_leak",
+]
 
 # Field names
 FIELD_POWER_ON_DELAY = "power_on_delay"
@@ -845,6 +856,8 @@ class BmcEventHandler(EventLogger):
             self.config_db, CHASSIS_MODULE_TABLE)
         self.rack_mgr_alert_sub = swsscommon.SubscriberStateTable(
             self.state_db, RACK_MANAGER_ALERT_TABLE)
+        self.rack_mgr_data_sub = swsscommon.SubscriberStateTable(
+            self.state_db, RACK_MANAGER_DATA_TABLE)
         self.system_leak_sub = swsscommon.SubscriberStateTable(
             self.state_db, SYSTEM_LEAK_STATUS_TABLE)
 
@@ -858,6 +871,7 @@ class BmcEventHandler(EventLogger):
             self.rack_mgr_cmd_sub.getFd():   (self.rack_mgr_cmd_sub,   self._handle_rack_mgr_command),
             self.chassis_module_sub.getFd(): (self.chassis_module_sub, self._handle_chassis_module),
             self.rack_mgr_alert_sub.getFd(): (self.rack_mgr_alert_sub, self._handle_rack_mgr_alert),
+            self.rack_mgr_data_sub.getFd():  (self.rack_mgr_data_sub,  self._handle_rack_mgr_data),
             self.system_leak_sub.getFd():    (self.system_leak_sub,    self._handle_system_leak),
         }
 
@@ -865,6 +879,7 @@ class BmcEventHandler(EventLogger):
         self.sel.addSelectable(self.rack_mgr_cmd_sub)
         self.sel.addSelectable(self.chassis_module_sub)
         self.sel.addSelectable(self.rack_mgr_alert_sub)
+        self.sel.addSelectable(self.rack_mgr_data_sub)
         self.sel.addSelectable(self.system_leak_sub)
 
     def seed_chassis_module_admin_status(self):
@@ -1046,6 +1061,39 @@ class BmcEventHandler(EventLogger):
             self._event_log.log_notice(
                 "RACK_MGR_ALERT handler done: key={} severity={} result=CLEARED (no action)".format(
                     key, severity))
+
+    def _handle_rack_mgr_data(self, key, fvs):
+        """Process a RACK_MANAGER_DATA (telemetry) change from Rack Manager.
+
+        Telemetry is pushed periodically and is used solely to clear a previously
+        raised RACK_MANAGER_ALERT: when a sensor's telemetry severity returns to
+        NORMAL, the matching RACK_MANAGER_ALERT|<key> row is deleted so the
+        power-on gate (has_critical_rack_mgr_alert) no longer treats it as active.
+        Telemetry never raises an alert or takes a power action; per design, on
+        clear no power action is taken (power-on stays under external/user control).
+        """
+        if key not in RACK_MGR_TELEMETRY_KEYS:
+            # Telemetry only maps to the supported alert keys; ignore anything else.
+            return
+
+        # severity field for temperature/flow/pressure; leak field for rack-level leak.
+        severity = str(fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)).upper()
+        if severity != ALERT_SEVERITY_NORMAL:
+            # Non-NORMAL telemetry is informational only; alerts are raised via the
+            # RACK_MANAGER_ALERT table, not here.
+            return
+
+        # NORMAL telemetry: clear the matching alert if one is currently active.
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        result = tbl.get(key)
+        if not (result and result[0]):
+            # No active alert for this key; nothing to clear (avoids per-cycle noise).
+            return
+
+        tbl._del(key)
+        self._last_rack_mgr_alert_severity.pop(key, None)
+        self._event_log.log_notice(
+            "RACK_MGR alert CLEARED by telemetry: key={} (RACK_MANAGER_DATA severity=NORMAL)".format(key))
 
     # ---- dispatch helpers ----
 
