@@ -57,52 +57,15 @@ class DOMDBUtils(DBUtils):
                                   "as no asic index found")
             return
 
-        physical_port = self._validate_and_get_physical_port(logical_port_name)
-        if physical_port is None:
-            return
-
-        try:
-            if db_cache is not None and physical_port in db_cache:
-                # If cache is enabled and dom flag values are in cache, just read from cache, no need read from EEPROM
-                dom_flags_dict = db_cache[physical_port]
-            else:
-                # Reading from the EEPROM as the cache is empty
-                dom_flags_dict = self.dom_utils.get_transceiver_dom_flags(physical_port)
-                if dom_flags_dict is None:
-                    self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
-                                          "as no dom flags found")
-                    return
-                if dom_flags_dict:
-                    dom_flags_dict_update_time = self.get_current_time()
-                    self._update_flag_metadata_tables(logical_port_name, dom_flags_dict,
-                                                     dom_flags_dict_update_time,
-                                                     self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-                                                     self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-                                                     self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-                                                     self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
-                                                     "DOM flags")
-
-                if db_cache is not None:
-                    # If cache is enabled, put dom flag values to cache
-                    db_cache[physical_port] = dom_flags_dict
-
-            if dom_flags_dict is not None:
-                if not dom_flags_dict:
-                    return
-
-                self._beautify_dom_info_dict(dom_flags_dict)
-                fvs = swsscommon.FieldValuePairs(
-                    [(k, v) for k, v in dom_flags_dict.items()] +
-                    [("last_update_time", self.get_current_time())]
-                )
-                self.xcvr_table_helper.get_dom_flag_tbl(asic_index).set(logical_port_name, fvs)
-            else:
-                return
-
-        except NotImplementedError:
-            self.logger.log_error(f"Post port dom flags to db failed for {logical_port_name} "
-                                  "as no dom flags found")
-            return
+        return self.post_flag_values_to_db(logical_port_name,
+                                           self.dom_utils.get_transceiver_dom_flags,
+                                           self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
+                                           self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
+                                           self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
+                                           self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
+                                           "DOM flags",
+                                           db_cache=db_cache,
+                                           beautify_func=self._beautify_dom_info_dict)
 
     def post_port_dom_thresholds_to_db(self, logical_port_name, db_cache=None):
         asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
