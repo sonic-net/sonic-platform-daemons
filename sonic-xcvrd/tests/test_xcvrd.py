@@ -5744,7 +5744,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
     @patch('os.kill')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
@@ -6235,15 +6235,17 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
-    def test_wrapper_get_transceiver_change_event(self, mock_sfputil, mock_chassis):
+    def test_get_port_change_event(self, mock_sfputil, mock_chassis):
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), MagicMock(),
+                                  threading.Event(), threading.Event())
+
         mock_chassis.get_change_event = MagicMock(return_value=(True, {'sfp': 1, 'sfp_error': 'N/A'}))
-        from xcvrd.xcvrd import _wrapper_get_transceiver_change_event
-        assert _wrapper_get_transceiver_change_event(0) == (True, 1, 'N/A')
+        assert task._get_port_change_event(0) == (True, 1, 'N/A')
 
         mock_chassis.get_change_event = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_transceiver_change_event = MagicMock(return_value=(True, 1))
 
-        assert _wrapper_get_transceiver_change_event(0) == (True, 1, None)
+        assert task._get_port_change_event(0) == (True, 1, None)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_wrapper_get_sfp_type(self, mock_chassis):
@@ -6648,7 +6650,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
     @patch('os.kill')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
