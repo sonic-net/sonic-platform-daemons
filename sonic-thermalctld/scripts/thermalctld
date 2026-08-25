@@ -991,6 +991,10 @@ class ThermalControlDaemon(daemon_base.DaemonBase):
         # Set minimum logging level to INFO
         self.set_min_log_priority_info()
 
+        if multi_asic.is_multi_asic():
+            # Load the namespace details first from the database_global.json file.
+            swsscommon.SonicDBConfig.initializeGlobalConfig()
+
         self.stop_event = threading.Event()
 
         self.wait_time = self.INTERVAL
