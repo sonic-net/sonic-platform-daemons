@@ -104,15 +104,6 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 #
 # Helper functions =============================================================
 #
-def _wrapper_is_replaceable(physical_port):
-    if platform_chassis is not None:
-        try:
-            return platform_chassis.get_sfp(physical_port).is_replaceable()
-        except NotImplementedError:
-            pass
-    return False
-
-
 def _wrapper_get_transceiver_info(physical_port):
     if platform_chassis is not None:
         try:
@@ -248,6 +239,14 @@ class SfpStateUpdateTask(threading.Thread):
         status, events = platform_sfputil.get_transceiver_change_event(timeout)
         return status, events, None
 
+    def _wrapper_is_replaceable(self, physical_port):
+        if platform_chassis is not None:
+            try:
+                return platform_chassis.get_sfp(physical_port).is_replaceable()
+            except NotImplementedError:
+                pass
+        return False
+
     # Update port sfp info in db
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,
                              stop_event=threading.Event()):
@@ -280,7 +279,7 @@ class SfpStateUpdateTask(threading.Thread):
                     port_info_dict = _wrapper_get_transceiver_info(physical_port)
                     transceiver_dict[physical_port] = port_info_dict
                 if port_info_dict is not None:
-                    is_replaceable = _wrapper_is_replaceable(physical_port)
+                    is_replaceable = self._wrapper_is_replaceable(physical_port)
                     # if cmis is supported by the module
                     if 'cmis_rev' in port_info_dict:
                         fvs = swsscommon.FieldValuePairs(
