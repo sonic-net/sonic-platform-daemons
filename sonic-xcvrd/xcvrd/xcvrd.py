@@ -140,19 +140,6 @@ def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
             port_dict[key] = sfp_status_helper.SFP_STATUS_INSERTED
             del sfp_insert_events[key]
 
-def _wrapper_get_transceiver_change_event(timeout):
-    if platform_chassis is not None:
-        try:
-            status, events = platform_chassis.get_change_event(timeout)
-            sfp_events = events.get('sfp')
-            sfp_errors = events.get('sfp_error')
-            return status, sfp_events, sfp_errors
-        except NotImplementedError:
-            pass
-    status, events = platform_sfputil.get_transceiver_change_event(timeout)
-    return status, events, None
-
-
 def _wrapper_get_sfp_type(physical_port):
     if platform_chassis:
         try:
@@ -248,6 +235,18 @@ class SfpStateUpdateTask(threading.Thread):
             except NotImplementedError:
                 pass
         return None
+
+    def _get_port_change_event(self, timeout):
+        if platform_chassis is not None:
+            try:
+                status, events = platform_chassis.get_change_event(timeout)
+                sfp_events = events.get('sfp')
+                sfp_errors = events.get('sfp_error')
+                return status, sfp_events, sfp_errors
+            except NotImplementedError:
+                pass
+        status, events = platform_sfputil.get_transceiver_change_event(timeout)
+        return status, events, None
 
     # Update port sfp info in db
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,
@@ -500,7 +499,7 @@ class SfpStateUpdateTask(threading.Thread):
             # Ensure not to block for any event if sfp insert event is pending
             if self.sfp_insert_events:
                 timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
-            status, port_dict, error_dict = _wrapper_get_transceiver_change_event(timeout)
+            status, port_dict, error_dict = self._get_port_change_event(timeout)
             if status:
                 # Soak SFP insert events across various ports (updates port_dict)
                 _wrapper_soak_sfp_insert_event(self.sfp_insert_events, port_dict)
@@ -862,7 +861,7 @@ class SfpStateUpdateTask(threading.Thread):
             return
 
         # Retry eeprom with an interval RETRY_EEPROM_READING_INTERVAL. No need to put sleep here
-        # because _wrapper_get_transceiver_change_event has a timeout argument.
+        # because _get_port_change_event has a timeout argument.
         now = time.time()
         if now - self.last_retry_eeprom_time < self.RETRY_EEPROM_READING_INTERVAL:
             return
