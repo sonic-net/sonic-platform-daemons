@@ -2022,6 +2022,27 @@ class TestDBSetterMethods:
 class TestRebootCausePersistence:
     """Test reboot cause file I/O, symlink management, and history rotation."""
 
+    def test_persist_dpu_reboot_cause_creates_missing_history_directory(self):
+        """The first reboot-cause capture creates the DPU history directory."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
+                updater.persist_dpu_reboot_cause(("Power Loss", "Unexpected"), "DPU0", boot_id="boot-1")
+
+                history_dir = os.path.join(tmpdir, "dpu0", "history")
+                files = os.listdir(history_dir)
+                assert len(files) == 1
+
+                history_path = os.path.join(history_dir, files[0])
+                with open(history_path) as f:
+                    data = json.load(f)
+                assert data["boot_id"] == "boot-1"
+
+                symlink = os.path.join(tmpdir, "dpu0", "previous-reboot-cause.json")
+                assert os.path.realpath(symlink) == history_path
+
     def test_persist_dpu_reboot_cause_creates_history_file(self):
         """persist_dpu_reboot_cause creates JSON history file."""
         chassis = create_chassis_with_dpus(1)

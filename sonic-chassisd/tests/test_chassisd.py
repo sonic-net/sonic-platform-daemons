@@ -45,6 +45,7 @@ scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
 
 os.environ["CHASSISD_UNIT_TESTING"] = "1"
+import chassisd
 from chassisd import *
 
 
@@ -457,15 +458,29 @@ def test_reboot_cause_subscriber_processes_boot_id():
     mock_select.addSelectable.assert_called_once_with(mock_sst)
     module_updater.dpu_boot_id_update.assert_called_once_with("DPU0", "new-boot-id")
 
+def test_fsync_parent_directory(tmp_path):
+    """The parent directory is opened, synced, and closed."""
+    with patch("chassisd.os.open", return_value=42) as mock_os_open, \
+         patch("chassisd.os.fsync") as mock_fsync, \
+         patch("chassisd.os.close") as mock_close:
+        chassisd._fsync_parent_directory(str(tmp_path / "record.json"))
+
+    mock_os_open.assert_called_once_with(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+    mock_fsync.assert_called_once_with(42)
+    mock_close.assert_called_once_with(42)
+
+
 def test_atomic_write_json_replaces_content(tmp_path):
     """The final path holds the new content and no temporary file is left behind."""
     target = tmp_path / "record.json"
     target.write_text('{"cause": "old"}')
 
-    SmartSwitchModuleUpdater._atomic_write_json(str(target), {"cause": "new"})
+    with patch("chassisd._fsync_parent_directory") as mock_fsync_parent:
+        chassisd._atomic_write_json(str(target), {"cause": "new"})
 
     assert json.loads(target.read_text()) == {"cause": "new"}
     assert list(p.name for p in tmp_path.iterdir()) == ["record.json"]
+    mock_fsync_parent.assert_called_once_with(str(target))
 
 
 def test_atomic_write_json_keeps_previous_content_on_failure(tmp_path):
@@ -475,7 +490,7 @@ def test_atomic_write_json_keeps_previous_content_on_failure(tmp_path):
 
     with patch("builtins.open", side_effect=OSError("disk full")):
         with pytest.raises(OSError):
-            SmartSwitchModuleUpdater._atomic_write_json(str(target), {"cause": "new"})
+            chassisd._atomic_write_json(str(target), {"cause": "new"})
 
     assert json.loads(target.read_text()) == {"cause": "old"}
     assert not (tmp_path / "record.json.tmp").exists()
@@ -497,12 +512,14 @@ def test_atomic_replace_symlink_never_leaves_link_absent(tmp_path):
         removed.append(path)
         real_remove(path)
 
-    with patch("chassisd.os.remove", side_effect=tracking_remove):
-        SmartSwitchModuleUpdater._atomic_replace_symlink(str(new_record), str(link))
+    with patch("chassisd.os.remove", side_effect=tracking_remove), \
+         patch("chassisd._fsync_parent_directory") as mock_fsync_parent:
+        chassisd._atomic_replace_symlink(str(new_record), str(link))
 
     assert os.path.realpath(str(link)) == os.path.realpath(str(new_record))
     # Removing the live link, even briefly, would lose the persisted baseline on a crash.
     assert str(link) not in removed
+    mock_fsync_parent.assert_called_once_with(str(link))
 
 
 def test_get_boot_id_reads_kernel_boot_id():

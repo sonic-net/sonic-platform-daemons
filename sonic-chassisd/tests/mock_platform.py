@@ -36,6 +36,7 @@ class MockModule(MockDevice):
         self.midplane_access = False
         self.state_transition = False
         self.state_transition_type = None
+        self.midplane_down_reason = None
         self.asic_list = asic_list
         self.module_serial = module_serial
 
@@ -118,7 +119,7 @@ class MockModule(MockDevice):
         self.midplane_access = up
 
     def get_midplane_down_reason(self):
-        return getattr(self, 'midplane_down_reason', None)
+        return self.midplane_down_reason
 
     def set_midplane_down_reason(self, reason):
         self.midplane_down_reason = reason

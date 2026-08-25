@@ -219,6 +219,60 @@ def get_formatted_time(datetimeobj=None, op_format=None):
     date_obj = datetimeobj if datetimeobj else datetime.now(timezone.utc)
     return date_obj.strftime(op_format if op_format else "%a %b %d %I:%M:%S %p UTC %Y")
 
+
+def _fsync_parent_directory(file_path):
+    """Persist directory-entry changes for file_path."""
+    directory = os.path.dirname(file_path) or "."
+    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _atomic_write(file_path, write_fn):
+    """Let write_fn fill a temporary file in the same directory, then rename it into place."""
+    directory = os.path.dirname(file_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{file_path}.tmp"
+    try:
+        with open(tmp_path, 'w') as f:
+            write_fn(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, file_path)
+        _fsync_parent_directory(file_path)
+    except Exception:
+        if os.path.lexists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def _atomic_write_json(file_path, content):
+    """Write content to file_path as JSON, atomically."""
+    _atomic_write(file_path, lambda f: json.dump(content, f))
+
+
+def _atomic_write_text(file_path, text):
+    """Write text to file_path atomically."""
+    _atomic_write(file_path, lambda f: f.write(text))
+
+
+def _atomic_replace_symlink(target_path, symlink_path):
+    """Point symlink_path at target_path without ever leaving symlink_path absent."""
+    tmp_path = f"{symlink_path}.tmp"
+    if os.path.lexists(tmp_path):
+        os.remove(tmp_path)
+    os.symlink(target_path, tmp_path)
+    try:
+        os.replace(tmp_path, symlink_path)
+        _fsync_parent_directory(symlink_path)
+    except Exception:
+        if os.path.lexists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def update_entity_info(table, parent_name, key, index, serial, model, is_replaceable):
     fvs = swsscommon.FieldValuePairs(
         [('position_in_parent', str(index)),
@@ -980,12 +1034,12 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         # Planned operation (graceful shutdown/startup/reset) in progress?
         if try_get(module.get_module_state_transition, module_name, default=False):
             try:
-                module_key = "{}|{}".format(CHASSIS_MODULE_INFO_TABLE, module_name.upper())
+                module_key = f"{CHASSIS_MODULE_INFO_TABLE}|{module_name.upper()}"
                 transition_type = self.state_db.hget(module_key, "transition_type")
                 if transition_type:
-                    reason_str = "Planned: '{}'".format(transition_type)
+                    reason_str = f"Planned: '{transition_type}'"
             except Exception as e:
-                self.log_error("{}: failed to read transition_type: {}".format(module_name, e))
+                self.log_error(f"{module_name}: failed to read transition_type: {e}")
 
         if reason_str is None:
             # Unplanned down: ask the platform for the hardware reason.
@@ -995,7 +1049,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 detail = ", ".join(parts) if parts else "Unknown"
             else:
                 detail = reason or "Unknown"
-            reason_str = "Unplanned: '{}'".format(detail)
+            reason_str = f"Unplanned: '{detail}'"
 
         self._write_midplane_down_reason(module_name, reason_str)
         return reason_str
@@ -1010,16 +1064,16 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         except FileNotFoundError:
             return None
         except Exception as e:
-            self.log_error("{}: read midplane reason failed: {}".format(module_name, e))
+            self.log_error(f"{module_name}: read midplane reason failed: {e}")
             return None
 
     def _write_midplane_down_reason(self, module_name, reason):
         path = self._midplane_reason_path(module_name)
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            self._atomic_write_text(path, (reason or "") + "\n")
+            _atomic_write_text(path, (reason or "") + "\n")
         except Exception as e:
-            self.log_error("{}: persist midplane reason failed: {}".format(module_name, e))
+            self.log_error(f"{module_name}: persist midplane reason failed: {e}")
 
     def _clear_midplane_down_reason(self, module_name):
         try:
@@ -1027,7 +1081,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         except FileNotFoundError:
             pass
         except Exception as e:
-            self.log_error("{}: clear midplane reason failed: {}".format(module_name, e))
+            self.log_error(f"{module_name}: clear midplane reason failed: {e}")
 
     def update_dpu_state(self, key, state, reason=None):
         """
@@ -1094,43 +1148,6 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         """Generates the full path for history files."""
         return os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "history", file_name)
 
-    @staticmethod
-    def _atomic_write(file_path, write_fn):
-        """Let write_fn fill a temporary file in the same directory, then rename it into place."""
-        tmp_path = "{}.tmp".format(file_path)
-        try:
-            with open(tmp_path, 'w') as f:
-                write_fn(f)
-            os.replace(tmp_path, file_path)
-        except Exception:
-            if os.path.lexists(tmp_path):
-                os.remove(tmp_path)
-            raise
-
-    @classmethod
-    def _atomic_write_json(cls, file_path, content):
-        """Write content to file_path as JSON, atomically."""
-        cls._atomic_write(file_path, lambda f: json.dump(content, f))
-
-    @classmethod
-    def _atomic_write_text(cls, file_path, text):
-        """Write text to file_path atomically."""
-        cls._atomic_write(file_path, lambda f: f.write(text))
-
-    @staticmethod
-    def _atomic_replace_symlink(target_path, symlink_path):
-        """Point symlink_path at target_path without ever leaving symlink_path absent."""
-        tmp_path = "{}.tmp".format(symlink_path)
-        if os.path.lexists(tmp_path):
-            os.remove(tmp_path)
-        os.symlink(target_path, tmp_path)
-        try:
-            os.replace(tmp_path, symlink_path)
-        except Exception:
-            if os.path.lexists(tmp_path):
-                os.remove(tmp_path)
-            raise
-
     def persist_dpu_reboot_cause(self, reboot_cause, module, boot_id=None):
         """Persist the reboot cause information, boot_id and handle file rotation."""
         # Extract cause and comment from the reboot_cause
@@ -1163,9 +1180,9 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         }
 
         # write reboot_cause_dict to the file and replace the symlink to the latest reboot cause file.
-        self._atomic_write_json(file_path, reboot_cause_dict)
+        _atomic_write_json(file_path, reboot_cause_dict)
         symlink_path = os.path.join(MODULE_REBOOT_CAUSE_DIR, module.lower(), "previous-reboot-cause.json")
-        self._atomic_replace_symlink(file_path, symlink_path)
+        _atomic_replace_symlink(file_path, symlink_path)
 
         # Perform file rotation if necessary
         self._rotate_files(module)
@@ -1258,7 +1275,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 self.log_notice("Module {} midplane connectivity is up".format(module_key))
 
             # Update midplane state in the chassisStateDB DPU_STATE table
-            key = DPU_STATE_TABLE + "|" + module_key
+            key = f"{DPU_STATE_TABLE}|{module_key}"
             dpu_mp_state = self.get_dpu_midplane_state(key)
             if midplane_access:
                 if dpu_mp_state != 'up':
@@ -1308,7 +1325,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
     def _get_dpu_states(self, module_name):
         """Get current DPU states from CHASSIS_STATE_DB."""
-        dpu_key = DPU_STATE_TABLE + "|" + module_name
+        dpu_key = f"{DPU_STATE_TABLE}|{module_name}"
         mp_state = self.get_dpu_midplane_state(dpu_key)
         _, cp_state = self.dpu_state_table.hget(module_name, CP_STATE)
         _, dp_state = self.dpu_state_table.hget(module_name, DP_STATE)
@@ -1808,7 +1825,7 @@ class RebootCauseSubscriberTask(ProcessTaskBase):
         self.chassis_state_db = daemon_base.db_connect("CHASSIS_STATE_DB")
 
         sel = swsscommon.Select()
-        sst = swsscommon.SubscriberStateTable(self.chassis_state_db, "DPU_STATE")
+        sst = swsscommon.SubscriberStateTable(self.chassis_state_db, DPU_STATE_TABLE)
         sel.addSelectable(sst)
 
         # Listen indefinitely for DPU_STATE changes in CHASSIS_STATE_DB
@@ -2012,7 +2029,7 @@ class ChassisdDaemon(daemon_base.DaemonBase):
                     op = MODULE_ADMIN_DOWN
 
                 # Initialize DPU_STATE DB table on bootup
-                dpu_state_key = DPU_STATE_TABLE + "|" + module_name
+                dpu_state_key = f"{DPU_STATE_TABLE}|{module_name}"
                 if operational_state == ModuleBase.MODULE_STATUS_ONLINE:
                     op_state = 'up'
                 else:
@@ -2123,7 +2140,7 @@ class DpuStateManagerTask(ProcessTaskBase):
         selectable = [
             swsscommon.SubscriberStateTable(self.app_db, 'PORT_TABLE'),
             swsscommon.SubscriberStateTable(self.state_db, 'SYSTEM_READY'),
-            swsscommon.SubscriberStateTable(self.chassis_state_db, 'DPU_STATE')
+            swsscommon.SubscriberStateTable(self.chassis_state_db, DPU_STATE_TABLE)
         ]
 
         for s in selectable:
