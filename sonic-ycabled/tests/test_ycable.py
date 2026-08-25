@@ -316,6 +316,55 @@ class TestYcableScript(object):
         rc = handle_state_update_task(op, port, fvp_dict, y_cable_presence, port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stopping_event)
         assert(rc == None)
 
+    def test_handle_state_update_task_ignores_update_for_initialized_simulator(self):
+        fvp_dict = {
+            'type': 'QSFP-DD',
+            'manufacturer': 'microsoft',
+            'active_apsel_hostlane1': '1',
+            'host_lane_count': '8',
+            'media_lane_count': '4',
+        }
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_simulated_y_cable',
+                return_value=True), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_not_called()
+
+    def test_handle_state_update_task_processes_update_for_uninitialized_simulator(self):
+        fvp_dict = {
+            'type': 'QSFP-DD',
+            'manufacturer': 'microsoft',
+            'active_apsel_hostlane1': '1',
+        }
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_simulated_y_cable',
+                return_value=False), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_called_once()
+
+    def test_handle_state_update_task_retries_cmis_update_after_failed_simulator_init(self):
+        fvp_dict = {'active_apsel_hostlane1': '1'}
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_simulated_y_cable',
+                return_value=False), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_called_once()
+
 
     @patch('ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event', MagicMock(return_value=0))
     def test_handle_state_update_task_with_delete(self):
@@ -482,4 +531,3 @@ class TestYcableActiveActiveHelper(object):
         rc = check_presence_for_active_active_cable_type(y_cable_tbl)
 
         assert(rc == True)
-

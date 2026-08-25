@@ -85,6 +85,8 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 SFP_STATUS_REMOVED = '0'
 SFP_STATUS_INSERTED = '1'
 
+MUX_SIMULATOR_CONFIG_FILE = "/etc/sonic/mux_simulator.json"
+
 # SFP error codes, stored as strings. Can add more as needed.
 SFP_STATUS_ERR_I2C_STUCK = '2'
 SFP_STATUS_ERR_BAD_EEPROM = '3'
@@ -273,6 +275,24 @@ def get_ycable_port_instance_from_logical_port(logical_port_name):
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable table port {} while trying to toggle the mux".format(logical_port_name))
         return -1
+
+
+def is_initialized_simulated_y_cable(logical_port_name):
+    """Return True when a simulated Y-cable instance is ready for the port.
+
+    Failed or incomplete initialization must return False so a later SET can
+    retry normal discovery after the simulator configuration becomes available.
+    """
+    if not os.path.exists(MUX_SIMULATOR_CONFIG_FILE):
+        return False
+
+    physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+    if len(physical_port_list) != 1:
+        return False
+
+    port_instance = y_cable_port_instances.get(physical_port_list[0])
+    return port_instance is not None and getattr(port_instance, '_initialized', False) is True
+
 
 def set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_rsp_tbl):
     fvs = swsscommon.FieldValuePairs(
