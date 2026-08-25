@@ -34,6 +34,8 @@ class MockModule(MockDevice):
         self.admin_state = 1
         self.supervisor_slot = 16
         self.midplane_access = False
+        self.state_transition = False
+        self.state_transition_type = None
         self.asic_list = asic_list
         self.module_serial = module_serial
 
@@ -84,15 +86,18 @@ class MockModule(MockDevice):
 
     def clear_module_state_transition(self, module_name):
         """Mock implementation of clear_module_state_transition"""
+        self.state_transition = False
         return True
 
     def set_module_state_transition(self, module_name, transition_type):
         """Mock implementation of set_module_state_transition"""
+        self.state_transition = True
+        self.state_transition_type = transition_type
         return True
 
     def get_module_state_transition(self, module_name):
         """Mock implementation of get_module_state_transition"""
-        return False
+        return self.state_transition
 
     def clear_module_gnoi_halt_in_progress(self):
         """Mock implementation of clear_module_gnoi_halt_in_progress"""
@@ -111,6 +116,12 @@ class MockModule(MockDevice):
 
     def set_midplane_reachable(self, up):
         self.midplane_access = up
+
+    def get_midplane_down_reason(self):
+        return getattr(self, 'midplane_down_reason', None)
+
+    def set_midplane_down_reason(self, reason):
+        self.midplane_down_reason = reason
 
     def get_all_asics(self):
         return self.asic_list
