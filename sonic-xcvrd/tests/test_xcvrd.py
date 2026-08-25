@@ -1424,7 +1424,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': '22.75',
                                                                                 'vendor_rev': '0.5',
                                                                                 'serial': '0.7',
@@ -1494,7 +1494,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': '22.75',
                                                                                 'vendor_rev': '0.5',
@@ -1529,7 +1529,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_init_port_sfp_status_sw_tbl(self):
         port_mapping = PortMapping()
@@ -5979,17 +5979,18 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_wrapper_is_replaceable(self, mock_chassis):
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), MagicMock(),
+                                  threading.Event(), threading.Event())
         mock_object = MagicMock()
         mock_object.is_replaceable = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
-        from xcvrd.xcvrd import _wrapper_is_replaceable
-        assert _wrapper_is_replaceable(1)
+        assert task._wrapper_is_replaceable(1)
 
         mock_object.is_replaceable = MagicMock(return_value=False)
-        assert not _wrapper_is_replaceable(1)
+        assert not task._wrapper_is_replaceable(1)
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
-        assert not _wrapper_is_replaceable(1)
+        assert not task._wrapper_is_replaceable(1)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
