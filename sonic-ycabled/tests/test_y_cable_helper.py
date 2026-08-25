@@ -1267,6 +1267,38 @@ class TestYCableScript(object):
             state_db, port_tbl, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name, y_cable_presence)
         assert(rc == None)
 
+    @patch('os.path.exists', MagicMock(return_value=True))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_simulated_y_cable(self):
+        simulated_port_instance = MagicMock()
+        simulated_port_instance._initialized = True
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {0: simulated_port_instance}, clear=True):
+            assert is_initialized_simulated_y_cable("Ethernet0") is True
+
+    @patch('os.path.exists', MagicMock(return_value=True))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_simulated_y_cable_without_instance(self):
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {}, clear=True):
+            assert is_initialized_simulated_y_cable("Ethernet0") is False
+
+    @patch('os.path.exists', MagicMock(return_value=True))
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_simulated_y_cable_incomplete_instance(self):
+        simulated_port_instance = MagicMock()
+        simulated_port_instance._initialized = False
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {0: simulated_port_instance}, clear=True):
+            assert is_initialized_simulated_y_cable("Ethernet0") is False
+
+    @patch('os.path.exists', MagicMock(return_value=False))
+    def test_is_initialized_simulated_y_cable_without_config(self):
+        assert is_initialized_simulated_y_cable("Ethernet0") is False
+
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))

@@ -108,6 +108,10 @@ def handle_state_update_task(op, port, fvp_dict, y_cable_presence, port_tbl, por
 
     port_dict = {}
     if op == swsscommon.SET_COMMAND:
+        if y_cable_helper.is_initialized_simulated_y_cable(port):
+            helper_logger.log_debug(
+                "Ignoring transceiver info update for initialized simulated Y-cable port {}".format(port))
+            return
         port_dict[port] = SFP_STATUS_INSERTED
     elif op == swsscommon.DEL_COMMAND:
         port_dict[port] = SFP_STATUS_REMOVED
