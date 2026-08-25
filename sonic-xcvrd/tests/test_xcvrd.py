@@ -5911,8 +5911,8 @@ class TestXcvrdScript(object):
         mock_post_sfp_info.assert_called_with('Ethernet0', task.port_mapping, int_tbl, {})
         assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
-        task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_with('Ethernet0')
-        task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_with('Ethernet0')
+        task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_with('Ethernet0', db_cache=None)
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_with('Ethernet0', db_cache=None)
         assert mock_update_media_setting.call_count == 1
         assert 'Ethernet0' not in task.retry_eeprom_set
 
