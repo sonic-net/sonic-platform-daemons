@@ -320,6 +320,17 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_error("This functionality is currently not implemented for this platform")
                 sys.exit(NOT_IMPLEMENTED_ERROR)
 
+    def post_port_thresholds_to_db(self, logical_port_name, dom_db_cache=None, vdm_db_cache=None):
+        """Post the DOM and VDM thresholds for a port to the DB.
+
+        Args:
+            logical_port_name (str): logical port name
+            dom_db_cache (dict, optional): per-physical-port cache for the DOM thresholds
+            vdm_db_cache (dict, optional): per-physical-port cache for the VDM thresholds
+        """
+        self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_db_cache)
+        self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_db_cache)
+
     # Update port sfp info and dom threshold in db during xcvrd bootup
     def _post_port_sfp_info_and_dom_thr_to_db_once(self, port_mapping, xcvr_table_helper, stop_event=threading.Event()):
         # Connect to STATE_DB and create transceiver dom/sfp info tables
@@ -356,9 +367,9 @@ class SfpStateUpdateTask(threading.Thread):
                 break
             
             if logical_port_name not in retry_eeprom_set:
-                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_thresholds_cache)
-                # Read the VDM thresholds and post them to the DB
-                self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_thresholds_cache)
+                self.post_port_thresholds_to_db(logical_port_name,
+                                                dom_db_cache=dom_thresholds_cache,
+                                                vdm_db_cache=vdm_thresholds_cache)
 
         return retry_eeprom_set
 
@@ -576,8 +587,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         self.retry_eeprom_set.add(logical_port)
 
                                 if rc != SFP_EEPROM_NOT_READY:
-                                    self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
-                                    self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
+                                    self.post_port_thresholds_to_db(logical_port)
 
                                     if not self.is_warm_fast_reboot_for_lport(logical_port):
                                         media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
@@ -838,8 +848,7 @@ class SfpStateUpdateTask(threading.Thread):
                 # Failed to read EEPROM, put it to retry set
                 self.retry_eeprom_set.add(port_change_event.port_name)
             else:
-                self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
-                self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
+                self.post_port_thresholds_to_db(port_change_event.port_name)
                 if not self.is_warm_fast_reboot_for_lport(port_change_event.port_name):
                     media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
@@ -866,8 +875,7 @@ class SfpStateUpdateTask(threading.Thread):
             asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
             rc = self.post_port_info_to_db(logical_port, self.port_mapping, self.xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict)
             if rc != SFP_EEPROM_NOT_READY:
-                self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
-                self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
+                self.post_port_thresholds_to_db(logical_port)
 
                 if not self.is_warm_fast_reboot_for_lport(logical_port):
                     media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
