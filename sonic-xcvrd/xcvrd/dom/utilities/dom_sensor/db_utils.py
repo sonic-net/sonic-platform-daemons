@@ -1,10 +1,10 @@
-import re
 from xcvrd.dom.utilities.db.utils import DBUtils
+from xcvrd.dom.utilities.dom_sensor.beautify import DOMBeautifyMixin
 from xcvrd.dom.utilities.dom_sensor.utils import DOMUtils
 from swsscommon import swsscommon
 
 
-class DOMDBUtils(DBUtils):
+class DOMDBUtils(DOMBeautifyMixin, DBUtils):
     """
     This class provides utility functions for managing DB operations
     related to DOM on transceivers.
@@ -13,11 +13,6 @@ class DOMDBUtils(DBUtils):
         - TRANSCEIVER_DOM_FLAG and its corresponding metadata tables (change count, set time, clear time)
         - TRANSCEIVER_DOM_THRESHOLD
     """
-    TEMP_UNIT = 'C'
-    VOLT_UNIT = 'Volts'
-    POWER_UNIT = 'dBm'
-    BIAS_UNIT = 'mA'
-
     def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
         super().__init__(sfp_obj_dict, port_mapping, task_stopping_event, logger)
         self.xcvr_table_helper = xcvr_table_helper
@@ -79,28 +74,3 @@ class DOMDBUtils(DBUtils):
                                                  self.dom_utils.get_transceiver_dom_thresholds,
                                                  db_cache=db_cache,
                                                  beautify_func=self._beautify_dom_info_dict)
-
-    def _strip_unit(self, value, unit):
-        # Strip unit from raw data
-        if isinstance(value, str) and value.endswith(unit):
-            return value[:-len(unit)]
-        return str(value)
-
-    # Remove unnecessary unit from the raw data
-    def _beautify_dom_info_dict(self, dom_info_dict):
-        if dom_info_dict is None:
-            self.logger.log_warning("DOM info dict is None while beautifying")
-            return
-
-        for k, v in dom_info_dict.items():
-            if k == 'temperature':
-                dom_info_dict[k] = self._strip_unit(v, self.TEMP_UNIT)
-            elif k == 'voltage':
-                dom_info_dict[k] = self._strip_unit(v, self.VOLT_UNIT)
-            elif re.match('^(tx|rx)[1-8]power$', k):
-                dom_info_dict[k] = self._strip_unit(v, self.POWER_UNIT)
-            elif re.match('^(tx|rx)[1-8]bias$', k):
-                dom_info_dict[k] = self._strip_unit(v, self.BIAS_UNIT)
-            elif type(v) is not str:
-                # For all the other keys:
-                dom_info_dict[k] = str(v)
