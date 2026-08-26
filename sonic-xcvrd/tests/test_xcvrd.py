@@ -472,7 +472,7 @@ class TestXcvrdThreadException(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
                                             {'speed':'400000', 'lanes':'1,2,3,4,5,6,7,8',
                                              'admin_status':'up', 'host_tx_status':'true'})
@@ -685,16 +685,23 @@ class TestXcvrdScript(object):
         mock_state_tbl.hget.return_value = (True, "SI_SYNC_DONE:4")
         assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
 
-        # NOTIFIED:5 + SI_SETTINGS_DEFAULT:5 (default ack matches) → synced
+        # NOTIFIED:5 + SI_SETTINGS_DEFAULT:5 → NOT synced. DEFAULT is the removal/reset ack,
+        # not proof that this module's SI was applied (it must not be a false positive).
         mock_state_tbl.hget.return_value = (True, "SI_SETTINGS_DEFAULT:5")
-        assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is True
+        assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
+
+        # DEFAULT:5 notification (post-removal/reset) + SYNC_DONE:5 → NOT synced; a remove->insert
+        # (OIR) must re-publish rather than treat the stale DEFAULT number as applied SI.
+        mock_read_tbl.get.return_value = (True, [("si_settings_notification", "SI_SETTINGS_DEFAULT:5")])
+        mock_state_tbl.hget.return_value = (True, "SI_SYNC_DONE:5")
+        assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
 
         # Counterless UNAVAIL notification → not synced
         mock_read_tbl.get.return_value = (True, [("si_settings_notification", "SI_SETTINGS_UNAVAIL")])
         mock_state_tbl.hget.return_value = (True, "SI_SYNC_DONE:5")
         assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
 
-        # Malformed notification counter → get_current returns None → not synced
+        # Malformed notification counter → not synced
         mock_read_tbl.get.return_value = (True, [("si_settings_notification", "SI_SETTINGS_NOTIFIED:xyz")])
         assert xcvr_table_helper.is_si_settings_synced("Ethernet0", asic_id) is False
 
@@ -3571,7 +3578,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
 
         # Properly set up the port via port change event
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
@@ -3637,7 +3644,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
 
         # Properly set up the port via port change event
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
@@ -3751,7 +3758,7 @@ class TestXcvrdScript(object):
             # Branch B: not synced but an outstanding notification exists → adopt its number.
             seed()
             task.xcvr_table_helper.is_si_settings_synced.return_value = False
-            task.xcvr_table_helper.get_current_si_notification_number.return_value = 7
+            task.xcvr_table_helper.get_outstanding_si_notification_number.return_value = 7
             task.handle_cmis_inserted_state('Ethernet0')
             assert task.port_dict['Ethernet0']['si_notification_number'] == 7
             assert task.port_dict['Ethernet0']['notify_si_settings'] is False
@@ -3834,7 +3841,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
 
         # Simulate a 2x200G breakout: subport 1 owns lanes 1-4 (host_lanes_mask=0x0f, media_lanes_mask=0x0f)
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
@@ -4840,7 +4847,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_UNKNOWN
@@ -4912,7 +4919,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert common.get_cmis_state_from_state_db('Ethernet1', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet1'))) == CMIS_STATE_UNKNOWN
@@ -5043,7 +5050,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_UNKNOWN
@@ -5227,7 +5234,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_UNKNOWN
@@ -5328,7 +5335,7 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {0: mock_sfp}, stop_event)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
-        task.xcvr_table_helper.get_current_si_notification_number = MagicMock(return_value=None)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
         task.is_decommission_required = MagicMock(side_effect=[True] + [False] * 20)
         task.get_host_tx_status = MagicMock(return_value='true')
         task.get_port_admin_status = MagicMock(return_value='up')

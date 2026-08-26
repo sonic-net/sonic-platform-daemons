@@ -1003,7 +1003,7 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict[lport]['si_settings_synced'] = True
                 self.port_dict[lport]['notify_si_settings'] = False
             else:
-                outstanding = self.xcvr_table_helper.get_current_si_notification_number(lport, asic_id)
+                outstanding = self.xcvr_table_helper.get_outstanding_si_notification_number(lport, asic_id)
                 if outstanding is not None:
                     # OA hasn't yet acked our last notification; adopt its number and wait for
                     # the ack instead of publishing a fresh one.

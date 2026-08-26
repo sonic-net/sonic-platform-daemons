@@ -226,46 +226,55 @@ class XcvrTableHelper:
             port_name, [("si_settings_notification", "SI_SETTINGS_DEFAULT:{}".format(next_number))])
         return next_number
 
-    def get_current_si_notification_number(self, port_name, asic_id):
+    @staticmethod
+    def _parse_si_value(value):
         """
-        Return the counter N currently published in APPL_DB si_settings_notification
-        (SI_SETTINGS_NOTIFIED:<N> / SI_SETTINGS_DEFAULT:<N>), or None when the field is
-        absent, counterless (SI_SETTINGS_UNAVAIL), or malformed. Unlike
-        get_next_si_notification_number this returns the value as-is (no +1).
+        Split a si_settings value 'TYPE:<N>' into (TYPE, int(N)). Returns (TYPE, None) for a
+        counterless value (e.g. SI_SETTINGS_UNAVAIL) and (None, None) for a missing/malformed
+        value.
+        """
+        if not value:
+            return (None, None)
+        parts = value.split(':', 1)
+        if len(parts) == 1:
+            return (parts[0], None)
+        try:
+            return (parts[0], int(parts[1]))
+        except ValueError:
+            return (None, None)
+
+    def get_outstanding_si_notification_number(self, port_name, asic_id):
+        """
+        Return N when APPL_DB currently holds SI_SETTINGS_NOTIFIED:<N> - an outstanding
+        notification orchagent has not yet fully applied - otherwise None. SI_SETTINGS_DEFAULT:<N>
+        (removal/reset handshake) and SI_SETTINGS_UNAVAIL are not outstanding and must force a
+        fresh SI decision on the next insertion.
         """
         found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
         if not found:
             return None
-        value = dict(fvs).get('si_settings_notification')
-        if not value:
-            return None
-        try:
-            _, count = value.split(':', 1)
-            return int(count)
-        except ValueError:
-            return None
+        ntype, nnum = self._parse_si_value(dict(fvs).get('si_settings_notification'))
+        return nnum if ntype == 'SI_SETTINGS_NOTIFIED' else None
 
     def is_si_settings_synced(self, port_name, asic_id):
         """
-        Return True when the retained APPL_DB si_settings_notification and STATE_DB
-        si_settings_ack agree on the same counter N, i.e. orchagent has already applied
-        the SI settings we last published. Used to avoid re-notifying / re-programming
-        across an xcvrd restart or warm reboot, where in-memory tracking is lost but DB
-        contents are retained.
+        Return True only when we last published SI_SETTINGS_NOTIFIED:<N> AND orchagent acked
+        SI_SYNC_DONE:<N> for the same N, i.e. this module's SI settings were actually applied.
+        SI_SETTINGS_DEFAULT:<N> is the removal/reset handshake, not proof of applied SI, so it
+        never counts as synced and a remove->insert (OIR) always re-publishes. Used to avoid
+        re-notifying / re-programming across an xcvrd restart or warm reboot.
         """
-        notified = self.get_current_si_notification_number(port_name, asic_id)
-        if notified is None:
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        if not found:
+            return False
+        ntype, nnum = self._parse_si_value(dict(fvs).get('si_settings_notification'))
+        if ntype != 'SI_SETTINGS_NOTIFIED' or nnum is None:
             return False
         found, ack = self.state_port_tbl[asic_id].hget(port_name, 'si_settings_ack')
-        if not found or not ack:
+        if not found:
             return False
-        try:
-            prefix, count = ack.split(':', 1)
-            # OA acks either SI_SYNC_DONE:<N> (real SI applied) or SI_SETTINGS_DEFAULT:<N>
-            # (defaults applied); both mean notification <N> has been fully processed.
-            return prefix in ('SI_SYNC_DONE', 'SI_SETTINGS_DEFAULT') and int(count) == notified
-        except ValueError:
-            return False
+        atype, anum = self._parse_si_value(ack)
+        return atype == 'SI_SYNC_DONE' and anum == nnum
 
     def get_state_db(self, asic_id):
         return self.state_db[asic_id]
