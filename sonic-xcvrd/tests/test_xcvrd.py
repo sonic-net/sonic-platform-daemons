@@ -6649,6 +6649,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device')
     @patch('os.kill')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
@@ -6657,14 +6658,14 @@ class TestXcvrdScript(object):
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
     @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw')
-    @patch('xcvrd.xcvrd.platform_chassis')
-    def test_sfp_removal_from_dict(self, mock_platform_chassis, mock_update_status, mock_post_sfp_info,
+    def test_sfp_removal_from_dict(self, mock_update_status, mock_post_sfp_info,
                                             mock_post_firmware_info, mock_update_media_setting,
-                                            mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill):
+                                            mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill,
+                                            mock_get_port_device):
         port_mapping = PortMapping()
         mock_sfp = MagicMock()
         mock_sfp.remove_xcvr_api = MagicMock(return_value=None)
-        mock_platform_chassis.get_sfp.return_value = mock_sfp
+        mock_get_port_device.return_value = mock_sfp
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
