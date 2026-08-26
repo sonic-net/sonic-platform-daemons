@@ -7,6 +7,7 @@ try:
     from ..xcvrd import (SfpStateUpdateTask, helper_logger,
                          PHYSICAL_PORT_NOT_EXIST, SFP_EEPROM_NOT_READY)
     from ..xcvrd_utilities import common
+    from ..xcvrd_utilities.xcvr_table_helper import VDM_THRESHOLD_TYPES
     from .db_utils import CPODOMDBUtils, CPOVDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -90,3 +91,17 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
     def post_port_thresholds_to_db(self, logical_port_name, dom_db_cache=None, vdm_db_cache=None):
         self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_db_cache)
         self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_db_cache)
+
+    def delete_port_data_from_db(self, logical_port_name, asic_index,
+                                 delete_intf_tbl=False, delete_status_sw_tbl=False):
+        super().delete_port_data_from_db(logical_port_name, asic_index,
+                                         delete_intf_tbl=delete_intf_tbl,
+                                         delete_status_sw_tbl=delete_status_sw_tbl)
+
+        tbl_to_del_list = [
+            self.xcvr_table_helper.get_els_dom_threshold_tbl(asic_index),
+            *[self.xcvr_table_helper.get_els_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+        ]
+        if delete_intf_tbl:
+            tbl_to_del_list.append(self.xcvr_table_helper.get_els_info_tbl(asic_index))
+        common.del_port_sfp_dom_info_from_db(logical_port_name, self.port_mapping, tbl_to_del_list)

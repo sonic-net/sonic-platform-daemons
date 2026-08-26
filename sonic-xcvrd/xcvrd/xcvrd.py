@@ -591,10 +591,10 @@ class SfpStateUpdateTask(threading.Thread):
                                         media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
-                                # Remove the SFP API object for this physical port
+                                # Remove the API object for this physical port
                                 try:
-                                    sfp = platform_chassis.get_sfp(int(key))
-                                    sfp.remove_xcvr_api()
+                                    device = common.get_port_device(int(key))
+                                    device.remove_xcvr_api()
                                 except (NotImplementedError, AttributeError) as e:
                                     helper_logger.log_error(f"Failed to remove xcvr api for port {key}: {str(e)}")
                                 helper_logger.log_notice("{}: Got SFP removed event".format(logical_port))
@@ -603,29 +603,8 @@ class SfpStateUpdateTask(threading.Thread):
                                 common.update_port_transceiver_status_table_sw(
                                     logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                                 helper_logger.log_notice("{}: received plug out and update port sfp status table.".format(logical_port))
-                                common.del_port_sfp_dom_info_from_db(logical_port, self.port_mapping, [
-                                                              self.xcvr_table_helper.get_intf_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                                              *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                              self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                              *[self.xcvr_table_helper.get_vdm_flag_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                              *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                              *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                              *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                              self.xcvr_table_helper.get_status_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_status_flag_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_pm_tbl(asic_index),
-                                                              self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
-                                                              ])
+                                self.delete_port_data_from_db(logical_port, asic_index,
+                                                             delete_intf_tbl=True)
                             else:
                                 try:
                                     error_bits = int(value)
@@ -647,29 +626,7 @@ class SfpStateUpdateTask(threading.Thread):
                                     # In this case EEPROM is not accessible. The DOM info will be removed since it can be out-of-date.
                                     # The interface info remains in the DB since it is static.
                                     if sfp_status_helper.is_error_block_eeprom_reading(error_bits):
-                                        common.del_port_sfp_dom_info_from_db(logical_port,
-                                                                      self.port_mapping, [
-                                                                      self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                                                      *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                                      self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                                                      *[self.xcvr_table_helper.get_vdm_flag_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                                      *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                                      *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                                      *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                                                      self.xcvr_table_helper.get_status_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_status_flag_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_pm_tbl(asic_index),
-                                                                      self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
-                                                                      ])
+                                        self.delete_port_data_from_db(logical_port, asic_index)
                                 except (TypeError, ValueError) as e:
                                     helper_logger.log_error("{}: Got unrecognized event {}, ignored".format(logical_port, value))
 
@@ -739,6 +696,49 @@ class SfpStateUpdateTask(threading.Thread):
         if self.exc:
             raise self.exc
 
+    def delete_port_data_from_db(self, logical_port_name, asic_index,
+                                 delete_intf_tbl=False, delete_status_sw_tbl=False):
+        """Delete data of a logical port from the DB.
+
+        The DOM, VDM, status, PM and firmware info tables are always deleted, since their
+        content is only meaningful while the transceiver is present and its EEPROM readable.
+
+        Args:
+            logical_port_name (str): logical port name
+            asic_index (int): the asic index the logical port belongs to
+            delete_intf_tbl (bool): also delete TRANSCEIVER_INFO. It is permitted to keep it
+                in some circumstances, since it contains static data only.
+            delete_status_sw_tbl (bool): also delete TRANSCEIVER_STATUS_SW. It is kept while
+                the logical port exists, since the SFP status/error is recorded there.
+        """
+        tbl_to_del_list = [
+            self.xcvr_table_helper.get_dom_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
+            self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
+            *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+            self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+            *[self.xcvr_table_helper.get_vdm_flag_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+            self.xcvr_table_helper.get_status_tbl(asic_index),
+            self.xcvr_table_helper.get_status_flag_tbl(asic_index),
+            self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
+            self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
+            self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
+            self.xcvr_table_helper.get_pm_tbl(asic_index),
+            self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
+        ]
+        if delete_intf_tbl:
+            tbl_to_del_list.append(self.xcvr_table_helper.get_intf_tbl(asic_index))
+        if delete_status_sw_tbl:
+            tbl_to_del_list.append(self.xcvr_table_helper.get_status_sw_tbl(asic_index))
+        common.del_port_sfp_dom_info_from_db(logical_port_name, self.port_mapping, tbl_to_del_list)
+
     def on_port_config_change(self , port_change_event):
         if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:
             self.on_remove_logical_port(port_change_event)
@@ -756,31 +756,10 @@ class SfpStateUpdateTask(threading.Thread):
         # To avoid race condition, remove the entry TRANSCEIVER_DOM_INFO, TRANSCEIVER_STATUS_INFO and TRANSCEIVER_INFO table.
         # The operation to remove entry from TRANSCEIVER_DOM_INFO is duplicate with DomInfoUpdateTask.on_remove_logical_port,
         # but it is necessary because TRANSCEIVER_DOM_INFO is also updated in this thread when a new SFP is inserted.
-        common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
-                                      self.port_mapping, [
-                                      self.xcvr_table_helper.get_intf_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_temperature_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_clear_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_threshold_tbl(port_change_event.asic_id),
-                                      *[self.xcvr_table_helper.get_vdm_threshold_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      self.xcvr_table_helper.get_vdm_real_value_tbl(port_change_event.asic_id),
-                                      *[self.xcvr_table_helper.get_vdm_flag_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_change_count_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_set_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_clear_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_sw_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
-                                      ])
+        self.delete_port_data_from_db(port_change_event.port_name,
+                                      port_change_event.asic_id,
+                                      delete_intf_tbl=True,
+                                      delete_status_sw_tbl=True)
 
         # The logical port has been removed, no need retry EEPROM reading
         if port_change_event.port_name in self.retry_eeprom_set:
