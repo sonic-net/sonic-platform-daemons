@@ -54,6 +54,31 @@ class DBUtils:
                                          "as functionality is not implemented")
             return
 
+    def post_diagnostic_values_from_dict_to_db(self, logical_port_name, table, values_dict,
+                                               beautify_func=None, enable_flat_memory_check=False):
+        """
+        Posts a caller-supplied dictionary of diagnostic values to the database.
+
+        This is the counterpart to post_diagnostic_values_to_db for callers that have
+        already read the values from hardware. Since the caller performs the read, there
+        is no get_values_func to invoke lazily and therefore no db_cache to consult.
+
+        Args:
+            logical_port_name (str): Logical port name.
+            table (object): Database table object.
+            values_dict (dict): Pre-read diagnostic values. Beautified in place.
+            beautify_func (function, optional): Function to beautify the values. Defaults to self.beautify_info_dict.
+            enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
+        """
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
+        if physical_port is None:
+            return
+
+        if not values_dict:
+            return
+
+        self._write_values_to_table(table, logical_port_name, values_dict, beautify_func=beautify_func)
+
     def post_flag_values_to_db(self, logical_port_name, get_values_func,
                                flag_tbl, flag_change_count_tbl, flag_set_time_tbl, flag_clear_time_tbl,
                                log_context, db_cache=None, beautify_func=None,
