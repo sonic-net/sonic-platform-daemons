@@ -1,0 +1,14 @@
+# Rust half of sonic-platform-daemons.  The Python daemons beside it are
+# unchanged; this workspace holds their Rust counterparts, the way
+# sonic-swss-common carries crates/ beside its C++.
+[workspace]
+members  = ["crates/thermalctld"]
+resolver = "2"
+
+# Profiles only take effect at the workspace root; cargo ignores them in a
+# member manifest.  panic = "abort" is load-bearing: the panic hook that
+# suspends hw-management-tc exists because unwinding is skipped.
+[profile.release]
+lto            = true
+codegen-units  = 1
+panic          = "abort"

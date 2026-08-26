@@ -21,3 +21,7 @@ test-results.xml
 leddc
 pciedc
 syseepromdc
+
+# Rust
+/target/
+/vendor-platform

@@ -1,0 +1,9 @@
+sonic (1.0.0) stable; urgency=medium
+
+  * Initial release of sonic-thermalctld-rs
+  * Rust port of thermalctld reading hardware through a Rust platform API
+    compiled in from platform/<vendor>
+  * Core thermal and fan path: TEMPERATURE_INFO, FAN_INFO, FAN_DRAWER_INFO,
+    PHYSICAL_ENTITY_INFO
+
+ -- SONiC Team <sonic-dev@lists.sonicfoundation.dev>  Mon, 10 Aug 2026 00:00:00 -0800
