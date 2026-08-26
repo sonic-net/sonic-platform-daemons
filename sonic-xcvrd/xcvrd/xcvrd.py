@@ -879,12 +879,13 @@ class SfpStateUpdateTask(threading.Thread):
     def notify_media_setting_on_insert(self, logical_port, asic_index):
         """Publish SI settings for a newly ready transceiver on the insert path.
 
-        CMIS modules are owned by CmisManagerTask; SFF modules by SffManagerTask, but
-        only when --enable_sff_mgr is set. For a non-CMIS module with the SFF manager
-        disabled, no always-on task would otherwise publish its SI settings, leaving
-        orchagent waiting. Publish them here so SI settings reach APPL_DB independent of
-        --enable_sff_mgr. notify_media_setting falls back to SI_SETTINGS_UNAVAIL
-        internally when no media settings match this transceiver.
+        Ensures every present external port has exactly one SI-settings publisher.
+        CmisManagerTask owns paged CMIS modules (when running); SffManagerTask owns non-CMIS
+        modules (when --enable_sff_mgr is set). This always-on path publishes for everything
+        else - non-CMIS with the SFF manager off, flat-memory CMIS, and CMIS under
+        --skip_cmis_mgr - so orchagent never waits on an SI notification no component sends.
+        notify_media_setting falls back to SI_SETTINGS_UNAVAIL internally when no media
+        settings match this transceiver.
         """
         physical_port_list = self.port_mapping.logical_port_name_to_physical_port_list(logical_port)
         if not physical_port_list or platform_chassis is None:
@@ -896,9 +897,21 @@ class SfpStateUpdateTask(threading.Thread):
             api = platform_chassis.get_sfp(physical_port).get_xcvr_api()
         except (NotImplementedError, AttributeError):
             api = None
-        # CMIS modules are handled by CmisManagerTask, and SFF modules by SffManagerTask
-        # when it is enabled; only publish here for a non-CMIS module with the SFF manager off.
-        if common.is_cmis_api(api) or self.enable_sff_mgr:
+        is_cmis = common.is_cmis_api(api)
+        is_flat_memory = False
+        if is_cmis:
+            try:
+                is_flat_memory = bool(api.is_flat_memory())
+            except (NotImplementedError, AttributeError):
+                is_flat_memory = False
+        # A CMIS state-machine-driven module is CMIS and NOT flat-memory; CmisManagerTask owns
+        # its SI publication only when that manager is running. SffManagerTask owns non-CMIS SI
+        # only when --enable_sff_mgr is set. Every other present external port - non-CMIS with
+        # the SFF manager off, flat-memory CMIS (incl. passive copper), and CMIS under
+        # --skip_cmis_mgr - has no other owner, so it must be published here.
+        owned_by_cmis_mgr = is_cmis and not is_flat_memory and not self.skip_cmis_mgr
+        owned_by_sff_mgr = (not is_cmis) and self.enable_sff_mgr
+        if owned_by_cmis_mgr or owned_by_sff_mgr:
             return
         # Skip re-publishing across an xcvrd restart when OA already synced the retained value;
         # a replayed / boot-scan insert must not re-notify an already-applied module.
@@ -909,6 +922,9 @@ class SfpStateUpdateTask(threading.Thread):
         except (NotImplementedError, AttributeError):
             xcvr_info = None
         if xcvr_info is None:
+            # Transient read failure: re-arm the EEPROM retry so a later attempt still publishes
+            # a terminal SI result instead of dropping it and stranding the OA admin gate.
+            self.retry_eeprom_set.add(logical_port)
             return
         media_settings_parser.notify_media_setting(
             logical_port, {physical_port: xcvr_info}, self.xcvr_table_helper, self.port_mapping)

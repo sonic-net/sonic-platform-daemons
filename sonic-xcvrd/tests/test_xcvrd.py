@@ -762,12 +762,15 @@ class TestXcvrdScript(object):
         task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_called_once()
 
-        # xcvr_info unavailable → nothing to publish.
+        # xcvr_info unavailable → nothing published; port re-armed for EEPROM retry.
         mock_notify.reset_mock()
+        task.retry_eeprom_set.discard('Ethernet0')
         mock_sfp.get_transceiver_info.return_value = None
         task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_not_called()
+        assert 'Ethernet0' in task.retry_eeprom_set
         mock_sfp.get_transceiver_info.return_value = {'foo': 'bar'}
+        task.retry_eeprom_set.discard('Ethernet0')
 
         # SFF manager enabled → owned by SffManagerTask, skip here.
         mock_notify.reset_mock()
@@ -776,26 +779,46 @@ class TestXcvrdScript(object):
         mock_notify.assert_not_called()
         task.enable_sff_mgr = False
 
-        # CMIS module → owned by CmisManagerTask, skip here.
+        mock_api = mock_sfp.get_xcvr_api.return_value
+
+        # Paged CMIS with CmisManagerTask running → owned by that task, skip here.
+        mock_api.is_flat_memory.return_value = False
         mock_notify.reset_mock()
         with patch('xcvrd.xcvrd.common.is_cmis_api', return_value=True):
             task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_not_called()
 
+        # Flat-memory CMIS → CmisManagerTask skips it (goes READY), so publish here.
+        mock_api.is_flat_memory.return_value = True
+        mock_notify.reset_mock()
+        with patch('xcvrd.xcvrd.common.is_cmis_api', return_value=True):
+            task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_called_once()
+        mock_api.is_flat_memory.return_value = False
+
+        # CMIS under --skip_cmis_mgr → no CmisManagerTask, so publish here.
+        task.skip_cmis_mgr = True
+        mock_notify.reset_mock()
+        with patch('xcvrd.xcvrd.common.is_cmis_api', return_value=True):
+            task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_called_once()
+        task.skip_cmis_mgr = False
+
         # get_xcvr_api raising → api treated as None (non-CMIS) → still publishes.
         mock_notify.reset_mock()
-        task.xcvr_table_helper.is_si_settings_synced.return_value = False
         mock_sfp.get_xcvr_api.side_effect = AttributeError
         task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_called_once()
         mock_sfp.get_xcvr_api.side_effect = None
-        mock_sfp.get_xcvr_api.return_value = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = mock_api
 
-        # get_transceiver_info raising → xcvr_info None → nothing to publish.
+        # Transient read failure (get_transceiver_info raises) → re-arm EEPROM retry, do not drop.
         mock_notify.reset_mock()
+        task.retry_eeprom_set.discard('Ethernet0')
         mock_sfp.get_transceiver_info.side_effect = NotImplementedError
         task.notify_media_setting_on_insert('Ethernet0', 0)
         mock_notify.assert_not_called()
+        assert 'Ethernet0' in task.retry_eeprom_set
         mock_sfp.get_transceiver_info.side_effect = None
 
     def test_CmisManagerTask_arms_notify_si_settings_only_on_transceiver_info(self):
