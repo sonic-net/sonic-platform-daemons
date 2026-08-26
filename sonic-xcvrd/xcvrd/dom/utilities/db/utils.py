@@ -9,11 +9,11 @@ class DBUtils:
     NEVER = "never"
     NOT_AVAILABLE = "N/A"
 
-    def __init__(self, sfp_obj_dict, port_mapping, task_stopping_event, logger):
-        self.sfp_obj_dict = sfp_obj_dict
+    def __init__(self, port_obj_dict, port_mapping, task_stopping_event, logger):
+        self.port_obj_dict = port_obj_dict
         self.port_mapping = port_mapping
         self.task_stopping_event = task_stopping_event
-        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, logger)
+        self.xcvrd_utils = XCVRDUtils(port_obj_dict, logger)
         self.logger = logger
 
     def post_diagnostic_values_to_db(self, logical_port_name, table, get_values_func,
@@ -191,7 +191,7 @@ class DBUtils:
 
         physical_port = pport_list[0]
 
-        if physical_port not in self.sfp_obj_dict:
+        if physical_port not in self.port_obj_dict:
             self.logger.log_error(f"Validate and get physical port failed for {logical_port_name} "
                                    "as no sfp object found")
             return None

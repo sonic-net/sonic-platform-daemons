@@ -12,10 +12,10 @@ class StatusDBUtils(DBUtils):
         - TRANSCEIVER_STATUS_FLAG and its corresponding metadata tables (change count, set time, clear time)
     """
 
-    def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
-        super().__init__(sfp_obj_dict, port_mapping, task_stopping_event, logger)
+    def __init__(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        super().__init__(port_obj_dict, port_mapping, task_stopping_event, logger)
         self.xcvr_table_helper = xcvr_table_helper
-        self.status_utils = StatusUtils(self.sfp_obj_dict, logger)
+        self.status_utils = StatusUtils(self.port_obj_dict, logger)
         self.logger = logger
 
     def post_port_transceiver_hw_status_to_db(self, logical_port_name, db_cache=None):

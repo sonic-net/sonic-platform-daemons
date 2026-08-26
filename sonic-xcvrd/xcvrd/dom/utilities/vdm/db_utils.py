@@ -16,10 +16,10 @@ class VDMDBUtils(DBUtils):
         - TRANSCEIVER_VDM_XXXX_THRESHOLD
             - XXXX refers to HALARM, LALARM, HWARN or LWARN
     """
-    def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
-        super().__init__(sfp_obj_dict, port_mapping, task_stopping_event, logger)
+    def __init__(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        super().__init__(port_obj_dict, port_mapping, task_stopping_event, logger)
         self.xcvr_table_helper = xcvr_table_helper
-        self.vdm_utils = VDMUtils(self.sfp_obj_dict, logger)
+        self.vdm_utils = VDMUtils(self.port_obj_dict, logger)
         self.logger = logger
 
     def post_port_vdm_real_values_from_dict_to_db(self, logical_port_name, vdm_real_values_dict):
