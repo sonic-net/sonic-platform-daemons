@@ -1040,6 +1040,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize shared utilities with platform objects
         common.init_globals(platform_chassis, platform_sfputil)
 
+        # Imported here rather than at module scope because cpo_state_task imports from this module
+        # Initialize shared chassis global in cpo_state_task.
+        from .cpo import cpo_state_task
+        cpo_state_task.platform_chassis = platform_chassis
+
         if multi_asic.is_multi_asic():
             # Load the namespace details first from the database_global.json file.
             swsscommon.SonicDBConfig.initializeGlobalConfig()
