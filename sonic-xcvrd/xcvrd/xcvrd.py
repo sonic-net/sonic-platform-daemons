@@ -176,10 +176,21 @@ class SfpStateUpdateTask(threading.Thread):
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)
         self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
-        self.dom_db_utils = DOMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
-        self.vdm_db_utils = VDMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+        self.dom_db_utils = self.create_dom_db_utils(port_obj_dict, self.port_mapping, self.xcvr_table_helper,
+                                                     self.task_stopping_event, self.logger)
+        self.vdm_db_utils = self.create_vdm_db_utils(port_obj_dict, self.port_mapping, self.xcvr_table_helper,
+                                                     self.task_stopping_event, self.logger)
+
+    def create_xcvr_table_helper(self, namespaces):
+        return XcvrTableHelper(namespaces)
+
+    def create_dom_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        return DOMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
+
+    def create_vdm_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        return VDMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
 
     def initialize_warm_fast_reboot_status(self):
         warm_fast_reboot_status = {}

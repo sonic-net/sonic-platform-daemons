@@ -9,6 +9,7 @@ try:
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities.xcvr_table_helper import VDM_THRESHOLD_TYPES
     from .db_utils import CPODOMDBUtils, CPOVDMDBUtils
+    from .xcvr_table_helper import CpoXcvrTableHelper
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -19,11 +20,17 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
         super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event)
         self.name = "CpoStateUpdateTask"
-        # Replace the pluggable-transceiver DB utils installed by the base class with the CPO ones
-        self.dom_db_utils = CPODOMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper,
-                                          self.task_stopping_event, self.logger)
-        self.vdm_db_utils = CPOVDMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper,
-                                          self.task_stopping_event, self.logger)
+
+    def create_xcvr_table_helper(self, namespaces) -> CpoXcvrTableHelper:
+        return CpoXcvrTableHelper(namespaces)
+
+    def create_dom_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper,
+                            task_stopping_event, logger) -> CPODOMDBUtils:
+        return CPODOMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
+
+    def create_vdm_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper,
+                            task_stopping_event, logger) -> CPOVDMDBUtils:
+        return CPOVDMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
 
     def _get_port_change_event(self, timeout):
         status, events = platform_chassis.get_elsfp_change_event(timeout)
