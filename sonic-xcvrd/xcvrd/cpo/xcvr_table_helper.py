@@ -32,3 +32,13 @@ class CpoXcvrTableHelper(XcvrTableHelper):
 
     def get_els_vdm_threshold_tbl(self, asic_id, threshold_type):
         return self.els_vdm_threshold_tbl[f'els_vdm_{threshold_type}_threshold_tbl'][asic_id]
+
+    def get_dom_tables(self, asic_id):
+        return super().get_dom_tables(asic_id) + [self.get_els_dom_threshold_tbl(asic_id)]
+
+    def get_vdm_tables(self, asic_id):
+        return super().get_vdm_tables(asic_id) + \
+            [self.get_els_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES]
+
+    def get_info_tables(self, asic_id):
+        return super().get_info_tables(asic_id) + [self.get_els_info_tbl(asic_id)]
