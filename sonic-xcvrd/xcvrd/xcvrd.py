@@ -240,12 +240,12 @@ class SfpStateUpdateTask(threading.Thread):
         return status, events, None
 
     def _wrapper_is_replaceable(self, physical_port):
-        if platform_chassis is not None:
-            try:
-                return platform_chassis.get_sfp(physical_port).is_replaceable()
-            except NotImplementedError:
-                pass
-        return False
+        port_device = common.get_port_device(physical_port)
+        if port_device is None:
+            helper_logger.log_error("No port device found for port {}".format(physical_port))
+            return False
+
+        return port_device.is_replaceable()
 
     # Update port sfp info in db
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,

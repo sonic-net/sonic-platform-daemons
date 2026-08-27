@@ -36,10 +36,6 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
         oe_api = port_device.oe.get_api()
         return oe_api.get_error_description()
 
-    def _wrapper_is_replaceable(self, physical_port):
-        port_device = common.get_port_device(physical_port)
-        return port_device.is_replaceable()
-
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,
                              stop_event=threading.Event()):
         physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
@@ -86,11 +82,6 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
                 [('is_replaceable', str(is_replaceable))]
             )
             els_tbl.set(port_name, fvs)
-
-
-    def post_port_thresholds_to_db(self, logical_port_name, dom_db_cache=None, vdm_db_cache=None):
-        self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port_name, db_cache=dom_db_cache)
-        self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port_name, db_cache=vdm_db_cache)
 
     def delete_port_data_from_db(self, logical_port_name, asic_index,
                                  delete_intf_tbl=False, delete_status_sw_tbl=False):

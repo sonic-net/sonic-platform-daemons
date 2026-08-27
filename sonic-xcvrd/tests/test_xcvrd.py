@@ -5977,12 +5977,13 @@ class TestXcvrdScript(object):
         mock_sfputil.get_presence = MagicMock(return_value=False)
         assert not _wrapper_get_presence(1)
 
-    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_replaceable(self, mock_chassis):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), MagicMock(),
                                   threading.Event(), threading.Event())
         mock_object = MagicMock()
         mock_object.is_replaceable = MagicMock(return_value=True)
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
         assert task._wrapper_is_replaceable(1)
 
