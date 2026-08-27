@@ -723,31 +723,12 @@ class SfpStateUpdateTask(threading.Thread):
                 the logical port exists, since the SFP status/error is recorded there.
         """
         tbl_to_del_list = [
-            self.xcvr_table_helper.get_dom_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
-            self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-            *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-            self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-            *[self.xcvr_table_helper.get_vdm_flag_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-            *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-            *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-            *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-            self.xcvr_table_helper.get_status_tbl(asic_index),
-            self.xcvr_table_helper.get_status_flag_tbl(asic_index),
-            self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
-            self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
-            self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
-            self.xcvr_table_helper.get_pm_tbl(asic_index),
-            self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
+            *self.xcvr_table_helper.get_dom_tables(asic_index),
+            *self.xcvr_table_helper.get_vdm_tables(asic_index),
+            *self.xcvr_table_helper.get_status_tables(asic_index, include_sw=delete_status_sw_tbl),
         ]
         if delete_intf_tbl:
-            tbl_to_del_list.append(self.xcvr_table_helper.get_intf_tbl(asic_index))
-        if delete_status_sw_tbl:
-            tbl_to_del_list.append(self.xcvr_table_helper.get_status_sw_tbl(asic_index))
+            tbl_to_del_list.extend(self.xcvr_table_helper.get_info_tables(asic_index))
         common.del_port_sfp_dom_info_from_db(logical_port_name, self.port_mapping, tbl_to_del_list)
 
     def on_port_config_change(self , port_change_event):
