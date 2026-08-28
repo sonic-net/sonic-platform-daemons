@@ -16,7 +16,6 @@ try:
     import time
     import datetime
     import subprocess
-    import argparse
     import re
     import traceback
     import ctypes
@@ -891,17 +890,22 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, skip_cpo_mgr=False):
+    def __init__(self, log_identifier):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
-        self.skip_cmis_mgr = skip_cmis_mgr
-        self.skip_cpo_mgr = skip_cpo_mgr
-        self.enable_sff_mgr = enable_sff_mgr
-        # Resolve dom_* tunables from the "xcvrd" section of the per-platform
-        # pmon_daemon_control.json (see XcvrdConfig). Degrades to built-in
-        # defaults when the file/section is absent or unreadable.
+        # Resolve xcvrd tunables from the "xcvrd" section of the per-platform
+        # pmon_daemon_control.json (see XcvrdConfig). The manager toggles and the
+        # dom_* cadences are read from the resolved config; an absent or
+        # unreadable file/section degrades to built-in defaults.
         self.config = XcvrdConfig.resolve()
+        # self.config is authoritative; the booleans below are convenience views
+        # derived from it once for signature compatibility with the manager task
+        # constructors. Do not mutate them independently - re-derive from
+        # self.config if a toggle ever needs to change.
+        self.skip_cmis_mgr = not self.config.cmis_mgr.enabled
+        self.skip_cpo_mgr = not self.config.cpo_mgr.enabled
+        self.enable_sff_mgr = self.config.sff_mgr.enabled
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
@@ -1165,22 +1169,22 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.config.dom_update_interval)
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.config.dom.update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
 
         # Start the CPO dom sensor info update thread
         cpo_dom_info_update = None
         if self.cpo_obj_dict:
-            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.config.dom_update_interval)
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.config.dom.update_interval)
             cpo_dom_info_update.start()
             self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
-        if self.config.dom_temperature_poll_interval is not None:
+        if self.config.dom.temperature_poll_interval is not None:
             dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event,
-                                                               self.config.dom_temperature_poll_interval)
+                                                               self.config.dom.temperature_poll_interval)
             dom_thermal_info_update.start()
             self.threads.append(dom_thermal_info_update)
 
@@ -1277,14 +1281,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--skip_cmis_mgr', action='store_true')
-    parser.add_argument('--skip_cpo_mgr', action='store_true')
-    parser.add_argument('--enable_sff_mgr', action='store_true')
-
-    args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
-                        args.skip_cpo_mgr)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
     xcvrd.run()
 
 

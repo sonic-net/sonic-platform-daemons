@@ -580,7 +580,7 @@ class TestXcvrdThreadException(object):
         mock_init.return_value = PortMapping()
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.enable_sff_mgr = True
-        xcvrd.config.dom_temperature_poll_interval = 10
+        xcvrd.config.dom.temperature_poll_interval = 10
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
         # init() is mocked out, so populate the pluggable port dict directly.
@@ -6964,25 +6964,36 @@ class TestXcvrdScript(object):
         assert DomInfoUpdateTask.DEFAULT_DOM_INFO_UPDATE_PERIOD_SECS == 60
 
     def test_DaemonXcvrd_resolves_config(self):
-        """DaemonXcvrd populates self.config from XcvrdConfig.resolve().
+        """DaemonXcvrd populates self.config from XcvrdConfig.resolve() and
+        derives the manager toggles from it.
 
         The resolution logic itself (platform-file layering, coercion, defaults)
         is covered in tests/test_xcvrd_config.py; here we only verify the wiring.
         """
-        resolved = MagicMock(dom_temperature_poll_interval=5, dom_update_interval=30)
+        resolved = XcvrdConfig()
+        resolved.dom.temperature_poll_interval = 5
+        resolved.dom.update_interval = 30
         with patch('xcvrd.xcvrd.XcvrdConfig.resolve', return_value=resolved) as mock_resolve:
-            daemon = DaemonXcvrd(SYSLOG_IDENTIFIER, skip_cmis_mgr=False, enable_sff_mgr=False)
+            daemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
         mock_resolve.assert_called_once()
         assert daemon.config is resolved
-        assert daemon.config.dom_temperature_poll_interval == 5
-        assert daemon.config.dom_update_interval == 30
+        assert daemon.config.dom.temperature_poll_interval == 5
+        assert daemon.config.dom.update_interval == 30
+        # Manager toggles are derived from the resolved config's defaults:
+        # cmis_mgr/cpo_mgr enabled, sff_mgr disabled.
+        assert daemon.skip_cmis_mgr is False
+        assert daemon.skip_cpo_mgr is False
+        assert daemon.enable_sff_mgr is False
 
     def test_DaemonXcvrd_config_defaults(self):
-        """With no platform overrides, dom_* tunables fall back to None defaults."""
+        """With no platform overrides, tunables fall back to built-in defaults."""
         with patch('xcvrd.xcvrd.XcvrdConfig.resolve', return_value=XcvrdConfig()):
             daemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        assert daemon.config.dom_temperature_poll_interval is None
-        assert daemon.config.dom_update_interval is None
+        assert daemon.config.dom.temperature_poll_interval is None
+        assert daemon.config.dom.update_interval is None
+        assert daemon.config.cmis_mgr.enabled is True
+        assert daemon.config.sff_mgr.enabled is False
+        assert daemon.config.cpo_mgr.enabled is True
 
 def wait_until(total_wait_time, interval, call_back, *args, **kwargs):
     wait_time = 0
