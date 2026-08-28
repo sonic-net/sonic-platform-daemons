@@ -1,8 +1,13 @@
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py as _build_py
 import distutils.command
+from importlib.metadata import version
 import os.path
 import sys
+
+GRPC_VERSION = '1.71.0'
+PROTOBUF_VERSION = '5.29.6'
+
 
 class GrpcTool(distutils.cmd.Command):
     def initialize_options(self):
@@ -13,6 +18,14 @@ class GrpcTool(distutils.cmd.Command):
 
     def run(self):
         import grpc_tools.protoc
+
+        installed_version = version('grpcio-tools')
+        if installed_version != GRPC_VERSION:
+            raise RuntimeError(
+                'grpcio-tools {} is required; found {}'.format(
+                    GRPC_VERSION, installed_version
+                )
+            )
 
         grpc_tools.protoc.main([
             'grpc_tools.protoc',
@@ -67,12 +80,12 @@ setup(
         # NOTE: This package also requires swsscommon, but it is not currently installed as a wheel
         'enum34; python_version < "3.4"',
         'sonic-py-common',
-        'grpcio',
-        'protobuf>=5.26.0',
+        'grpcio>={}'.format(GRPC_VERSION),
+        'protobuf>={},<6'.format(PROTOBUF_VERSION),
     ],
     setup_requires=[
         'wheel',
-        'grpcio-tools'
+        'grpcio-tools=={}'.format(GRPC_VERSION)
     ],
     tests_require=[
         'pytest',

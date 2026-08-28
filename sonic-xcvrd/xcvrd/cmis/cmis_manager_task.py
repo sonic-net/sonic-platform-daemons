@@ -46,23 +46,35 @@ class CmisManagerTask(threading.Thread):
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
 
-    def __init__(self, namespaces, port_mapping, main_thread_stop_event, skip_cmis_mgr=False, platform_chassis=None):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
         self.name = "CmisManagerTask"
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.port_dict = {k: {"asic_id": v} for k, v in port_mapping.logical_to_asic.items()}
+        self.port_dict = {}
+        for lport, asic_id in port_mapping.logical_to_asic.items():
+            entry = {"asic_id": asic_id}
+            pports = port_mapping.get_logical_to_physical(lport)
+            if pports:
+                entry["index"] = pports[0]
+            self.port_dict[lport] = entry
         self.decomm_pending_dict = {}
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
         self.namespaces = namespaces
-        self.platform_chassis = platform_chassis
+        self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self._is_fast_reboot_enabled = None
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
+        self.fast_reboot_status = self.initialize_fast_reboot_status()
+
+    def initialize_fast_reboot_status(self):
+        fast_reboot_status = {}
+        for namespace in self.namespaces:
+            fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
+        return fast_reboot_status
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -73,14 +85,13 @@ class CmisManagerTask(threading.Thread):
     def log_error(self, message):
         helper_logger.log_error(message)
 
-    def is_fast_reboot_enabled(self):
-        """Check if fast reboot is enabled, caching the result"""
-        if self._is_fast_reboot_enabled is None:
-            self._is_fast_reboot_enabled = common.is_fast_reboot_enabled()
-        return self._is_fast_reboot_enabled
-
     def get_asic_id(self, lport):
         return self.port_dict.get(lport, {}).get("asic_id", -1)
+
+    def is_fast_reboot_enabled_for_lport(self, lport):
+        asic_id = self.get_asic_id(lport)
+        namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
+        return self.fast_reboot_status.get(namespace, False)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
         status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))
@@ -116,6 +127,10 @@ class CmisManagerTask(threading.Thread):
             return
 
         if port_change_event.port_dict is None:
+            return
+
+        owner_pport = pport if pport >= 0 else self.port_dict.get(lport, {}).get('index')
+        if owner_pport not in self.port_obj_dict:
             return
 
         if port_change_event.event_type == port_change_event.PORT_SET:
@@ -226,7 +241,7 @@ class CmisManagerTask(threading.Thread):
         Get maximum host lanes mask based on module type
         """
         module_type = api.get_module_type_abbreviation()
-        
+
         # QSFP+C has 4 lanes, all others have 8
         return 0x0f if module_type == 'QSFP+C' else 0xff
 
@@ -862,7 +877,7 @@ class CmisManagerTask(threading.Thread):
         speed = port_info.get('speed')
         subport = port_info.get('subport')
         appl = port_info.get('appl', 0)
-        is_fast_reboot = self.is_fast_reboot_enabled()
+        is_fast_reboot = self.is_fast_reboot_enabled_for_lport(lport)
 
         self.port_dict[lport]['appl'] = common.get_cmis_application_desired(api, host_lane_count, speed)
         if self.port_dict[lport]['appl'] is None:
@@ -1033,8 +1048,8 @@ class CmisManagerTask(threading.Thread):
         retries = port_info.get('cmis_retries', 0)
         deinit_host_lanes_mask = port_info.get('host_lanes_mask', 0)
         disable_media_lanes_mask = port_info['media_lanes_mask']
-        # Deinit and disable all lanes if we are in ModuleLowPwr to avoid unintentional 
-        # initialization of other datapaths during transition to ModuleReady 
+        # Deinit and disable all lanes if we are in ModuleLowPwr to avoid unintentional
+        # initialization of other datapaths during transition to ModuleReady
         if self.check_module_state(api, ['ModuleLowPwr']):
             self.log_notice("{}: ModuleLowPwr detected, set datapath deinit and disable Tx output for all lanes".format(lport))
             deinit_host_lanes_mask = self.port_dict[lport]['max_host_lanes_mask']
@@ -1067,7 +1082,6 @@ class CmisManagerTask(threading.Thread):
         subport = port_info.get('subport')
         pport = port_info.get('pport')
         sfp = port_info.get('sfp')
-        is_fast_reboot = self.is_fast_reboot_enabled()
 
         # CMIS expiration and retries
         #
@@ -1107,8 +1121,8 @@ class CmisManagerTask(threading.Thread):
                 if not self.handle_cmis_dp_deinit_state(lport):
                     return
             elif state == CMIS_STATE_AP_CONF:
-                # Explicit control bit to apply custom Host SI settings. 
-                # It will be set to 1 and applied via set_application if 
+                # Explicit control bit to apply custom Host SI settings.
+                # It will be set to 1 and applied via set_application if
                 # custom SI settings is applicable
                 ec = 0
 
@@ -1173,12 +1187,17 @@ class CmisManagerTask(threading.Thread):
                     if self.is_timer_expired(expired):
                         self.log_notice("{}: timeout for 'ConfigSuccess', current ConfigStatus: "
                                         "{}".format(lport, list(api.get_config_datapath_hostlane_status().values())))
+                        if self.is_decomm_pending(lport):
+                            self.log_notice("{}: DECOMMISSION: failed for physical port {}".format(
+                                                lport, self.port_dict[lport]['index']))
+                            self.clear_decomm_pending(lport)
                         self.force_cmis_reinit(lport, retries + 1)
                     return
 
                 # Clear decommission status and invoke CMIS reinit so that normal CMIS initialization can begin
                 if self.is_decomm_pending(lport):
-                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(lport, self.port_dict[lport]['index']))
+                    self.log_notice("{}: DECOMMISSION: done for physical port {}".format(
+                                        lport, self.port_dict[lport]['index']))
                     self.clear_decomm_pending(lport)
                     self.force_cmis_reinit(lport)
                     return
@@ -1267,10 +1286,13 @@ class CmisManagerTask(threading.Thread):
         if pport < 0 or speed == 0 or len(lanes) < 1 or subport < 0:
             return
 
+        if pport not in self.port_obj_dict:
+            return
+
         host_lane_count = self.get_host_lane_count(lport, lanes)
 
         # double-check the HW presence before moving forward
-        sfp = self.platform_chassis.get_sfp(pport)
+        sfp = self.port_obj_dict[pport]
         if not sfp.get_presence():
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
             return
@@ -1346,8 +1368,8 @@ class CmisManagerTask(threading.Thread):
         self.log_notice("Stopped")
 
     def run(self):
-        if self.platform_chassis is None:
-            self.log_notice("Platform chassis is not available, stopping...")
+        if not self.port_obj_dict:
+            self.log_notice("No SFP objects are available, stopping...")
             return
 
         if self.skip_cmis_mgr:
@@ -1361,7 +1383,8 @@ class CmisManagerTask(threading.Thread):
                 self.wait_for_port_config_done(namespace)
 
             for lport in self.port_dict.keys():
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
+                if self.port_dict[lport].get('index') in self.port_obj_dict:
+                    self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
 
             self.task_worker()
         except Exception as e:
@@ -1376,4 +1399,3 @@ class CmisManagerTask(threading.Thread):
             threading.Thread.join(self)
             if self.exc:
                 raise self.exc
-

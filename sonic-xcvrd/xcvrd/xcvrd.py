@@ -30,6 +30,8 @@ try:
     from .sff_mgr import SffManagerTask
     from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
+    from .cpo.cpo_manager_task import CpoManagerTask
+    from .cpo.dom_mgr import CpoDomInfoUpdateTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -259,7 +261,7 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
-    def __init__(self, namespaces, port_mapping, sfp_obj_dict, main_thread_stop_event, sfp_error_event):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
         threading.Thread.__init__(self)
         self.name = "SfpStateUpdateTask"
         self.exc = None
@@ -276,11 +278,26 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_error_dict = {}
         self.sfp_insert_events = {}
         self.namespaces = namespaces
-        self.sfp_obj_dict = sfp_obj_dict
+        self.port_obj_dict = port_obj_dict
         self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.dom_db_utils = DOMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
-        self.vdm_db_utils = VDMDBUtils(sfp_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+        self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
+        self.dom_db_utils = DOMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+        self.vdm_db_utils = VDMDBUtils(port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.logger)
+
+    def initialize_warm_fast_reboot_status(self):
+        warm_fast_reboot_status = {}
+        for namespace in self.namespaces:
+            warm_fast_reboot_status[namespace] = bool(common.is_syncd_warm_restore_complete(namespace) or
+                                                      common.is_fast_reboot_enabled(namespace))
+        return warm_fast_reboot_status
+
+    def is_warm_fast_reboot_for_lport(self, logical_port):
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
+        if asic_index is None:
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_index)
+        return self.warm_fast_reboot_status.get(namespace, False)
 
     def _mapping_event_from_change_event(self, status, port_dict):
         """
@@ -312,11 +329,6 @@ class SfpStateUpdateTask(threading.Thread):
         transceiver_dict = {}
         retry_eeprom_set = set()
 
-        # Pre-fetch warm start status for all namespaces/ASICs
-        warm_start_status = {}
-        for namespace in self.namespaces:
-            warm_start_status[namespace] = common.is_syncd_warm_restore_complete(namespace)
-
         # Post all the current interface sfp/dom threshold info to STATE_DB
         logical_port_list = port_mapping.logical_port_list
         for logical_port_name in logical_port_list:
@@ -329,13 +341,13 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored while posting SFP info during boot-up".format(logical_port_name))
                 continue
 
-            # Get warm start status for this ASIC's namespace
+            # Get warm/fast reboot status for this ASIC's namespace
             namespace = common.get_namespace_from_asic_id(asic_index)
-            is_warm_start = warm_start_status.get(namespace, False)
+            is_warm_fast_reboot = self.warm_fast_reboot_status.get(namespace, False)
 
             rc = post_port_sfp_info_to_db(logical_port_name, port_mapping, xcvr_table_helper.get_intf_tbl(asic_index), transceiver_dict, stop_event)
             if rc != SFP_EEPROM_NOT_READY:
-                if is_warm_start == False:
+                if is_warm_fast_reboot == False:
                     media_settings_parser.notify_media_setting(logical_port_name, transceiver_dict, xcvr_table_helper, port_mapping)
             else:
                 retry_eeprom_set.add(logical_port_name)
@@ -570,7 +582,8 @@ class SfpStateUpdateTask(threading.Thread):
                                     self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                                     self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
-                                    media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                                    if not self.is_warm_fast_reboot_for_lport(logical_port):
+                                        media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                                     transceiver_dict.clear()
                             elif value == sfp_status_helper.SFP_STATUS_REMOVED:
                                 # Remove the SFP API object for this physical port
@@ -830,7 +843,8 @@ class SfpStateUpdateTask(threading.Thread):
             else:
                 self.dom_db_utils.post_port_dom_thresholds_to_db(port_change_event.port_name)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(port_change_event.port_name)
-                media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                if not self.is_warm_fast_reboot_for_lport(port_change_event.port_name):
+                    media_settings_parser.notify_media_setting(port_change_event.port_name, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
         else:
             status = sfp_status_helper.SFP_STATUS_REMOVED if not status else status
         common.update_port_transceiver_status_table_sw(port_change_event.port_name, status_sw_tbl, status, error_description)
@@ -858,7 +872,8 @@ class SfpStateUpdateTask(threading.Thread):
                 self.dom_db_utils.post_port_dom_thresholds_to_db(logical_port)
                 self.vdm_db_utils.post_port_vdm_thresholds_to_db(logical_port)
 
-                media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
+                if not self.is_warm_fast_reboot_for_lport(logical_port):
+                    media_settings_parser.notify_media_setting(logical_port, transceiver_dict, self.xcvr_table_helper, self.port_mapping)
                 transceiver_dict.clear()
                 retry_success_set.add(logical_port)
         # Update retry EEPROM set
@@ -876,11 +891,12 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False):
+    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, skip_cpo_mgr=False):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
         self.skip_cmis_mgr = skip_cmis_mgr
+        self.skip_cpo_mgr = skip_cpo_mgr
         self.enable_sff_mgr = enable_sff_mgr
         # Resolve dom_* tunables from the "xcvrd" section of the per-platform
         # pmon_daemon_control.json (see XcvrdConfig). Degrades to built-in
@@ -889,6 +905,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
+        self.cpo_obj_dict = {}
 
     def update_loggers_log_level(self):
         """
@@ -962,30 +979,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         self.log_notice("XCVRD INIT: Port init control fields initialized in STATE_DB PORT_TABLE")
 
-    def initialize_sfp_obj_dict(self, port_mapping_data):
-        """
-        Create a dictionary mapping physical ports to their corresponding SFP objects.
-
-        Args:
-            port_mapping_data (PortMapping): The port mapping data.
-
-        Returns:
-            Dict[int, Sfp]: A dictionary mapping physical ports to SFP objects.
-        """
-        if port_mapping_data is None or port_mapping_data.physical_to_logical is None:
-            self.log_error("SFP OBJ INIT: Failed to get port mapping data")
-            return {}
-
-        physical_port_list = port_mapping_data.physical_to_logical.keys()
-        sfp_obj_dict = {}
-        for physical_port in physical_port_list:
-            try:
-                sfp_obj_dict[physical_port] = platform_chassis.get_sfp(physical_port)
-            except Exception as e:
-                self.log_error(f"SFP OBJ INIT: Failed to get SFP object for port {physical_port} due to {repr(e)}")
-
-        return sfp_obj_dict
-
     def remove_stale_transceiver_info(self, port_mapping_data):
         """
         Remove stale entries from the TRANSCEIVER_INFO table for ports where the transceiver is no longer present.
@@ -1056,8 +1049,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # Initialize xcvr table helper
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
-        if common.is_fast_reboot_enabled():
-            self.log_info("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
+        if all(common.is_fast_reboot_enabled(ns) for ns in self.namespaces):
+            self.log_notice("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
             media_settings_parser.load_media_settings()
             optics_si_parser.load_optics_si_settings()
@@ -1071,7 +1064,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
-        self.sfp_obj_dict = self.initialize_sfp_obj_dict(port_mapping_data)
+        self.sfp_obj_dict = common.get_pluggable_obj_dict(port_mapping_data)
+        self.cpo_obj_dict = common.get_cpo_obj_dict(port_mapping_data)
 
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
         # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
@@ -1086,10 +1080,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_info("Start daemon deinit...")
 
         # Pre-fetch warm/fast reboot status for all namespaces/ASICs
-        is_fast_reboot = common.is_fast_reboot_enabled()
         warm_fast_reboot_status = {}
         for namespace in self.namespaces:
-            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or is_fast_reboot
+            warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)
 
         # Delete all the information from DB and then exit
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
@@ -1159,15 +1152,29 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Start the CMIS manager
         cmis_manager = None
-        if not self.skip_cmis_mgr:
-            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr, platform_chassis=platform_chassis)
+        if self.sfp_obj_dict and not self.skip_cmis_mgr:
+            cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr)
             cmis_manager.start()
             self.threads.append(cmis_manager)
+
+        # Start the CPO manager
+        cpo_manager = None
+        if self.cpo_obj_dict and not self.skip_cpo_mgr:
+            cpo_manager = CpoManagerTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, skip_cpo_mgr=self.skip_cpo_mgr)
+            cpo_manager.start()
+            self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
         dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.config.dom_update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
+
+        # Start the CPO dom sensor info update thread
+        cpo_dom_info_update = None
+        if self.cpo_obj_dict:
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.config.dom_update_interval)
+            cpo_dom_info_update.start()
+            self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
@@ -1181,6 +1188,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
         sfp_state_update.start()
         self.threads.append(sfp_state_update)
+
+        # Start the CPO state info update thread
+        cpo_state_update = None
+        if self.cpo_obj_dict:
+            from .cpo.cpo_state_task import CpoStateUpdateTask
+            cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
+            cpo_state_update.start()
+            self.threads.append(cpo_state_update)
 
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
@@ -1215,9 +1230,19 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             if cmis_manager.is_alive():
                 cmis_manager.join()
 
+        # Stop the CPO manager
+        if cpo_manager is not None:
+            if cpo_manager.is_alive():
+                cpo_manager.join()
+
         # Stop the dom sensor info update thread
         if dom_info_update.is_alive():
             dom_info_update.join()
+
+        # Stop the CPO dom sensor info update thread
+        if cpo_dom_info_update is not None:
+            if cpo_dom_info_update.is_alive():
+                cpo_dom_info_update.join()
 
         # Stop the dom thermal sensor info update thread
         if dom_thermal_info_update is not None:
@@ -1228,6 +1253,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if sfp_state_update.is_alive():
             sfp_state_update.raise_exception()
             sfp_state_update.join()
+
+        # Stop the CPO state info update thread
+        if cpo_state_update is not None:
+            if cpo_state_update.is_alive():
+                cpo_state_update.raise_exception()
+                cpo_state_update.join()
 
         # Start daemon deinitialization sequence
         self.deinit()
@@ -1248,10 +1279,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip_cmis_mgr', action='store_true')
+    parser.add_argument('--skip_cpo_mgr', action='store_true')
     parser.add_argument('--enable_sff_mgr', action='store_true')
 
     args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
+                        args.skip_cpo_mgr)
     xcvrd.run()
 
 

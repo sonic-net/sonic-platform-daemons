@@ -7,12 +7,17 @@
 
 try:
     import sys
+    import functools
     import subprocess
     import traceback
     import threading
+    from dataclasses import dataclass
+    from types import MappingProxyType
+    from typing import Any, Callable, Dict, FrozenSet, Mapping, Set
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base, multi_asic
+    from sonic_py_common import syslogger, daemon_base, device_info, multi_asic
     from . import sfp_status_helper
+    from .port_event_helper import PortMapping
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
 except ImportError as e:
@@ -44,6 +49,11 @@ platform_sfputil = None
 
 # Cache for thread-specific loggers to avoid creating multiple loggers for the same thread
 thread_loggers = {}
+
+# Useful constants for interpreting the contents of cpo.json
+CPO_DEVICE_TYPE_OE = 'optical_engine'
+CPO_DEVICE_TYPE_ELSFP = 'external_laser_source'
+
 
 def get_syslog_identifier_common():
     """Get syslog identifier based on current thread name, fallback to 'xcvrd_common'"""
@@ -112,6 +122,177 @@ def update_port_transceiver_status_table_sw(logical_port_name, status_sw_tbl, st
     fvs = swsscommon.FieldValuePairs([('status', status), ('error', error_descriptions)])
     status_sw_tbl.set(logical_port_name, fvs)
 
+def get_port_device(physical_port: int) -> Any:
+    if platform_chassis is None:
+        return None
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    try:
+        return platform_chassis.get_sfp(physical_port)
+    except (NotImplementedError, AttributeError, IndexError):
+        return None
+
+def is_cpo_port(physical_port: int) -> bool:
+    if platform_chassis is None:
+        return False
+    try:
+        return platform_chassis.get_cpo(physical_port) is not None
+    except (NotImplementedError, AttributeError, IndexError):
+        return False
+
+def is_pluggable_port(physical_port: int) -> bool:
+    return not is_cpo_port(physical_port)
+
+def _get_port_obj_dict(port_mapping_data: PortMapping | None,
+                       port_filter: Callable[[int], bool]) -> Dict[int, Any]:
+    """
+    Create a dictionary mapping physical ports to their corresponding device objects,
+    restricted to the ports accepted by port_filter.
+
+    Args:
+        port_mapping_data (PortMapping): The port mapping data.
+        port_filter (Callable[[int], bool]): Predicate selecting the physical ports to include.
+
+    Returns:
+        Dict[int, Any]: A dictionary mapping physical ports to device objects.
+    """
+    if port_mapping_data is None or port_mapping_data.physical_to_logical is None:
+        helper_logger.log_error("PORT OBJ INIT: Failed to get port mapping data")
+        return {}
+
+    obj_dict = {}
+    for physical_port in port_mapping_data.physical_to_logical.keys():
+        try:
+            if port_filter(physical_port):
+                obj_dict[physical_port] = get_port_device(physical_port)
+        except Exception as e:
+            helper_logger.log_error(f"PORT OBJ INIT: Failed to get device object for port {physical_port} due to {repr(e)}")
+
+    return obj_dict
+
+def get_cpo_obj_dict(port_mapping_data: PortMapping | None) -> Dict[int, Any]:
+    """Create a dictionary mapping physical ports to their corresponding CPO objects."""
+    return _get_port_obj_dict(port_mapping_data, is_cpo_port)
+
+def get_pluggable_obj_dict(port_mapping_data: PortMapping | None) -> Dict[int, Any]:
+    """Create a dictionary mapping physical ports to their corresponding SFP objects."""
+    return _get_port_obj_dict(port_mapping_data, is_pluggable_port)
+
+@dataclass(frozen=True)
+class CpoTopology:
+    """
+    The CPO devices of a platform and the physical ports they drive.
+
+    Attributes:
+        pports_by_device: {device type: {device id: physical ports the device drives}}
+        devices_by_pport: {physical port: ids of the devices driving the port}
+    """
+    pports_by_device: Mapping[str, Mapping[str, FrozenSet[int]]]
+    devices_by_pport: Mapping[int, FrozenSet[str]]
+
+@functools.cache
+def _build_cpo_topology() -> CpoTopology:
+    """
+    Build the CPO device topology of the platform.
+
+    The topology is described by cpo.json, which associates each platform.json
+    interface with the devices driving it, and platform.json, which maps
+    each of those interfaces to a physical port index. Both describe static
+    platform data, so the result is memoized for the lifetime of the process.
+
+    Returns:
+        CpoTopology: The platform topology, empty if cpo.json is not available.
+    """
+    def freeze_topology(pports_by_device: Dict[str, Dict[str, Set[int]]],
+                        devices_by_pport: Dict[int, Set[str]]) -> CpoTopology:
+        """Convert the mutable topology accumulators into an immutable CpoTopology."""
+        frozen_pports_by_device = {}
+        for device_type, devices_of_type in pports_by_device.items():
+            frozen_devices_of_type = {device_id: frozenset(pports)
+                                      for device_id, pports in devices_of_type.items()}
+            frozen_pports_by_device[device_type] = MappingProxyType(frozen_devices_of_type)
+
+        frozen_devices_by_pport = {pport: frozenset(device_ids)
+                                   for pport, device_ids in devices_by_pport.items()}
+        return CpoTopology(MappingProxyType(frozen_pports_by_device),
+                           MappingProxyType(frozen_devices_by_pport))
+
+    cpo_data = device_info.get_cpo_data()
+    if not cpo_data:
+        helper_logger.log_notice("CPO TOPOLOGY: no cpo.json data available")
+        return freeze_topology({}, {})
+
+    pports_by_device = {}
+    devices_by_pport = {}
+
+    platform_interfaces = (device_info.get_platform_json_data() or {}).get('interfaces', {})
+    devices = cpo_data.get('devices') or {}
+
+    for ifname, if_data in (cpo_data.get('interfaces') or {}).items():
+        pport = int(str(platform_interfaces[ifname]['index']).split(',')[0].strip())
+
+        for associated_device in (if_data or {}).get('associated_devices') or []:
+            device_id = associated_device['device_id']
+            pports = pports_by_device.setdefault(devices[device_id]['device_type'], {})
+            pports.setdefault(device_id, set()).add(pport)
+            devices_by_pport.setdefault(pport, set()).add(device_id)
+
+    return freeze_topology(pports_by_device, devices_by_pport)
+
+def get_cpo_devices_of_pport(physical_port: int, device_type: str) -> Dict[str, FrozenSet[int]]:
+    """
+    Get the CPO devices of the given type driving physical_port.
+
+    Args:
+        physical_port (int): Physical port index
+        device_type (str): cpo.json device type
+
+    Returns:
+        Dict[str, FrozenSet[int]]: {device id: all physical ports the device drives}, taken
+        straight from the immutable platform topology. Empty if the topology is not
+        available or no such device drives physical_port.
+    """
+    topology = _build_cpo_topology()
+    pports_by_device = topology.pports_by_device.get(device_type) or {}
+    return {device_id: pports_by_device[device_id]
+            for device_id in topology.devices_by_pport.get(physical_port, ())
+            if device_id in pports_by_device}
+
+def _get_sibling_pports(physical_port: int, device_type: str) -> FrozenSet[int]:
+    """
+    Get all physical ports sharing the given type of CPO device with physical_port.
+
+    Args:
+        physical_port (int): Physical port index
+        device_type (str): cpo.json device type
+
+    Returns:
+        FrozenSet[int]: Physical port indexes, always including physical_port itself.
+        Only physical_port is returned if the platform topology is not available.
+    """
+    siblings = {physical_port}
+    for pports in get_cpo_devices_of_pport(physical_port, device_type).values():
+        siblings.update(pports)
+    return frozenset(siblings)
+
+def get_oe_sibling_pports(physical_port: int) -> FrozenSet[int]:
+    """
+    Get all physical ports sharing an optical engine with physical_port, including
+    physical_port itself.
+    """
+    return _get_sibling_pports(physical_port, CPO_DEVICE_TYPE_OE)
+
+def get_elsfp_sibling_pports(physical_port: int) -> FrozenSet[int]:
+    """
+    Get all physical ports sharing an ELSFP with physical_port, including
+    physical_port itself.
+    """
+    return _get_sibling_pports(physical_port, CPO_DEVICE_TYPE_ELSFP)
+
 def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
@@ -125,7 +306,9 @@ def _wrapper_get_presence(physical_port):
     """Wrapper function to get SFP presence status"""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_presence()
+            device = get_port_device(physical_port)
+            if device is not None:
+                return device.get_presence()
         except NotImplementedError:
             pass
     if platform_sfputil is not None:
@@ -145,10 +328,13 @@ def _wrapper_get_presence(physical_port):
                 pass
     return False
 
-def is_fast_reboot_enabled():
+def is_fast_reboot_enabled(namespace=''):
     """Check if fast reboot is enabled"""
-    fastboot_enabled = subprocess.check_output('sonic-db-cli STATE_DB hget "FAST_RESTART_ENABLE_TABLE|system" enable', shell=True, universal_newlines=True)
-    return "true" in fastboot_enabled
+    state_db = daemon_base.db_connect("STATE_DB", namespace=namespace)
+    fastboot_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
+    if isinstance(fastboot_enabled, str):
+        return fastboot_enabled.strip().lower() == "true"
+    return False
 
 def is_syncd_warm_restore_complete(namespace=''):
     """

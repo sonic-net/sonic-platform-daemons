@@ -14,7 +14,8 @@
       - Operator admin up/down                  (STATE_DB: CHASSIS_MODULE)
 
     Classes:
-      EventLogger            Dual-output logger: syslog + /host/bmc/event.log.
+      EventLogger            Syslog logger that optionally tees to a file
+                             (/host/bmc/event.log for critical events).
                              All daemon classes inherit from this.
       ActionItem             Data class carrying a pending power action from the
                              event thread to the main thread via action_queue.
@@ -60,26 +61,37 @@ except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
 
-DEFAULT_LOG_FILE = "/var/log/syslog"
 CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
 
 
 # This class could be moved to sonic-py-common, the log file name can be passed as input.
 class EventLogger(logger.Logger):
     """
-    Extends sonic_py_common Logger to tee every log call to a local file in
-    addition to syslog.  All bmcctld classes inherit from this so that
-    power-state transitions and event handling are recorded in a dedicated
-    log file that survives syslog rotation and is easy to grep offline.
+    Extends sonic_py_common Logger to optionally tee log calls to a local file
+    in addition to syslog.  A file is used only for critical power/leak/alert
+    events, which must survive syslog rotation and be easy to grep offline.
+
+    When log_file is None the instance logs to syslog only.  Container-local
+    files are not rotated by the host logrotate, so a file target must live on
+    a host-visible path that logrotate covers.
     """
 
-    def __init__(self, syslog_identifier, log_file=DEFAULT_LOG_FILE):
+    def __init__(self, syslog_identifier, log_file=None):
         super(EventLogger, self).__init__(syslog_identifier)
         # Derive a unique Python logger name per log file so instances writing
-        # to different files do not share handlers.
-        py_name = "{}.{}".format(syslog_identifier,
-                                 os.path.basename(log_file).replace(".", "_"))
+        # to different files do not share handlers.  Syslog-only instances
+        # share a single inert logger.
+        py_name = "{}.{}".format(
+            syslog_identifier,
+            os.path.basename(log_file).replace(".", "_") if log_file else "syslog_only")
         self._file_logger = logging.getLogger(py_name)
+        if log_file is None:
+            # Keep the logger inert so records are neither emitted nor
+            # propagated to the root logger.
+            self._file_logger.propagate = False
+            if not self._file_logger.handlers:
+                self._file_logger.addHandler(logging.NullHandler())
+            return
         if not self._file_logger.handlers and os.getenv("BMCCTLD_UNIT_TESTING") != "1":
             try:
                 handler = logging.FileHandler(log_file)
@@ -268,9 +280,9 @@ exit_code = 1
 CHASSIS_LOAD_ERROR = 1
 
 # Two global logger instances — initialised once and shared across the module.
-# Use _daemon_logger for routine operational messages (DEFAULT_LOG_FILE).
+# Use _daemon_logger for routine operational messages (syslog only).
 # Use _event_logger for critical power/leak/alert events (CRITICAL_EVENT_LOG_FILE).
-_daemon_logger = EventLogger(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+_daemon_logger = EventLogger(SYSLOG_IDENTIFIER)
 _event_logger = EventLogger(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
 
 # ============================================================
@@ -554,7 +566,7 @@ class PolicyReader(EventLogger):
     """Reads bmcctld timing and leak policy configuration from CONFIG_DB."""
 
     def __init__(self):
-        super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER)
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
     def _get_chassis_module_entry(self):
@@ -690,7 +702,7 @@ class GracefulShutdownHandler(EventLogger):
     """
 
     def __init__(self, controller, policy_reader):
-        super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER)
         self._event_log = _event_logger  # for critical leak / alert events only
         self.controller = controller
         self.policy_reader = policy_reader
@@ -808,7 +820,7 @@ class BmcEventHandler(EventLogger):
 
     def __init__(self, action_queue, policy_reader, critical_event_checker, stop_event,
                  controller):
-        super(BmcEventHandler, self).__init__(SYSLOG_IDENTIFIER, DEFAULT_LOG_FILE)
+        super(BmcEventHandler, self).__init__(SYSLOG_IDENTIFIER)
         self._event_log = _event_logger  # for critical leak / alert events only
         self.action_queue = action_queue
         self.policy_reader = policy_reader

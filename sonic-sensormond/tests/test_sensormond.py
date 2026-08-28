@@ -545,9 +545,12 @@ def sensor_mock_open(*args, **kwargs):
     # unpatched version for every other path
     return builtin_open(*args, **kwargs)
 
+def sensor_mock_isfile(path):
+    return path == sensormond.PLATFORM_ENV_CONF_FILE
+
 @mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
 @mock.patch("builtins.open", sensor_mock_open)
-@mock.patch('os.path.isfile', mock.MagicMock(return_value=True))
+@mock.patch('os.path.isfile', sensor_mock_isfile)
 def test_daemon_init_with_valid_platform_config():
     import sonic_platform.platform
     class MyPlatform():
@@ -566,7 +569,7 @@ def sensor_mock_open_invalid(*args, **kwargs):
 
 @mock.patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', mock.MagicMock(return_value=(tests_path, '')))
 @mock.patch("builtins.open", sensor_mock_open_invalid)
-@mock.patch('os.path.isfile', mock.MagicMock(return_value=True))
+@mock.patch('os.path.isfile', sensor_mock_isfile)
 def test_daemon_init_with_invalid_platform_config():
     import sonic_platform.platform
     class MyPlatform():
