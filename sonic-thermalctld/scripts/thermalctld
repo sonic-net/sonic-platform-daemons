@@ -726,17 +726,25 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             if not sensor_is_ok:
                 if sensor_name not in self.faulty_sensors:
                     self.faulty_sensors[sensor_name] = now
-                    self.log_error('Liquid cooling leakage sensor {} reported faulty'.format(sensor_name))
+                    self.event_logger.log_error('Liquid cooling leakage sensor {} reported faulty'.format(sensor_name))
             else:
                 if sensor_name in self.faulty_sensors:
                     del self.faulty_sensors[sensor_name]
-                    self.log_notice('Liquid cooling leaking sensor {} recovered from fault'.format(sensor_name))
+                    self.event_logger.log_notice('Liquid cooling leaking sensor {} recovered from fault'.format(sensor_name))
 
             if sensor_is_ok:
                 if sensor_is_leak:
                     if sensor_name not in self.leaking_sensors:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
+
+                    # A healthy sensor that is leaking must report a severity. A None here
+                    # is a platform-plugin contract violation; surface it to the event log
+                    # so it can be flagged via syslog alerting.
+                    if sensor_leak_severity is None:
+                        self.event_logger.log_error(
+                            'Liquid cooling leakage sensor {} is leaking but reported no severity (None)'.format(
+                                sensor_name))
 
                     # Upgrade minor leaks to critical if the time threshold has been exceeded.
                     escalated_to_critical = False
@@ -854,7 +862,12 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         while not stopping_event.is_set():
             self.log_debug("Start liquid cooling updating")
 
-            self.update()
+            try:
+                self.update()
+            except Exception as e:
+                # A platform-plugin error in a single cycle must not permanently kill
+                # the leak-monitoring thread; log and retry on the next interval.
+                self.log_error('Error during liquid cooling update cycle: {}'.format(repr(e)))
 
             self.log_debug("End liquid cooling updating")
 

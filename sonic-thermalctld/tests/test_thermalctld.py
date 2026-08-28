@@ -1293,6 +1293,81 @@ class TestLiquidCoolingUpdater(object):
 
         assert mock_sleep.call_count == 0
 
+    @mock.patch('time.sleep')
+    def test_task_worker_survives_update_exception(self, mock_sleep):
+        """A platform error in update() is caught so the monitoring thread stays alive."""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater.log_debug = mock.MagicMock()
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.update = mock.MagicMock(
+            side_effect=Exception("boom from platform plugin"))
+
+        stopping_event = threading.Event()
+
+        def side_effect_sleep(interval):
+            stopping_event.set()
+
+        mock_sleep.side_effect = side_effect_sleep
+
+        # Must not raise, must complete one cycle and go back to sleep (thread alive).
+        liquid_cooling_updater.task_worker(stopping_event)
+
+        assert liquid_cooling_updater.update.call_count == 1
+        assert liquid_cooling_updater.log_error.call_count == 1
+        assert 'Error during liquid cooling update cycle' in \
+            liquid_cooling_updater.log_error.call_args[0][0]
+        assert mock_sleep.call_count == 1
+        assert liquid_cooling_updater.exc is None
+        assert not liquid_cooling_updater.task_stopping_event.is_set()
+
+    @mock.patch('thermalctld.try_get')
+    def test_faulty_sensor_logged_to_event_log(self, mock_try_get):
+        """A faulty leak sensor and its recovery are recorded to the durable event log."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = \
+            mock.MagicMock(return_value=False)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 reported faulty')
+
+        # Recovery is also written to the event log.
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = \
+            mock.MagicMock(return_value=True)
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_notice.assert_any_call(
+            'Liquid cooling leaking sensor leakage1 recovered from fault')
+
+    @mock.patch('thermalctld.try_get')
+    def test_leaking_without_severity_logs_event_error(self, mock_try_get):
+        """A leaking healthy sensor reporting no severity logs an error to the event log."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].get_leak_severity = \
+            mock.MagicMock(return_value=None)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 is leaking but reported no severity (None)')
+
 
 class TestThermalMonitor(object):
     """
