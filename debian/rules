@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+#export DH_VERBOSE = 1
+
+# The vendor supplies its platform API directory through _BUILD_ENV in
+# platform/<vendor>/rules.mk.  Cargo needs a literal path, so point a symlink of
+# a fixed name at whatever that variable holds; nothing here names a vendor.
+VENDOR_PLATFORM_LINK = vendor-platform
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	test -n "$(VENDOR_PLATFORM_RS_PATH)" || { echo "VENDOR_PLATFORM_RS_PATH is unset; platform/<vendor>/rules.mk must set it"; exit 1; }
+	ln -sfn $(VENDOR_PLATFORM_RS_PATH) $(VENDOR_PLATFORM_LINK)
+	cargo build --locked --release
+
+override_dh_auto_install:
+	# do nothing
+	:
+
+# Deliberately not `cargo clean`: this is a workspace, and cargo has to load
+# every member's manifest before it will do anything.  At clean time the
+# vendor-platform symlink does not exist yet, so `sonic-platform` cannot be
+# resolved and cargo exits non-zero.  Removing the directory is what
+# `cargo clean` would have done anyway, and it needs no manifest.
+override_dh_auto_clean:
+	rm -rf target
+	rm -f $(VENDOR_PLATFORM_LINK)
+
+override_dh_auto_test:
+	# The vendor crate is tested by its own target; see
+	# platform/<vendor>/mlnx-platform-api-rs.mk and 7.13 of the HLD.
+	cargo test --locked --release
