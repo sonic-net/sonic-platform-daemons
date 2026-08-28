@@ -738,26 +738,24 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater._refresh_leak_status()
 
-        # Two self.log_error calls (one per sensor leak detection). Multiple
-        # concurrent leaks no longer auto-escalate to CRITICAL, so there is NO
-        # event_logger.log_error for a system CRITICAL transition and the system
-        # severity stays MINOR.
+        # Two self.log_error calls (one per sensor leak detection) plus one
+        # event_logger.log_error for the system CRITICAL transition.
         assert liquid_cooling_updater.log_error.call_count == 2
-        assert liquid_cooling_updater.event_logger.log_error.call_count == 0
+        assert liquid_cooling_updater.event_logger.log_error.call_count == 1
         assert len(liquid_cooling_updater.leaking_sensors) == 2
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert "leakage2" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
 
-        # System status only written on the initial None->MINOR transition; the
-        # second MINOR leak does not change the aggregate severity, so no
-        # additional write occurs.
         calls_sys = liquid_cooling_updater.system_table.set.call_args_list
-        assert len(calls_sys) == 1
-        scope_name, fvp = calls_sys[0][0]
-        assert scope_name == "system"
-        assert fvp.fv_dict['device_leak_status'] == 'MINOR'
+        for index, call in enumerate(calls_sys):
+            scope_name, fvp = call[0]
+            assert scope_name == "system"
+            if index == 0:
+                assert fvp.fv_dict['device_leak_status'] == 'MINOR'
+            elif index == 1:
+                assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_minor_no_escalation_when_duration_zero(self, mock_try_get):

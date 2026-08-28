@@ -780,13 +780,11 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         self.event_logger.log_error(msg)
                         self.critical_sensors.add(sensor_name)
 
-                    # System severity is the highest per-sensor severity. Multiple
-                    # concurrent leaks do NOT by themselves escalate to CRITICAL;
-                    # escalation comes only from a sensor's own CRITICAL severity or
-                    # the time-based MINOR->CRITICAL upgrade handled above.
-                    if sensor_leak_severity == LeakSeverity.CRITICAL:
+                    if status is not None:
+                        # Multiple leaks (any severity) are critical.
                         status = LeakSeverity.CRITICAL
-                    elif status is None:
+                    else:
+                        # Else, severity is whatever this sensor's severity is.
                         status = sensor_leak_severity
                 else:
                     if sensor_name in self.leaking_sensors:
