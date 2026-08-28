@@ -701,8 +701,9 @@ class TestBmcEventHandlerCmdTableBounding:
         assert tbl.get("CMD_C")[0] is True
         assert list(event_handler._completed_cmd_keys) == ["CMD_B", "CMD_C"]
 
-    def test_startup_never_deletes_in_flight(self, event_handler, monkeypatch):
-        """PENDING/IN_PROGRESS entries are never trimmed, even above the cap."""
+    def test_startup_keeps_pending_deletes_in_progress(self, event_handler, monkeypatch):
+        """PENDING entries survive (the subscriber replay re-executes them), while
+        stale IN_PROGRESS entries are deleted (replay never retries them)."""
         monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 1)
         tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
         self._seed(tbl, "CMD_P", bmcctld.CMD_STATUS_PENDING, "2026-01-01 00:00:01")
@@ -711,9 +712,9 @@ class TestBmcEventHandlerCmdTableBounding:
         self._seed(tbl, "CMD_D2", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:04")
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             event_handler._bound_cmd_table_on_startup()
-        # In-flight entries always survive.
+        # PENDING survives; stale IN_PROGRESS is deleted.
         assert tbl.get("CMD_P")[0] is True
-        assert tbl.get("CMD_I")[0] is True
+        assert tbl.get("CMD_I")[0] is False
         # Only the newest terminal entry (cap=1) survives; older terminal deleted.
         assert tbl.get("CMD_D1")[0] is False
         assert tbl.get("CMD_D2")[0] is True

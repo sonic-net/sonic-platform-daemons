@@ -1125,7 +1125,13 @@ class BmcEventHandler(EventLogger):
         """One-time reconcile at startup: the FIFO is in-memory and empty after a
         restart, so scan the table once, delete terminal (DONE/FAILED) entries
         beyond the newest max_entries (oldest first by timestamp), and seed the
-        FIFO with the survivors. In-flight (PENDING/IN_PROGRESS) entries are kept."""
+        FIFO with the survivors.
+
+        IN_PROGRESS entries are stale orphans after a restart: the subscriber
+        replay only re-processes PENDING entries (see _handle_rack_mgr_command),
+        so an IN_PROGRESS command can never complete or be retried. Delete them
+        to reclaim the slot. PENDING entries are kept because the replay executes
+        them."""
         if max_entries is None:
             max_entries = MAX_RACK_MGR_CMD_ENTRIES
         tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
@@ -1135,7 +1141,13 @@ class BmcEventHandler(EventLogger):
             if not (result and result[0]):
                 continue
             entry = fvs_to_dict(result[1])
-            if entry.get(FIELD_STATUS) in (CMD_STATUS_DONE, CMD_STATUS_FAILED):
+            status = entry.get(FIELD_STATUS)
+            if status == CMD_STATUS_IN_PROGRESS:
+                self.log_notice(
+                    "Deleting stale IN_PROGRESS rack manager command on startup: key={}".format(k))
+                tbl._del(k)
+                continue
+            if status in (CMD_STATUS_DONE, CMD_STATUS_FAILED):
                 terminal.append((entry.get(FIELD_LAST_CHANGE_TIMESTAMP, ""), k))
         terminal.sort()  # oldest timestamp first
         survivors = terminal[-max_entries:] if max_entries else []
