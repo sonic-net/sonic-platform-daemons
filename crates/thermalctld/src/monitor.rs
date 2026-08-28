@@ -12,10 +12,10 @@ use tokio::sync::watch;
 
 use platform_traits::{PlatformApi, ThermalManager};
 
-use crate::db::StateDb;
-use crate::fan_updater::FanUpdater;
 use crate::bmc::ChassisThermalWatch;
+use crate::db::StateDb;
 use crate::event_log::BmcEventLogger;
+use crate::fan_updater::FanUpdater;
 use crate::polling::{PollingGate, PollingIntervals};
 use crate::temp_updater::TemperatureUpdater;
 
@@ -80,8 +80,7 @@ impl Monitor {
             intervals,
             fan_gate: PollingGate::new(),
             policy_gate: PollingGate::new(),
-            bmc_watch: is_switch_bmc
-                .then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
+            bmc_watch: is_switch_bmc.then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
         }
     }
 
@@ -137,8 +136,9 @@ impl Monitor {
 
             // Temperature update: needs &mut self (updates min/max_recorded).
             // Each thermal may carry its own interval.
-            if let Err(e) =
-                self.temperature_updater.update(platform, db, &self.intervals, begin, &stopping)
+            if let Err(e) = self
+                .temperature_updater
+                .update(platform, db, &self.intervals, begin, &stopping)
             {
                 log::warn!("temperature update failed: {e}");
             }
@@ -189,9 +189,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use platform_traits::{
-        ChassisInfo, FanDrawerInfo, FanInfo, PlatformError, ThermalInfo,
-    };
+    use platform_traits::{ChassisInfo, FanDrawerInfo, FanInfo, PlatformError, ThermalInfo};
 
     use crate::db::mock::MockDb;
 
@@ -296,7 +294,11 @@ mod tests {
             // Zero means due every cycle.  `PollingGate` measures in real
             // time, which `start_paused` does not advance, so a non-zero
             // interval here would never come due.
-            manager: FakeManager { log: log.clone(), fail: false, interval: 0.0 },
+            manager: FakeManager {
+                log: log.clone(),
+                fail: false,
+                interval: 0.0,
+            },
             log,
             rx,
         }

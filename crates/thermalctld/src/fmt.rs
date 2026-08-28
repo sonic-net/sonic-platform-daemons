@@ -77,7 +77,11 @@ pub fn float(v: f64) -> String {
 
 /// Format like Python's `str(bool)`.
 pub fn bool(v: bool) -> String {
-    if v { "True".to_string() } else { "False".to_string() }
+    if v {
+        "True".to_string()
+    } else {
+        "False".to_string()
+    }
 }
 
 /// Format an optional bool; `None` → `"N/A"`.
@@ -93,7 +97,7 @@ pub fn opt_bool(v: Option<bool>) -> String {
 /// so we match that convention.
 pub fn direction(d: Option<FanDirection>) -> String {
     match d {
-        Some(FanDirection::Intake)  => "intake".to_string(),
+        Some(FanDirection::Intake) => "intake".to_string(),
         Some(FanDirection::Exhaust) => "exhaust".to_string(),
         None => NOT_AVAILABLE.to_string(),
     }
@@ -130,7 +134,6 @@ pub fn timestamp() -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-
 /// Timestamp for the BMC event log, matching Python's
 /// `datefmt="%Y-%m-%dT%H:%M:%S"`.
 pub fn event_timestamp() -> String {
@@ -143,7 +146,7 @@ pub fn event_timestamp() -> String {
 mod tests {
     use super::*;
 
-        /// Python spells the non-finite values in lower case; Rust's `Display`
+    /// Python spells the non-finite values in lower case; Rust's `Display`
     /// does not.  A provider handing back a NaN temperature would otherwise
     /// publish `NaN` where the Python daemon publishes `nan`, and this module's
     /// whole contract is that the two strings match.
@@ -157,23 +160,23 @@ mod tests {
         assert_eq!(float(36.5), "36.5");
     }
 
-#[test]
+    #[test]
     fn integral_floats_keep_decimal_point() {
         assert_eq!(float(45.0), "45.0");
-        assert_eq!(float(0.0),  "0.0");
+        assert_eq!(float(0.0), "0.0");
         assert_eq!(float(-5.0), "-5.0");
     }
 
     #[test]
     fn fractional_floats_round_trip() {
         assert_eq!(float(45.25), "45.25");
-        assert_eq!(float(36.5),  "36.5");
+        assert_eq!(float(36.5), "36.5");
     }
 
     #[test]
     fn threshold_int_no_decimal() {
-        assert_eq!(threshold(Some(Threshold::Int(105))),   "105");
-        assert_eq!(threshold(Some(Threshold::Int(120))),   "120");
+        assert_eq!(threshold(Some(Threshold::Int(105))), "105");
+        assert_eq!(threshold(Some(Threshold::Int(120))), "120");
     }
 
     #[test]
@@ -189,13 +192,13 @@ mod tests {
 
     #[test]
     fn bool_is_python_cased() {
-        assert_eq!(bool(true),  "True");
+        assert_eq!(bool(true), "True");
         assert_eq!(bool(false), "False");
     }
 
     #[test]
     fn direction_strings_match_sonic_convention() {
-        assert_eq!(direction(Some(FanDirection::Intake)),  "intake");
+        assert_eq!(direction(Some(FanDirection::Intake)), "intake");
         assert_eq!(direction(Some(FanDirection::Exhaust)), "exhaust");
         assert_eq!(direction(None), "N/A");
     }

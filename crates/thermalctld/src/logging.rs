@@ -77,9 +77,10 @@ pub fn init(identifier: &str) {
 
     match syslog::unix(formatter) {
         Ok(writer) => {
-            let logger = SyslogLogger { inner: Mutex::new(writer) };
-            let _ = log::set_boxed_logger(Box::new(logger))
-                .map(|()| log::set_max_level(log::LevelFilter::Info));
+            let logger = SyslogLogger {
+                inner: Mutex::new(writer),
+            };
+            let _ = log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(log::LevelFilter::Info));
         }
         Err(e) => eprintln!("cannot connect to syslog: {e}"),
     }

@@ -89,14 +89,10 @@ impl LeakState {
             // Sensor health is tracked separately from what it reports.
             if !sensor.is_ok {
                 if self.faulty.insert(name.to_string()) {
-                    events.error(&format!(
-                        "Liquid cooling leakage sensor {name} reported faulty"
-                    ));
+                    events.error(&format!("Liquid cooling leakage sensor {name} reported faulty"));
                 }
             } else if self.faulty.remove(name) {
-                events.notice(&format!(
-                    "Liquid cooling leaking sensor {name} recovered from fault"
-                ));
+                events.notice(&format!("Liquid cooling leaking sensor {name} recovered from fault"));
             }
 
             let mut severity = sensor.severity;
@@ -104,9 +100,7 @@ impl LeakState {
             if sensor.is_ok {
                 if sensor.is_leak {
                     let started = *self.leaking_since.entry(name.to_string()).or_insert_with(|| {
-                        events.error(&format!(
-                            "Liquid cooling leakage sensor {name} reported leaking"
-                        ));
+                        events.error(&format!("Liquid cooling leakage sensor {name} reported leaking"));
                         now
                     });
 
@@ -136,9 +130,7 @@ impl LeakState {
                         ));
                     }
 
-                    if severity == Some(LeakSeverity::Critical)
-                        && self.critical.insert(name.to_string())
-                    {
+                    if severity == Some(LeakSeverity::Critical) && self.critical.insert(name.to_string()) {
                         events.error(&match escalated_after {
                             Some(secs) => format!(
                                 "Leak on sensor {name} escalated from MINOR to CRITICAL after {}s",
@@ -165,9 +157,7 @@ impl LeakState {
                             "Liquid cooling leakage sensor {name} recovered from CRITICAL leak"
                         ));
                     } else {
-                        events.notice(&format!(
-                            "Liquid cooling leakage sensor {name} recovered from leaking"
-                        ));
+                        events.notice(&format!("Liquid cooling leakage sensor {name} recovered from leaking"));
                     }
                 }
             }
@@ -185,10 +175,16 @@ impl LeakState {
                 // leak_status duplicates leaking for the system-health checker
                 // and the legacy leakageshow CLI, which still read it.
                 ("leak_status", leaking.to_string()),
-                ("leak_sensor_status", if sensor.is_ok { "Good" } else { "Fault" }.to_string()),
+                (
+                    "leak_sensor_status",
+                    if sensor.is_ok { "Good" } else { "Fault" }.to_string(),
+                ),
                 ("type", sensor.sensor_type.clone()),
                 ("location", sensor.location.clone()),
-                ("leak_severity", severity.map_or("None".to_string(), |s| s.as_str().to_string())),
+                (
+                    "leak_severity",
+                    severity.map_or("None".to_string(), |s| s.as_str().to_string()),
+                ),
             ];
             if self.last_row.get(name) != Some(&row) {
                 self.last_row.insert(name.to_string(), row.clone());
@@ -201,7 +197,11 @@ impl LeakState {
         if is_critical && !was_critical {
             let mut names: Vec<&str> = self.leaking_since.keys().map(|s| s.as_str()).collect();
             names.sort_unstable();
-            let list = if names.is_empty() { "unknown".to_string() } else { names.join(", ") };
+            let list = if names.is_empty() {
+                "unknown".to_string()
+            } else {
+                names.join(", ")
+            };
             events.error(&format!("CRITICAL system leak detected (sensors: {list})"));
         } else if was_critical && !is_critical {
             events.notice(&format!(
@@ -218,7 +218,6 @@ impl LeakState {
         out
     }
 }
-
 
 // ── The thread ────────────────────────────────────────────────────────────────
 
@@ -351,11 +350,17 @@ mod tests {
     /// two-sensors-are-critical rule must not depend on the first one having
     /// answered.
     fn unrated(name: &str, leak: bool) -> LeakSensorInfo {
-        LeakSensorInfo { severity: None, ..sensor(name, leak) }
+        LeakSensorInfo {
+            severity: None,
+            ..sensor(name, leak)
+        }
     }
 
     fn profile(secs: f64) -> Vec<LeakProfile> {
-        vec![LeakProfile { profile_type: "p".to_string(), max_minor_duration_sec: Some(secs) }]
+        vec![LeakProfile {
+            profile_type: "p".to_string(),
+            max_minor_duration_sec: Some(secs),
+        }]
     }
 
     fn field<'a>(row: &'a SensorRow, key: &str) -> &'a str {
@@ -412,9 +417,17 @@ mod tests {
         let out = st.refresh(&[minor("a", true)], &profile(10.0), t + Duration::from_secs(9), &mut ev);
         assert_eq!(out.system_status, None, "not yet");
 
-        let out = st.refresh(&[minor("a", true)], &profile(10.0), t + Duration::from_secs(10), &mut ev);
+        let out = st.refresh(
+            &[minor("a", true)],
+            &profile(10.0),
+            t + Duration::from_secs(10),
+            &mut ev,
+        );
         assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
-        assert!(ev.lines.iter().any(|l| l.contains("escalated from MINOR to CRITICAL after 10")));
+        assert!(ev
+            .lines
+            .iter()
+            .any(|l| l.contains("escalated from MINOR to CRITICAL after 10")));
     }
 
     #[test]
@@ -448,7 +461,10 @@ mod tests {
         st.refresh(&[sensor("a", true)], &[], t, &mut ev);
         st.refresh(&[sensor("a", false)], &[], t, &mut ev);
         st.refresh(&[sensor("a", true)], &[], t, &mut ev);
-        assert_eq!(ev.lines.iter().filter(|l| l.contains("CRITICAL leak reported")).count(), 2);
+        assert_eq!(
+            ev.lines.iter().filter(|l| l.contains("CRITICAL leak reported")).count(),
+            2
+        );
     }
 
     #[test]
@@ -459,7 +475,11 @@ mod tests {
         let mut s = sensor("a", true);
         s.is_ok = false;
         let out = st.refresh(&[s.clone()], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(None), "a faulty sensor does not set the aggregate");
+        assert_eq!(
+            out.system_status,
+            Some(None),
+            "a faulty sensor does not set the aggregate"
+        );
         assert_eq!(field(&out.rows[0].1, "leaking"), "N/A");
         assert_eq!(field(&out.rows[0].1, "leak_sensor_status"), "Fault");
         st.refresh(&[s], &[], t, &mut ev);
@@ -513,22 +533,28 @@ mod tests {
     fn an_empty_table_is_seeded_with_none() {
         let m = MockLeak::new();
         publish_profiles_and_seed(&m.tables, &[]);
-        assert_eq!(
-            m.system.field("system", "device_leak_status").as_deref(),
-            Some("None")
-        );
+        assert_eq!(m.system.field("system", "device_leak_status").as_deref(), Some("None"));
     }
 
     #[test]
     fn profiles_are_published_once_per_type() {
         let m = MockLeak::new();
         let profiles = vec![
-            LeakProfile { profile_type: "fast".into(), max_minor_duration_sec: Some(30.0) },
-            LeakProfile { profile_type: "slow".into(), max_minor_duration_sec: None },
+            LeakProfile {
+                profile_type: "fast".into(),
+                max_minor_duration_sec: Some(30.0),
+            },
+            LeakProfile {
+                profile_type: "slow".into(),
+                max_minor_duration_sec: None,
+            },
         ];
         publish_profiles_and_seed(&m.tables, &profiles);
         assert_eq!(m.profile.keys(), ["fast", "slow"]);
-        assert_eq!(m.profile.field("fast", "max_minor_duration_sec").as_deref(), Some("30.0"));
+        assert_eq!(
+            m.profile.field("fast", "max_minor_duration_sec").as_deref(),
+            Some("30.0")
+        );
         assert_eq!(
             m.profile.field("slow", "max_minor_duration_sec").as_deref(),
             Some("inf"),
@@ -684,7 +710,10 @@ mod tests {
         let m = crate::db::mock::MockLeak::new();
         let mut st = LeakState::new();
         let mut ev = Recorder::default();
-        let profiles = [LeakProfile { profile_type: "chassis".into(), max_minor_duration_sec: Some(0.0) }];
+        let profiles = [LeakProfile {
+            profile_type: "chassis".into(),
+            max_minor_duration_sec: Some(0.0),
+        }];
         let mut sensor_crit = sensor("leakage1", true);
         sensor_crit.profile_type = Some("chassis".to_string());
 
@@ -694,7 +723,11 @@ mod tests {
         let unwritten = apply(&m.tables, &out);
         assert!(unwritten.system);
         st.forget(&unwritten);
-        let alarms = ev.lines.iter().filter(|l| l.contains("CRITICAL system leak detected")).count();
+        let alarms = ev
+            .lines
+            .iter()
+            .filter(|l| l.contains("CRITICAL system leak detected"))
+            .count();
         assert_eq!(alarms, 1, "the episode was announced once");
 
         // Same state, database healthy: the value has to be rewritten, and the
@@ -703,7 +736,11 @@ mod tests {
         let out = st.refresh(&[sensor_crit], &profiles, Instant::now(), &mut ev);
         assert!(out.system_status.is_some(), "the dropped value is rewritten");
         let _ = apply(&m.tables, &out);
-        let alarms = ev.lines.iter().filter(|l| l.contains("CRITICAL system leak detected")).count();
+        let alarms = ev
+            .lines
+            .iter()
+            .filter(|l| l.contains("CRITICAL system leak detected"))
+            .count();
         assert_eq!(alarms, 1, "and only once");
     }
 
@@ -757,7 +794,10 @@ mod tests {
 
         publish_profiles_and_seed(
             &m.tables,
-            &[LeakProfile { profile_type: "chassis".into(), max_minor_duration_sec: None }],
+            &[LeakProfile {
+                profile_type: "chassis".into(),
+                max_minor_duration_sec: None,
+            }],
         );
         assert!(m.profile.is_empty());
 

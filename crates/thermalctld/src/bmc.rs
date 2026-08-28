@@ -115,8 +115,7 @@ impl BmcMirror {
                 self.table = None;
                 if !self.failed {
                     self.failed = true;
-                    log::warn!("Failed to open remote BMC {} table: {e}",
-                               crate::db::TEMPERATURE_INFO);
+                    log::warn!("Failed to open remote BMC {} table: {e}", crate::db::TEMPERATURE_INFO);
                 }
             }
         }
@@ -346,10 +345,7 @@ mod tests {
 
     /// An opener whose answer a test controls, and which counts how often it
     /// was asked.
-    fn opener(
-        table: MockTable,
-        fail_until: usize,
-    ) -> (OpenTable, Arc<Mutex<usize>>) {
+    fn opener(table: MockTable, fail_until: usize) -> (OpenTable, Arc<Mutex<usize>>) {
         let calls = Arc::new(Mutex::new(0usize));
         let c = calls.clone();
         let open: OpenTable = Box::new(move |_addr: &str| {
@@ -400,7 +396,11 @@ mod tests {
 
         remote.fail_writes("broken pipe");
         m.set("ASIC", &[("temperature", "45.0".to_string())]);
-        assert_eq!(*calls.lock().unwrap(), 1, "no reconnect yet — the failure just happened");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "no reconnect yet — the failure just happened"
+        );
 
         m.set("PSU-1 Temp", &[("temperature", "30.0".to_string())]);
         assert_eq!(*calls.lock().unwrap(), 2, "the next row reconnects");

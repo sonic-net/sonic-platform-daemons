@@ -138,8 +138,7 @@ fn py_dict(m: &HashMap<String, f64>) -> String {
     }
     let mut keys: Vec<&String> = m.keys().collect();
     keys.sort();
-    let body: Vec<String> =
-        keys.iter().map(|k| format!("'{k}': {}", float(m[*k]))).collect();
+    let body: Vec<String> = keys.iter().map(|k| format!("'{k}': {}", float(m[*k]))).collect();
     format!("{{{}}}", body.join(", "))
 }
 
@@ -315,8 +314,11 @@ mod tests {
     /// The fan takes the faster of the two entries that can throttle it.
     #[test]
     fn the_fan_takes_the_faster_of_its_two_intervals() {
-        let mut i =
-            PollingIntervals { fan_drawer: Some(30.0), psu: Some(15.0), ..Default::default() };
+        let mut i = PollingIntervals {
+            fan_drawer: Some(30.0),
+            psu: Some(15.0),
+            ..Default::default()
+        };
         assert_eq!(i.resolve(60.0), 15.0);
         assert_eq!(i.fan, Some(15.0));
     }
@@ -327,7 +329,10 @@ mod tests {
     /// every cycle — including a cycle the fan itself shrank.
     #[test]
     fn a_fan_only_file_does_not_pin_thermals() {
-        let mut i = PollingIntervals { fan_drawer: Some(5.0), ..Default::default() };
+        let mut i = PollingIntervals {
+            fan_drawer: Some(5.0),
+            ..Default::default()
+        };
         assert_eq!(i.resolve(60.0), 5.0);
         assert_eq!(i.default_thermal, None);
     }
@@ -368,10 +373,12 @@ mod tests {
 
     #[test]
     fn config_entry_is_the_one_without_a_name() {
-        let f = write(r#"{"chassis": {"fan_drawers": [
+        let f = write(
+            r#"{"chassis": {"fan_drawers": [
             {"polling_interval": 5},
             {"name": "drawer1", "polling_interval": 99}
-        ]}}"#);
+        ]}}"#,
+        );
         assert_eq!(PollingIntervals::load_from(f.path()).fan_drawer, Some(5.0));
     }
 
@@ -383,11 +390,13 @@ mod tests {
 
     #[test]
     fn thermals_are_keyed_by_name_and_accept_strings() {
-        let f = write(r#"{"chassis": {"thermals": [
+        let f = write(
+            r#"{"chassis": {"thermals": [
             {"name": "ASIC", "polling_interval": "3"},
             {"name": "Ambient", "polling_interval": 12.5},
             {"name": "NoInterval"}
-        ]}}"#);
+        ]}}"#,
+        );
         let got = PollingIntervals::load_from(f.path()).thermals;
         assert_eq!(got.get("ASIC"), Some(&3.0));
         assert_eq!(got.get("Ambient"), Some(&12.5));
@@ -400,9 +409,7 @@ mod tests {
     #[test]
     fn a_non_finite_or_absurd_interval_is_unset() {
         for bad in ["inf", "-inf", "NaN", "1e30"] {
-            let body = format!(
-                r#"{{"chassis": {{"thermals": [{{"name": "ASIC", "polling_interval": "{bad}"}}]}}}}"#
-            );
+            let body = format!(r#"{{"chassis": {{"thermals": [{{"name": "ASIC", "polling_interval": "{bad}"}}]}}}}"#);
             let f = write(&body);
             assert!(
                 PollingIntervals::load_from(f.path()).thermals.is_empty(),

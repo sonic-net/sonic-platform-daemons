@@ -18,7 +18,7 @@ use crate::db::{StateDb, CHASSIS_INFO_KEY};
 use crate::fmt;
 
 const LED_GREEN: &str = "green";
-const LED_RED:   &str = "red";
+const LED_RED: &str = "red";
 
 /// Per-cycle tallies — reset at the top of each `update()` call.
 #[derive(Default)]
@@ -62,14 +62,20 @@ impl FanStatus {
         if !presence && kind == FanKind::Drawer {
             counters.absent += 1;
         }
-        if presence == self.presence { return false; }
+        if presence == self.presence {
+            return false;
+        }
         self.presence = presence;
         true
     }
 
     fn set_fault_status(&mut self, status: bool, counters: &mut BadFanCounters) -> bool {
-        if !status { counters.faulty += 1; }
-        if status == self.status { return false; }
+        if !status {
+            counters.faulty += 1;
+        }
+        if status == self.status {
+            return false;
+        }
         self.status = status;
         true
     }
@@ -113,14 +119,14 @@ impl FanStatus {
 /// 1a, so this is built in one place and asserted in the tests.
 fn drawer_row(drawer: &FanDrawerInfo) -> [(&'static str, String); 5] {
     [
-        ("presence",      fmt::bool(drawer.presence)),
-        ("model",         fmt::opt_str(&drawer.model)),
-        ("serial",        fmt::opt_str(&drawer.serial)),
+        ("presence", fmt::bool(drawer.presence)),
+        ("model", fmt::opt_str(&drawer.model)),
+        ("serial", fmt::opt_str(&drawer.serial)),
         // Python calls get_status() here and gets "N/A" only because
         // DeviceBase raises NotImplementedError on Mellanox.  Pass the
         // vendor's answer through so a platform that has one is not silently
         // dropped; a platform without reports None, which formats as "N/A".
-        ("status",        fmt::opt_bool(drawer.status)),
+        ("status", fmt::opt_bool(drawer.status)),
         ("is_replaceable", fmt::bool(drawer.is_replaceable)),
     ]
 }
@@ -135,25 +141,56 @@ fn drawer_row(drawer: &FanDrawerInfo) -> [(&'static str, String); 5] {
 ///
 /// For a *present* fan, `status` is the aggregate health rather than the raw
 /// fault bit, so one that is unbroken but over speed reports false.
-fn fan_row(
-    fan: &FanInfo,
-    status: &FanStatus,
-    drawer_name: String,
-) -> [(&'static str, String); 12] {
+fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static str, String); 12] {
     let na = || fmt::NOT_AVAILABLE.to_string();
     [
-        ("presence",     fmt::bool(fan.presence)),
-        ("drawer_name",  drawer_name),
-        ("model",        fmt::opt_str(&fan.model)),
-        ("serial",       fmt::opt_str(&fan.serial)),
-        ("status",       if fan.presence { fmt::bool(status.is_ok()) } else { na() }),
-        ("direction",    if fan.presence { fmt::direction(fan.direction) } else { na() }),
-        ("speed",        if fan.presence { fmt::opt_u32(fan.speed_pct) } else { na() }),
-        ("speed_target", if fan.presence { fmt::opt_u32(fan.target_speed_pct) } else { na() }),
-        ("is_under_speed", if fan.presence { fmt::opt_bool(fan.is_under_speed) } else { na() }),
-        ("is_over_speed",  if fan.presence { fmt::opt_bool(fan.is_over_speed) } else { na() }),
+        ("presence", fmt::bool(fan.presence)),
+        ("drawer_name", drawer_name),
+        ("model", fmt::opt_str(&fan.model)),
+        ("serial", fmt::opt_str(&fan.serial)),
+        ("status", if fan.presence { fmt::bool(status.is_ok()) } else { na() }),
+        (
+            "direction",
+            if fan.presence {
+                fmt::direction(fan.direction)
+            } else {
+                na()
+            },
+        ),
+        (
+            "speed",
+            if fan.presence {
+                fmt::opt_u32(fan.speed_pct)
+            } else {
+                na()
+            },
+        ),
+        (
+            "speed_target",
+            if fan.presence {
+                fmt::opt_u32(fan.target_speed_pct)
+            } else {
+                na()
+            },
+        ),
+        (
+            "is_under_speed",
+            if fan.presence {
+                fmt::opt_bool(fan.is_under_speed)
+            } else {
+                na()
+            },
+        ),
+        (
+            "is_over_speed",
+            if fan.presence {
+                fmt::opt_bool(fan.is_over_speed)
+            } else {
+                na()
+            },
+        ),
         ("is_replaceable", fmt::bool(fan.is_replaceable)),
-        ("timestamp",    fmt::timestamp()),
+        ("timestamp", fmt::timestamp()),
     ]
 }
 
@@ -192,8 +229,8 @@ impl FanUpdater {
         stop: &dyn Fn() -> bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let drawers = platform.get_fan_drawers()?;
-        let fans    = platform.get_fans()?;
-        let mut counters  = BadFanCounters::default();
+        let fans = platform.get_fans()?;
+        let mut counters = BadFanCounters::default();
         let mut led_writes: Vec<LedWrite> = Vec::new();
 
         for drawer in &drawers {
@@ -217,11 +254,7 @@ impl FanUpdater {
             self.update_led_color(db, &fans, &drawers, stop);
         } else {
             for write in &led_writes {
-                if let Err(e) = platform.set_fan_led(
-                    &write.fan_name,
-                    &write.drawer_name,
-                    write.color,
-                ) {
+                if let Err(e) = platform.set_fan_led(&write.fan_name, &write.drawer_name, write.color) {
                     // NotSupported is expected for Phase-1 Mellanox (no SW LED).
                     log::warn!(
                         "Failed to set status LED for fan {}, set_status_led not implemented: {}",
@@ -230,7 +263,7 @@ impl FanUpdater {
                     );
                 }
             }
-            let fresh_fans    = platform.get_fans().unwrap_or_default();
+            let fresh_fans = platform.get_fans().unwrap_or_default();
             let fresh_drawers = platform.get_fan_drawers().unwrap_or_default();
             self.update_led_color(db, &fresh_fans, &fresh_drawers, stop);
         }
@@ -243,9 +276,7 @@ impl FanUpdater {
                 if bad_fan_count == 1 { " is" } else { "s are" }
             );
         } else if self.previous_bad_fan_count > 0 && bad_fan_count == 0 {
-            crate::logging::notice!(
-                "Insufficient number of working fans warning cleared: all fans are back to normal"
-            );
+            crate::logging::notice!("Insufficient number of working fans warning cleared: all fans are back to normal");
         }
         self.previous_bad_fan_count = bad_fan_count;
 
@@ -282,11 +313,7 @@ impl FanUpdater {
         led_writes: &mut Vec<LedWrite>,
     ) {
         let name = fan.name.as_str();
-        db.set_entity_info(
-            name,
-            &fan.parent_name,
-            &fmt::position(fan.position_in_parent),
-        );
+        db.set_entity_info(name, &fan.parent_name, &fmt::position(fan.position_in_parent));
 
         let status = self.status.entry(name.to_string()).or_default();
         let mut set_led = !status.led_initialized;
@@ -346,7 +373,7 @@ impl FanUpdater {
         if set_led && fan.kind == FanKind::Drawer {
             let color = if status.is_ok() { LED_GREEN } else { LED_RED };
             led_writes.push(LedWrite {
-                fan_name:    name.to_string(),
+                fan_name: name.to_string(),
                 drawer_name: fan.drawer_name.clone(),
                 color,
             });
@@ -366,13 +393,7 @@ impl FanUpdater {
         }
     }
 
-    fn update_led_color(
-        &self,
-        db: &StateDb,
-        fans: &[FanInfo],
-        drawers: &[FanDrawerInfo],
-        stop: &dyn Fn() -> bool,
-    ) {
+    fn update_led_color(&self, db: &StateDb, fans: &[FanInfo], drawers: &[FanDrawerInfo], stop: &dyn Fn() -> bool) {
         for fan in fans {
             if stop() {
                 return;
@@ -393,10 +414,7 @@ impl FanUpdater {
             }
             let fvs = [("led_status", fmt::opt_str(&drawer.status_led))];
             if let Err(e) = db.fan_drawer.set(&drawer.name, &fvs) {
-                log::warn!(
-                    "Failed to get status LED state for fan drawer {} - {e}",
-                    drawer.name
-                );
+                log::warn!("Failed to get status LED state for fan drawer {} - {e}", drawer.name);
             }
         }
     }
@@ -506,9 +524,18 @@ mod tests {
         assert_eq!(
             keys(&fan_row(&f, &FanStatus::default(), "drawer1".into())),
             [
-                "presence", "drawer_name", "model", "serial", "status", "direction",
-                "speed", "speed_target", "is_under_speed", "is_over_speed",
-                "is_replaceable", "timestamp"
+                "presence",
+                "drawer_name",
+                "model",
+                "serial",
+                "status",
+                "direction",
+                "speed",
+                "speed_target",
+                "is_under_speed",
+                "is_over_speed",
+                "is_replaceable",
+                "timestamp"
             ]
         );
     }
@@ -617,7 +644,14 @@ mod tests {
         let mut f = fan("fan1");
         f.presence = false;
         let row = fan_row(&f, &FanStatus::default(), "drawer1".into());
-        for field in ["status", "direction", "speed", "speed_target", "is_under_speed", "is_over_speed"] {
+        for field in [
+            "status",
+            "direction",
+            "speed",
+            "speed_target",
+            "is_under_speed",
+            "is_over_speed",
+        ] {
             assert_eq!(val(&row, field), "N/A", "{field} should be N/A on an absent fan");
         }
         // The six that do not depend on the fan answering are still written.
@@ -731,8 +765,14 @@ mod tests {
 
         assert_eq!(m.fan.field("fan1", "presence").as_deref(), Some("True"));
         assert_eq!(m.fan_drawer.field("drawer1", "status").as_deref(), Some("N/A"));
-        assert_eq!(m.physical_entity.field("fan1", "parent_name").as_deref(), Some("drawer1"));
-        assert_eq!(m.physical_entity.field("drawer1", "parent_name").as_deref(), Some("chassis 1"));
+        assert_eq!(
+            m.physical_entity.field("fan1", "parent_name").as_deref(),
+            Some("drawer1")
+        );
+        assert_eq!(
+            m.physical_entity.field("drawer1", "parent_name").as_deref(),
+            Some("chassis 1")
+        );
     }
 
     /// What the platform reports the LED is showing has to reach `FAN_INFO`
@@ -891,10 +931,7 @@ mod tests {
                 _ => p.fans[0].presence = false,
             }
             u.update(&mut p, &m.db, &never_stop).unwrap();
-            assert!(
-                p.led_calls.borrow().len() > baseline,
-                "{change} should be a transition"
-            );
+            assert!(p.led_calls.borrow().len() > baseline, "{change} should be a transition");
 
             // And recovering is a transition too, not a silent return.
             let after = p.led_calls.borrow().len();

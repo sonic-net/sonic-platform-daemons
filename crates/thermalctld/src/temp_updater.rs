@@ -16,10 +16,10 @@ use platform_traits::{PlatformApi, ThermalInfo};
 
 use std::time::Instant;
 
-use crate::db::StateDb;
 use crate::bmc::BmcMirror;
-use crate::polling::{PollingGate, PollingIntervals};
+use crate::db::StateDb;
 use crate::fmt;
+use crate::polling::{PollingGate, PollingIntervals};
 
 /// A jump larger than this between two polls is reported as suspect hardware.
 const TEMPERATURE_DIFF_THRESHOLD: f64 = 10.0;
@@ -78,7 +78,9 @@ impl TemperatureStatus {
             return old;
         }
         let status = temperature.unwrap() > threshold.unwrap();
-        if status == self.over_temperature { return false; }
+        if status == self.over_temperature {
+            return false;
+        }
         self.over_temperature = status;
         true
     }
@@ -90,7 +92,9 @@ impl TemperatureStatus {
             return old;
         }
         let status = temperature.unwrap() < threshold.unwrap();
-        if status == self.under_temperature { return false; }
+        if status == self.under_temperature {
+            return false;
+        }
         self.under_temperature = status;
         true
     }
@@ -121,8 +125,8 @@ impl TemperatureUpdater {
     pub fn with_mirror(mirror: Option<BmcMirror>) -> Self {
         Self {
             status: HashMap::new(),
-            known:  HashSet::new(),
-            gate:   PollingGate::new(),
+            known: HashSet::new(),
+            gate: PollingGate::new(),
             mirror,
         }
     }
@@ -158,9 +162,7 @@ impl TemperatureUpdater {
             // is due; the rest are refreshed every cycle.  Either way the name
             // stays in `available`, so a throttled sensor is not deleted as
             // stale between refreshes.
-            let due = if thermal.parent_name.starts_with("PSU ")
-                || thermal.parent_name.starts_with("PDB ")
-            {
+            let due = if thermal.parent_name.starts_with("PSU ") || thermal.parent_name.starts_with("PDB ") {
                 psus_due
             } else {
                 // A thermal that named no interval falls back to the cycle
@@ -203,7 +205,7 @@ impl TemperatureUpdater {
 
         let temperature = thermal.temperature;
         let high_threshold = thermal.high_threshold.map(|t| t.as_f64());
-        let low_threshold  = thermal.low_threshold.map(|t| t.as_f64());
+        let low_threshold = thermal.low_threshold.map(|t| t.as_f64());
 
         let mut warning = false;
 
@@ -259,11 +261,7 @@ impl TemperatureUpdater {
             warning |= status.under_temperature;
         }
 
-        db.set_entity_info(
-            name,
-            &thermal.parent_name,
-            &fmt::position(thermal.position_in_parent),
-        );
+        db.set_entity_info(name, &thermal.parent_name, &fmt::position(thermal.position_in_parent));
 
         let fvs = thermal_row(thermal, temperature, warning);
 
@@ -295,25 +293,27 @@ impl TemperatureUpdater {
 /// thresholds only under `if temperature != NOT_AVAILABLE:`
 /// (`thermalctld:1159-1181`), so publishing thresholds beside an unreadable
 /// temperature would be a row Python never writes.
-fn thermal_row(
-    thermal: &ThermalInfo,
-    temperature: Option<f64>,
-    warning: bool,
-) -> [(&'static str, String); 10] {
+fn thermal_row(thermal: &ThermalInfo, temperature: Option<f64>, warning: bool) -> [(&'static str, String); 10] {
     let na = || fmt::NOT_AVAILABLE.to_string();
     let readable = temperature.is_some();
     let when = |v: String| if readable { v } else { na() };
     [
-        ("temperature",           fmt::temp(temperature)),
-        ("minimum_temperature",   when(fmt::temp(thermal.min_recorded))),
-        ("maximum_temperature",   when(fmt::temp(thermal.max_recorded))),
-        ("high_threshold",        when(fmt::threshold(thermal.high_threshold))),
-        ("low_threshold",         when(fmt::threshold(thermal.low_threshold))),
-        ("warning_status",        fmt::bool(warning)),
-        ("critical_high_threshold", when(fmt::threshold(thermal.high_critical_threshold))),
-        ("critical_low_threshold",  when(fmt::threshold(thermal.low_critical_threshold))),
-        ("is_replaceable",        fmt::bool(thermal.is_replaceable)),
-        ("timestamp",             fmt::timestamp()),
+        ("temperature", fmt::temp(temperature)),
+        ("minimum_temperature", when(fmt::temp(thermal.min_recorded))),
+        ("maximum_temperature", when(fmt::temp(thermal.max_recorded))),
+        ("high_threshold", when(fmt::threshold(thermal.high_threshold))),
+        ("low_threshold", when(fmt::threshold(thermal.low_threshold))),
+        ("warning_status", fmt::bool(warning)),
+        (
+            "critical_high_threshold",
+            when(fmt::threshold(thermal.high_critical_threshold)),
+        ),
+        (
+            "critical_low_threshold",
+            when(fmt::threshold(thermal.low_critical_threshold)),
+        ),
+        ("is_replaceable", fmt::bool(thermal.is_replaceable)),
+        ("timestamp", fmt::timestamp()),
     ]
 }
 
@@ -388,10 +388,16 @@ mod tests {
         assert_eq!(
             keys(&thermal_row(&thermal("ASIC"), Some(45.0), false)),
             [
-                "temperature", "minimum_temperature", "maximum_temperature",
-                "high_threshold", "low_threshold", "warning_status",
-                "critical_high_threshold", "critical_low_threshold",
-                "is_replaceable", "timestamp"
+                "temperature",
+                "minimum_temperature",
+                "maximum_temperature",
+                "high_threshold",
+                "low_threshold",
+                "warning_status",
+                "critical_high_threshold",
+                "critical_low_threshold",
+                "is_replaceable",
+                "timestamp"
             ]
         );
     }
@@ -454,9 +460,13 @@ mod tests {
         let th = thermal("ASIC"); // thresholds and min/max all present
         let row = thermal_row(&th, None, false);
         for field in [
-            "temperature", "minimum_temperature", "maximum_temperature",
-            "high_threshold", "low_threshold",
-            "critical_high_threshold", "critical_low_threshold",
+            "temperature",
+            "minimum_temperature",
+            "maximum_temperature",
+            "high_threshold",
+            "low_threshold",
+            "critical_high_threshold",
+            "critical_low_threshold",
         ] {
             assert_eq!(val(&row, field), "N/A", "{field} should be N/A without a temperature");
         }
@@ -532,9 +542,18 @@ mod tests {
     fn a_thermal_is_written_with_its_entity_info() {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::new();
-        run(&mut u, &m, vec![thermal("ASIC")], &PollingIntervals::default(), Instant::now());
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC")],
+            &PollingIntervals::default(),
+            Instant::now(),
+        );
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
-        assert_eq!(m.physical_entity.field("ASIC", "parent_name").as_deref(), Some("chassis 1"));
+        assert_eq!(
+            m.physical_entity.field("ASIC", "parent_name").as_deref(),
+            Some("chassis 1")
+        );
     }
 
     /// A sensor that stops being reported is removed, not left stale.
@@ -543,7 +562,13 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::new();
         let now = Instant::now();
-        run(&mut u, &m, vec![thermal("ASIC"), thermal("Ambient")], &PollingIntervals::default(), now);
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC"), thermal("Ambient")],
+            &PollingIntervals::default(),
+            now,
+        );
         assert_eq!(m.temperature.len(), 2);
         run(&mut u, &m, vec![thermal("ASIC")], &PollingIntervals::default(), now);
         assert_eq!(m.temperature.keys(), ["ASIC"]);
@@ -555,7 +580,13 @@ mod tests {
         let m = MockDb::new(true);
         let mut u = TemperatureUpdater::new();
         let now = Instant::now();
-        run(&mut u, &m, vec![thermal("ASIC"), thermal("Ambient")], &PollingIntervals::default(), now);
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC"), thermal("Ambient")],
+            &PollingIntervals::default(),
+            now,
+        );
         assert_eq!(m.chassis_temperature.row("ASIC"), m.temperature.row("ASIC"));
         run(&mut u, &m, vec![thermal("ASIC")], &PollingIntervals::default(), now);
         assert_eq!(m.chassis_temperature.keys(), ["ASIC"]);
@@ -575,7 +606,13 @@ mod tests {
 
         let mut hot = thermal("ASIC");
         hot.temperature = Some(90.0);
-        run(&mut u, &m, vec![hot], &intervals, t0 + std::time::Duration::from_secs(1));
+        run(
+            &mut u,
+            &m,
+            vec![hot],
+            &intervals,
+            t0 + std::time::Duration::from_secs(1),
+        );
         assert_eq!(
             m.temperature.field("ASIC", "temperature").as_deref(),
             Some("45.0"),
@@ -590,7 +627,10 @@ mod tests {
     fn pdb_thermals_share_the_psu_interval() {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::new();
-        let intervals = PollingIntervals { psu: Some(100.0), ..Default::default() };
+        let intervals = PollingIntervals {
+            psu: Some(100.0),
+            ..Default::default()
+        };
         let t0 = Instant::now();
         let mut pdb = thermal("PDB-1 Temp");
         pdb.parent_name = "PDB 1".to_string();
@@ -598,26 +638,50 @@ mod tests {
         run(&mut u, &m, vec![pdb.clone()], &intervals, t0);
         let mut hot = pdb.clone();
         hot.temperature = Some(90.0);
-        run(&mut u, &m, vec![hot], &intervals, t0 + std::time::Duration::from_secs(1));
-        assert_eq!(m.temperature.field("PDB-1 Temp", "temperature").as_deref(), Some("45.0"));
+        run(
+            &mut u,
+            &m,
+            vec![hot],
+            &intervals,
+            t0 + std::time::Duration::from_secs(1),
+        );
+        assert_eq!(
+            m.temperature.field("PDB-1 Temp", "temperature").as_deref(),
+            Some("45.0")
+        );
     }
 
     #[test]
     fn psu_thermals_share_one_interval() {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::new();
-        let intervals = PollingIntervals { psu: Some(100.0), ..Default::default() };
+        let intervals = PollingIntervals {
+            psu: Some(100.0),
+            ..Default::default()
+        };
         let t0 = Instant::now();
         let mut psu = thermal("PSU 1 Temp");
         psu.parent_name = "PSU 1".to_string();
 
         run(&mut u, &m, vec![psu.clone()], &intervals, t0);
-        assert_eq!(m.temperature.field("PSU 1 Temp", "temperature").as_deref(), Some("45.0"));
+        assert_eq!(
+            m.temperature.field("PSU 1 Temp", "temperature").as_deref(),
+            Some("45.0")
+        );
 
         let mut hot = psu.clone();
         hot.temperature = Some(90.0);
-        run(&mut u, &m, vec![hot], &intervals, t0 + std::time::Duration::from_secs(1));
-        assert_eq!(m.temperature.field("PSU 1 Temp", "temperature").as_deref(), Some("45.0"));
+        run(
+            &mut u,
+            &m,
+            vec![hot],
+            &intervals,
+            t0 + std::time::Duration::from_secs(1),
+        );
+        assert_eq!(
+            m.temperature.field("PSU 1 Temp", "temperature").as_deref(),
+            Some("45.0")
+        );
     }
 
     /// A thermal that named no interval of its own runs on the cycle the daemon
@@ -642,7 +706,13 @@ mod tests {
         // the 60 s this sensor inherits.
         let mut hot = thermal("Ambient");
         hot.temperature = Some(90.0);
-        run(&mut u, &m, vec![hot], &intervals, t0 + std::time::Duration::from_secs(10));
+        run(
+            &mut u,
+            &m,
+            vec![hot],
+            &intervals,
+            t0 + std::time::Duration::from_secs(10),
+        );
         assert_eq!(m.temperature.field("Ambient", "temperature").as_deref(), Some("45.0"));
     }
 
@@ -691,7 +761,9 @@ mod tests {
         let remote = MockTable::new();
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(Some(mirror_to(remote.clone())));
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
 
         u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
             .unwrap();
@@ -712,14 +784,18 @@ mod tests {
         let remote = MockTable::new();
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(Some(mirror_to(remote.clone())));
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")],
+        };
         let now = Instant::now();
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(remote.len(), 2);
 
         p.thermals.retain(|t| t.name == "ASIC");
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(remote.keys(), vec!["ASIC"], "the PSU sensor is gone from the BMC too");
     }
 
@@ -729,7 +805,9 @@ mod tests {
     fn an_updater_without_a_mirror_still_writes_locally() {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(None);
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
         u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
             .unwrap();
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
@@ -748,23 +826,29 @@ mod tests {
         th.low_threshold = Some(Threshold::Int(10));
         let now = Instant::now();
 
-        let mut p = FakePlatform { thermals: vec![th.clone()] };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        let mut p = FakePlatform {
+            thermals: vec![th.clone()],
+        };
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
 
         // Above the high threshold.
         p.thermals[0].temperature = Some(110.0);
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("True"));
 
         // Back into the band.
         p.thermals[0].temperature = Some(45.0);
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
 
         // Below the low threshold.
         p.thermals[0].temperature = Some(5.0);
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(
             m.temperature.field("ASIC", "warning_status").as_deref(),
             Some("True"),
@@ -780,11 +864,15 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(None);
         let now = Instant::now();
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         p.thermals[0].temperature = Some(200.0);
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
 
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("200.0"));
     }
@@ -803,15 +891,20 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(None);
         let now = Instant::now();
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         p.thermals[0].temperature = None;
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("N/A"));
 
         p.thermals[0].temperature = Some(45.0);
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
     }
 
@@ -825,7 +918,9 @@ mod tests {
         m.chassis_temperature.fail_writes("redis is down");
 
         let mut u = TemperatureUpdater::with_mirror(None);
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")],
+        };
         u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
             .expect("a write failure is not an error the caller sees");
 
@@ -840,8 +935,11 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(None);
         let now = Instant::now();
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")] };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")],
+        };
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
 
         m.temperature.fail_writes("redis is down");
         p.thermals.retain(|t| t.name == "ASIC");
@@ -869,10 +967,12 @@ mod tests {
             thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp"), thermal("Ambient")],
         };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
+            .unwrap();
         assert_eq!(m.temperature.len(), 3);
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &|| true).unwrap();
+        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &|| true)
+            .unwrap();
         assert_eq!(
             m.temperature.len(),
             3,
@@ -885,7 +985,9 @@ mod tests {
     fn a_pass_told_to_stop_publishes_nothing() {
         let m = MockDb::new(false);
         let mut u = TemperatureUpdater::with_mirror(None);
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
         u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &|| true)
             .unwrap();
         assert!(m.temperature.is_empty());

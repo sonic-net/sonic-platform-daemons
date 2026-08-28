@@ -18,10 +18,10 @@
 
 mod bmc;
 mod db;
-mod fan_updater;
-mod fmt;
 mod device_env;
 mod event_log;
+mod fan_updater;
+mod fmt;
 mod leak_updater;
 mod logging;
 mod monitor;
@@ -29,9 +29,9 @@ mod polling;
 mod temp_updater;
 
 use clap::Parser;
+use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
-use std::time::Duration;
 
 use platform_traits::PlatformApi;
 
@@ -112,7 +112,6 @@ async fn main() {
     let args = Args::parse();
     init_logging();
 
-
     // Initialise the platform first: the slot or DPU id it reports decides
     // whether there is a suffixed table to open below.
     // Mirrors Python: `chassis = Platform().get_chassis()`
@@ -128,8 +127,7 @@ async fn main() {
     let slot_or_dpu_id = chassis.as_ref().and_then(|i| i.slot_or_dpu_id);
     // The leak thread runs only where the platform has sensors and the flag is
     // set, which is how Python gates it too.
-    let leak_enabled = args.enable_liquid_cooling
-        && chassis.as_ref().is_some_and(|i| i.is_liquid_cooled);
+    let leak_enabled = args.enable_liquid_cooling && chassis.as_ref().is_some_and(|i| i.is_liquid_cooled);
 
     // Open STATE_DB tables.  The leak tables are not among them: the leak
     // thread is their only writer and opens them itself, on its own cadence.
@@ -165,10 +163,8 @@ async fn main() {
     // Signal handling: SIGTERM and SIGINT both trigger a graceful shutdown.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-        let mut sigint =
-            signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
         tokio::select! {
             _ = sigterm.recv() => log::info!("caught SIGTERM, shutting down"),
             _ = sigint.recv()  => log::info!("caught SIGINT, shutting down"),
@@ -223,11 +219,7 @@ async fn main() {
 }
 
 /// The leak thread: read every sensor, run the state machine, write the tables.
-fn leak_thread_main(
-    interval: Duration,
-    is_switch_bmc: bool,
-    shutdown: watch::Receiver<bool>,
-) {
+fn leak_thread_main(interval: Duration, is_switch_bmc: bool, shutdown: watch::Receiver<bool>) {
     let platform = match Platform::new() {
         Ok(p) => p,
         Err(e) => {
@@ -241,8 +233,10 @@ fn leak_thread_main(
     let tables = match db::LeakTables::open() {
         Ok(t) => t,
         Err(e) => {
-            log::error!("leak updater: cannot open the leak tables, \
-                         leak monitoring is off: {e:?}");
+            log::error!(
+                "leak updater: cannot open the leak tables, \
+                         leak monitoring is off: {e:?}"
+            );
             return;
         }
     };
@@ -337,12 +331,7 @@ mod tests {
     #[test]
     fn clap_rejects_a_bad_interval_on_the_command_line() {
         use clap::Parser;
-        assert!(Args::try_parse_from([
-            "thermalctld-rs",
-            "--liquid_cooling_update_interval",
-            "-0.5"
-        ])
-        .is_err());
+        assert!(Args::try_parse_from(["thermalctld-rs", "--liquid_cooling_update_interval", "-0.5"]).is_err());
         let ok = Args::try_parse_from([
             "thermalctld-rs",
             "--liquid_cooling_update_interval",
@@ -359,8 +348,7 @@ mod tests {
 
     use crate::db::mock::MockLeak;
     use platform_traits::{
-        ChassisInfo, FanDrawerInfo, FanInfo, LeakProfile, LeakSensorInfo, PlatformError,
-        ThermalInfo, ThermalManager,
+        ChassisInfo, FanDrawerInfo, FanInfo, LeakProfile, LeakSensorInfo, PlatformError, ThermalInfo, ThermalManager,
     };
 
     struct FakePlatform {
@@ -433,10 +421,7 @@ mod tests {
             Some("inf"),
             "a profile with no escalation timer publishes Python's inf"
         );
-        assert_eq!(
-            m.system.field("system", "device_leak_status").as_deref(),
-            Some("None")
-        );
+        assert_eq!(m.system.field("system", "device_leak_status").as_deref(), Some("None"));
         assert!(m.sensor.is_empty(), "the sensor rows wait for the first poll");
     }
 
@@ -446,14 +431,12 @@ mod tests {
     #[test]
     fn a_restart_does_not_clear_a_standing_leak_status() {
         let m = MockLeak::new();
-        crate::db::TableLike::set(
-            &m.system,
-            "system",
-            &[("device_leak_status", "CRITICAL".to_string())],
-        )
-        .unwrap();
+        crate::db::TableLike::set(&m.system, "system", &[("device_leak_status", "CRITICAL".to_string())]).unwrap();
 
-        let p = FakePlatform { profiles: Vec::new(), sensors: Vec::new() };
+        let p = FakePlatform {
+            profiles: Vec::new(),
+            sensors: Vec::new(),
+        };
         let (tx, rx) = watch::channel(false);
         tx.send(true).unwrap();
         leak_loop(&p, &m.tables, Duration::from_millis(1), false, rx);
@@ -496,7 +479,10 @@ mod tests {
     #[test]
     fn a_platform_with_no_leak_sensors_publishes_nothing() {
         let m = MockLeak::new();
-        let p = FakePlatform { profiles: Vec::new(), sensors: Vec::new() };
+        let p = FakePlatform {
+            profiles: Vec::new(),
+            sensors: Vec::new(),
+        };
         let (tx, rx) = watch::channel(false);
         tx.send(true).unwrap();
         leak_loop(&p, &m.tables, Duration::from_millis(1), false, rx);

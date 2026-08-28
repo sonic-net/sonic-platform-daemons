@@ -40,7 +40,9 @@ impl BmcEventLogger {
     }
 
     pub fn with_path(is_switch_bmc: bool, path: &Path) -> Self {
-        Self { file: is_switch_bmc.then(|| path.to_path_buf()) }
+        Self {
+            file: is_switch_bmc.then(|| path.to_path_buf()),
+        }
     }
 
     fn tee(&self, level: &str, msg: &str) {

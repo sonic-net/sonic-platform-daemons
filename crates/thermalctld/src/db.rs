@@ -106,8 +106,8 @@ impl LeakTables {
 
     pub fn open_with(mut open: OpenNamed) -> Result<Self, String> {
         Ok(Self {
-            sensor:  open(STATE_DB, LIQUID_COOLING_INFO)?,
-            system:  open(STATE_DB, SYSTEM_LEAK_STATUS)?,
+            sensor: open(STATE_DB, LIQUID_COOLING_INFO)?,
+            system: open(STATE_DB, SYSTEM_LEAK_STATUS)?,
             profile: open(STATE_DB, LEAK_PROFILE)?,
         })
     }
@@ -214,10 +214,7 @@ pub mod mock {
 
         /// The value of one field, for terse assertions.
         pub fn field(&self, key: &str, field: &str) -> Option<String> {
-            self.row(key)?
-                .into_iter()
-                .find(|(k, _)| k == field)
-                .map(|(_, v)| v)
+            self.row(key)?.into_iter().find(|(k, _)| k == field).map(|(_, v)| v)
         }
 
         pub fn len(&self) -> usize {
@@ -282,8 +279,7 @@ pub mod mock {
             let physical_entity = MockTable::new();
             let db = StateDb {
                 temperature: Box::new(temperature.clone()),
-                chassis_temperature: with_chassis
-                    .then(|| Box::new(chassis_temperature.clone()) as Box<dyn TableLike>),
+                chassis_temperature: with_chassis.then(|| Box::new(chassis_temperature.clone()) as Box<dyn TableLike>),
                 fan: Box::new(fan.clone()),
                 fan_drawer: Box::new(fan_drawer.clone()),
                 physical_entity: Box::new(physical_entity.clone()),
@@ -320,8 +316,8 @@ pub mod mock {
             let profile = MockTable::new();
             Self {
                 tables: LeakTables {
-                    sensor:  Box::new(sensor.clone()),
-                    system:  Box::new(system.clone()),
+                    sensor: Box::new(sensor.clone()),
+                    system: Box::new(system.clone()),
                     profile: Box::new(profile.clone()),
                 },
                 sensor,
@@ -341,8 +337,14 @@ mod tests {
     fn entity_info_carries_the_parent_and_position() {
         let m = MockDb::new(false);
         m.db.set_entity_info("fan1", "drawer1", "1");
-        assert_eq!(m.physical_entity.field("fan1", "parent_name").as_deref(), Some("drawer1"));
-        assert_eq!(m.physical_entity.field("fan1", "position_in_parent").as_deref(), Some("1"));
+        assert_eq!(
+            m.physical_entity.field("fan1", "parent_name").as_deref(),
+            Some("drawer1")
+        );
+        assert_eq!(
+            m.physical_entity.field("fan1", "position_in_parent").as_deref(),
+            Some("1")
+        );
     }
 
     /// Python writes position first and parent second; the order is part of
@@ -351,8 +353,13 @@ mod tests {
     fn entity_info_field_order_matches_python() {
         let m = MockDb::new(false);
         m.db.set_entity_info("fan1", "drawer1", "1");
-        let keys: Vec<String> =
-            m.physical_entity.row("fan1").unwrap().into_iter().map(|(k, _)| k).collect();
+        let keys: Vec<String> = m
+            .physical_entity
+            .row("fan1")
+            .unwrap()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         assert_eq!(keys, ["position_in_parent", "parent_name"]);
     }
 
