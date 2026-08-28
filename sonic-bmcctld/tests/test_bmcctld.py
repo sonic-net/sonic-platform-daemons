@@ -456,6 +456,14 @@ class TestCriticalEventChecker:
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_system_leak() is False
 
+    def test_mixed_case_critical_system_leak(self, critical_event_checker):
+        """A mixed-case 'Critical' leak is recognised by the power-on gate."""
+        tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
+        _set_table_entry(tbl, bmcctld.SYSTEM_LEAK_STATUS_KEY,
+                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: "Critical"})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_critical_system_leak() is True
+
     def test_has_critical_rack_mgr_alert(self, critical_event_checker):
         tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
         _set_table_entry(tbl, "Inlet_liquid_temperature",
@@ -475,6 +483,14 @@ class TestCriticalEventChecker:
         tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
         _set_table_entry(tbl, "Rack_level_leak",
                          {bmcctld.FIELD_LEAK: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_critical_rack_mgr_alert() is True
+
+    def test_mixed_case_critical_rack_mgr_alert(self, critical_event_checker):
+        """A mixed-case 'Critical' alert severity is recognised by the power-on gate."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_temperature",
+                         {bmcctld.FIELD_SEVERITY: "Critical"})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_rack_mgr_alert() is True
 
@@ -585,9 +601,15 @@ class TestBmcEventHandlerRackMgrCommands:
         assert event_handler.action_queue.empty()
 
     def test_power_cycle_command_enqueues_power_cycle(self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         event_handler._handle_rack_mgr_command("CMD_4", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_CYCLE
+
+    def test_power_cycle_command_blocked_by_critical_leak(self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler._handle_rack_mgr_command("CMD_4b", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
+        assert event_handler.action_queue.empty()
 
     def test_already_processed_command_is_skipped(self, event_handler):
         event_handler._handle_rack_mgr_command(
@@ -597,6 +619,106 @@ class TestBmcEventHandlerRackMgrCommands:
     def test_unknown_command_is_logged(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_6", self._cmd_fvs("INVALID_CMD"))
         assert event_handler.action_queue.empty()
+
+    def test_on_complete_success_marks_done(self, event_handler):
+        """On success the RACK_MANAGER_COMMAND entry is marked DONE and recorded in
+        the bounded FIFO for later trimming."""
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_ON))
+            item = event_handler.action_queue.get_nowait()
+            item.on_complete(True)
+            found, fvs = tbl.get("CMD_1")
+            assert found is True
+            entry = dict(fvs)
+            assert entry[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_DONE
+            assert entry[bmcctld.FIELD_RESULT] == "SUCCESS"
+            assert "CMD_1" in event_handler._completed_cmd_keys
+
+    def test_on_complete_failure_marks_failed(self, event_handler):
+        """On failure the entry is retained with FAILED/ERROR for debugging."""
+        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_ON))
+            item = event_handler.action_queue.get_nowait()
+            item.on_complete(False)
+            found, fvs = tbl.get("CMD_1")
+            assert found is True
+            entry = dict(fvs)
+            assert entry[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_FAILED
+            assert entry[bmcctld.FIELD_RESULT] == "ERROR"
+
+
+# --------------------------------------------------------------------------
+# Tests: BmcEventHandler - RACK_MANAGER_COMMAND table bounding
+# --------------------------------------------------------------------------
+
+class TestBmcEventHandlerCmdTableBounding:
+
+    def _seed(self, tbl, key, status, ts):
+        tbl.mock_dict[key] = {
+            bmcctld.FIELD_STATUS: status,
+            bmcctld.FIELD_LAST_CHANGE_TIMESTAMP: ts,
+        }
+
+    def test_record_evicts_oldest_beyond_cap(self, event_handler, monkeypatch):
+        """The FIFO caps retained entries; the oldest key is deleted from STATE_DB
+        once the cap is exceeded."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 3)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        for k in ("CMD_1", "CMD_2", "CMD_3", "CMD_4"):
+            tbl.mock_dict[k] = {bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_DONE}
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            for k in ("CMD_1", "CMD_2", "CMD_3", "CMD_4"):
+                event_handler._record_completed_cmd(k)
+        # Cap is 3 -> oldest (CMD_1) evicted from DB; last three retained in FIFO.
+        assert tbl.get("CMD_1")[0] is False
+        assert list(event_handler._completed_cmd_keys) == ["CMD_2", "CMD_3", "CMD_4"]
+
+    def test_record_under_cap_keeps_all(self, event_handler):
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl.mock_dict["CMD_1"] = {bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_DONE}
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._record_completed_cmd("CMD_1")
+        assert tbl.get("CMD_1")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_1"]
+
+    def test_startup_trims_oldest_terminal_and_seeds_fifo(self, event_handler, monkeypatch):
+        """Startup reconcile keeps the newest N terminal entries (by timestamp),
+        deletes older ones, and seeds the FIFO with the survivors."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 2)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        self._seed(tbl, "CMD_A", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:01")
+        self._seed(tbl, "CMD_B", bmcctld.CMD_STATUS_FAILED, "2026-01-01 00:00:02")
+        self._seed(tbl, "CMD_C", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:03")
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._bound_cmd_table_on_startup()
+        # Oldest (CMD_A) deleted; two newest survive and seed the FIFO in age order.
+        assert tbl.get("CMD_A")[0] is False
+        assert tbl.get("CMD_B")[0] is True
+        assert tbl.get("CMD_C")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_B", "CMD_C"]
+
+    def test_startup_keeps_pending_deletes_in_progress(self, event_handler, monkeypatch):
+        """PENDING entries survive (the subscriber replay re-executes them), while
+        stale IN_PROGRESS entries are deleted (replay never retries them)."""
+        monkeypatch.setattr(bmcctld, "MAX_RACK_MGR_CMD_ENTRIES", 1)
+        tbl = Table(event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        self._seed(tbl, "CMD_P", bmcctld.CMD_STATUS_PENDING, "2026-01-01 00:00:01")
+        self._seed(tbl, "CMD_I", bmcctld.CMD_STATUS_IN_PROGRESS, "2026-01-01 00:00:02")
+        self._seed(tbl, "CMD_D1", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:03")
+        self._seed(tbl, "CMD_D2", bmcctld.CMD_STATUS_DONE, "2026-01-01 00:00:04")
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            event_handler._bound_cmd_table_on_startup()
+        # PENDING survives; stale IN_PROGRESS is deleted.
+        assert tbl.get("CMD_P")[0] is True
+        assert tbl.get("CMD_I")[0] is False
+        # Only the newest terminal entry (cap=1) survives; older terminal deleted.
+        assert tbl.get("CMD_D1")[0] is False
+        assert tbl.get("CMD_D2")[0] is True
+        assert list(event_handler._completed_cmd_keys) == ["CMD_D2"]
 
 
 # --------------------------------------------------------------------------
@@ -893,6 +1015,77 @@ class TestBmcEventHandlerRackMgrAlerts:
 
 
 # --------------------------------------------------------------------------
+# Tests: BmcEventHandler - event loop robustness
+# --------------------------------------------------------------------------
+
+class _FakeSelectable:
+    def __init__(self, fd):
+        self._fd = fd
+
+    def getFd(self):
+        return self._fd
+
+
+class _FakeSelect:
+    """Yields each scripted selectable once as OBJECT, then sets stop_event and TIMEOUTs."""
+    def __init__(self, selectables, stop_event):
+        self._selectables = list(selectables)
+        self._stop_event = stop_event
+
+    def select(self, timeout=-1, interrupt_on_signal=False):
+        if self._selectables:
+            return bmcctld.swsscommon.Select.OBJECT, self._selectables.pop(0)
+        self._stop_event.set()
+        return bmcctld.swsscommon.Select.TIMEOUT, None
+
+
+class TestBmcEventHandlerEventLoopRobustness:
+
+    def _table(self, key):
+        tbl = MagicMock()
+        tbl.pop.return_value = (key, "SET", [])
+        return tbl
+
+    def test_malformed_event_does_not_kill_loop(self, event_handler):
+        """A handler exception on one event must be swallowed so the event thread
+        keeps running and processes subsequent events."""
+        eh = event_handler
+        eh.stop_event.clear()
+
+        def raising_handler(key, fvs):
+            raise ValueError("malformed event")
+
+        good_calls = []
+
+        def good_handler(key, fvs):
+            good_calls.append(key)
+
+        eh._subscribers = {
+            1: (self._table("BADKEY"), raising_handler),
+            2: (self._table("GOODKEY"), good_handler),
+        }
+        eh.sel = _FakeSelect([_FakeSelectable(1), _FakeSelectable(2)], eh.stop_event)
+
+        # Must not raise, and the good event after the bad one must still be handled.
+        eh.run_event_loop()
+        assert good_calls == ["GOODKEY"]
+
+    def test_pop_exception_does_not_kill_loop(self, event_handler):
+        """An exception from table.pop() (e.g. malformed fvs) must not kill the loop."""
+        eh = event_handler
+        eh.stop_event.clear()
+
+        bad_table = MagicMock()
+        bad_table.pop.side_effect = RuntimeError("bad fvs")
+        eh._subscribers = {1: (bad_table, lambda k, f: None)}
+        eh.sel = _FakeSelect([_FakeSelectable(1)], eh.stop_event)
+
+        # Loop should survive and exit cleanly once stop_event is set.
+        eh.run_event_loop()
+        assert eh.stop_event.is_set()
+
+
+# --------------------------------------------------------------------------
 # Tests: BmcctldDaemon - action loop
 # --------------------------------------------------------------------------
 
@@ -1176,86 +1369,69 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_off.assert_called_once()
 
     def test_rack_mgr_power_off_during_boot_delay_skips_auto_power_on(self, chassis):
-        """If Rack Manager POWER_OFF cmd executed during boot delay, automatic power-on is skipped."""
+        """A Rack Manager POWER_OFF executed during the boot delay sets the in-memory
+        marker so the subsequent automatic power-on is skipped (host left OFFLINE)."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+
+        def fake_power_off():
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+            return True
+        daemon.controller.power_off = MagicMock(side_effect=fake_power_off)
+        daemon.controller.power_on = MagicMock(return_value=True)
+        # Rack Manager POWER_OFF arrives during the boot delay.
+        daemon.action_queue.put(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_OFF"))
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
+        # Host ended OFFLINE, but the marker must suppress the automatic power-on.
+        assert daemon._rack_mgr_power_cmd_during_boot is True
+        daemon.controller.power_on.assert_not_called()
+
+    def test_no_rack_mgr_cmd_during_boot_allows_auto_power_on(self, chassis):
+        """Without a Rack Manager power directive during the boot delay, an OFFLINE host
+        is powered on automatically."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
-        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
-        daemon.controller.power_on.assert_not_called()
+        assert daemon._rack_mgr_power_cmd_during_boot is False
+        daemon.controller.power_on.assert_called_once()
 
-    def test_rack_mgr_power_on_during_boot_delay_skips_auto_power_on(self, chassis):
-        """If Rack Manager POWER_ON cmd executed during boot delay, automatic power-on is skipped."""
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+    def test_rack_mgr_power_action_sets_boot_marker(self, chassis):
+        """_execute_action_item sets the boot marker for a Rack-Manager-originated
+        power directive."""
         daemon = self._make_daemon(chassis)
-        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
-        daemon.controller.power_on = MagicMock(return_value=True)
-        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
-        daemon._initial_power_on_sequence()
-        daemon.controller.power_on.assert_not_called()
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller.power_off = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_OFF"))
+        assert daemon._rack_mgr_power_cmd_during_boot is True
 
-    def test_rack_mgr_power_cmd_executed_detects_done_power_off(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when POWER_OFF is DONE in RACK_MANAGER_COMMAND."""
+    def test_non_rack_mgr_power_action_does_not_set_boot_marker(self, chassis):
+        """A non-Rack-Manager power action (e.g. CLI admin-down) does not set the marker."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "CHASSIS_MODULE:ADMIN_DOWN"))
+        assert daemon._rack_mgr_power_cmd_during_boot is False
 
-    def test_rack_mgr_power_cmd_executed_detects_in_progress_power_on(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when POWER_ON is IN_PROGRESS."""
+    def test_rack_mgr_power_cycle_does_not_set_boot_marker(self, chassis):
+        """A Rack Manager POWER_CYCLE does not set the marker (leaves host ONLINE)."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_ON),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_IN_PROGRESS),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
-
-    def test_rack_mgr_power_cmd_executed_ignores_power_cycle(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False for POWER_CYCLE (not POWER_ON/OFF/GRACEFUL_SHUT)."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_CYCLE),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
-
-    def test_rack_mgr_power_cmd_executed_detects_graceful_shut(self, chassis):
-        """_rack_mgr_power_cmd_executed returns True when GRACEFUL_SHUT is DONE."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_GRACEFUL_SHUT),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is True
-
-    def test_rack_mgr_power_cmd_executed_ignores_pending(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False when command is still PENDING."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        tbl.set("CMD_1", FieldValuePairs([
-            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
-            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_PENDING),
-        ]))
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
-
-    def test_rack_mgr_power_cmd_executed_empty_table(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False when no commands exist."""
-        daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
-        with patch('bmcctld.swsscommon.Table', return_value=tbl):
-            assert daemon._rack_mgr_power_cmd_executed() is False
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller.power_cycle = MagicMock(return_value=True)
+        daemon._rack_mgr_power_cmd_during_boot = False
+        daemon._execute_action_item(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_CYCLE, bmcctld.RACK_MGR_CMD_EVENT_PREFIX + "POWER_CYCLE"))
+        assert daemon._rack_mgr_power_cmd_during_boot is False
 
     def test_cold_boot_applies_power_on_delay(self, chassis):
         """On a FULL POWER LOSS (cold boot), SWITCH_HOST_POWER_ON_DELAY must be applied."""
