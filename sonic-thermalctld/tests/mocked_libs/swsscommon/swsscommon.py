@@ -58,7 +58,12 @@ class FieldValuePairs:
     fv_dict = {}
 
     def __init__(self, tuple_list):
-        if isinstance(tuple_list, list) and isinstance(tuple_list[0], tuple):
+        if isinstance(tuple_list, list) and tuple_list and isinstance(tuple_list[0], tuple):
+            for i, kv in enumerate(tuple_list):
+                if (not isinstance(kv, tuple) or len(kv) != 2
+                        or not isinstance(kv[0], str) or not isinstance(kv[1], str)):
+                    raise TypeError(
+                        "FieldValuePairs item {} must be (str, str), got {!r}".format(i, kv))
             self.fv_dict = dict(tuple_list)
 
     def __setitem__(self, key, kv_tuple):
