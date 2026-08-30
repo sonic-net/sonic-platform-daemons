@@ -452,6 +452,7 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
         liquid_cooling_updater.sensor_table = mock.MagicMock()
         liquid_cooling_updater.system_table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = {}
@@ -462,13 +463,20 @@ class TestLiquidCoolingUpdater(object):
 
         assert liquid_cooling_updater.sensor_table.set.call_count == 2
         assert liquid_cooling_updater.log_error.call_count == 1
+        assert liquid_cooling_updater.event_logger.log_error.call_count == 2
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
         assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
 
-        liquid_cooling_updater.log_error.assert_called_with(
+        liquid_cooling_updater.log_error.assert_any_call(
             'Liquid cooling leakage sensor leakage1 reported leaking'
+        )
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'CRITICAL leak reported by sensor leakage1'
+        )
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'CRITICAL system leak detected (sensors: leakage1)'
         )
 
         calls = liquid_cooling_updater.sensor_table.set.call_args_list
@@ -476,6 +484,11 @@ class TestLiquidCoolingUpdater(object):
         for call in calls:
             sensor_name, fvp = call[0]
             leak_statuses[sensor_name] = fvp.fv_dict['leaking']
+            # leak_status is a back-compat alias of leaking for system-health/legacy CLI
+            assert fvp.fv_dict['leak_status'] == fvp.fv_dict['leaking']
+            # severity field was renamed to leak_severity (matches HLD and sonic-utilities)
+            assert 'leak_severity' in fvp.fv_dict
+            assert 'severity' not in fvp.fv_dict
 
         assert leak_statuses["leakage1"] == "Yes"
         assert leak_statuses["leakage2"] == "No"
@@ -495,6 +508,7 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
         liquid_cooling_updater.sensor_table = mock.MagicMock()
         liquid_cooling_updater.system_table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = {}
@@ -511,6 +525,7 @@ class TestLiquidCoolingUpdater(object):
         liquid_cooling_updater._refresh_leak_status()
 
         assert liquid_cooling_updater.log_error.call_count == 1
+        assert liquid_cooling_updater.event_logger.log_error.call_count == 0
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
@@ -521,7 +536,10 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater._refresh_leak_status()
 
+        # Two self.log_error calls (one per sensor leak detection) plus one
+        # event_logger.log_error for the system CRITICAL transition.
         assert liquid_cooling_updater.log_error.call_count == 2
+        assert liquid_cooling_updater.event_logger.log_error.call_count == 1
         assert len(liquid_cooling_updater.leaking_sensors) == 2
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert "leakage2" in liquid_cooling_updater.leaking_sensors
@@ -582,6 +600,148 @@ class TestLiquidCoolingUpdater(object):
                 assert fvp.fv_dict['device_leak_status'] == 'MINOR'
             elif index == 1:
                 assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_platform_severity_bump(self, mock_try_get):
+        """Platform reports MINOR then directly bumps to CRITICAL (no time escalation).
+        Verifies CRITICAL is logged once and sensor is added to critical_sensors,
+        even though new_leak=False and escalated_to_critical=False on the bump cycle."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        # Start the sensor as MINOR with a long max-minor duration so the time-based
+        # escalation cannot fire — only a platform-driven bump can reach CRITICAL.
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: MINOR leak detected — no CRITICAL log expected
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
+            assert 'CRITICAL leak reported' not in call[0][0]
+
+        # Cycle 2: platform bumps severity directly to CRITICAL (no time escalation)
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'CRITICAL leak reported by sensor leakage1'
+        )
+
+        # Cycle 3: still CRITICAL — must NOT re-log (critical_sensors guard)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
+            assert 'CRITICAL leak reported' not in call[0][0]
+            assert 'escalated from MINOR to CRITICAL' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_platform_severity_downgrade(self, mock_try_get):
+        """Platform downgrades CRITICAL -> MINOR while still leaking.
+        Verifies the sensor is pruned from critical_sensors and a one-shot
+        'downgraded from CRITICAL to MINOR' notice is emitted."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        # Long max-minor duration so time-based escalation can't fire on the
+        # downgrade cycle (which would re-bump MINOR back to CRITICAL).
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: CRITICAL detected
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+
+        # Cycle 2: platform downgrades to MINOR (sensor still leaking)
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+        assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        liquid_cooling_updater.event_logger.log_notice.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 downgraded from CRITICAL to MINOR'
+        )
+
+        # Cycle 3: still MINOR — must NOT re-log the downgrade
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        for call in liquid_cooling_updater.event_logger.log_notice.call_args_list:
+            assert 'downgraded from CRITICAL' not in call[0][0]
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_leak_status_critical_minor_critical_flap(self, mock_try_get):
+        """CRITICAL -> MINOR -> CRITICAL flap. Verifies the post-downgrade
+        re-CRITICAL emits the CRITICAL log again exactly once."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        sensor = mock_chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        sensor.get_leak_profile().get_leak_max_minor_duration_sec = mock.MagicMock(return_value=86400)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        liquid_cooling_updater.critical_sensors = set()
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Cycle 1: CRITICAL
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+
+        # Cycle 2: downgrade to MINOR
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        liquid_cooling_updater._refresh_leak_status()
+        assert "leakage1" not in liquid_cooling_updater.critical_sensors
+
+        # Cycle 3: re-bump to CRITICAL — must log CRITICAL again
+        sensor.get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+
+        assert "leakage1" in liquid_cooling_updater.critical_sensors
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'CRITICAL leak reported by sensor leakage1'
+        )
+
+        # Cycle 4: still CRITICAL — must NOT re-log
+        liquid_cooling_updater.event_logger.reset_mock()
+        liquid_cooling_updater._refresh_leak_status()
+        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
+            assert 'CRITICAL leak reported' not in call[0][0]
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_leak_recovery(self, mock_try_get):
@@ -1783,3 +1943,307 @@ class TestCollectThermalsEarlyReturn(object):
         updater._refresh_temperature_status.assert_not_called()
         # Entity info should still be updated even without temperature refresh
         updater.phy_entity_table.set.assert_called()
+
+
+class TestTemperatureUpdaterBmcMirror(object):
+    """
+    Tests for pushing TEMPERATURE_INFO from Switch-Host to BMC's STATE_DB
+    via daemon_base.db_connect_remote (pmon-bmc-design §2.4.1).
+    """
+
+    @mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=False)
+    @mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value='10.0.0.1')
+    @mock.patch.object(thermalctld.daemon_base, 'db_connect_remote')
+    def test_init_skipped_when_not_switch_host(self, mock_remote, mock_addr, mock_is_sh):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        assert updater.bmc_temperature_table is None
+        mock_remote.assert_not_called()
+
+    @mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=True)
+    @mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value=None)
+    @mock.patch.object(thermalctld.daemon_base, 'db_connect_remote')
+    def test_init_skipped_when_no_bmc_address(self, mock_remote, mock_addr, mock_is_sh):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        assert updater.bmc_temperature_table is None
+        mock_remote.assert_not_called()
+
+    @mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=True)
+    @mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value='10.0.0.1')
+    @mock.patch.object(thermalctld.daemon_base, 'db_connect_remote')
+    @mock.patch.object(thermalctld.swsscommon, 'Table')
+    def test_init_opens_remote_bmc_table(self, mock_table_cls, mock_remote, mock_addr, mock_is_sh):
+        mock_remote.return_value = mock.MagicMock(name='remote_conn')
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        mock_remote.assert_called_once_with(thermalctld.STATE_DB_ID, '10.0.0.1')
+        # The Table constructor is invoked for local STATE_DB, phy_entity, and BMC mirror.
+        # Verify at least one call used the remote connection + TEMPERATURE_INFO name.
+        calls = [c for c in mock_table_cls.call_args_list
+                 if c.args and c.args[0] is mock_remote.return_value]
+        assert len(calls) == 1
+        assert calls[0].args[1] == thermalctld.TemperatureUpdater.TEMPER_INFO_TABLE_NAME
+        assert updater.bmc_temperature_table is not None
+        assert updater._bmc_addr == '10.0.0.1'
+
+    @mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=True)
+    @mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value='10.0.0.1')
+    @mock.patch.object(thermalctld.daemon_base, 'db_connect_remote',
+                       side_effect=Exception('boom'))
+    def test_init_handles_remote_connect_failure(self, mock_remote, mock_addr, mock_is_sh):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        assert updater.bmc_temperature_table is None
+        # _bmc_addr is set so a later lazy reconnect can be attempted.
+        assert updater._bmc_addr == '10.0.0.1'
+
+    def _make_switch_host_updater(self):
+        with mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=True), \
+             mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value='10.0.0.1'), \
+             mock.patch.object(thermalctld.daemon_base, 'db_connect_remote',
+                               return_value=mock.MagicMock()):
+            updater = thermalctld.TemperatureUpdater(MockChassis(), threading.Event())
+        updater.bmc_temperature_table = mock.MagicMock()
+        updater._bmc_addr = '10.0.0.1'
+        return updater
+
+    def test_bmc_table_set_noop_when_not_switch_host(self):
+        chassis = MockChassis()
+        updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
+        # Not switch-host: _bmc_addr is None, set is a no-op.
+        assert updater._bmc_addr is None
+        updater._bmc_table_set('Thermal 1', mock.MagicMock())  # must not raise
+
+    def test_bmc_table_set_forwards_to_remote_table(self):
+        updater = self._make_switch_host_updater()
+        fvs = mock.MagicMock(name='fvs')
+        updater._bmc_table_set('Thermal 1', fvs)
+        updater.bmc_temperature_table.set.assert_called_once_with('Thermal 1', fvs)
+
+    def test_bmc_table_set_reconnects_once_on_failure(self):
+        updater = self._make_switch_host_updater()
+        # First attempt raises, second attempt (after reconnect) succeeds.
+        first_table = updater.bmc_temperature_table
+        first_table.set.side_effect = Exception('disconnect')
+        reconnected = mock.MagicMock()
+        with mock.patch.object(thermalctld.device_info, 'is_switch_host', return_value=True), \
+             mock.patch.object(thermalctld.device_info, 'get_bmc_address', return_value='10.0.0.1'), \
+             mock.patch.object(thermalctld.daemon_base, 'db_connect_remote',
+                               return_value=mock.MagicMock()), \
+             mock.patch.object(thermalctld.swsscommon, 'Table',
+                               return_value=reconnected):
+            updater._bmc_table_set('Thermal 1', 'fvs')
+        # First table cleared, reconnect set the new one, second set call succeeded.
+        reconnected.set.assert_called_once_with('Thermal 1', 'fvs')
+
+    def test_bmc_table_del_clears_handle_on_error(self):
+        updater = self._make_switch_host_updater()
+        updater.bmc_temperature_table._del = mock.MagicMock(side_effect=Exception('x'))
+        updater._bmc_table_del('Thermal 1')
+        assert updater.bmc_temperature_table is None
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_temperature_tees_to_bmc(self, mock_try_get):
+        mock_try_get.side_effect = lambda func, default=thermalctld.NOT_AVAILABLE: func()
+        updater = self._make_switch_host_updater()
+        updater.table = mock.MagicMock()
+        updater.is_chassis_upd_required = False
+        thermal = MockThermal()
+        updater._refresh_temperature_status('Chassis 1', thermal, 0)
+        # Local + BMC mirror both received the same row.
+        assert updater.table.set.called
+        assert updater.bmc_temperature_table.set.called
+        local_name, local_fvs = updater.table.set.call_args[0]
+        bmc_name, bmc_fvs = updater.bmc_temperature_table.set.call_args[0]
+        assert local_name == bmc_name
+        assert local_fvs is bmc_fvs
+
+
+class TestThermalMonitorSwitchHostCritical(object):
+    """
+    Tests for the BMC-side monitor in ThermalMonitor that watches the
+    TEMPERATURE_INFO table (populated by both the BMC and Switch-Host) and
+    logs CRITICAL breaches into /host/bmc/event.log.
+    """
+
+    def _make_monitor(self):
+        """Build a ThermalMonitor with init side-effects bypassed."""
+        with mock.patch.object(thermalctld, 'FanUpdater'), \
+             mock.patch.object(thermalctld, 'TemperatureUpdater'), \
+             mock.patch.object(thermalctld.device_info, 'is_switch_bmc', return_value=False):
+            # is_switch_bmc=False keeps the monitor disabled during construction;
+            # tests will inject mocks directly afterwards.
+            tm = thermalctld.ThermalMonitor(MockChassis(), 5, 60, 30)
+        return tm
+
+    def test_init_skipped_on_switch_host(self):
+        with mock.patch.object(thermalctld, 'FanUpdater'), \
+             mock.patch.object(thermalctld, 'TemperatureUpdater'), \
+             mock.patch.object(thermalctld.device_info, 'is_switch_bmc', return_value=False):
+            tm = thermalctld.ThermalMonitor(MockChassis(), 5, 60, 30)
+        assert tm._switch_host_thermal_table is None
+
+    def test_init_skipped_when_no_bmc(self):
+        with mock.patch.object(thermalctld, 'FanUpdater'), \
+             mock.patch.object(thermalctld, 'TemperatureUpdater'), \
+             mock.patch.object(thermalctld.device_info, 'is_switch_bmc', return_value=False):
+            tm = thermalctld.ThermalMonitor(MockChassis(), 5, 60, 30)
+        assert tm._switch_host_thermal_table is None
+
+    def test_init_enabled_on_bmc(self):
+        with mock.patch.object(thermalctld, 'FanUpdater'), \
+             mock.patch.object(thermalctld.device_info, 'is_switch_bmc', return_value=True), \
+             mock.patch.object(thermalctld.swsscommon, 'Table') as mock_table_cls:
+            tm = thermalctld.ThermalMonitor(MockChassis(), 5, 60, 30)
+        mirror_calls = [c for c in mock_table_cls.call_args_list
+                        if c.args and c.args[1] == 'TEMPERATURE_INFO']
+        assert len(mirror_calls) >= 1
+        assert tm._switch_host_thermal_table is not None
+        assert tm._sw_host_thermal_event_logger is not None
+
+    def test_check_logs_critical_on_high_threshold_breach(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '105.0'),
+            ('critical_high_threshold', '100.0'),
+            ('critical_low_threshold', '-15.0'),
+            ('high_threshold', '90.0'),
+        ])
+        tm._check_switch_host_thermals()
+        tm._sw_host_thermal_event_logger.log_error.assert_called_once()
+        msg = tm._sw_host_thermal_event_logger.log_error.call_args.args[0]
+        assert 'CRITICAL chassis thermal: Thermal 1' in msg
+        assert '105.0' in msg
+        assert 'critical_high_threshold 100.0' in msg
+        assert tm._switch_host_thermal_state['Thermal 1'] is True
+
+    def test_check_logs_critical_on_low_threshold_breach(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 2']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '-20.0'),
+            ('critical_high_threshold', '100.0'),
+            ('critical_low_threshold', '-15.0'),
+        ])
+        tm._check_switch_host_thermals()
+        tm._sw_host_thermal_event_logger.log_error.assert_called_once()
+        assert 'critical_low_threshold -15.0' in \
+            tm._sw_host_thermal_event_logger.log_error.call_args.args[0]
+
+    def test_check_does_not_log_within_thresholds(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '50.0'),
+            ('critical_high_threshold', '100.0'),
+            ('critical_low_threshold', '-15.0'),
+        ])
+        tm._check_switch_host_thermals()
+        tm._sw_host_thermal_event_logger.log_error.assert_not_called()
+        assert tm._switch_host_thermal_state.get('Thermal 1', False) is False
+
+    def test_check_only_logs_on_transition(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '105.0'),
+            ('critical_high_threshold', '100.0'),
+        ])
+        # First call enters critical → 1 log_error.
+        tm._check_switch_host_thermals()
+        # Second call still critical → no additional log.
+        tm._check_switch_host_thermals()
+        assert tm._sw_host_thermal_event_logger.log_error.call_count == 1
+
+    def test_check_logs_recovery_on_clear(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_state = {'Thermal 1': True}  # was critical
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '50.0'),
+            ('critical_high_threshold', '100.0'),
+        ])
+        tm._check_switch_host_thermals()
+        # Recovery is silent — only critical-breach transitions are logged.
+        tm._sw_host_thermal_event_logger.log_notice.assert_not_called()
+        tm._sw_host_thermal_event_logger.log_error.assert_not_called()
+        assert tm._switch_host_thermal_state['Thermal 1'] is False
+
+    def test_check_handles_missing_temperature(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', 'N/A'),
+            ('critical_high_threshold', '100.0'),
+        ])
+        tm._check_switch_host_thermals()
+        tm._sw_host_thermal_event_logger.log_error.assert_not_called()
+
+    def test_check_noop_when_disabled(self):
+        tm = self._make_monitor()
+        assert tm._switch_host_thermal_table is None
+        # Must not raise.
+        tm._check_switch_host_thermals()
+
+    def test_check_drops_state_for_disappeared_sensors(self):
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        tm._sw_host_thermal_event_logger = mock.MagicMock()
+        tm._switch_host_thermal_state = {'Thermal 1': True, 'Old': True}
+        tm._switch_host_thermal_table.getKeys.return_value = ['Thermal 1']
+        tm._switch_host_thermal_table.get.return_value = (True, [
+            ('temperature', '50.0'),
+            ('critical_high_threshold', '100.0'),
+        ])
+        tm._check_switch_host_thermals()
+        assert 'Old' not in tm._switch_host_thermal_state
+
+    def test_critical_breach_logs_to_both_syslog_and_event_log(self):
+        """A single breach log call must tee to both syslog and event.log."""
+        import tempfile
+
+        tm = self._make_monitor()
+        tm._switch_host_thermal_table = mock.MagicMock()
+        with tempfile.NamedTemporaryFile(suffix='.log', delete=False) as f:
+            tmp_log = f.name
+        try:
+            # Clear the THERMALCTLD_UNIT_TESTING gate so the file handler is
+            # actually attached for this test, then restore on exit.
+            prev = os.environ.pop('THERMALCTLD_UNIT_TESTING', None)
+            try:
+                tm._sw_host_thermal_event_logger = thermalctld.EventLogger(
+                    'thermalctld-test', log_file=tmp_log)
+            finally:
+                if prev is not None:
+                    os.environ['THERMALCTLD_UNIT_TESTING'] = prev
+            tm._sw_host_thermal_event_logger.set_min_log_priority_info()
+            tm._sw_host_thermal_event_logger._syslog = mock.MagicMock()
+
+            tm._switch_host_thermal_table.getKeys.return_value = ['Thermal X']
+            tm._switch_host_thermal_table.get.return_value = (True, [
+                ('temperature', '110.0'),
+                ('critical_high_threshold', '100.0'),
+            ])
+            tm._check_switch_host_thermals()
+
+            assert tm._sw_host_thermal_event_logger._syslog.syslog.called
+            with open(tmp_log) as fh:
+                contents = fh.read()
+            assert 'CRITICAL chassis thermal: Thermal X' in contents
+            assert '110.0' in contents
+        finally:
+            os.unlink(tmp_log)
