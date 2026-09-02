@@ -71,10 +71,7 @@ class DBUtils:
             enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
         """
         physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
-        if physical_port is None:
-            return
-
-        if not values_dict:
+        if physical_port is None or not values_dict:
             return
 
         self._write_values_to_table(table, logical_port_name, values_dict, beautify_func=beautify_func)
