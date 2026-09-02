@@ -56,17 +56,15 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
                 break
 
             if not common._wrapper_get_presence(physical_port):
-                helper_logger.log_notice("Transceiver not present in port {}".format(logical_port_name))
+                helper_logger.log_notice("ELSFP not present in port {}".format(logical_port_name))
                 continue
 
             port_name = common.get_physical_port_name(logical_port_name, physical_port, False)
 
             port_device = common.get_port_device(physical_port)
-            if physical_port in transceiver_dict:
-                oe_info = transceiver_dict[physical_port]
-            else:
-                oe_info = port_device.oe.get_api().get_transceiver_info()
-                transceiver_dict[physical_port] = oe_info
+            if physical_port not in transceiver_dict:
+               transceiver_dict[physical_port] = port_device.oe.get_api().get_transceiver_info()
+            oe_info = transceiver_dict[physical_port]
             elsfp_info = port_device.elsfp.get_api().get_elsfp_info()
 
             if oe_info is None or elsfp_info is None:
