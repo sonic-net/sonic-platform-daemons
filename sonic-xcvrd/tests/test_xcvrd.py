@@ -3702,6 +3702,44 @@ class TestXcvrdScript(object):
 
         assert result == [3, 3, 3, 3, 1, 1, 1, 1]
 
+    def test_CmisManagerTask_get_desired_app_map_mixed_width_subports(self):
+        """Mixed widths use cumulative lanes instead of width times subport."""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.port_dict['Ethernet4'] = {'index': 1, 'asic_id': 0}
+
+        cfg_port_tbl = MagicMock()
+        cfg_port_tbl.getKeys = MagicMock(return_value=['Ethernet4', 'Ethernet0', 'Ethernet2'])
+
+        def get_side_effect(key):
+            data = {
+                'Ethernet0': (True, [('speed', '400000'), ('lanes', '1,2'),
+                                     ('subport', '1'), ('index', '1')]),
+                'Ethernet2': (True, [('speed', '400000'), ('lanes', '3,4'),
+                                     ('subport', '2'), ('index', '1')]),
+                'Ethernet4': (True, [('speed', '800000'), ('lanes', '5,6,7,8'),
+                                     ('subport', '3'), ('index', '1')]),
+            }
+            return data.get(key, (False, []))
+
+        cfg_port_tbl.get = MagicMock(side_effect=get_side_effect)
+        task.xcvr_table_helper.get_cfg_port_tbl = MagicMock(return_value=cfg_port_tbl)
+        task._gearbox_lanes_dict = {}
+
+        def get_app_desired(api, lane_count, speed):
+            return {(2, 400000): 4, (4, 800000): 1}.get((lane_count, speed))
+
+        mock_xcvr_api.get_host_lane_assignment_option = MagicMock(
+            side_effect=lambda app: {1: 0x11, 4: 0x55}[app])
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired',
+                   side_effect=get_app_desired):
+            result = task.get_desired_app_map(mock_xcvr_api, 'Ethernet4')
+
+        assert result == [4, 4, 4, 4, 1, 1, 1, 1]
+
     def test_CmisManagerTask_get_desired_app_map_no_matching_app(self):
         """Test get_desired_app_map when get_cmis_application_desired returns None"""
         mock_xcvr_api = MagicMock()
@@ -3828,6 +3866,31 @@ class TestXcvrdScript(object):
             {'lport': 'Ethernet0', 'subport': 1, 'speed': 200000, 'host_lane_count': 2},
         ]
 
+    def test_CmisManagerTask_get_cmis_lane_start_bits_mixed_width(self):
+        """Host and media starts sum lower-numbered sibling lane counts."""
+        mock_xcvr_api = MagicMock()
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.port_dict['Ethernet4'] = {
+            'media_lane_count': 4,
+            'media_lane_assignment_options': 0x11,
+        }
+
+        task.get_sibling_port_configs = MagicMock(return_value=[
+            {'lport': 'Ethernet4', 'subport': 3, 'speed': 800000, 'host_lane_count': 4},
+            {'lport': 'Ethernet0', 'subport': 1, 'speed': 400000, 'host_lane_count': 2},
+            {'lport': 'Ethernet2', 'subport': 2, 'speed': 400000, 'host_lane_count': 2},
+        ])
+        mock_xcvr_api.get_media_lane_count = MagicMock(return_value=2)
+
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired',
+                   return_value=4):
+            result = task.get_cmis_lane_start_bits(mock_xcvr_api, 'Ethernet4', 3)
+
+        assert result == (4, 4)
+        assert task.get_cmis_media_lanes_mask(mock_xcvr_api, 1, 'Ethernet4', result[1]) == 0xf0
+
     DEFAULT_DP_STATE = {
         'DP1State': 'DataPathActivated',
         'DP2State': 'DataPathActivated',
@@ -3911,16 +3974,17 @@ class TestXcvrdScript(object):
         assert common.get_interface_speed(ifname) == expected
 
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
-    @pytest.mark.parametrize("host_lane_count, speed, subport, expected", [
+    @pytest.mark.parametrize("host_lane_count, speed, host_lane_start_bit, expected", [
         (8, 400000, 0, 0xFF),
-        (4, 100000, 1, 0xF),
-        (4, 100000, 2, 0xF0),
         (4, 100000, 0, 0xF),
-        (4, 100000, 9, 0x0),
-        (1, 50000, 2, 0x2),
-        (1, 200000, 2, 0x0)
+        (4, 100000, 4, 0xF0),
+        (4, 100000, 0, 0xF),
+        (4, 100000, 8, 0x0),
+        (1, 50000, 1, 0x2),
+        (1, 200000, 1, 0x0)
     ])
-    def test_CmisManagerTask_get_cmis_host_lanes_mask(self, host_lane_count, speed, subport, expected):
+    def test_CmisManagerTask_get_cmis_host_lanes_mask(
+            self, host_lane_count, speed, host_lane_start_bit, expected):
         appl_advert_dict = {
             1: {
                 'host_electrical_interface_id': '400GAUI-8 C2M (Annex 120E)',
@@ -3955,7 +4019,8 @@ class TestXcvrdScript(object):
         task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
 
         appl = common.get_cmis_application_desired(mock_xcvr_api, host_lane_count, speed)
-        assert task.get_cmis_host_lanes_mask(mock_xcvr_api, appl, host_lane_count, subport) == expected
+        assert task.get_cmis_host_lanes_mask(
+            mock_xcvr_api, appl, host_lane_count, host_lane_start_bit) == expected
 
     @pytest.mark.parametrize("gearbox_data, expected_dict", [
         # Test case 1: Gearbox port with 2 line lanes
