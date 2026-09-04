@@ -245,9 +245,9 @@ class CmisManagerTask(threading.Thread):
         # QSFP+C has 4 lanes, all others have 8
         return 0x0f if module_type == 'QSFP+C' else 0xff
 
-    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
+    def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, host_lane_start_bit):
         """
-        Retrieves mask of active host lanes based on appl, host lane count and subport
+        Retrieves mask of active host lanes based on appl, lane count and start bit
 
         Args:
             api:
@@ -256,9 +256,8 @@ class CmisManagerTask(threading.Thread):
                 Integer, the transceiver-specific application code
             host_lane_count:
                 Integer, number of lanes on the host side
-            subport:
-                Integer, 1-based logical port number of the physical port after breakout
-                         0 means port is a non-breakout port
+            host_lane_start_bit:
+                Integer, zero-based starting host lane
 
         Returns:
             Integer, a mask of the active lanes on the host side
@@ -266,26 +265,26 @@ class CmisManagerTask(threading.Thread):
         """
         host_lanes_mask = 0
 
-        if appl is None or host_lane_count <= 0 or subport < 0:
+        if appl is None or host_lane_count <= 0 or host_lane_start_bit < 0:
             self.log_error("Invalid input to get host lane mask - appl {} host_lane_count {} "
-                            "subport {}!".format(appl, host_lane_count, subport))
+                            "host_lane_start_bit {}!".format(
+                                appl, host_lane_count, host_lane_start_bit))
             return host_lanes_mask
 
         host_lane_assignment_option = api.get_host_lane_assignment_option(appl)
-        host_lane_start_bit = (host_lane_count * (0 if subport == 0 else subport - 1))
         if host_lane_assignment_option & (1 << host_lane_start_bit):
             host_lanes_mask = ((1 << host_lane_count) - 1) << host_lane_start_bit
         else:
             self.log_error("Unable to find starting host lane - host_lane_assignment_option {}"
-                            " host_lane_start_bit {} host_lane_count {} subport {} appl {}!".format(
+                            " host_lane_start_bit {} host_lane_count {} appl {}!".format(
                             host_lane_assignment_option, host_lane_start_bit, host_lane_count,
-                            subport, appl))
+                            appl))
 
         return host_lanes_mask
 
-    def get_cmis_media_lanes_mask(self, api, appl, lport, subport):
+    def get_cmis_media_lanes_mask(self, api, appl, lport, media_lane_start_bit):
         """
-        Retrieves mask of active media lanes based on appl, lport and subport
+        Retrieves mask of active media lanes based on appl, lport and start bit
 
         Args:
             api:
@@ -294,9 +293,8 @@ class CmisManagerTask(threading.Thread):
                 Integer, the transceiver-specific application code
             lport:
                 String, logical port name
-            subport:
-                Integer, 1-based logical port number of the physical port after breakout
-                         0 means port is a non-breakout port
+            media_lane_start_bit:
+                Integer, zero-based starting media lane
 
         Returns:
             Integer, a mask of the active lanes on the media side
@@ -306,19 +304,19 @@ class CmisManagerTask(threading.Thread):
         media_lane_count = self.port_dict[lport]['media_lane_count']
         media_lane_assignment_option = self.port_dict[lport]['media_lane_assignment_options']
 
-        if appl < 1 or media_lane_count <= 0 or subport < 0:
+        if appl < 1 or media_lane_count <= 0 or media_lane_start_bit < 0:
             self.log_error("Invalid input to get media lane mask - appl {} media_lane_count {} "
-                            "lport {} subport {}!".format(appl, media_lane_count, lport, subport))
+                            "lport {} media_lane_start_bit {}!".format(
+                                appl, media_lane_count, lport, media_lane_start_bit))
             return media_lanes_mask
 
-        media_lane_start_bit = (media_lane_count * (0 if subport == 0 else subport - 1))
         if media_lane_assignment_option & (1 << media_lane_start_bit):
             media_lanes_mask = ((1 << media_lane_count) - 1) << media_lane_start_bit
         else:
             self.log_error("Unable to find starting media lane - media_lane_assignment_option {}"
-                            " media_lane_start_bit {} media_lane_count {} lport {} subport {} appl {}!".format(
+                            " media_lane_start_bit {} media_lane_count {} lport {} appl {}!".format(
                             media_lane_assignment_option, media_lane_start_bit, media_lane_count,
-                            lport, subport, appl))
+                            lport, appl))
 
         return media_lanes_mask
 
@@ -464,6 +462,36 @@ class CmisManagerTask(threading.Thread):
 
         return siblings
 
+    def get_cmis_lane_start_bits(self, api, lport, subport):
+        """Return host and media offsets after lower-numbered siblings."""
+        host_lane_start_bit = 0
+        media_lane_start_bit = 0
+
+        siblings = sorted(
+            self.get_sibling_port_configs(lport),
+            key=lambda sibling: (sibling['subport'], sibling['lport']))
+        for sibling in siblings:
+            if sibling['subport'] >= subport:
+                break
+
+            sibling_appl = common.get_cmis_application_desired(
+                api, sibling['host_lane_count'], sibling['speed'])
+            if sibling_appl is None:
+                self.log_error("{}: no suitable app for preceding sibling {}".format(
+                    lport, sibling['lport']))
+                return -1, -1
+
+            sibling_media_lane_count = int(api.get_media_lane_count(sibling_appl))
+            if sibling_media_lane_count <= 0:
+                self.log_error("{}: invalid media lane count {} for preceding sibling {}".format(
+                    lport, sibling_media_lane_count, sibling['lport']))
+                return -1, -1
+
+            host_lane_start_bit += sibling['host_lane_count']
+            media_lane_start_bit += sibling_media_lane_count
+
+        return host_lane_start_bit, media_lane_start_bit
+
     def get_desired_app_map(self, api, lport):
         """
         Build a per-lane desired application code map for all lanes of the
@@ -481,17 +509,20 @@ class CmisManagerTask(threading.Thread):
             (0 = unused/unassigned)
         """
         desired_map = [0] * self.CMIS_MAX_HOST_LANES
-        for sibling in self.get_sibling_port_configs(lport):
+        host_lane_start_bit = 0
+        siblings = sorted(
+            self.get_sibling_port_configs(lport),
+            key=lambda sibling: (sibling['subport'], sibling['lport']))
+        for sibling in siblings:
             sibling_appl = common.get_cmis_application_desired(
                 api, sibling['host_lane_count'], sibling['speed'])
-            if sibling_appl is None:
-                continue
-
-            sibling_mask = self.get_cmis_host_lanes_mask(
-                api, sibling_appl, sibling['host_lane_count'], sibling['subport'])
-            for lane in range(self.CMIS_MAX_HOST_LANES):
-                if (1 << lane) & sibling_mask:
-                    desired_map[lane] = sibling_appl
+            if sibling_appl is not None:
+                sibling_mask = self.get_cmis_host_lanes_mask(
+                    api, sibling_appl, sibling['host_lane_count'], host_lane_start_bit)
+                for lane in range(self.CMIS_MAX_HOST_LANES):
+                    if (1 << lane) & sibling_mask:
+                        desired_map[lane] = sibling_appl
+            host_lane_start_bit += sibling['host_lane_count']
 
         return desired_map
 
@@ -888,12 +919,19 @@ class CmisManagerTask(threading.Thread):
         appl = self.port_dict[lport]['appl']
         self.log_notice("{}: Setting appl={}".format(lport, appl))
 
+        host_lane_start_bit, media_lane_start_bit = self.get_cmis_lane_start_bits(
+            api, lport, subport)
+        if host_lane_start_bit < 0 or media_lane_start_bit < 0:
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
+            return False
+
         self.port_dict[lport]['max_host_lanes_mask'] = self.get_cmis_max_host_lanes_mask(api)
         self.port_dict[lport]['host_lanes_mask'] = self.get_cmis_host_lanes_mask(api,
-                                                        appl, host_lane_count, subport)
+                                                        appl, host_lane_count, host_lane_start_bit)
         if self.port_dict[lport]['host_lanes_mask'] <= 0:
-            self.log_error("{}: Invalid lane mask received - host_lane_count {} subport {} "
-                            "appl {}!".format(lport, host_lane_count, subport, appl))
+            self.log_error("{}: Invalid lane mask received - host_lane_count {} "
+                            "host_lane_start_bit {} appl {}!".format(
+                                lport, host_lane_count, host_lane_start_bit, appl))
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
             return False
         host_lanes_mask = self.port_dict[lport]['host_lanes_mask']
@@ -905,11 +943,12 @@ class CmisManagerTask(threading.Thread):
         media_lane_assignment_options = self.port_dict[lport]['media_lane_assignment_options']
         self.port_dict[lport]['max_media_lanes_mask'] = self.port_dict[lport]['max_host_lanes_mask']
         self.port_dict[lport]['media_lanes_mask'] = self.get_cmis_media_lanes_mask(api,
-                                                        appl, lport, subport)
+                                                        appl, lport, media_lane_start_bit)
         if self.port_dict[lport]['media_lanes_mask'] <= 0:
             self.log_error("{}: Invalid media lane mask received - media_lane_count {} "
-                            "media_lane_assignment_options {} subport {}"
-                            " appl {}!".format(lport, media_lane_count, media_lane_assignment_options, subport, appl))
+                            "media_lane_assignment_options {} media_lane_start_bit {}"
+                            " appl {}!".format(lport, media_lane_count, media_lane_assignment_options,
+                                              media_lane_start_bit, appl))
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
             return False
         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
