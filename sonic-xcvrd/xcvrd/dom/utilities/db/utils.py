@@ -9,11 +9,11 @@ class DBUtils:
     NEVER = "never"
     NOT_AVAILABLE = "N/A"
 
-    def __init__(self, sfp_obj_dict, port_mapping, task_stopping_event, logger):
-        self.sfp_obj_dict = sfp_obj_dict
+    def __init__(self, port_obj_dict, port_mapping, task_stopping_event, logger):
+        self.port_obj_dict = port_obj_dict
         self.port_mapping = port_mapping
         self.task_stopping_event = task_stopping_event
-        self.xcvrd_utils = XCVRDUtils(sfp_obj_dict, logger)
+        self.xcvrd_utils = XCVRDUtils(port_obj_dict, logger)
         self.logger = logger
 
     def post_diagnostic_values_to_db(self, logical_port_name, table, get_values_func,
@@ -46,18 +46,115 @@ class DBUtils:
                 if not diagnostic_values_dict:
                     return
 
-                # Use the provided beautify function or default to self.beautify_info_dict
-                (beautify_func or self.beautify_info_dict)(diagnostic_values_dict)
-                fvs = swsscommon.FieldValuePairs(
-                    [(k, v) for k, v in diagnostic_values_dict.items()] +
-                    [("last_update_time", self.get_current_time())]
-                )
-                table.set(logical_port_name, fvs)
+                self._write_values_to_table(table, logical_port_name, diagnostic_values_dict,
+                                            beautify_func=beautify_func)
 
         except NotImplementedError:
             self.logger.log_error(f"Post port diagnostic values to db failed for {logical_port_name} "
                                          "as functionality is not implemented")
             return
+
+    def post_diagnostic_values_from_dict_to_db(self, logical_port_name, table, values_dict,
+                                               beautify_func=None, enable_flat_memory_check=False):
+        """
+        Posts a caller-supplied dictionary of diagnostic values to the database.
+
+        This is the counterpart to post_diagnostic_values_to_db for callers that have
+        already read the values from hardware. Since the caller performs the read, there
+        is no get_values_func to invoke lazily and therefore no db_cache to consult.
+
+        Args:
+            logical_port_name (str): Logical port name.
+            table (object): Database table object.
+            values_dict (dict): Pre-read diagnostic values. Beautified in place.
+            beautify_func (function, optional): Function to beautify the values. Defaults to self.beautify_info_dict.
+            enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
+        """
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
+        if physical_port is None or not values_dict:
+            return
+
+        self._write_values_to_table(table, logical_port_name, values_dict, beautify_func=beautify_func)
+
+    def post_flag_values_to_db(self, logical_port_name, get_values_func,
+                               flag_tbl, flag_change_count_tbl, flag_set_time_tbl, flag_clear_time_tbl,
+                               log_context, db_cache=None, beautify_func=None,
+                               enable_flat_memory_check=False):
+        """
+        Posts the flag values to the database and updates the corresponding flag metadata tables.
+
+        This differs from post_diagnostic_values_to_db in that the metadata tables (change count,
+        last set time, last clear time) must be updated before flag_tbl is overwritten, since
+        _update_flag_metadata_tables diffs the newly read values against the ones already in
+        flag_tbl. The metadata update also has to run on the raw values, before beautification
+        turns booleans into strings (a beautified False is truthy and would be recorded as a set).
+
+        Args:
+            logical_port_name (str): Logical port name.
+            get_values_func (function): Function to get the flag values.
+            flag_tbl (swsscommon.Table): Table containing flag values.
+            flag_change_count_tbl (swsscommon.Table): Table for change counts.
+            flag_set_time_tbl (swsscommon.Table): Table for last set times.
+            flag_clear_time_tbl (swsscommon.Table): Table for last clear times.
+            log_context (str): Name of the flags for logging purposes.
+            db_cache (dict, optional): Cache for flag values.
+            beautify_func (function, optional): Function to beautify the flag values. Defaults to self.beautify_info_dict.
+            enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
+        """
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
+        if physical_port is None:
+            return
+
+        try:
+            if db_cache is not None and physical_port in db_cache:
+                # If cache is enabled and flag values are in cache, just read from cache, no need read from EEPROM
+                flags_dict = db_cache[physical_port]
+            else:
+                # Reading from the EEPROM as the cache is empty
+                flags_dict = get_values_func(physical_port)
+                if flags_dict is None:
+                    self.logger.log_error(f"Post {log_context} to db failed for {logical_port_name} "
+                                          "as no flags found")
+                    return
+                if flags_dict:
+                    self._update_flag_metadata_tables(logical_port_name, flags_dict,
+                                                      self.get_current_time(),
+                                                      flag_tbl, flag_change_count_tbl,
+                                                      flag_set_time_tbl, flag_clear_time_tbl,
+                                                      log_context)
+
+                if db_cache is not None:
+                    # If cache is enabled, put flag values to cache
+                    db_cache[physical_port] = flags_dict
+
+            if not flags_dict:
+                return
+
+            self._write_values_to_table(flag_tbl, logical_port_name, flags_dict,
+                                        beautify_func=beautify_func)
+
+        except NotImplementedError:
+            self.logger.log_error(f"Post {log_context} to db failed for {logical_port_name} "
+                                  "as functionality is not implemented")
+            return
+
+    def _write_values_to_table(self, table, key, values_dict, beautify_func=None):
+        """
+        Beautifies the values and writes them to the given table along with a last update timestamp.
+
+        Args:
+            table (object): Database table object.
+            key (str): Key to write the values under (typically the logical port name).
+            values_dict (dict): Values to write. Beautified in place.
+            beautify_func (function, optional): Function to beautify the values. Defaults to self.beautify_info_dict.
+        """
+        # Use the provided beautify function or default to self.beautify_info_dict
+        (beautify_func or self.beautify_info_dict)(values_dict)
+        fvs = swsscommon.FieldValuePairs(
+            [(k, v) for k, v in values_dict.items()] +
+            [("last_update_time", self.get_current_time())]
+        )
+        table.set(key, fvs)
 
     def _validate_and_get_physical_port(self, logical_port_name, enable_flat_memory_check=False):
         """
@@ -91,7 +188,7 @@ class DBUtils:
 
         physical_port = pport_list[0]
 
-        if physical_port not in self.sfp_obj_dict:
+        if physical_port not in self.port_obj_dict:
             self.logger.log_error(f"Validate and get physical port failed for {logical_port_name} "
                                    "as no sfp object found")
             return None
