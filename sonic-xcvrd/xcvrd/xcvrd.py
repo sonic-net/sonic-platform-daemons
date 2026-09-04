@@ -1162,9 +1162,13 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(dom_thermal_info_update)
 
         # Start the sfp state info update thread
-        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
-        sfp_state_update.start()
-        self.threads.append(sfp_state_update)
+        sfp_state_update = None
+        if self.sfp_obj_dict:
+            sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
+            sfp_state_update.start()
+            self.threads.append(sfp_state_update)
+        else:
+            self.log_notice("Skipping SfpStateUpdateTask as no pluggable modules are present")
 
         # Start the CPO state info update thread
         cpo_state_update = None
@@ -1227,9 +1231,10 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 dom_thermal_info_update.join()
 
         # Stop the sfp state info update thread
-        if sfp_state_update.is_alive():
-            sfp_state_update.raise_exception()
-            sfp_state_update.join()
+        if sfp_state_update is not None:
+            if sfp_state_update.is_alive():
+                sfp_state_update.raise_exception()
+                sfp_state_update.join()
 
         # Stop the CPO state info update thread
         if cpo_state_update is not None:
