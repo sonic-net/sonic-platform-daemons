@@ -2775,6 +2775,9 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
+        # init() is mocked out, so populate the pluggable port dict directly.
+        # SfpStateUpdateTask is only created when there is at least one pluggable port.
+        xcvrd.sfp_obj_dict = {1: MagicMock()}
         xcvrd.run()
         assert mock_task_stop1.call_count == 1
         assert mock_task_stop2.call_count == 1
