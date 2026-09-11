@@ -188,15 +188,21 @@ def try_get(callback, *args, **kwargs):
     Handy function to invoke the callback and catch NotImplementedError
     :param callback: Callback to be invoked
     :param args: Arguments to be passed to callback
-    :param kwargs: Default return value if exception occur
+    :param kwargs: 'default' - return valueif exception occur;
+                   'log_error' - optional log function invoked with an error
+                   message when the platform API is not implemented
     :return: Default return value if exception occur else return value of the callback
     """
     default = kwargs.get('default', NOT_AVAILABLE)
+    log_error = kwargs.get('log_error')
     try:
         ret = callback(*args)
         if ret is None:
             ret = default
     except NotImplementedError:
+        if log_error is not None:
+            api_name = getattr(callback, '__name__', str(callback))
+            log_error(f"{api_name} is not implemented")
         ret = default
 
     return ret
@@ -1032,7 +1038,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         reason_str = None
         # Planned operation (graceful shutdown/startup/reset) in progress?
-        if try_get(module.get_module_state_transition, module_name, default=False):
+        if try_get(module.get_module_state_transition, module_name, default=False, log_error=self.log_error):
             try:
                 module_key = f"{CHASSIS_MODULE_INFO_TABLE}|{module_name.upper()}"
                 transition_type = self.state_db.hget(module_key, "transition_type")
@@ -1043,7 +1049,7 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         if reason_str is None:
             # Unplanned down: ask the platform for the hardware reason.
-            reason = try_get(module.get_midplane_down_reason, default=None)
+            reason = try_get(module.get_midplane_down_reason, default=None, log_error=self.log_error)
             if isinstance(reason, (tuple, list)):
                 parts = [str(p) for p in reason if p not in (None, "")]
                 detail = ", ".join(parts) if parts else "Unknown"
