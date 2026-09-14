@@ -405,7 +405,13 @@ def test_admin_down_marks_not_ready(results, dpu_name):
     logger.info(f"Test: admin-down marks {dpu_name} not-ready")
 
     # Save original admin status
-    original_admin = get_chassis_module_admin_status(dpu_name) or 'up'
+    original_admin = get_chassis_module_admin_status(dpu_name)
+    if original_admin != 'up':
+        results.skip(
+            f"admin_down_not_ready_{dpu_name}",
+            f"Requires configured admin_status=up, got '{original_admin}'"
+        )
+        return
 
     try:
         # Admin-down the DPU
@@ -885,7 +891,17 @@ def main():
             results.summary()
             sys.exit(0)
 
+        configured_dpus = []
         for dpu in target_dpus:
+            admin_status = get_chassis_module_admin_status(dpu)
+            if admin_status != 'up':
+                results.skip(
+                    f"configured_destructive_tests_{dpu}",
+                    f"Requires admin_status=up, got '{admin_status}'"
+                )
+                continue
+
+            configured_dpus.append(dpu)
             logger.info(f"\n--- Destructive tests for {dpu} ---")
             test_admin_down_marks_not_ready(results, dpu)
             test_enable_auto_recovery_feature(results, dpu)
@@ -896,7 +912,7 @@ def main():
 
         # --- Race condition tests ---
         logger.info("\n=== RACE CONDITION TESTS ===\n")
-        for dpu in target_dpus:
+        for dpu in configured_dpus:
             logger.info(f"\n--- Race condition tests for {dpu} ---")
             test_transition_lock_suppresses_recovery(results, dpu)
             test_recovery_type_does_not_suppress(results, dpu)

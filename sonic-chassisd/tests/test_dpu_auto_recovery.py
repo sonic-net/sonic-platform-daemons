@@ -173,6 +173,7 @@ class TestInitDpuRecoveryState:
         updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_ONLINE))
 
         with patch.object(updater, '_npu_crash_on_last_boot', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'), \
              patch.object(updater, '_is_auto_recovery_enabled', return_value=False):
             updater.init_dpu_recovery_state()
 
@@ -2736,7 +2737,71 @@ class TestUpdateRecoveryStateIntegration:
         updater.device_metadata_table = mock_device_metadata_table
 
         with patch("os.path.isfile", return_value=True), \
-             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")):
+             patch("builtins.open", mock_open(read_data="kernel panic - not syncing")), \
+             patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.init_dpu_recovery_state()
 
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_MANUAL_INTERVENTION
+
+
+# ============================================================================
+# Test: Unconfigured (admin Empty) DPUs must never be auto-recovered
+# ============================================================================
+
+class TestUnconfiguredDpuNotRecovered:
+    """A DPU with no CHASSIS_MODULE entry in CONFIG_DB must never be powered on.
+
+    get_module_admin_status() returns MODULE_STATUS_EMPTY for such a DPU, and
+    set_initial_dpu_admin_state() powers it off at boot. The recovery FSM must
+    apply the same rule; treating Empty as "not admin-down" made chassisd
+    power on DPUs the operator had never started.
+    """
+
+    def test_boot_timeout_does_not_power_cycle_unconfigured_dpu(self):
+        """Boot timeout on an Empty-admin DPU must not reach the platform API.
+
+        No internal recovery method is stubbed, so this guards the
+        customer-visible symptom: an unconfigured DPU powering itself on.
+        """
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.dpu_recovery_state["DPU0"]['state'] = DPU_STATE_BOOTING
+        updater.dpu_recovery_state["DPU0"]['boot_start_time'] = time.time() - 700
+
+        set_dpu_states(updater, "DPU0", mp='down', cp='down', dp='down')
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_OFFLINE))
+
+        module = chassis.module_list[0]
+        module.set_admin_state = MagicMock()
+
+        with patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY):
+            # Several polls: the FSM must stay quiescent, not just skip once.
+            for _ in range(3):
+                updater.update_dpu_recovery_state()
+
+        module.set_admin_state.assert_not_called()
+        assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_ADMIN_DOWN
+        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
+        assert get_dpu_state_field(updater, "DPU0", READY_STATUS) == 'false'
+
+    def test_npu_crash_does_not_power_cycle_unconfigured_dpu(self):
+        """NPU kernel-crash recovery must also skip never-configured DPUs.
+
+        init_dpu_recovery_state() calls _enter_power_cycle_or_unrecoverable()
+        directly, bypassing the FSM gate, so it needs its own allow-list check.
+        """
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+        updater.module_table.hset("DPU0", "oper_status", str(ModuleBase.MODULE_STATUS_OFFLINE))
+
+        module = chassis.module_list[0]
+        module.set_admin_state = MagicMock()
+
+        with patch.object(updater, '_npu_crash_on_last_boot', return_value=True), \
+             patch.object(updater, '_is_auto_recovery_enabled', return_value=True), \
+             patch.object(updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY):
+            updater.init_dpu_recovery_state()
+
+        module.set_admin_state.assert_not_called()
+        assert updater.dpu_recovery_state["DPU0"]['reset_count'] == 0
