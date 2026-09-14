@@ -44,13 +44,14 @@ try:
     import logging
     import os
     import queue
+    import re
     import signal
     import sys
     import threading
     import time
     from datetime import datetime
 
-    from sonic_py_common import daemon_base, logger
+    from sonic_py_common import daemon_base, device_info, logger
     from sonic_platform_base.chassis_base import ChassisBase
 
     if os.getenv("BMCCTLD_UNIT_TESTING") == "1":
@@ -59,6 +60,10 @@ try:
         from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
+
+import grpc
+from sonic_grpc.gnoi.client import GnoiClient
+from sonic_grpc.gnoi import system_pb2
 
 
 CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
@@ -177,6 +182,10 @@ FIELD_DEVICE_LEAK_STATUS = "device_leak_status"
 FIELD_SEVERITY = "severity"
 FIELD_LEAK = "leak"
 FIELD_ADMIN_STATUS = "admin_status"
+FIELD_OP_RESULT = "op_result"
+FIELD_OP_REASON = "op_reason"
+FIELD_OP_TRIGGER = "op_trigger"
+FIELD_OP_REQUEST_ID = "op_request_id"
 
 # FIELD_DEVICE_POWER_STATE: Power state values - What POWER action taken on device
 # Stable (final) states — written after the platform call completes
@@ -200,6 +209,7 @@ SWITCH_HOST_OFFLINE = "OFFLINE"
 CMD_POWER_ON = "POWER_ON"
 CMD_POWER_OFF = "POWER_OFF"
 CMD_GRACEFUL_SHUT = "GRACEFUL_SHUT"
+CMD_GRACEFUL_RESTART = "GRACEFUL_RESTART"
 CMD_POWER_CYCLE = "POWER_CYCLE"
 
 # Command execution status
@@ -225,6 +235,7 @@ ALERT_SEVERITY_NORMAL = "NORMAL"
 # Dispatch action values (LEAK_CONTROL_POLICY and queue items)
 ACTION_SYSLOG_ONLY = "syslog_only"
 ACTION_GRACEFUL_SHUTDOWN = "graceful_shutdown"
+ACTION_GRACEFUL_RESTART = "graceful_restart"
 ACTION_POWER_OFF = "power_off"
 ACTION_POWER_ON = "power_on"
 ACTION_POWER_CYCLE = "power_cycle"
@@ -244,6 +255,27 @@ DEFAULT_POWER_ON_DELAY_SECS = 300   # liquid-cooled: allow Rack Manager time to 
 DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
                                     # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
 
+# Terminal operation results
+OP_RESULT_SUCCESS_GRACEFUL = "SUCCESS_GRACEFUL"
+OP_RESULT_SUCCESS_FORCED = "SUCCESS_FORCED"
+OP_RESULT_SUCCESS = "SUCCESS"
+OP_RESULT_POWER_OFF_FAILED = "POWER_OFF_FAILED"
+OP_RESULT_POWER_ON_FAILED = "POWER_ON_FAILED"
+OP_RESULT_OFF_LEAK_BLOCKED = "OFF_LEAK_BLOCKED"
+OP_RESULT_PREEMPTED = "PREEMPTED"
+OP_RESULT_ABANDONED = "ABANDONED"
+
+# Graceful-operation reason codes
+OP_REASON_NOT_QUALIFIED = "not_qualified"
+OP_REASON_TIMEOUT_ZERO = "timeout_zero"
+OP_REASON_ALREADY_OFF = "already_off"
+OP_REASON_PREEMPTED = "preempted"
+OP_REASON_RPC_FAILURE = "rpc_failure"
+OP_REASON_BACKEND_ANSWERED = "backend_answered"
+OP_REASON_CHECK_FAILED = "check_failed"
+OP_REASON_DEADLINE = "deadline"
+OP_REASON_UNCLASSIFIED = "unclassified"
+
 # Switch-Host module name key in CHASSIS_MODULE table
 SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
 
@@ -261,9 +293,21 @@ BMC_JSON_PATHS = [
     "/etc/sonic/bmc.json",
 ]
 DEFAULT_SWITCH_HOST_ADDR = "169.254.100.2"
+DEFAULT_SWITCH_HOST_GNMI_PORT = 8080
+GNOI_SERVER_NAME = "switch-host.bmc-link.sonic"
+BMC_LINK_CERT_DIR = "/etc/sonic/bmc-link"
+BMC_LINK_CERT_PATHS = (
+    os.path.join(BMC_LINK_CERT_DIR, "client.crt"),
+    os.path.join(BMC_LINK_CERT_DIR, "client.key"),
+    os.path.join(BMC_LINK_CERT_DIR, "ca.crt"),
+)
+TAG_RE = r"\[bmc-req:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]"
 
 SELECT_TIMEOUT_MSECS = 1000
 GNOI_REQUEST_TIMEOUT_SECS = 30
+GNOI_STATUS_RPC_TIMEOUT_SECS = 10
+GNOI_STATUS_POLL_INTERVAL_SECS = 1
+RESTART_PAUSE_SECS = 10
 SHUTDOWN_POLL_INTERVAL_SECS = 5
 
 # Polling constants for verifying oper_status after power* API calls
@@ -312,6 +356,81 @@ def fvs_to_dict(fvs):
     if isinstance(fvs, dict):
         return fvs
     return dict(fvs)
+
+
+def classify_report(resp, our_id):
+    """Classify one gNOI RebootStatus report for the current operation."""
+    if re.findall(TAG_RE, resp.reason) != [our_id] or resp.active:
+        return "keep_waiting", None
+    if resp.status.message:
+        return "forced", OP_REASON_BACKEND_ANSWERED
+    if resp.method == system_pb2.HALT and \
+            resp.status.status == system_pb2.RebootStatus.STATUS_SUCCESS:
+        return "graceful", None
+    return "forced", OP_REASON_CHECK_FAILED
+
+
+class GnoiRpcError(Exception):
+    """Normalized gNOI transport failure exposed to operation code."""
+
+
+class GnoiRequester:
+    """One-operation mTLS wrapper around the in-process gNOI client."""
+
+    def __init__(self, target_addr, target_port, cert_dir, server_name):
+        self.target_addr = target_addr
+        self.target_port = target_port
+        self.cert_dir = cert_dir
+        self.server_name = server_name
+        self._client = None
+
+    def open(self):
+        try:
+            with open(os.path.join(self.cert_dir, "ca.crt"), "rb") as cert_file:
+                ca_cert = cert_file.read()
+            with open(os.path.join(self.cert_dir, "client.key"), "rb") as key_file:
+                client_key = key_file.read()
+            with open(os.path.join(self.cert_dir, "client.crt"), "rb") as cert_file:
+                client_cert = cert_file.read()
+
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=ca_cert,
+                private_key=client_key,
+                certificate_chain=client_cert,
+            )
+            client = GnoiClient(
+                "{}:{}".format(self.target_addr, self.target_port),
+                options=(("grpc.ssl_target_name_override", self.server_name),),
+                credentials=credentials,
+            )
+            client.__enter__()
+            self._client = client
+        except (OSError, ValueError, grpc.RpcError) as e:
+            raise GnoiRpcError(str(e)) from e
+
+    def close(self):
+        if self._client is None:
+            return
+        client = self._client
+        self._client = None
+        try:
+            client.__exit__(None, None, None)
+        except grpc.RpcError as e:
+            raise GnoiRpcError(str(e)) from e
+
+    def send_halt(self, message, timeout_secs):
+        request = system_pb2.RebootRequest(method=system_pb2.HALT, message=message)
+        try:
+            return self._client.system.Reboot(request, timeout=timeout_secs)
+        except grpc.RpcError as e:
+            raise GnoiRpcError(str(e)) from e
+
+    def poll_status(self, timeout_secs):
+        request = system_pb2.RebootStatusRequest()
+        try:
+            return self._client.system.RebootStatus(request, timeout=timeout_secs)
+        except grpc.RpcError as e:
+            raise GnoiRpcError(str(e)) from e
 
 
 # ============================================================
@@ -707,6 +826,22 @@ class GracefulShutdownHandler(EventLogger):
         self.controller = controller
         self.policy_reader = policy_reader
 
+    def _is_graceful_qualified(self):
+        """Return whether this BMC is currently qualified for the graceful leg."""
+        try:
+            if not device_info.is_switch_bmc():
+                return False
+        except Exception as e:
+            self.log_error(
+                "Failed to evaluate graceful shutdown qualification: {}".format(e))
+            return False
+
+        try:
+            return all(os.path.isfile(path) and os.path.getsize(path) > 0
+                       for path in BMC_LINK_CERT_PATHS)
+        except OSError:
+            return False
+
     def execute(self):
         """
         Perform graceful shutdown of Switch-Host.
@@ -790,18 +925,31 @@ class GracefulShutdownHandler(EventLogger):
         """
         return True
 
-    def _get_switch_host_addr(self):
-        """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
+    def _read_bmc_link_data(self):
+        """Read available bmc.json files in precedence order."""
         for path in BMC_JSON_PATHS:
             try:
                 with open(path) as f:
                     data = json.load(f)
-                    addr = data.get("bmc_if_addr")
-                    if addr:
-                        return addr
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError):
                 continue
+            yield data
+
+    def _get_switch_host_addr(self):
+        """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
+        for data in self._read_bmc_link_data():
+            addr = data.get("bmc_if_addr")
+            if addr:
+                return addr
         return DEFAULT_SWITCH_HOST_ADDR
+
+    def _get_switch_host_gnoi_port(self):
+        """Read the Switch-Host gNMI port from bmc.json."""
+        for data in self._read_bmc_link_data():
+            port = data.get("switch_host_gnmi_port")
+            if port is not None:
+                return port
+        return DEFAULT_SWITCH_HOST_GNMI_PORT
 
 
 # ============================================================
@@ -1108,6 +1256,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self.policy_reader = PolicyReader()
         self.critical_event_checker = CriticalEventChecker(self.policy_reader)
         self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
+        self.gnoi_requester_factory = GnoiRequester
         self.action_queue = queue.Queue()
         self.event_handler = BmcEventHandler(
             self.action_queue,

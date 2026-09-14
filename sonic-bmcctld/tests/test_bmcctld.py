@@ -5,11 +5,13 @@
 """
 
 import os
+import builtins
 import sys
 import threading
 import time
 import importlib.util
 import importlib.machinery
+from types import SimpleNamespace
 
 def load_source(module_name, module_path):
     loader = importlib.machinery.SourceFileLoader(module_name, module_path)
@@ -54,6 +56,27 @@ daemon_base.db_connect = MagicMock()
 
 load_source('bmcctld', os.path.join(scripts_path, 'bmcctld'))
 import bmcctld  # noqa: E402  (loaded via load_source above)
+
+@pytest.mark.parametrize("dependency", [
+    "grpc", "sonic_grpc.gnoi.client", "sonic_grpc.gnoi",
+])
+def test_missing_required_gnoi_import_fails_loading(dependency, monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_dependency(name, *args, **kwargs):
+        if name == dependency:
+            raise ImportError("missing required dependency: " + name)
+        return original_import(name, *args, **kwargs)
+
+    module_name = "bmcctld_missing_dependency"
+    loader = importlib.machinery.SourceFileLoader(
+        module_name, os.path.join(scripts_path, "bmcctld"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    monkeypatch.setitem(sys.modules, module_name, importlib.util.module_from_spec(spec))
+    with patch("builtins.__import__", side_effect=import_without_dependency):
+        with pytest.raises(ImportError, match="missing required dependency"):
+            load_source(module_name, os.path.join(scripts_path, "bmcctld"))
+
 
 from .mock_platform import MockChassis, MockModule
 from .mock_swsscommon import Table, FieldValuePairs
@@ -556,6 +579,279 @@ class TestGracefulShutdownHandler:
             addr = graceful_shutdown._get_switch_host_addr()
         assert addr == "10.0.0.1"
 
+    def test_get_switch_host_gnoi_port_default(self, graceful_shutdown):
+        """An absent bmc.json port uses 8080."""
+        with patch('builtins.open', side_effect=FileNotFoundError):
+            port = graceful_shutdown._get_switch_host_gnoi_port()
+        assert port == 8080
+
+    def test_get_switch_host_gnoi_port_from_bmc_json(self, graceful_shutdown, tmp_path):
+        """switch_host_gnmi_port is read from BMC link metadata."""
+        import json
+        bmc_json = tmp_path / "bmc.json"
+        bmc_json.write_text(json.dumps({"switch_host_gnmi_port": 8443}))
+        with patch.object(bmcctld, 'BMC_JSON_PATHS', [str(bmc_json)]):
+            port = graceful_shutdown._get_switch_host_gnoi_port()
+        assert port == 8443
+
+    @pytest.mark.parametrize("first_data,expected_addr,expected_port", [
+        ({"bmc_if_addr": "10.0.0.1"}, "10.0.0.1", 8443),
+        ({"switch_host_gnmi_port": 9443}, "10.0.0.2", 9443),
+        ({"bmc_if_addr": "", "switch_host_gnmi_port": None}, "10.0.0.2", 8443),
+        ({"bmc_if_addr": "", "switch_host_gnmi_port": 0}, "10.0.0.2", 0),
+    ])
+    def test_bmc_link_settings_keep_independent_precedence(
+            self, graceful_shutdown, tmp_path, first_data, expected_addr,
+            expected_port):
+        import json
+        first = tmp_path / "first.json"
+        second = tmp_path / "second.json"
+        broken = tmp_path / "broken.json"
+        first.write_text(json.dumps(first_data))
+        second.write_text(json.dumps({
+            "bmc_if_addr": "10.0.0.2", "switch_host_gnmi_port": 8443,
+        }))
+        broken.write_text("invalid json")
+        with patch.object(bmcctld, "BMC_JSON_PATHS", [
+                str(tmp_path / "missing.json"), str(broken), str(first), str(second)]):
+            assert graceful_shutdown._get_switch_host_addr() == expected_addr
+            assert graceful_shutdown._get_switch_host_gnoi_port() == expected_port
+
+
+# --------------------------------------------------------------------------
+# Tests: graceful qualification, report classification, and gNOI transport
+# --------------------------------------------------------------------------
+
+OUR_REQUEST_ID = "3f2b1c8a-1234-4abc-8def-0123456789ab"
+OTHER_REQUEST_ID = "7a25d48e-9876-4fed-8cba-fedcba987654"
+
+
+def _report(reason, active=False, method=3, status=1, message=""):
+    return SimpleNamespace(
+        reason=reason,
+        active=active,
+        method=method,
+        status=SimpleNamespace(status=status, message=message),
+    )
+
+
+class TestReportClassifier:
+
+    @pytest.mark.parametrize(
+        "resp, expected",
+        [
+            (_report("done [bmc-req:{}]".format(OUR_REQUEST_ID)),
+             ("graceful", None)),
+            (_report("active [bmc-req:{}]".format(OUR_REQUEST_ID), active=True),
+             ("keep_waiting", None)),
+            (_report("failed [bmc-req:{}]".format(OUR_REQUEST_ID), status=2),
+             ("forced", bmcctld.OP_REASON_CHECK_FAILED)),
+            (_report("failed [bmc-req:{}]".format(OUR_REQUEST_ID), status=2,
+                     message="backend failure"),
+             ("forced", bmcctld.OP_REASON_BACKEND_ANSWERED)),
+            (_report("done [bmc-req:{}]".format(OUR_REQUEST_ID),
+                     message="backend answer"),
+             ("forced", bmcctld.OP_REASON_BACKEND_ANSWERED)),
+            (_report("done [bmc-req:{}]".format(OTHER_REQUEST_ID)),
+             ("keep_waiting", None)),
+            (_report("done [bmc-req:{}0]".format(OUR_REQUEST_ID)),
+             ("keep_waiting", None)),
+            (_report("done [bmc-req:{}]".format(OUR_REQUEST_ID[:-1])),
+             ("keep_waiting", None)),
+            (_report("done without a tag"), ("keep_waiting", None)),
+            (_report("done [bmc-req:{0}] [bmc-req:{0}]".format(OUR_REQUEST_ID)),
+             ("keep_waiting", None)),
+            (_report("done [bmc-req:{}]".format(OUR_REQUEST_ID), method=1),
+             ("forced", bmcctld.OP_REASON_CHECK_FAILED)),
+        ],
+        ids=[
+            "graceful", "active", "host-failure", "backend-failure",
+            "backend-success", "foreign", "longer-id", "shorter-id",
+            "untagged", "duplicate-tag", "wrong-method",
+        ],
+    )
+    def test_n_report_attribution(self, resp, expected):
+        assert bmcctld.classify_report(resp, OUR_REQUEST_ID) == expected
+
+
+class TestGracefulQualification:
+
+    def _configure_qualified(self, monkeypatch, tmp_path, graceful_shutdown):
+        cert_dir = tmp_path / "certs"
+        cert_dir.mkdir()
+        cert_paths = tuple(cert_dir / name for name in ("client.crt", "client.key", "ca.crt"))
+        for path in cert_paths:
+            path.write_bytes(b"certificate-data")
+
+        monkeypatch.setattr(bmcctld.device_info, "is_switch_bmc", lambda: True)
+        monkeypatch.setattr(bmcctld, "BMC_LINK_CERT_PATHS",
+                            tuple(str(path) for path in cert_paths))
+        return cert_paths
+
+    def test_g_qualification_accepts_only_complete_positive_gate(
+            self, monkeypatch, tmp_path, graceful_shutdown):
+        self._configure_qualified(monkeypatch, tmp_path, graceful_shutdown)
+        with patch("builtins.open") as direct_open:
+            assert graceful_shutdown._is_graceful_qualified() is True
+        direct_open.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "failure",
+        ["wrong-role", "missing-cert", "empty-cert", "cert-race"],
+    )
+    def test_g_qualification_rejects_incomplete_gate(
+            self, failure, monkeypatch, tmp_path, graceful_shutdown):
+        cert_paths = self._configure_qualified(
+            monkeypatch, tmp_path, graceful_shutdown)
+
+        if failure == "wrong-role":
+            monkeypatch.setattr(bmcctld.device_info, "is_switch_bmc", lambda: False)
+        elif failure == "missing-cert":
+            cert_paths[0].unlink()
+        elif failure == "empty-cert":
+            cert_paths[0].write_bytes(b"")
+        else:
+            monkeypatch.setattr(bmcctld.os.path, "isfile", lambda _path: True)
+            monkeypatch.setattr(bmcctld.os.path, "getsize",
+                                MagicMock(side_effect=FileNotFoundError))
+
+        assert graceful_shutdown._is_graceful_qualified() is False
+
+    def test_g_qualification_identity_exception_is_logged(
+            self, monkeypatch, tmp_path, graceful_shutdown):
+        self._configure_qualified(
+            monkeypatch, tmp_path, graceful_shutdown)
+        failure = RuntimeError("unexpected identity failure")
+        monkeypatch.setattr(
+            bmcctld.device_info, "is_switch_bmc",
+            MagicMock(side_effect=failure))
+        graceful_shutdown.log_error = MagicMock()
+
+        assert graceful_shutdown._is_graceful_qualified() is False
+        graceful_shutdown.log_error.assert_called_once()
+        assert str(failure) in graceful_shutdown.log_error.call_args.args[0]
+
+    def test_g_qualification_is_reevaluated_between_operations(
+            self, monkeypatch, tmp_path, graceful_shutdown):
+        cert_paths = self._configure_qualified(
+            monkeypatch, tmp_path, graceful_shutdown)
+        cert_paths[0].unlink()
+        assert graceful_shutdown._is_graceful_qualified() is False
+        cert_paths[0].write_bytes(b"certificate-data")
+        assert graceful_shutdown._is_graceful_qualified() is True
+
+
+class FakeGrpcError(Exception):
+    pass
+
+
+class TestGnoiRequester:
+
+    def _make_requester(self, monkeypatch, tmp_path):
+        cert_dir = tmp_path / "certs"
+        cert_dir.mkdir()
+        (cert_dir / "ca.crt").write_bytes(b"ca")
+        (cert_dir / "client.key").write_bytes(b"key")
+        (cert_dir / "client.crt").write_bytes(b"cert")
+
+        grpc_api = SimpleNamespace(
+            RpcError=FakeGrpcError,
+            ssl_channel_credentials=MagicMock(return_value="credentials"),
+        )
+        proto_api = SimpleNamespace(
+            HALT=3,
+            RebootRequest=MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
+            RebootStatusRequest=MagicMock(return_value="status-request"),
+        )
+        client = MagicMock()
+        client_factory = MagicMock(return_value=client)
+
+        monkeypatch.setattr(bmcctld, "grpc", grpc_api)
+        monkeypatch.setattr(bmcctld, "system_pb2", proto_api)
+        monkeypatch.setattr(bmcctld, "GnoiClient", client_factory)
+
+        requester = bmcctld.GnoiRequester(
+            "169.254.100.2", 8080, str(cert_dir), bmcctld.GNOI_SERVER_NAME)
+        return requester, grpc_api, proto_api, client_factory, client, cert_dir
+
+    def test_f_requester_uses_exact_mtls_and_rpc_shapes(self, monkeypatch, tmp_path):
+        requester, grpc_api, proto_api, client_factory, client, _ = \
+            self._make_requester(monkeypatch, tmp_path)
+
+        requester.open()
+        grpc_api.ssl_channel_credentials.assert_called_once_with(
+            root_certificates=b"ca", private_key=b"key", certificate_chain=b"cert")
+        client_factory.assert_called_once_with(
+            "169.254.100.2:8080",
+            options=(("grpc.ssl_target_name_override", "switch-host.bmc-link.sonic"),),
+            credentials="credentials",
+        )
+        client.__enter__.assert_called_once_with()
+
+        requester.send_halt("BMC pre-shutdown request [bmc-req:{}]".format(OUR_REQUEST_ID), 30)
+        proto_api.RebootRequest.assert_called_once_with(
+            method=3,
+            message="BMC pre-shutdown request [bmc-req:{}]".format(OUR_REQUEST_ID),
+        )
+        reboot_request = client.system.Reboot.call_args.args[0]
+        assert reboot_request.method == 3
+        assert reboot_request.message.endswith("[bmc-req:{}]".format(OUR_REQUEST_ID))
+        client.system.Reboot.assert_called_once_with(reboot_request, timeout=30)
+
+        requester.poll_status(10)
+        proto_api.RebootStatusRequest.assert_called_once_with()
+        client.system.RebootStatus.assert_called_once_with("status-request", timeout=10)
+
+        requester.close()
+        client.__exit__.assert_called_once_with(None, None, None)
+
+    @pytest.mark.parametrize(
+        "failure_point",
+        ["cert-read", "credentials", "client-open", "send", "poll", "close"],
+    )
+    def test_f_transport_failures_are_normalized_once(
+            self, failure_point, monkeypatch, tmp_path):
+        requester, grpc_api, _, client_factory, client, cert_dir = \
+            self._make_requester(monkeypatch, tmp_path)
+
+        if failure_point == "cert-read":
+            (cert_dir / "ca.crt").unlink()
+        elif failure_point == "credentials":
+            grpc_api.ssl_channel_credentials.side_effect = ValueError("bad PEM")
+        elif failure_point == "client-open":
+            client.__enter__.side_effect = FakeGrpcError("channel failed")
+        else:
+            requester.open()
+            if failure_point == "send":
+                client.system.Reboot.side_effect = FakeGrpcError("send failed")
+            elif failure_point == "poll":
+                client.system.RebootStatus.side_effect = FakeGrpcError("poll failed")
+            else:
+                client.__exit__.side_effect = FakeGrpcError("close failed")
+
+        with pytest.raises(bmcctld.GnoiRpcError):
+            if failure_point in ("cert-read", "credentials", "client-open"):
+                requester.open()
+            elif failure_point == "send":
+                requester.send_halt("message", 30)
+            elif failure_point == "poll":
+                requester.poll_status(10)
+            else:
+                requester.close()
+
+        if failure_point == "credentials":
+            assert grpc_api.ssl_channel_credentials.call_count == 1
+        elif failure_point == "client-open":
+            assert client.__enter__.call_count == 1
+        elif failure_point == "send":
+            assert client.system.Reboot.call_count == 1
+        elif failure_point == "poll":
+            assert client.system.RebootStatus.call_count == 1
+        elif failure_point == "close":
+            assert client.__exit__.call_count == 1
+        else:
+            client_factory.assert_not_called()
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - Rack Manager commands
@@ -904,6 +1200,14 @@ class TestBmcctldDaemonActionLoop:
             daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
             daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
         return daemon
+
+    def test_gnoi_requester_factory_is_injectable(self, chassis):
+        """The daemon exposes the requester factory test seam."""
+        daemon = self._make_daemon(chassis)
+        assert daemon.gnoi_requester_factory is bmcctld.GnoiRequester
+        replacement = MagicMock()
+        daemon.gnoi_requester_factory = replacement
+        assert daemon.gnoi_requester_factory is replacement
 
     def test_execute_graceful_shutdown(self, chassis):
         daemon = self._make_daemon(chassis)
