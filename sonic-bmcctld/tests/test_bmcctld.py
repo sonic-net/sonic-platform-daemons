@@ -5,12 +5,14 @@
 """
 
 import os
-import builtins
 import sys
+import itertools
+import queue
 import threading
 import time
 import importlib.util
 import importlib.machinery
+import builtins
 from types import SimpleNamespace
 
 def load_source(module_name, module_path):
@@ -52,10 +54,18 @@ assert os.path.samefile(
 os.environ["BMCCTLD_UNIT_TESTING"] = "1"
 
 from sonic_py_common import daemon_base  # noqa: E402
-daemon_base.db_connect = MagicMock()
+daemon_base.db_connect = MagicMock(side_effect=lambda db_name: db_name)
 
 load_source('bmcctld', os.path.join(scripts_path, 'bmcctld'))
 import bmcctld  # noqa: E402  (loaded via load_source above)
+
+from .mock_platform import MockChassis, MockModule
+from .mock_swsscommon import Table, FieldValuePairs
+
+TEST_REQUEST_ID = "12345678-1234-1234-1234-123456789abc"
+TEST_UUID1 = "3f2b1c8a-1234-1abc-8def-0123456789ab"
+TEST_UUID4 = "3f2b1c8a-1234-4abc-8def-0123456789ab"
+
 
 @pytest.mark.parametrize("dependency", [
     "grpc", "sonic_grpc.gnoi.client", "sonic_grpc.gnoi",
@@ -78,12 +88,30 @@ def test_missing_required_gnoi_import_fails_loading(dependency, monkeypatch):
             load_source(module_name, os.path.join(scripts_path, "bmcctld"))
 
 
-from .mock_platform import MockChassis, MockModule
-from .mock_swsscommon import Table, FieldValuePairs
+def _make_operation(action, event_desc="test", priority=None, callback=None,
+                    rack_cmd_key=None):
+    if priority is None:
+        priority = bmcctld.action_priority(action)
+    item = bmcctld.ActionItem(
+        action, event_desc, priority,
+        on_complete=callback, rack_cmd_key=rack_cmd_key)
+    return bmcctld.Operation(
+        item, TEST_REQUEST_ID,
+        bmcctld.OperationRunner.INITIAL_STAGES[action])
+
+
+def _dequeue_item(action_queue):
+    return action_queue.get_nowait()[2]
 
 # --------------------------------------------------------------------------
 # Fixtures
 # --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_database_mocks():
+    bmcctld.swsscommon.reset_mock_db()
+    daemon_base.db_connect.reset_mock()
 
 
 @pytest.fixture(autouse=True)
@@ -111,10 +139,7 @@ def chassis():
 
 @pytest.fixture
 def controller(chassis):
-    ctrl = bmcctld.SwitchHostController(chassis)
-    ctrl.host_state_table = Table(None, bmcctld.HOST_STATE_TABLE)
-    ctrl.chassis_module_info_table = Table(None, bmcctld.CHASSIS_MODULE_INFO_TABLE)
-    return ctrl
+    return bmcctld.SwitchHostController(chassis)
 
 
 @pytest.fixture
@@ -141,9 +166,11 @@ def graceful_shutdown(controller, policy_reader):
 def event_handler(controller, policy_reader, critical_event_checker):
     stop_event = threading.Event()
     stop_event.set()  # Prevent blocking in tests
-    action_queue = __import__('queue').Queue()
-    eh = bmcctld.BmcEventHandler(action_queue, policy_reader, critical_event_checker, stop_event,
-                                  controller)
+    action_queue = queue.PriorityQueue()
+    action_sequence = itertools.count()
+    eh = bmcctld.BmcEventHandler(
+        action_queue, action_sequence, policy_reader,
+        critical_event_checker, stop_event, controller)
     # Replace live DB tables with in-memory mocks
     eh._cmd_table = Table(None, bmcctld.RACK_MANAGER_COMMAND_TABLE)
     return eh
@@ -173,23 +200,23 @@ class TestSwitchHostController:
 
     def test_power_on_calls_set_admin_state(self, chassis, controller):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        result = controller.power_on()
-        assert result is True
+        result = controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
+        assert result == bmcctld.PowerCallResult.CONFIRMED
         assert chassis.switch_host.get_admin_state() is True
 
     def test_power_off_calls_set_admin_state(self, chassis, controller):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        result = controller.power_off()
-        assert result is True
+        result = controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
+        assert result == bmcctld.PowerCallResult.CONFIRMED
         assert chassis.switch_host.get_admin_state() is False
 
     def test_power_cycle_calls_do_power_cycle(self, chassis, controller):
-        result = controller.power_cycle()
-        assert result is True
+        result = controller.power_cycle(_make_operation(bmcctld.ACTION_POWER_CYCLE))
+        assert result == bmcctld.PowerCallResult.CONFIRMED
         assert chassis.switch_host.power_cycle_called is True
 
     def test_power_on_updates_host_state(self, chassis, controller):
-        controller.power_on()
+        controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         assert result[0] is True
         state = dict(result[1])
@@ -198,7 +225,7 @@ class TestSwitchHostController:
 
     def test_power_off_updates_host_state(self, chassis, controller):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.power_off()
+        controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
         result = controller.host_state_table.get(bmcctld.HOST_STATE_KEY)
         assert result[0] is True
         state = dict(result[1])
@@ -215,7 +242,7 @@ class TestSwitchHostController:
                 captured.update(dict(result[1]))
             original(up)
         chassis.switch_host.set_admin_state = interceptor
-        controller.power_on()
+        controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
         assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWERING_ON
         assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
         # Final entry must reflect POWER_ON and confirmed ONLINE
@@ -234,7 +261,7 @@ class TestSwitchHostController:
                 captured.update(dict(result[1]))
             original(up)
         chassis.switch_host.set_admin_state = interceptor
-        controller.power_off()
+        controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
         assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWERING_OFF
         assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
         # Final entry must reflect POWER_OFF and confirmed OFFLINE
@@ -252,7 +279,7 @@ class TestSwitchHostController:
                 captured.update(dict(result[1]))
             original()
         chassis.switch_host.do_power_cycle = interceptor
-        controller.power_cycle()
+        controller.power_cycle(_make_operation(bmcctld.ACTION_POWER_CYCLE))
         assert captured.get(bmcctld.FIELD_DEVICE_POWER_STATE) == bmcctld.SWITCH_HOST_POWER_CYCLING
         assert captured.get(bmcctld.FIELD_DEVICE_STATUS) in (bmcctld.SWITCH_HOST_ONLINE, bmcctld.SWITCH_HOST_OFFLINE)
         # Final entry must reflect POWER_CYCLE and confirmed ONLINE
@@ -262,30 +289,29 @@ class TestSwitchHostController:
 
     def test_get_db_power_state(self, chassis, controller):
         """get_db_power_state returns the value stored by the last _update_host_state call."""
-        controller.power_on()
+        controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
         assert controller.get_db_power_state() == bmcctld.POWER_STATE_ON
 
     def test_power_on_rolls_back_state_on_exception(self, chassis, controller):
         """If set_admin_state raises, STATE_DB is restored to the pre-call snapshot."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        controller.power_off()  # seed a known prior state (OFFLINE / POWER_OFF)
+        controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
         chassis.switch_host.set_admin_state = MagicMock(side_effect=RuntimeError("hw fault"))
-        result = controller.power_on()
-        assert result is False
+        result = controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
 
-    def test_power_off_rolls_back_state_on_exception(self, chassis, controller):
-        """If set_admin_state raises, STATE_DB is restored to the pre-call snapshot."""
+    def test_power_off_leaves_transition_on_exception(self, chassis, controller):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.power_on()  # seed a known prior state (ONLINE / POWER_ON)
+        controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
         chassis.switch_host.set_admin_state = MagicMock(side_effect=RuntimeError("hw fault"))
-        result = controller.power_off()
-        assert result is False
+        result = controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         state = dict(controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
-        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.SWITCH_HOST_POWERING_OFF
 
     def test_get_switch_host_module_by_type(self, chassis):
         """If a module explicitly returns MODULE_TYPE_SWITCH_HOST it is selected."""
@@ -321,13 +347,116 @@ class TestSwitchHostController:
         assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
         assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
 
+    @pytest.mark.parametrize(
+        "death_point,stale_state,live_status,op_result,stale_reason", [
+        ("before_host_accept", bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+         MockModule.MODULE_STATUS_ONLINE, "-", "-"),
+        ("after_accept_before_watchdog", bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+         MockModule.MODULE_STATUS_ONLINE, "-", "-"),
+        ("after_watchdog_arm", bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+         MockModule.MODULE_STATUS_ONLINE, "-", "-"),
+        ("before_transitional_write", bmcctld.POWER_STATE_ON,
+         MockModule.MODULE_STATUS_ONLINE, None,
+         bmcctld.OP_REASON_UNCLASSIFIED),
+        ("before_terminal_record", bmcctld.SWITCH_HOST_POWERING_OFF,
+         MockModule.MODULE_STATUS_OFFLINE, "-", "-"),
+    ])
+    @pytest.mark.parametrize("request_id", [TEST_UUID1, TEST_UUID4, TEST_REQUEST_ID])
+    def test_dth_stale_operation_is_abandoned_on_startup(
+            self, chassis, death_point, stale_state, live_status, op_result,
+            stale_reason, request_id):
+        retained_state = Table("STATE_DB", bmcctld.HOST_STATE_TABLE)
+        fields = [
+            (bmcctld.FIELD_DEVICE_POWER_STATE, stale_state),
+            (bmcctld.FIELD_DEVICE_STATUS, bmcctld.SWITCH_HOST_ONLINE),
+            (bmcctld.FIELD_OP_REQUEST_ID, request_id),
+            (bmcctld.FIELD_OP_TRIGGER, death_point),
+            (bmcctld.FIELD_OP_REASON, stale_reason),
+        ]
+        if op_result is not None:
+            fields.append((bmcctld.FIELD_OP_RESULT, op_result))
+        retained_state.set(
+            bmcctld.HOST_STATE_KEY, FieldValuePairs(fields))
+
+        chassis.switch_host.set_oper_status(live_status)
+        chassis.switch_host.set_admin_state = MagicMock()
+        chassis.switch_host.do_power_cycle = MagicMock()
+        chassis.set_liquid_cooled(False)
+        with patch('sonic_platform.platform.Platform') as mock_platform:
+            mock_platform.return_value.get_chassis.return_value = chassis
+            fresh_daemon = bmcctld.BmcctldDaemon(
+                bmcctld.SYSLOG_IDENTIFIER)
+        fresh_daemon.policy_reader.get_switch_host_admin_status = MagicMock(
+            return_value=bmcctld.ADMIN_DOWN)
+        fresh_daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=fresh_daemon.event_handler._subscription_ready.set)
+        fresh_daemon._run_action_loop = MagicMock()
+
+        assert fresh_daemon.run() is False
+
+        state = dict(retained_state.get(bmcctld.HOST_STATE_KEY)[1])
+        expected_power_state = (
+            bmcctld.POWER_STATE_ON
+            if live_status == MockModule.MODULE_STATUS_ONLINE
+            else bmcctld.POWER_STATE_OFF)
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == expected_power_state
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == str(live_status).upper()
+        assert state[bmcctld.FIELD_OP_REQUEST_ID] == request_id
+        assert state[bmcctld.FIELD_OP_TRIGGER] == death_point
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_ABANDONED
+        assert state[bmcctld.FIELD_OP_REASON] == "-"
+        fresh_daemon.controller.log_warning.assert_called_once_with(
+            "OP_ABANDONED request_id={} stale_state={}".format(
+                request_id, stale_state))
+        assert fresh_daemon.operation_runner.current is None
+        assert fresh_daemon.action_queue.empty()
+        chassis.switch_host.set_admin_state.assert_not_called()
+        chassis.switch_host.do_power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize("request_id", [
+        "-",
+        "",
+        TEST_UUID4.upper(),
+        "not-a-uuid",
+    ])
+    def test_dth_invalid_request_id_is_not_abandoned(
+            self, chassis, controller, request_id):
+        controller.host_state_table.set(
+            bmcctld.HOST_STATE_KEY, FieldValuePairs([
+                (bmcctld.FIELD_DEVICE_POWER_STATE,
+                 bmcctld.SWITCH_HOST_POWERING_OFF),
+                (bmcctld.FIELD_OP_REQUEST_ID, request_id),
+                (bmcctld.FIELD_OP_RESULT, "-"),
+            ]))
+        controller.init_host_state()
+        state = dict(controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == "-"
+        controller.log_warning.assert_not_called()
+
+    def test_dth_terminal_operation_is_not_rewritten(self, controller):
+        controller.host_state_table.set(
+            bmcctld.HOST_STATE_KEY, FieldValuePairs([
+                (bmcctld.FIELD_DEVICE_POWER_STATE,
+                 bmcctld.SWITCH_HOST_POWERING_OFF),
+                (bmcctld.FIELD_OP_REQUEST_ID, TEST_UUID4),
+                (bmcctld.FIELD_OP_RESULT, bmcctld.OP_RESULT_POWER_OFF_FAILED),
+                (bmcctld.FIELD_OP_REASON, "-"),
+            ]))
+        controller.init_host_state()
+        state = dict(controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+        controller.log_warning.assert_not_called()
+
     # -- _verify_oper_status tests --
 
     def test_verify_oper_status_matches_immediately(self, chassis, controller):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         with patch('time.sleep') as mock_sleep:
             result = controller._verify_oper_status(bmcctld.SWITCH_HOST_ONLINE, 30, "test")
-        assert result is True
+        assert result == bmcctld.PowerCallResult.CONFIRMED
         mock_sleep.assert_not_called()
 
     @patch('time.sleep')
@@ -338,35 +467,195 @@ class TestSwitchHostController:
         mock_monotonic.side_effect = [0, 0, 31, 31]
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         result = controller._verify_oper_status(bmcctld.SWITCH_HOST_ONLINE, 30, "test")
-        assert result is False
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         mock_sleep.assert_called_once_with(bmcctld.POWER_VERIFY_POLL_INTERVAL_SECS)
 
     def test_power_on_returns_false_when_verify_fails(self, chassis, controller):
-        with patch.object(controller, '_verify_oper_status', return_value=False):
-            result = controller.power_on()
-        assert result is False
+        with patch.object(
+                controller, '_verify_oper_status',
+                return_value=bmcctld.PowerCallResult.NOT_CONFIRMED):
+            result = controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         assert chassis.switch_host.get_admin_state() is True  # API was still called
 
     def test_power_off_returns_false_when_verify_fails(self, chassis, controller):
-        with patch.object(controller, '_verify_oper_status', return_value=False):
-            result = controller.power_off()
-        assert result is False
+        with patch.object(
+                controller, '_verify_oper_status',
+                return_value=bmcctld.PowerCallResult.NOT_CONFIRMED):
+            result = controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         assert chassis.switch_host.get_admin_state() is False  # API was still called
 
     def test_power_cycle_returns_false_when_verify_fails(self, chassis, controller):
-        with patch.object(controller, '_verify_oper_status', return_value=False):
-            result = controller.power_cycle()
-        assert result is False
+        with patch.object(
+                controller, '_verify_oper_status',
+                return_value=bmcctld.PowerCallResult.NOT_CONFIRMED):
+            result = controller.power_cycle(_make_operation(bmcctld.ACTION_POWER_CYCLE))
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
         assert chassis.switch_host.power_cycle_called is True  # API was still called
 
     def test_power_cycle_uses_double_timeout(self, chassis, controller):
-        with patch.object(controller, '_verify_oper_status', return_value=True) as mock_verify:
-            controller.power_cycle()
+        with patch.object(
+                controller, '_verify_oper_status',
+                return_value=bmcctld.PowerCallResult.CONFIRMED) as mock_verify:
+            operation = _make_operation(bmcctld.ACTION_POWER_CYCLE)
+            controller.power_cycle(operation)
         mock_verify.assert_called_once_with(
             bmcctld.SWITCH_HOST_ONLINE,
             bmcctld.POWER_VERIFY_TIMEOUT_SECS * 2,
-            "power_cycle"
+            "power_cycle",
+            None,
         )
+
+    @pytest.mark.parametrize(
+        "action, method_name",
+        [
+            (bmcctld.ACTION_POWER_OFF, "power_off"),
+            (bmcctld.ACTION_POWER_ON, "power_on"),
+            (bmcctld.ACTION_POWER_CYCLE, "power_cycle"),
+        ],
+    )
+    def test_p_cancel_before_wrapper_entry_issues_no_platform_call(
+            self, action, method_name, chassis, controller):
+        operation = _make_operation(action)
+        operation.cancel.set()
+        chassis.switch_host.set_admin_state = MagicMock()
+        chassis.switch_host.do_power_cycle = MagicMock()
+        result = getattr(controller, method_name)(operation, operation.cancel)
+        assert result == bmcctld.PowerCallResult.CANCELLED
+        chassis.switch_host.set_admin_state.assert_not_called()
+        chassis.switch_host.do_power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, method_name",
+        [
+            (bmcctld.ACTION_POWER_OFF, "power_off"),
+            (bmcctld.ACTION_POWER_ON, "power_on"),
+            (bmcctld.ACTION_POWER_CYCLE, "power_cycle"),
+        ],
+    )
+    def test_p_cancel_under_lock_issues_no_platform_call(
+            self, action, method_name, chassis, controller):
+        operation = _make_operation(action)
+        chassis.switch_host.set_admin_state = MagicMock()
+        chassis.switch_host.do_power_cycle = MagicMock()
+
+        class CancelOnEnter:
+            def __enter__(self):
+                operation.cancel.set()
+            def __exit__(self, exc_type, exc_value, tb):
+                return False
+
+        controller._power_lock = CancelOnEnter()
+        result = getattr(controller, method_name)(operation, operation.cancel)
+        assert result == bmcctld.PowerCallResult.CANCELLED
+        chassis.switch_host.set_admin_state.assert_not_called()
+        chassis.switch_host.do_power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, method_name",
+        [
+            (bmcctld.ACTION_POWER_ON, "power_on"),
+            (bmcctld.ACTION_POWER_CYCLE, "power_cycle"),
+        ],
+    )
+    def test_s_raise_is_refused_on_under_lock_critical_reread(
+            self, action, method_name, chassis, controller):
+        checker = MagicMock()
+        checker.has_any_critical_event.return_value = True
+        controller.set_critical_event_checker(checker)
+        chassis.switch_host.set_admin_state = MagicMock()
+        chassis.switch_host.do_power_cycle = MagicMock()
+        operation = _make_operation(action)
+        result = getattr(controller, method_name)(operation, operation.cancel)
+        assert result == bmcctld.PowerCallResult.REFUSED_LEAK
+        checker.has_any_critical_event.assert_called_once()
+        chassis.switch_host.set_admin_state.assert_not_called()
+        chassis.switch_host.do_power_cycle.assert_not_called()
+
+    def test_p_verify_wait_is_cancelled_without_poll_interval_delay(
+            self, chassis, controller):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        cancel = MagicMock()
+        cancel.is_set.return_value = False
+        cancel.wait.return_value = True
+        with patch('bmcctld.time.sleep') as sleep:
+            result = controller._verify_oper_status(
+                bmcctld.SWITCH_HOST_ONLINE, 60, "cancel-test", cancel)
+        assert result == bmcctld.PowerCallResult.CANCELLED
+        cancel.wait.assert_called_once()
+        sleep.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, method_name, platform_method",
+        [
+            (bmcctld.ACTION_POWER_OFF, "power_off", "set_admin_state"),
+            (bmcctld.ACTION_POWER_ON, "power_on", "set_admin_state"),
+            (bmcctld.ACTION_POWER_CYCLE, "power_cycle", "do_power_cycle"),
+        ],
+    )
+    def test_p_cancel_during_issued_call_wins_over_call_exception(
+            self, action, method_name, platform_method, chassis, controller):
+        operation = _make_operation(action)
+
+        def cancel_then_raise(*_args):
+            operation.cancel.set()
+            raise RuntimeError("platform call failed after cancellation")
+
+        setattr(chassis.switch_host, platform_method, cancel_then_raise)
+        result = getattr(controller, method_name)(operation, operation.cancel)
+
+        assert result == bmcctld.PowerCallResult.CANCELLED
+
+    @pytest.mark.parametrize(
+        "action, method_name, issued_stage, confirmed_stage",
+        [
+            (bmcctld.ACTION_POWER_OFF, "power_off",
+             bmcctld.STAGE_POWER_OFF_ISSUED,
+             bmcctld.STAGE_POWER_OFF_CONFIRMED),
+            (bmcctld.ACTION_POWER_ON, "power_on",
+             bmcctld.STAGE_POWER_ON_ISSUED,
+             bmcctld.STAGE_POWER_ON_CONFIRMED),
+            (bmcctld.ACTION_POWER_CYCLE, "power_cycle",
+             bmcctld.STAGE_POWER_CYCLE_ISSUED,
+             bmcctld.STAGE_POWER_CYCLE_CONFIRMED),
+        ],
+    )
+    def test_q_stage_is_issued_during_call_and_confirmed_after_verify(
+            self, action, method_name, issued_stage, confirmed_stage,
+            chassis, controller):
+        operation = _make_operation(action)
+        observed = []
+        if action == bmcctld.ACTION_POWER_CYCLE:
+            original = chassis.switch_host.do_power_cycle
+            def platform_call():
+                observed.append(operation.stage)
+                original()
+            chassis.switch_host.do_power_cycle = platform_call
+        else:
+            original = chassis.switch_host.set_admin_state
+            def platform_call(up):
+                observed.append(operation.stage)
+                original(up)
+            chassis.switch_host.set_admin_state = platform_call
+            if action == bmcctld.ACTION_POWER_OFF:
+                chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        result = getattr(controller, method_name)(operation, operation.cancel)
+        assert result == bmcctld.PowerCallResult.CONFIRMED
+        assert observed == [issued_stage]
+        assert operation.stage == confirmed_stage
+
+    def test_w_power_on_timeout_keeps_existing_final_state_behavior(
+            self, chassis, controller):
+        operation = _make_operation(bmcctld.ACTION_POWER_ON)
+        with patch.object(
+                controller, '_verify_oper_status',
+                return_value=bmcctld.PowerCallResult.NOT_CONFIRMED):
+            result = controller.power_on(operation, operation.cancel)
+        assert result == bmcctld.PowerCallResult.NOT_CONFIRMED
+        state = dict(controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
 
 
 # --------------------------------------------------------------------------
@@ -524,8 +813,9 @@ class TestCriticalEventChecker:
 class TestGracefulShutdownHandler:
 
     def test_powering_off_state_set_before_gnoi(self, graceful_shutdown, chassis):
-        """STATE_DB device_power_state shows POWERING_OFF before gNOI shutdown is issued."""
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         captured = {}
         original = graceful_shutdown.controller._update_host_state
         def capture_first(power_state, device_status=None):
@@ -533,38 +823,99 @@ class TestGracefulShutdownHandler:
                 captured['power_state'] = power_state
             return original(power_state, device_status)
         graceful_shutdown.controller._update_host_state = capture_first
-        graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=False)
-        graceful_shutdown.execute()
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "failed [bmc-req:{}]".format(TEST_REQUEST_ID), status=2)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        graceful_shutdown.execute(
+            _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN),
+            MagicMock(return_value=requester))
         assert captured.get('power_state') == bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN
 
     def test_shutdown_delay_zero_skips_gnoi(self, graceful_shutdown, chassis):
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=0)
-        graceful_shutdown.execute()
-        # set_admin_state(False) must be called on the Switch-Host module
-        assert chassis.switch_host.get_admin_state() is False
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        factory = MagicMock()
+        outcome = graceful_shutdown.execute(
+            _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN), factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            True,
+        )
+        factory.assert_not_called()
+        graceful_shutdown.controller.power_off.assert_called_once()
 
     def test_gnoi_fails_triggers_power_off(self, graceful_shutdown, chassis):
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
-        graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=False)
-        graceful_shutdown.execute()
-        assert chassis.switch_host.get_admin_state() is False
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        requester = MagicMock()
+        requester.send_halt.side_effect = bmcctld.GnoiRpcError("unreachable")
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        outcome = graceful_shutdown.execute(
+            _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN),
+            MagicMock(return_value=requester))
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_RPC_FAILURE,
+            True,
+        )
+        graceful_shutdown.controller.power_off.assert_called_once()
 
     def test_gnoi_success_and_host_goes_offline_still_calls_power_off(self, graceful_shutdown, chassis):
-        """Even after graceful OFFLINE, power_off is always issued to remove power."""
         graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
-        graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
-        result = graceful_shutdown.execute()
-        assert result is True
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "complete [bmc-req:{}]".format(TEST_REQUEST_ID))
+        states = []
+        update_state = graceful_shutdown.controller._update_host_state
+
+        def record_state(power_state, device_status=None):
+            states.append(power_state)
+            return update_state(power_state, device_status)
+
+        graceful_shutdown.controller._update_host_state = MagicMock(
+            side_effect=record_state)
+        outcome = graceful_shutdown.execute(
+            _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN),
+            MagicMock(return_value=requester))
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+        assert states == [
+            bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+            bmcctld.SWITCH_HOST_POWERING_OFF,
+            bmcctld.POWER_STATE_OFF,
+        ]
         assert chassis.switch_host.get_admin_state() is False
+        requester.close.assert_called_once()
 
     def test_gnoi_timeout_triggers_power_off(self, graceful_shutdown, chassis):
-        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=10)
-        graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
-        # Simulate timeout: host never goes OFFLINE within shutdown_delay
-        with patch.object(graceful_shutdown.controller, '_verify_oper_status', return_value=False):
-            graceful_shutdown.execute()
-        assert chassis.switch_host.get_admin_state() is False
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=1)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "active [bmc-req:{}]".format(TEST_REQUEST_ID), active=True)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        with patch.object(operation.cancel, 'wait', side_effect=lambda _delay: False), \
+                patch('bmcctld.time.monotonic', side_effect=[0, 0, 0, 0, 2]):
+            outcome = graceful_shutdown.execute(
+                operation, MagicMock(return_value=requester))
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_DEADLINE,
+            True,
+        )
+        graceful_shutdown.controller.power_off.assert_called_once()
 
     def test_get_switch_host_addr_default(self, graceful_shutdown):
         with patch('builtins.open', side_effect=FileNotFoundError):
@@ -580,13 +931,11 @@ class TestGracefulShutdownHandler:
         assert addr == "10.0.0.1"
 
     def test_get_switch_host_gnoi_port_default(self, graceful_shutdown):
-        """An absent bmc.json port uses 8080."""
         with patch('builtins.open', side_effect=FileNotFoundError):
             port = graceful_shutdown._get_switch_host_gnoi_port()
         assert port == 8080
 
     def test_get_switch_host_gnoi_port_from_bmc_json(self, graceful_shutdown, tmp_path):
-        """switch_host_gnmi_port is read from BMC link metadata."""
         import json
         bmc_json = tmp_path / "bmc.json"
         bmc_json.write_text(json.dumps({"switch_host_gnmi_port": 8443}))
@@ -616,6 +965,45 @@ class TestGracefulShutdownHandler:
                 str(tmp_path / "missing.json"), str(broken), str(first), str(second)]):
             assert graceful_shutdown._get_switch_host_addr() == expected_addr
             assert graceful_shutdown._get_switch_host_gnoi_port() == expected_port
+
+    @pytest.mark.parametrize("method", ["execute", "execute_restart"])
+    @pytest.mark.parametrize("graceful,reason", [
+        (True, None), (False, bmcctld.OP_REASON_DEADLINE),
+        (False, bmcctld.OP_REASON_PREEMPTED),
+    ])
+    @pytest.mark.parametrize("power_result", [
+        bmcctld.PowerCallResult.CANCELLED,
+        bmcctld.PowerCallResult.NOT_CONFIRMED,
+    ])
+    def test_shutdown_and_restart_share_off_failure_outcomes(
+            self, graceful_shutdown, method, graceful, reason, power_result):
+        action = (bmcctld.ACTION_GRACEFUL_RESTART if method == "execute_restart"
+                  else bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        operation = _make_operation(action)
+        graceful_shutdown._run_shutdown_leg = MagicMock(return_value=(graceful, reason))
+        graceful_shutdown.controller.power_off = MagicMock(return_value=power_result)
+        graceful_shutdown.controller.power_on = MagicMock()
+        graceful_shutdown._event_log = MagicMock()
+
+        outcome = getattr(graceful_shutdown, method)(operation, MagicMock())
+
+        if reason == bmcctld.OP_REASON_PREEMPTED:
+            expected_result = bmcctld.OP_RESULT_PREEMPTED
+            graceful_shutdown.controller.power_off.assert_not_called()
+        else:
+            expected_result = (bmcctld.OP_RESULT_PREEMPTED
+                               if power_result == bmcctld.PowerCallResult.CANCELLED
+                               else bmcctld.OP_RESULT_POWER_OFF_FAILED)
+            graceful_shutdown.controller.power_off.assert_called_once_with(
+                operation, operation.cancel)
+        assert outcome == (expected_result, reason or "-", False)
+        graceful_shutdown._run_shutdown_leg.assert_called_once()
+        graceful_shutdown.controller.power_on.assert_not_called()
+        if expected_result == bmcctld.OP_RESULT_POWER_OFF_FAILED:
+            graceful_shutdown._event_log.log_error.assert_called_once_with(
+                "POWER_OFF_FAILED request_id={}".format(operation.request_id))
+        else:
+            graceful_shutdown._event_log.log_error.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -853,6 +1241,520 @@ class TestGnoiRequester:
             client_factory.assert_not_called()
 
 
+class FakeClock:
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class TestGracefulShutdownOperation:
+
+    def _setup(self, graceful_shutdown, chassis, timeout=10,
+               power_result=None):
+        if power_result is None:
+            power_result = bmcctld.PowerCallResult.CONFIRMED
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = \
+            MagicMock(return_value=timeout)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=power_result)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        requester = MagicMock()
+        factory = MagicMock(return_value=requester)
+        return operation, requester, factory
+
+    def test_g_not_qualified_precedes_timeout_zero(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=0)
+        graceful_shutdown._is_graceful_qualified.return_value = False
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_NOT_QUALIFIED,
+            True,
+        )
+        factory.assert_not_called()
+        requester.send_halt.assert_not_called()
+
+    def test_h_operation_start_race_already_off(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_ALREADY_OFF,
+            True,
+        )
+        factory.assert_not_called()
+        graceful_shutdown.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+
+    @pytest.mark.parametrize(
+        "response, expected_reason",
+        [
+            (_report("failed [bmc-req:{}]".format(TEST_REQUEST_ID), status=2),
+             bmcctld.OP_REASON_CHECK_FAILED),
+            (_report("busy [bmc-req:{}]".format(TEST_REQUEST_ID), status=2,
+                     message="Previous reboot is ongoing"),
+             bmcctld.OP_REASON_BACKEND_ANSWERED),
+            (_report("backend [bmc-req:{}]".format(TEST_REQUEST_ID),
+                     message="backend answered"),
+             bmcctld.OP_REASON_BACKEND_ANSWERED),
+        ],
+        ids=["host-check-failed", "host-busy", "backend-success-shape"],
+    )
+    def test_f_tagged_terminal_reports_force_with_exact_reason(
+            self, response, expected_reason, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        requester.poll_status.return_value = response
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED, expected_reason, True)
+        requester.poll_status.assert_called_once()
+
+    def test_f_poll_rpc_failure_forces_without_retry(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        requester.poll_status.side_effect = bmcctld.GnoiRpcError("poll failed")
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_RPC_FAILURE,
+            True,
+        )
+        requester.poll_status.assert_called_once()
+        requester.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            _report("foreign [bmc-req:{}]".format(OTHER_REQUEST_ID)),
+            _report("untagged terminal"),
+            _report("active [bmc-req:{}]".format(TEST_REQUEST_ID), active=True),
+            _report("two [bmc-req:{0}] [bmc-req:{0}]".format(TEST_REQUEST_ID)),
+        ],
+        ids=["foreign", "untagged", "active", "duplicate-tag"],
+    )
+    def test_n_unattributed_reports_wait_to_deadline(
+            self, response, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=1)
+        requester.poll_status.return_value = response
+        clock = FakeClock()
+        operation.cancel.wait = MagicMock(
+            side_effect=lambda delay: clock.advance(delay) or False)
+        with patch('bmcctld.time.monotonic', side_effect=clock):
+            outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_DEADLINE,
+            True,
+        )
+        requester.poll_status.assert_called_once()
+
+    def test_f_poll_consuming_budget_starts_no_sleep_or_second_poll(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=1)
+        clock = FakeClock()
+        def poll_status(timeout_secs):
+            assert timeout_secs == 1
+            clock.now = 1
+            return _report(
+                "active [bmc-req:{}]".format(TEST_REQUEST_ID), active=True)
+        requester.poll_status.side_effect = poll_status
+        operation.cancel.wait = MagicMock()
+        with patch('bmcctld.time.monotonic', side_effect=clock):
+            outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome[1] == bmcctld.OP_REASON_DEADLINE
+        requester.poll_status.assert_called_once()
+        operation.cancel.wait.assert_not_called()
+
+    def test_f_budget_consumed_during_classification_starts_no_sleep(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=1)
+        clock = FakeClock()
+        requester.poll_status.return_value = _report("foreign")
+        operation.cancel.wait = MagicMock()
+        def classify(_response, _request_id):
+            clock.now = 1
+            return "keep_waiting", None
+        with patch('bmcctld.time.monotonic', side_effect=clock), \
+                patch('bmcctld.classify_report', side_effect=classify):
+            outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome[1] == bmcctld.OP_REASON_DEADLINE
+        operation.cancel.wait.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "report_time, expected_result, expected_reason",
+        [
+            (0.9, bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-"),
+            (1.1, bmcctld.OP_RESULT_SUCCESS_FORCED,
+             bmcctld.OP_REASON_DEADLINE),
+        ],
+        ids=["before-deadline", "after-deadline"],
+    )
+    def test_f_deadline_precedes_late_terminal_report(
+            self, report_time, expected_result, expected_reason,
+            graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=1)
+        clock = FakeClock()
+        def poll_status(timeout_secs):
+            assert timeout_secs == 1
+            clock.now = report_time
+            return _report("done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        requester.poll_status.side_effect = poll_status
+        with patch('bmcctld.time.monotonic', side_effect=clock):
+            outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (expected_result, expected_reason, True)
+
+    def test_p_cancel_before_open_sends_nothing(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        operation.cancel.set()
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        requester.open.assert_not_called()
+        requester.send_halt.assert_not_called()
+        requester.close.assert_called_once()
+        graceful_shutdown.controller.power_off.assert_not_called()
+
+    def test_p_cancel_during_open_sends_nothing(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        requester.open.side_effect = operation.cancel.set
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome[0] == bmcctld.OP_RESULT_PREEMPTED
+        requester.send_halt.assert_not_called()
+        requester.poll_status.assert_not_called()
+        requester.close.assert_called_once()
+        graceful_shutdown.controller.power_off.assert_not_called()
+
+    def test_p_cancel_inside_poll_allows_only_that_rpc(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        def poll_status(timeout_secs):
+            operation.cancel.set()
+            return _report(
+                "active [bmc-req:{}]".format(TEST_REQUEST_ID), active=True)
+        requester.poll_status.side_effect = poll_status
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome[0] == bmcctld.OP_RESULT_PREEMPTED
+        requester.poll_status.assert_called_once()
+        graceful_shutdown.controller.power_off.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "poll_result",
+        ["success", "failure", "error"],
+    )
+    def test_cancelled_poll_result_is_not_consumed(
+            self, poll_result, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+
+        def poll_status(timeout_secs):
+            operation.cancel.set()
+            if poll_result == "error":
+                raise bmcctld.GnoiRpcError("poll failed")
+            return _report(
+                "done [bmc-req:{}]".format(TEST_REQUEST_ID),
+                status=1 if poll_result == "success" else 2,
+            )
+
+        requester.poll_status.side_effect = poll_status
+
+        outcome = graceful_shutdown.execute(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        requester.poll_status.assert_called_once()
+        graceful_shutdown.controller.power_off.assert_not_called()
+
+    def test_p_cancelled_power_off_preserves_completed_graceful_leg(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+
+        def cancel_power_off(_operation, _cancel):
+            operation.cancel.set()
+            return bmcctld.PowerCallResult.CANCELLED
+
+        graceful_shutdown.controller.power_off.side_effect = cancel_power_off
+
+        outcome = graceful_shutdown.execute(operation, factory)
+
+        assert outcome == (bmcctld.OP_RESULT_PREEMPTED, "-", False)
+        graceful_shutdown.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+
+    def test_w_power_off_failure_keeps_leg_reason(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis,
+            power_result=bmcctld.PowerCallResult.NOT_CONFIRMED)
+        requester.poll_status.return_value = _report(
+            "failed [bmc-req:{}]".format(TEST_REQUEST_ID), status=2)
+        outcome = graceful_shutdown.execute(operation, factory)
+        assert outcome == (
+            bmcctld.OP_RESULT_POWER_OFF_FAILED,
+            bmcctld.OP_REASON_CHECK_FAILED,
+            False,
+        )
+
+    def test_requester_is_closed_when_classifier_raises(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(graceful_shutdown, chassis)
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        with patch('bmcctld.classify_report', side_effect=RuntimeError("bug")):
+            with pytest.raises(RuntimeError):
+                graceful_shutdown.execute(operation, factory)
+        requester.close.assert_called_once()
+        graceful_shutdown.controller.power_off.assert_not_called()
+
+
+class TestGracefulRestartOperation:
+
+    def _setup(self, graceful_shutdown, chassis, timeout=0,
+               power_off_result=None, power_on_result=None):
+        if power_off_result is None:
+            power_off_result = bmcctld.PowerCallResult.CONFIRMED
+        if power_on_result is None:
+            power_on_result = bmcctld.PowerCallResult.CONFIRMED
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = \
+            MagicMock(return_value=timeout)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=power_off_result)
+        graceful_shutdown.controller.power_on = MagicMock(
+            return_value=power_on_result)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+        operation.cancel.wait = MagicMock(return_value=False)
+        requester = MagicMock()
+        factory = MagicMock(return_value=requester)
+        return operation, requester, factory
+
+    def test_h_graceful_restart_uses_two_steps_and_preserves_admin_status(
+            self, graceful_shutdown, chassis):
+        assert bmcctld.RESTART_PAUSE_SECS == 10
+        controller = graceful_shutdown.controller
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = \
+            MagicMock(return_value=10)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=original_set_admin_state)
+        controller._update_host_state = MagicMock(
+            wraps=controller._update_host_state)
+        controller.chassis_module_config_table.set(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            FieldValuePairs([(bmcctld.FIELD_ADMIN_STATUS,
+                              bmcctld.ADMIN_DOWN)]))
+        admin_before = dict(controller.chassis_module_config_table.get(
+            bmcctld.SWITCH_HOST_MODULE_KEY)[1])
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+        operation.cancel.wait = MagicMock(return_value=False)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        factory = MagicMock(return_value=requester)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+        assert operation.stage == bmcctld.STAGE_POWER_ON_CONFIRMED
+        assert operation.cancel.wait.call_args_list == [
+            call(bmcctld.RESTART_PAUSE_SECS)]
+        assert [args[0] for args, _ in
+                controller._update_host_state.call_args_list] == [
+            bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+            bmcctld.SWITCH_HOST_POWERING_OFF,
+            bmcctld.POWER_STATE_OFF,
+            bmcctld.SWITCH_HOST_POWERING_ON,
+            bmcctld.POWER_STATE_ON,
+        ]
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False), call(True)]
+        assert chassis.switch_host.power_cycle_called is False
+        assert dict(controller.chassis_module_config_table.get(
+            bmcctld.SWITCH_HOST_MODULE_KEY)[1]) == admin_before
+        requester.send_halt.assert_called_once()
+
+    def test_h_forced_restart_keeps_leg_reason_and_uses_no_cycle(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            True,
+        )
+        graceful_shutdown.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+        operation.cancel.wait.assert_called_once_with(
+            bmcctld.RESTART_PAUSE_SECS)
+        graceful_shutdown.controller.power_on.assert_called_once_with(
+            operation, operation.cancel)
+        factory.assert_not_called()
+        requester.send_halt.assert_not_called()
+        assert chassis.switch_host.power_cycle_called is False
+
+    def test_p_restart_handshake_cancellation_makes_no_power_call(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=10)
+        operation.cancel.set()
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        requester.open.assert_not_called()
+        requester.send_halt.assert_not_called()
+        graceful_shutdown.controller.power_off.assert_not_called()
+        graceful_shutdown.controller.power_on.assert_not_called()
+
+    def test_p_restart_power_off_cancellation_stops_before_pause_and_raise(
+            self, graceful_shutdown, chassis):
+        operation, _, factory = self._setup(
+            graceful_shutdown, chassis,
+            power_off_result=bmcctld.PowerCallResult.CANCELLED)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        operation.cancel.wait.assert_not_called()
+        graceful_shutdown.controller.power_on.assert_not_called()
+
+    def test_p_restart_cancelled_during_pause_stays_off(
+            self, graceful_shutdown, chassis):
+        operation, requester, factory = self._setup(
+            graceful_shutdown, chassis, timeout=10)
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        operation.cancel.wait.return_value = True
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (bmcctld.OP_RESULT_PREEMPTED, "-", False)
+        assert operation.stage == bmcctld.STAGE_PAUSE
+        graceful_shutdown.controller.power_on.assert_not_called()
+
+    def test_p_restart_power_on_cancellation_retains_shutdown_leg_reason(
+            self, graceful_shutdown, chassis):
+        operation, _, factory = self._setup(
+            graceful_shutdown, chassis,
+            power_on_result=bmcctld.PowerCallResult.CANCELLED)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        operation.cancel.wait.assert_called_once_with(
+            bmcctld.RESTART_PAUSE_SECS)
+        graceful_shutdown.controller.power_on.assert_called_once_with(
+            operation, operation.cancel)
+
+    def test_w_restart_power_off_failure_stops_before_pause_and_raise(
+            self, graceful_shutdown, chassis):
+        operation, _, factory = self._setup(
+            graceful_shutdown, chassis,
+            power_off_result=bmcctld.PowerCallResult.NOT_CONFIRMED)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_POWER_OFF_FAILED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        operation.cancel.wait.assert_not_called()
+        graceful_shutdown.controller.power_on.assert_not_called()
+
+    def test_w_restart_power_on_failure_keeps_shutdown_leg_reason(
+            self, graceful_shutdown, chassis):
+        operation, _, factory = self._setup(
+            graceful_shutdown, chassis,
+            power_on_result=bmcctld.PowerCallResult.NOT_CONFIRMED)
+
+        outcome = graceful_shutdown.execute_restart(operation, factory)
+
+        assert outcome == (
+            bmcctld.OP_RESULT_POWER_ON_FAILED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        graceful_shutdown.controller.power_on.assert_called_once_with(
+            operation, operation.cancel)
+
+    def test_p_restart_raise_is_refused_by_under_lock_critical_read(
+            self, graceful_shutdown, chassis):
+        controller = graceful_shutdown.controller
+        graceful_shutdown.policy_reader.get_graceful_shutdown_timeout = \
+            MagicMock(return_value=0)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=original_set_admin_state)
+        controller.critical_event_checker = MagicMock()
+        controller.critical_event_checker.has_any_critical_event.return_value = True
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+        operation.cancel.wait = MagicMock(return_value=False)
+
+        outcome = graceful_shutdown.execute_restart(operation, MagicMock())
+
+        assert outcome == (
+            bmcctld.OP_RESULT_OFF_LEAK_BLOCKED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False)]
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_OFFLINE
+        state = dict(controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == \
+            bmcctld.SWITCH_HOST_OFFLINE
+        controller.critical_event_checker.has_any_critical_event.assert_called_once()
+
+
 # --------------------------------------------------------------------------
 # Tests: BmcEventHandler - Rack Manager commands
 # --------------------------------------------------------------------------
@@ -864,15 +1766,19 @@ class TestBmcEventHandlerRackMgrCommands:
 
     def test_power_off_command_enqueues_power_off(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_1", self._cmd_fvs(bmcctld.CMD_POWER_OFF))
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_OFF
+        assert item.priority == 2
+        assert item.rack_cmd_key == "CMD_1"
         assert item.on_complete is not None
 
     def test_power_on_command_no_leak_enqueues_power_on(self, event_handler):
         event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         event_handler._handle_rack_mgr_command("CMD_2", self._cmd_fvs(bmcctld.CMD_POWER_ON))
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_ON
+        assert item.priority == 5
+        assert item.rack_cmd_key == "CMD_2"
         assert item.on_complete is not None
 
     def test_power_on_command_blocked_by_critical_leak(self, event_handler):
@@ -882,8 +1788,17 @@ class TestBmcEventHandlerRackMgrCommands:
 
     def test_power_cycle_command_enqueues_power_cycle(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_4", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_CYCLE
+        assert item.priority == 4
+        assert item.rack_cmd_key == "CMD_4"
+
+    def test_q_power_cycle_command_blocked_by_critical_leak(self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = \
+            MagicMock(return_value=True)
+        event_handler._handle_rack_mgr_command(
+            "CMD_4B", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
+        assert event_handler.action_queue.empty()
 
     def test_already_processed_command_is_skipped(self, event_handler):
         event_handler._handle_rack_mgr_command(
@@ -893,6 +1808,21 @@ class TestBmcEventHandlerRackMgrCommands:
     def test_unknown_command_is_logged(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_6", self._cmd_fvs("INVALID_CMD"))
         assert event_handler.action_queue.empty()
+
+    def test_q_graceful_restart_command_is_admitted_without_early_leak_gate(
+            self, event_handler):
+        event_handler.critical_event_checker.has_any_critical_event = \
+            MagicMock(return_value=True)
+
+        event_handler._handle_rack_mgr_command(
+            "CMD_RESTART", self._cmd_fvs(bmcctld.CMD_GRACEFUL_RESTART))
+
+        item = _dequeue_item(event_handler.action_queue)
+        assert item.action == bmcctld.ACTION_GRACEFUL_RESTART
+        assert item.priority == 4
+        assert item.rack_cmd_key == "CMD_RESTART"
+        leak_check = event_handler.critical_event_checker.has_any_critical_event
+        leak_check.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -909,18 +1839,21 @@ class TestBmcEventHandlerChassisModule:
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
+        assert item.priority == 3
 
-    def test_admin_down_no_action_when_already_offline(self, event_handler, controller):
-        # host is OFFLINE (e.g. startup replay) → admin_down should be a no-op
+    def test_admin_down_is_admitted_when_already_offline(
+            self, event_handler, controller):
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
         )
-        assert event_handler.action_queue.empty()
+        item = _dequeue_item(event_handler.action_queue)
+        assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
+        assert item.priority == 3
 
     def test_admin_up_powers_on_when_no_leak(self, event_handler, controller):
         # host is OFFLINE → admin_up should enqueue power_on
@@ -931,8 +1864,9 @@ class TestBmcEventHandlerChassisModule:
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_ON
+        assert item.priority == 5
 
     def test_admin_up_no_action_when_already_online(self, event_handler, controller):
         # host is already ONLINE → admin_up should be a no-op
@@ -973,7 +1907,7 @@ class TestBmcEventHandlerChassisModule:
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_ON
 
     def test_seed_chassis_module_admin_status_ignores_config_replay(self, event_handler, controller):
@@ -1023,8 +1957,22 @@ class TestBmcEventHandlerSystemLeak:
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
             {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_OFF
+        assert item.priority == 0
+
+    def test_critical_rack_alert_graceful_has_priority_one(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(
+                rack_mgr_critical_alert_action=bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Rack_level_leak",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
+        )
+        item = _dequeue_item(event_handler.action_queue)
+        assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
+        assert item.priority == 1
 
     def test_critical_system_leak_graceful_shutdown(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
@@ -1034,7 +1982,7 @@ class TestBmcEventHandlerSystemLeak:
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
             {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
 
     def test_critical_system_leak_syslog_only(self, event_handler, chassis):
@@ -1118,8 +2066,9 @@ class TestBmcEventHandlerRackMgrAlerts:
             "Rack_level_leak",
             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_OFF
+        assert item.priority == 0
 
     def test_minor_rack_alert_syslog_only_by_default(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
@@ -1164,8 +2113,9 @@ class TestBmcEventHandlerRackMgrAlerts:
             "Inlet_liquid_pressure",
             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_OFF
+        assert item.priority == 0
         assert event_handler._last_rack_mgr_alert_severity["Inlet_liquid_pressure"] == \
             bmcctld.ALERT_SEVERITY_CRITICAL
 
@@ -1177,7 +2127,7 @@ class TestBmcEventHandlerRackMgrAlerts:
             "Rack_level_leak",
             {bmcctld.FIELD_LEAK: bmcctld.ALERT_SEVERITY_CRITICAL},
         )
-        item = event_handler.action_queue.get_nowait()
+        item = _dequeue_item(event_handler.action_queue)
         assert item.action == bmcctld.ACTION_POWER_OFF
 
     def test_normal_severity_no_action(self, event_handler):
@@ -1202,7 +2152,6 @@ class TestBmcctldDaemonActionLoop:
         return daemon
 
     def test_gnoi_requester_factory_is_injectable(self, chassis):
-        """The daemon exposes the requester factory test seam."""
         daemon = self._make_daemon(chassis)
         assert daemon.gnoi_requester_factory is bmcctld.GnoiRequester
         replacement = MagicMock()
@@ -1211,73 +2160,106 @@ class TestBmcctldDaemonActionLoop:
 
     def test_execute_graceful_shutdown(self, chassis):
         daemon = self._make_daemon(chassis)
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
-        item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "test")
-        daemon._execute_action_item(item)
+        daemon.graceful_shutdown.execute = MagicMock(return_value=(
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True))
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        daemon.operation_runner._run_worker(operation)
         daemon.graceful_shutdown.execute.assert_called_once()
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+
+    def test_execute_graceful_restart(self, chassis):
+        daemon = self._make_daemon(chassis)
+        daemon.graceful_shutdown.execute_restart = MagicMock(return_value=(
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True))
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+
+        daemon.operation_runner._run_worker(operation)
+
+        daemon.graceful_shutdown.execute_restart.assert_called_once_with(
+            operation, daemon.gnoi_requester_factory)
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
 
     def test_execute_power_off(self, chassis):
         daemon = self._make_daemon(chassis)
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        daemon.controller.power_off = MagicMock(return_value=True)
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "test")
-        daemon._execute_action_item(item)
+        daemon.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        operation = _make_operation(bmcctld.ACTION_POWER_OFF)
+        daemon.operation_runner._run_worker(operation)
         daemon.controller.power_off.assert_called_once()
+        assert operation.outcome == (bmcctld.OP_RESULT_SUCCESS, "-", True)
 
     def test_execute_power_on(self, chassis):
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_on = MagicMock(return_value=True)
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "test")
-        daemon._execute_action_item(item)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        operation = _make_operation(bmcctld.ACTION_POWER_ON)
+        daemon.operation_runner._run_worker(operation)
         daemon.controller.power_on.assert_called_once()
+        assert operation.outcome == (bmcctld.OP_RESULT_SUCCESS, "-", True)
 
     def test_execute_power_cycle(self, chassis):
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_cycle = MagicMock(return_value=True)
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_CYCLE, "test")
-        daemon._execute_action_item(item)
+        daemon.controller.power_cycle = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        operation = _make_operation(bmcctld.ACTION_POWER_CYCLE)
+        daemon.operation_runner._run_worker(operation)
         daemon.controller.power_cycle.assert_called_once()
+        assert operation.outcome == (bmcctld.OP_RESULT_SUCCESS, "-", True)
 
     def test_on_complete_called_with_success(self, chassis):
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "test", on_complete=callback)
-        daemon._execute_action_item(item)
-        callback.assert_called_once_with(True)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "test",
+            bmcctld.action_priority(bmcctld.ACTION_POWER_ON),
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join()
+        daemon.operation_runner.process_next(timeout=0)
+        callback.assert_called_once_with(True, bmcctld.OP_RESULT_SUCCESS)
 
     def test_on_complete_called_with_failure(self, chassis):
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_on = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.NOT_CONFIRMED)
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "test", on_complete=callback)
-        daemon._execute_action_item(item)
-        callback.assert_called_once_with(False)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "test",
+            bmcctld.action_priority(bmcctld.ACTION_POWER_ON),
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join()
+        daemon.operation_runner.process_next(timeout=0)
+        callback.assert_called_once_with(
+            False, bmcctld.OP_RESULT_POWER_ON_FAILED)
 
     def test_action_loop_processes_queued_items(self, chassis):
         daemon = self._make_daemon(chassis)
-        # power_on mock must also flip oper_status so the subsequent power_off
-        # idempotency check sees ONLINE and proceeds instead of skipping.
-        def fake_power_on():
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        def power_off(_operation, _cancel):
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+            return bmcctld.PowerCallResult.CONFIRMED
+        def power_on(_operation, _cancel):
             chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-            return True
-        daemon.controller.power_on = MagicMock(side_effect=fake_power_on)
-        daemon.controller.power_off = MagicMock(return_value=True)
-        daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "evt1"))
-        daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "evt2"))
+            return bmcctld.PowerCallResult.CONFIRMED
+        daemon.controller.power_off = MagicMock(side_effect=power_off)
+        daemon.controller.power_on = MagicMock(side_effect=power_on)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "evt1", 5))
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "evt2", 2))
 
-        # Stop the loop after both items are executed
-        original = daemon._execute_action_item
-        calls = [0]
-        def counting_execute(item):
-            original(item)
-            calls[0] += 1
-            if calls[0] >= 2:
-                daemon.stop_event.set()
-        daemon._execute_action_item = counting_execute
-
-        daemon._run_action_loop()
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join()
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join()
+        daemon.operation_runner.process_next(timeout=0)
         daemon.controller.power_on.assert_called_once()
         daemon.controller.power_off.assert_called_once()
 
@@ -1287,41 +2269,60 @@ class TestBmcctldDaemonActionLoop:
         """power_off is not issued when host is already OFFLINE; on_complete(True) fired."""
         # chassis.switch_host starts OFFLINE by default
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_off = MagicMock(return_value=True)
+        daemon.controller.power_off = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "dup-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "dup-event", 2,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.controller.power_off.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
 
     def test_execute_graceful_shutdown_skipped_when_already_offline(self, chassis):
         """graceful_shutdown is not issued when host is already OFFLINE."""
         daemon = self._make_daemon(chassis)
-        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        daemon.graceful_shutdown.execute = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-event", 3,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.graceful_shutdown.execute.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS_FORCED
+        assert state[bmcctld.FIELD_OP_REASON] == bmcctld.OP_REASON_ALREADY_OFF
 
     def test_execute_power_on_skipped_when_already_online(self, chassis):
         """power_on is not issued when host is already ONLINE; on_complete(True) fired."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon.controller.power_on = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "dup-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "dup-event", 5,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.controller.power_on.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
 
     def test_execute_power_cycle_not_skipped_when_online(self, chassis):
         """power_cycle always executes regardless of current oper_status."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_cycle = MagicMock(return_value=True)
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_CYCLE, "test")
-        daemon._execute_action_item(item)
+        daemon.controller.power_cycle = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_CYCLE, "test", 4)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join()
         daemon.controller.power_cycle.assert_called_once()
 
     def test_execute_power_off_skipped_when_powering_off_in_progress(self, chassis):
@@ -1330,36 +2331,48 @@ class TestBmcctldDaemonActionLoop:
         daemon = self._make_daemon(chassis)
         # Simulate a power_off already in progress by writing transitional power state to DB
         daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
-        daemon.controller.power_off = MagicMock(return_value=True)
+        daemon.controller.write_operation_start(TEST_REQUEST_ID, "active")
+        daemon.controller.power_off = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "dup-leak-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "dup-leak-event", 2,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.controller.power_off.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
 
     def test_execute_graceful_shutdown_skipped_when_powering_off_in_progress(self, chassis):
         """graceful_shutdown is skipped when STATE_DB device_power_state shows POWERING_OFF."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
-        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        daemon.controller.write_operation_start(TEST_REQUEST_ID, "active")
+        daemon.graceful_shutdown.execute = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-cmd", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-cmd", 3,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.graceful_shutdown.execute.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
 
     def test_execute_graceful_shutdown_skipped_when_graceful_shutting_down_in_progress(self, chassis):
         """graceful_shutdown is skipped when STATE_DB device_power_state shows GRACEFUL_SHUTTING_DOWN."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller._update_host_state(bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
-        daemon.graceful_shutdown.execute = MagicMock(return_value=True)
+        daemon.controller.write_operation_start(TEST_REQUEST_ID, "active")
+        daemon.graceful_shutdown.execute = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-grace-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-grace-event", 3,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.graceful_shutdown.execute.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
 
     def test_execute_power_on_skipped_when_powering_on_in_progress(self, chassis):
         """power_on is skipped when STATE_DB device_power_state shows POWERING_ON (already in progress)."""
@@ -1367,12 +2380,1655 @@ class TestBmcctldDaemonActionLoop:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_ON)
-        daemon.controller.power_on = MagicMock(return_value=True)
+        daemon.controller.write_operation_start(TEST_REQUEST_ID, "active")
+        daemon.controller.power_on = MagicMock()
         callback = MagicMock()
-        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "dup-on-event", on_complete=callback)
-        daemon._execute_action_item(item)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "dup-on-event", 5,
+            on_complete=callback)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
         daemon.controller.power_on.assert_not_called()
-        callback.assert_called_once_with(True)
+        callback.assert_called_once_with(True, "guard_skip")
+
+    def test_p_terminal_powering_on_residue_is_retryable(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_ON)
+        daemon.controller.write_operation_result(
+            bmcctld.OP_RESULT_PREEMPTED, bmcctld.OP_REASON_PREEMPTED)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "retry-after-preempt", 5))
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+
+        daemon.controller.power_on.assert_called_once()
+
+    @pytest.mark.parametrize("oper_status", [
+        MockModule.MODULE_STATUS_ONLINE,
+        MockModule.MODULE_STATUS_OFFLINE,
+    ])
+    def test_failed_power_off_residue_is_not_guarded(
+            self, oper_status, chassis):
+        chassis.switch_host.set_oper_status(oper_status)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
+        daemon.controller.write_operation_result(
+            bmcctld.OP_RESULT_POWER_OFF_FAILED, "-")
+        daemon.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "retry", 2))
+
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+
+        daemon.controller.power_off.assert_called_once()
+
+    def test_critical_shutdown_ignores_recorded_transition(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(
+            bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
+        daemon.controller.write_operation_start(TEST_REQUEST_ID, "active")
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0)
+        assert daemon.operation_runner._guard_should_skip(item) is False
+
+
+class TestOperationRunnerConcurrency:
+
+    def _make_daemon(self, chassis):
+        with patch('sonic_platform.platform.Platform') as platform:
+            platform.return_value.get_chassis.return_value = chassis
+            return bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+
+    def test_p_priority_queue_orders_by_priority_then_arrival(self, chassis):
+        daemon = self._make_daemon(chassis)
+        items = [
+            bmcctld.ActionItem(bmcctld.ACTION_POWER_ON, "on", 5),
+            bmcctld.ActionItem(bmcctld.ACTION_POWER_CYCLE, "cycle-a", 4),
+            bmcctld.ActionItem(bmcctld.ACTION_POWER_CYCLE, "cycle-b", 4),
+            bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "shutdown", 3),
+            bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "critical-off", 0),
+        ]
+        for item in items:
+            daemon.operation_runner.enqueue(item)
+        ordered = [daemon.action_queue.get_nowait()[2].event_desc
+                   for _ in items]
+        assert ordered == [
+            "critical-off", "shutdown", "cycle-a", "cycle-b", "on"]
+        with pytest.raises(AttributeError):
+            items[0].priority = 0
+
+    def test_q_operation_record_lifecycle_and_release(self, chassis):
+        daemon = self._make_daemon(chassis)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "record-test", 5)
+        daemon.operation_runner.enqueue(item)
+        daemon.operation_runner.process_next(timeout=0)
+        operation = daemon.operation_runner.current
+        start = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert start[bmcctld.FIELD_OP_REQUEST_ID] == operation.request_id
+        assert start[bmcctld.FIELD_OP_TRIGGER] == "record-test"
+        assert start[bmcctld.FIELD_OP_RESULT] == "-"
+        assert start[bmcctld.FIELD_OP_REASON] == "-"
+        assert operation.thread.name == "bmcctld-op"
+        assert operation.thread.daemon is True
+        operation.thread.join()
+        daemon.operation_runner.process_next(timeout=0)
+        terminal = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert terminal[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+        assert terminal[bmcctld.FIELD_OP_REASON] == "-"
+        assert daemon.operation_runner.current is None
+        assert operation.joined_callbacks == []
+
+    def test_q_shared_rack_command_row_keeps_fields_through_completion(
+            self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        command_table = Table(
+            daemon._thread_database.connection("STATE_DB"),
+            bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        command_table.set("CMD_SHARED", FieldValuePairs([
+            (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
+            (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_PENDING),
+            ("opaque", "preserve-me"),
+        ]))
+        table_factory = bmcctld.swsscommon.Table
+
+        def shared_table(db, table_name):
+            if table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE:
+                return command_table
+            return table_factory(db, table_name)
+
+        with patch('bmcctld.swsscommon.Table', side_effect=shared_table):
+            command_fvs = dict(command_table.get("CMD_SHARED")[1])
+            daemon.event_handler._handle_rack_mgr_command(
+                "CMD_SHARED", command_fvs)
+            in_progress = dict(command_table.get("CMD_SHARED")[1])
+            assert in_progress[bmcctld.FIELD_STATUS] == \
+                bmcctld.CMD_STATUS_IN_PROGRESS
+            assert bmcctld.FIELD_REQUEST_ID not in in_progress
+
+            daemon.operation_runner.process_next(timeout=0)
+            operation = daemon.operation_runner.current
+            request_id = operation.request_id
+            spawned = dict(command_table.get("CMD_SHARED")[1])
+            assert spawned[bmcctld.FIELD_REQUEST_ID] == request_id
+            operation.thread.join(2)
+            daemon.operation_runner.process_next(timeout=0)
+
+        completed = dict(command_table.get("CMD_SHARED")[1])
+        assert completed[bmcctld.FIELD_COMMAND] == bmcctld.CMD_POWER_OFF
+        assert completed[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_DONE
+        assert completed[bmcctld.FIELD_RESULT] == "SUCCESS"
+        assert completed[bmcctld.FIELD_REQUEST_ID] == request_id
+        assert completed["opaque"] == "preserve-me"
+
+    def test_q_graceful_restart_rack_retry_joins_one_operation(
+            self, chassis):
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked_restart(_operation, _factory):
+            started.set()
+            assert release.wait(2)
+            return bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True
+
+        daemon.graceful_shutdown.execute_restart = MagicMock(
+            side_effect=blocked_restart)
+        command_table = Table(
+            daemon._thread_database.connection("STATE_DB"),
+            bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        for key in ("RESTART_1", "RESTART_2"):
+            command_table.set(key, FieldValuePairs([
+                (bmcctld.FIELD_COMMAND, bmcctld.CMD_GRACEFUL_RESTART),
+                (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_PENDING),
+            ]))
+        table_factory = bmcctld.swsscommon.Table
+
+        def shared_table(db, table_name):
+            if table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE:
+                return command_table
+            return table_factory(db, table_name)
+
+        with patch('bmcctld.swsscommon.Table', side_effect=shared_table):
+            daemon.event_handler._handle_rack_mgr_command(
+                "RESTART_1", dict(command_table.get("RESTART_1")[1]))
+            daemon.operation_runner.process_next(timeout=0)
+            assert started.wait(1)
+            operation = daemon.operation_runner.current
+            request_id = operation.request_id
+
+            daemon.event_handler._handle_rack_mgr_command(
+                "RESTART_2", dict(command_table.get("RESTART_2")[1]))
+            daemon.operation_runner.process_next(timeout=0)
+            assert len(operation.joined_callbacks) == 1
+            for key in ("RESTART_1", "RESTART_2"):
+                in_progress = dict(command_table.get(key)[1])
+                assert in_progress[bmcctld.FIELD_STATUS] == \
+                    bmcctld.CMD_STATUS_IN_PROGRESS
+                assert in_progress[bmcctld.FIELD_REQUEST_ID] == request_id
+
+            release.set()
+            operation.thread.join(2)
+            daemon.operation_runner.process_next(timeout=0)
+
+        daemon.graceful_shutdown.execute_restart.assert_called_once()
+        for key in ("RESTART_1", "RESTART_2"):
+            completed = dict(command_table.get(key)[1])
+            assert completed[bmcctld.FIELD_COMMAND] == \
+                bmcctld.CMD_GRACEFUL_RESTART
+            assert completed[bmcctld.FIELD_STATUS] == \
+                bmcctld.CMD_STATUS_DONE
+            assert completed[bmcctld.FIELD_RESULT] == "SUCCESS"
+            assert completed[bmcctld.FIELD_REQUEST_ID] == request_id
+
+    def test_s_under_lock_raise_refusal_maps_to_operation_and_callback(
+            self, chassis):
+        daemon = self._make_daemon(chassis)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.REFUSED_LEAK)
+        callback = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "late-critical", 5,
+            on_complete=callback))
+
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_OFF_LEAK_BLOCKED
+        callback.assert_called_once_with(False, "CRITICAL_LEAK_PRESENT")
+
+    def test_p_identical_noncritical_request_joins(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        release = threading.Event()
+        def blocked_power_off(_operation, _cancel):
+            started.set()
+            assert release.wait(2)
+            return bmcctld.PowerCallResult.CONFIRMED
+        daemon.controller.power_off = MagicMock(side_effect=blocked_power_off)
+        daemon.event_handler._set_cmd_request_id = MagicMock()
+        first_callback = MagicMock()
+        second_callback = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "first", 2,
+            on_complete=first_callback, rack_cmd_key="CMD_1"))
+        daemon.operation_runner.process_next(timeout=0)
+        assert started.wait(1)
+        request_id = daemon.operation_runner.current.request_id
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "retry", 2,
+            on_complete=second_callback, rack_cmd_key="CMD_2"))
+        daemon.operation_runner.process_next(timeout=0)
+        assert len(daemon.operation_runner.current.joined_callbacks) == 1
+        release.set()
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.controller.power_off.assert_called_once()
+        first_callback.assert_called_once_with(
+            True, bmcctld.OP_RESULT_SUCCESS)
+        second_callback.assert_called_once_with(
+            True, bmcctld.OP_RESULT_SUCCESS)
+        assert daemon.event_handler._set_cmd_request_id.call_args_list == [
+            call("CMD_1", request_id),
+            call("CMD_2", request_id),
+        ]
+
+    def test_p_equal_or_lower_priority_is_refused_busy(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        release = threading.Event()
+        def blocked_power_off(_operation, _cancel):
+            started.set()
+            assert release.wait(2)
+            return bmcctld.PowerCallResult.CONFIRMED
+        daemon.controller.power_off = MagicMock(side_effect=blocked_power_off)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "running", 2))
+        daemon.operation_runner.process_next(timeout=0)
+        assert started.wait(1)
+        running_id = daemon.operation_runner.current.request_id
+        callback = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "lower", 5, on_complete=callback))
+        daemon.operation_runner.process_next(timeout=0)
+        callback.assert_called_once_with(False, "BUSY")
+        assert daemon.operation_runner.current.request_id == running_id
+        release.set()
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+    def test_p_critical_same_action_is_refused_not_joined(self, chassis):
+        daemon = self._make_daemon(chassis)
+        operation = _make_operation(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, priority=1)
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = True
+        daemon.operation_runner.current = operation
+        callback = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "second-critical", 1,
+            on_complete=callback))
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        callback.assert_called_once_with(False, "BUSY")
+        assert operation.joined_callbacks == []
+
+    def test_p_higher_priority_cancels_records_then_requeues(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        def graceful_wait(operation, _factory):
+            started.set()
+            assert operation.cancel.wait(2)
+            return (bmcctld.OP_RESULT_PREEMPTED,
+                    bmcctld.OP_REASON_PREEMPTED, False)
+        daemon.graceful_shutdown.execute = MagicMock(side_effect=graceful_wait)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "ordinary", 3))
+        daemon.operation_runner.process_next(timeout=0)
+        assert started.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0))
+        daemon.operation_runner.process_next(timeout=0)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_PREEMPTED
+        assert state[bmcctld.FIELD_OP_REASON] == bmcctld.OP_REASON_PREEMPTED
+        assert daemon.operation_runner.current is None
+        assert _dequeue_item(daemon.action_queue).event_desc == "critical"
+
+    def test_p_critical_off_preempts_restart_pause_and_is_guard_resolved(
+            self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_graceful_shutdown_timeout = \
+            MagicMock(return_value=0)
+        daemon.graceful_shutdown._is_graceful_qualified = \
+            MagicMock(return_value=True)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=original_set_admin_state)
+        daemon.controller.power_on = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "restart", 4))
+        daemon.operation_runner.process_next(timeout=0)
+        restart_operation = daemon.operation_runner.current
+
+        deadline = time.monotonic() + 1
+        while restart_operation.stage != bmcctld.STAGE_PAUSE and \
+                time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert restart_operation.stage == bmcctld.STAGE_PAUSE
+
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical-off", 0))
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert restart_operation.outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_TIMEOUT_ZERO,
+            False,
+        )
+        assert daemon.operation_runner.current is None
+        daemon.controller.power_on.assert_not_called()
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_OFFLINE
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert daemon.operation_runner.current is None
+        assert daemon.action_queue.empty()
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False)]
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == \
+            bmcctld.SWITCH_HOST_OFFLINE
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_SUCCESS
+
+    def test_admin_down_offline_completes_through_common_guard(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_OFF, bmcctld.SWITCH_HOST_OFFLINE)
+        daemon.controller.power_off = MagicMock()
+        daemon.operation_runner._new_request_id = MagicMock(
+            return_value=TEST_UUID4)
+
+        daemon.event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
+        )
+
+        assert daemon.operation_runner.process_next(timeout=0) is True
+        assert daemon.operation_runner.current is None
+        assert daemon.action_queue.empty()
+        daemon.controller.power_off.assert_not_called()
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_REQUEST_ID] == TEST_UUID4
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_SUCCESS_FORCED
+        assert state[bmcctld.FIELD_OP_REASON] == \
+            bmcctld.OP_REASON_ALREADY_OFF
+
+    @pytest.mark.parametrize(
+        "timeout, graceful, expected_reason",
+        [
+            (0, False, bmcctld.OP_REASON_TIMEOUT_ZERO),
+            (10, True, "-"),
+        ],
+        ids=["timeout-zero", "tagged-graceful"],
+    )
+    def test_admin_down_preempts_restart_while_host_is_off(
+            self, timeout, graceful, expected_reason, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_graceful_shutdown_timeout = MagicMock(
+            return_value=timeout)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=True)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        daemon.gnoi_requester_factory = MagicMock(return_value=requester)
+        daemon.operation_runner._new_request_id = MagicMock(
+            return_value=TEST_REQUEST_ID)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=original_set_admin_state)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "restart", 4))
+        daemon.operation_runner.process_next(timeout=0)
+        restart_operation = daemon.operation_runner.current
+
+        deadline = time.monotonic() + 1
+        while restart_operation.stage != bmcctld.STAGE_PAUSE and \
+                time.monotonic() < deadline:
+            time.sleep(0.001)
+        reached_pause = restart_operation.stage == bmcctld.STAGE_PAUSE
+        if not reached_pause:
+            restart_operation.cancel.set()
+            restart_operation.thread.join(2)
+        assert reached_pause
+        assert restart_operation.leg_graceful is graceful
+
+        daemon.event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
+        )
+        admitted = not daemon.action_queue.empty()
+        if admitted:
+            daemon.operation_runner.process_next(timeout=0)
+            daemon.operation_runner.process_next(timeout=0)
+        else:
+            restart_operation.cancel.set()
+            restart_operation.thread.join(2)
+
+        assert admitted
+        assert restart_operation.outcome == (
+            bmcctld.OP_RESULT_PREEMPTED, expected_reason, False)
+        assert daemon.operation_runner.current is None
+        assert daemon.action_queue.empty()
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False)]
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_OFFLINE
+
+    def test_admin_down_preempts_power_on_verification(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(
+            bmcctld.SWITCH_HOST_POWERING_ON,
+            bmcctld.SWITCH_HOST_OFFLINE)
+        verifying = threading.Event()
+
+        def power_on_verification(operation, cancel):
+            operation.stage = bmcctld.STAGE_POWER_ON_ISSUED
+            chassis.switch_host.set_oper_status(
+                MockModule.MODULE_STATUS_ONLINE)
+            verifying.set()
+            assert cancel.wait(2)
+            return bmcctld.PowerCallResult.CANCELLED
+
+        def confirmed_power_off(_operation, _cancel):
+            chassis.switch_host.set_oper_status(
+                MockModule.MODULE_STATUS_OFFLINE)
+            return bmcctld.PowerCallResult.CONFIRMED
+
+        daemon.controller.power_on = MagicMock(
+            side_effect=power_on_verification)
+        daemon.controller.power_off = MagicMock(
+            side_effect=confirmed_power_off)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "power-on", 5))
+        daemon.operation_runner.process_next(timeout=0)
+        power_on_operation = daemon.operation_runner.current
+        assert verifying.wait(1)
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_ONLINE
+
+        daemon.event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_DOWN},
+        )
+        admitted = not daemon.action_queue.empty()
+        if admitted:
+            daemon.operation_runner.process_next(timeout=0)
+            daemon.operation_runner.process_next(timeout=0)
+            shutdown_operation = daemon.operation_runner.current
+            shutdown_operation.thread.join(2)
+            daemon.operation_runner.process_next(timeout=0)
+        else:
+            power_on_operation.cancel.set()
+            power_on_operation.thread.join(2)
+
+        assert admitted
+        assert power_on_operation.outcome == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        assert daemon.operation_runner.current is None
+        assert daemon.action_queue.empty()
+        daemon.controller.power_off.assert_called_once()
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_OFFLINE
+
+    def test_admin_up_during_shutdown_remains_lower_priority(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked_shutdown(_operation, _factory):
+            started.set()
+            assert release.wait(2)
+            return (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+
+        daemon.graceful_shutdown.execute = MagicMock(
+            side_effect=blocked_shutdown)
+        daemon.controller.write_operation_start = MagicMock(
+            wraps=daemon.controller.write_operation_start)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "shutdown", 3))
+        daemon.operation_runner.process_next(timeout=0)
+        shutdown_operation = daemon.operation_runner.current
+        assert started.wait(1)
+        daemon.controller._update_host_state(
+            bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN,
+            bmcctld.SWITCH_HOST_OFFLINE)
+        daemon.event_handler.critical_event_checker.has_any_critical_event = \
+            MagicMock(return_value=False)
+
+        daemon.event_handler._handle_chassis_module(
+            bmcctld.SWITCH_HOST_MODULE_KEY,
+            {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        )
+        assert not daemon.action_queue.empty()
+        assert daemon.operation_runner.process_next(timeout=0) is True
+
+        assert daemon.operation_runner.current is shutdown_operation
+        assert daemon.action_queue.empty()
+        assert daemon.controller.write_operation_start.call_count == 1
+        release.set()
+        shutdown_operation.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+    def test_stop_reaps_worker_that_finishes_during_join(self, chassis):
+        daemon = self._make_daemon(chassis)
+        first_callback = MagicMock()
+        second_callback = MagicMock()
+        operation = _make_operation(
+            bmcctld.ACTION_POWER_ON, callback=first_callback)
+        operation.joined_callbacks = [(second_callback, None)]
+
+        def finish_after_cancel():
+            assert operation.cancel.wait(2)
+            operation.outcome = (
+                bmcctld.OP_RESULT_PREEMPTED, "-", False)
+
+        operation.thread = threading.Thread(
+            target=finish_after_cancel, daemon=True)
+        daemon.controller.write_operation_start(
+            operation.request_id, operation.item.event_desc)
+        daemon.operation_runner.current = operation
+        operation.thread.start()
+
+        daemon.operation_runner.stop()
+
+        assert daemon.operation_runner.current is None
+        first_callback.assert_called_once_with(
+            False, bmcctld.OP_RESULT_PREEMPTED)
+        second_callback.assert_called_once_with(
+            False, bmcctld.OP_RESULT_PREEMPTED)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_PREEMPTED
+
+        daemon.operation_runner.stop()
+        first_callback.assert_called_once()
+        second_callback.assert_called_once()
+
+    def test_p_completed_worker_is_reaped_after_blocking_get(self, chassis):
+        daemon = self._make_daemon(chassis)
+        release = threading.Event()
+        operation = _make_operation(bmcctld.ACTION_POWER_OFF)
+        def finish_old():
+            release.wait(2)
+            operation.outcome = (bmcctld.OP_RESULT_SUCCESS, "-", True)
+        operation.thread = threading.Thread(target=finish_old, daemon=True)
+        daemon.operation_runner.current = operation
+        operation.thread.start()
+        recorded = []
+        original_record = daemon.controller.write_operation_result
+        def record(result, reason):
+            recorded.append((result, reason))
+            original_record(result, reason)
+        daemon.controller.write_operation_result = MagicMock(side_effect=record)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+
+        processor = threading.Thread(
+            target=daemon.operation_runner.process_next,
+            kwargs={"timeout": 2})
+        processor.start()
+        time.sleep(0.05)
+        release.set()
+        operation.thread.join(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "new", 5))
+        processor.join(2)
+        assert processor.is_alive() is False
+        assert recorded[0] == (bmcctld.OP_RESULT_SUCCESS, "-")
+        assert all(result != bmcctld.OP_RESULT_PREEMPTED
+                   for result, _reason in recorded)
+        assert daemon.operation_runner.current.item.event_desc == "new"
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+    def test_p_completed_before_cancel_keeps_truthful_outcome(self, chassis):
+        daemon = self._make_daemon(chassis)
+        outcome_set = threading.Event()
+        operation = _make_operation(bmcctld.ACTION_POWER_ON, priority=5)
+
+        def complete_then_linger():
+            operation.outcome = (bmcctld.OP_RESULT_SUCCESS, "-", True)
+            outcome_set.set()
+            assert operation.cancel.wait(2)
+
+        operation.thread = threading.Thread(
+            target=complete_then_linger, daemon=True)
+        daemon.controller.write_operation_start(
+            operation.request_id, operation.item.event_desc)
+        daemon.operation_runner.current = operation
+        operation.thread.start()
+        assert outcome_set.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "higher-priority", 2))
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+        assert daemon.operation_runner.current is None
+        assert _dequeue_item(daemon.action_queue).event_desc == \
+            "higher-priority"
+
+    def test_p_displacement_preserves_entry_and_new_higher_priority_wins(
+            self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+        release = threading.Event()
+        def blocked_cycle(operation, _cancel):
+            started.set()
+            assert release.wait(2)
+            if operation.cancel.is_set():
+                return bmcctld.PowerCallResult.CANCELLED
+            return bmcctld.PowerCallResult.CONFIRMED
+        daemon.controller.power_cycle = MagicMock(side_effect=blocked_cycle)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_CYCLE, "running-cycle", 4))
+        daemon.operation_runner.process_next(timeout=0)
+        assert started.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "requeued", 3))
+        displacer = threading.Thread(
+            target=daemon.operation_runner.process_next,
+            kwargs={"timeout": 0})
+        displacer.start()
+        assert daemon.operation_runner.current.cancel.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "late-critical", 0))
+        release.set()
+        displacer.join(2)
+        assert displacer.is_alive() is False
+        entries = [daemon.action_queue.get_nowait(), daemon.action_queue.get_nowait()]
+        assert [entry[2].event_desc for entry in entries] == [
+            "late-critical", "requeued"]
+        assert entries[1][1] < entries[0][1]
+
+    def test_p_requeued_successor_runs_the_common_guard(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        started = threading.Event()
+
+        def checkpoint_passed_power_off(operation, _factory):
+            started.set()
+            assert operation.cancel.wait(2)
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+            return (bmcctld.OP_RESULT_PREEMPTED,
+                    bmcctld.OP_REASON_PREEMPTED, False)
+
+        daemon.graceful_shutdown.execute = MagicMock(
+            side_effect=checkpoint_passed_power_off)
+        daemon.controller.power_off = MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "running", 3))
+        daemon.operation_runner.process_next(timeout=0)
+        assert started.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical-successor", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+        assert daemon.operation_runner.current is None
+        daemon.operation_runner.process_next(timeout=0)
+
+        daemon.controller.power_off.assert_not_called()
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+
+    def test_q_guard_finalizes_state_after_cancelled_off_verify(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        verifying = threading.Event()
+        set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=set_admin_state)
+
+        def cancelled_verify(_expected, _timeout, _context, cancel=None):
+            verifying.set()
+            assert cancel.wait(2)
+            return bmcctld.PowerCallResult.CANCELLED
+
+        daemon.controller._verify_oper_status = MagicMock(
+            side_effect=cancelled_verify)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "running", 2))
+        daemon.operation_runner.process_next(timeout=0)
+        assert verifying.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical-successor", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+        assert daemon.operation_runner.current is None
+        daemon.operation_runner.process_next(timeout=0)
+
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == \
+            bmcctld.SWITCH_HOST_OFFLINE
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+
+    def test_s_startup_verify_is_displaceable(self, chassis):
+        daemon = self._make_daemon(chassis)
+        verifying = threading.Event()
+
+        def startup_verify(operation, cancel):
+            operation.stage = bmcctld.STAGE_POWER_ON_ISSUED
+            verifying.set()
+            assert cancel.wait(2)
+            return bmcctld.PowerCallResult.CANCELLED
+
+        daemon.controller.power_on = MagicMock(side_effect=startup_verify)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "STARTUP", 5))
+        daemon.operation_runner.process_next(timeout=0)
+        assert verifying.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert daemon.operation_runner.current is None
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_PREEMPTED
+
+    def test_p_preempted_power_on_cannot_absorb_off_successor(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        raise_issued = threading.Event()
+        admin_calls = []
+
+        def delayed_admin_state(admin_up):
+            admin_calls.append(admin_up)
+            if admin_up:
+                raise_issued.set()
+
+        chassis.switch_host.set_admin_state = delayed_admin_state
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "STARTUP", 5))
+        daemon.operation_runner.process_next(timeout=0)
+        assert raise_issued.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+        preempted = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert preempted[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_ON
+        assert preempted[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_PREEMPTED
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert admin_calls == [True, False]
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+
+    def test_p_preempted_power_cycle_cannot_absorb_off_successor(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        cycle_issued = threading.Event()
+        admin_calls = []
+
+        def delayed_cycle():
+            cycle_issued.set()
+
+        def record_admin_state(admin_up):
+            admin_calls.append(admin_up)
+
+        chassis.switch_host.do_power_cycle = delayed_cycle
+        chassis.switch_host.set_admin_state = record_admin_state
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_CYCLE, "cycle", 4))
+        daemon.operation_runner.process_next(timeout=0)
+        assert cycle_issued.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+        preempted = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert preempted[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWER_CYCLING
+        assert preempted[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_PREEMPTED
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert admin_calls == [False]
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+
+    def test_p_failed_off_after_preempted_raise_remains_retryable(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon = self._make_daemon(chassis)
+        raise_issued = threading.Event()
+        admin_calls = []
+
+        def fail_first_power_off(admin_up):
+            admin_calls.append(admin_up)
+            if admin_up:
+                raise_issued.set()
+            elif admin_calls.count(False) == 1:
+                raise RuntimeError("first power-off failed")
+
+        chassis.switch_host.set_admin_state = fail_first_power_off
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "STARTUP", 5))
+        daemon.operation_runner.process_next(timeout=0)
+        assert raise_issued.wait(1)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "critical", 0))
+
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+        failed = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert failed[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_OFF
+        assert failed[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "retry", 2))
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert admin_calls == [True, False, False]
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_SUCCESS
+
+    def test_q_platform_calls_use_worker_while_operation_is_live(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        observations = []
+        get_oper_status = chassis.switch_host.get_oper_status
+        set_admin_state = chassis.switch_host.set_admin_state
+
+        def in_flight():
+            current = daemon.operation_runner.current
+            return (current is not None and current.thread is not None and
+                    current.thread.is_alive())
+
+        def observed_status():
+            observations.append(
+                (threading.current_thread().name, in_flight()))
+            return get_oper_status()
+
+        def observed_admin_state(up):
+            observations.append(
+                (threading.current_thread().name, in_flight()))
+            return set_admin_state(up)
+
+        chassis.switch_host.get_oper_status = observed_status
+        chassis.switch_host.set_admin_state = observed_admin_state
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "thread-check", 2))
+        daemon.operation_runner.process_next(timeout=0)
+        daemon.operation_runner.current.thread.join(2)
+        daemon.operation_runner.process_next(timeout=0)
+
+        live_callers = [name for name, live in observations if live]
+        assert live_callers
+        assert set(live_callers) == {"bmcctld-op"}
+
+    def test_q_stop_cancels_and_joins_worker_for_five_seconds(self, chassis):
+        daemon = self._make_daemon(chassis)
+        callback = MagicMock()
+        operation = _make_operation(
+            bmcctld.ACTION_POWER_ON, callback=callback)
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = True
+        daemon.operation_runner.current = operation
+        daemon.controller.write_operation_result = MagicMock()
+
+        daemon.operation_runner.stop()
+
+        assert operation.cancel.is_set()
+        operation.thread.join.assert_called_once_with(timeout=5)
+        assert daemon.operation_runner.current is operation
+        callback.assert_not_called()
+        daemon.controller.write_operation_result.assert_not_called()
+
+    def test_q_callback_failure_does_not_wedge_reap(self, chassis):
+        daemon = self._make_daemon(chassis)
+        first = MagicMock()
+        third = MagicMock()
+        def raising(_success, _detail):
+            raise RuntimeError("callback failed")
+        item = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_ON, "callbacks", 5,
+            on_complete=first, rack_cmd_key="CMD_1")
+        operation = bmcctld.Operation(
+            item, TEST_REQUEST_ID, bmcctld.STAGE_POWER_ON_CONFIRMED)
+        operation.outcome = (bmcctld.OP_RESULT_SUCCESS, "-", True)
+        operation.joined_callbacks = [
+            (raising, "CMD_2"), (third, "CMD_3")]
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = False
+        daemon.operation_runner.current = operation
+        daemon.operation_runner.log_error = MagicMock()
+        assert daemon.operation_runner._reap_if_done() is True
+        assert daemon.operation_runner.current is None
+        first.assert_called_once_with(True, bmcctld.OP_RESULT_SUCCESS)
+        third.assert_called_once_with(True, bmcctld.OP_RESULT_SUCCESS)
+        daemon.operation_runner.log_error.assert_called_once_with(
+            "CALLBACK_FAILED request_id={} cmd_key=CMD_2".format(
+                TEST_REQUEST_ID))
+
+    @pytest.mark.parametrize(
+        "guarded, expected_request_id",
+        [(True, TEST_REQUEST_ID), (False, "-")],
+        ids=["guard", "refusal"],
+    )
+    def test_q_callback_failure_logs_path_identity(
+            self, guarded, expected_request_id, chassis):
+        daemon = self._make_daemon(chassis)
+        daemon.operation_runner.log_error = MagicMock()
+        daemon.operation_runner._new_request_id = MagicMock(
+            return_value=TEST_REQUEST_ID)
+
+        def raising(_success, _detail):
+            raise RuntimeError("callback failed")
+
+        if guarded:
+            item = bmcctld.ActionItem(
+                bmcctld.ACTION_POWER_OFF, "guard", 2,
+                on_complete=raising, rack_cmd_key="CMD_GUARD")
+        else:
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+            operation = _make_operation(bmcctld.ACTION_POWER_OFF)
+            operation.thread = MagicMock()
+            operation.thread.is_alive.return_value = True
+            daemon.operation_runner.current = operation
+            item = bmcctld.ActionItem(
+                bmcctld.ACTION_POWER_ON, "refuse", 5,
+                on_complete=raising, rack_cmd_key="CMD_REFUSE")
+        daemon.operation_runner.enqueue(item)
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        cmd_key = "CMD_GUARD" if guarded else "CMD_REFUSE"
+        daemon.operation_runner.log_error.assert_called_once_with(
+            "CALLBACK_FAILED request_id={} cmd_key={}".format(
+                expected_request_id, cmd_key))
+
+    def test_q_missing_worker_outcome_is_abandoned(self, chassis):
+        daemon = self._make_daemon(chassis)
+        operation = _make_operation(bmcctld.ACTION_POWER_ON)
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = False
+        daemon.operation_runner.current = operation
+        daemon.operation_runner.log_error = MagicMock()
+        daemon.operation_runner._reap_if_done()
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == bmcctld.OP_RESULT_ABANDONED
+        assert state[bmcctld.FIELD_OP_REASON] == bmcctld.OP_REASON_UNCLASSIFIED
+        daemon.operation_runner.log_error.assert_called_once()
+
+    def test_guard_does_not_treat_missing_op_result_as_in_flight(self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_POWERING_OFF)
+        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "legacy", 2)
+        assert daemon.operation_runner._guard_should_skip(item) is False
+
+
+class TestWorkerExceptionRecovery:
+
+    def _make_runner(self, chassis):
+        with patch('sonic_platform.platform.Platform') as platform:
+            platform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        return daemon, daemon.operation_runner
+
+    @pytest.mark.parametrize(
+        "command, action, expected_outcome, expected_cmd_status, expected_state",
+        [
+            (bmcctld.CMD_GRACEFUL_SHUT,
+             bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             (bmcctld.OP_RESULT_SUCCESS_FORCED,
+              bmcctld.OP_REASON_NOT_QUALIFIED, True),
+             bmcctld.CMD_STATUS_DONE,
+             bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN),
+            (bmcctld.CMD_GRACEFUL_RESTART,
+             bmcctld.ACTION_GRACEFUL_RESTART,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_NOT_QUALIFIED, False),
+             bmcctld.CMD_STATUS_FAILED,
+             bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN),
+            (bmcctld.CMD_POWER_OFF,
+             bmcctld.ACTION_POWER_OFF,
+             (bmcctld.OP_RESULT_SUCCESS, "-", True),
+             bmcctld.CMD_STATUS_DONE,
+             bmcctld.POWER_STATE_ON),
+        ],
+    )
+    def test_downward_bookkeeping_failure_does_not_block_power_removal(
+            self, command, action, expected_outcome, expected_cmd_status,
+            expected_state, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_ON, bmcctld.SWITCH_HOST_ONLINE)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=False)
+        command_key = "bookkeeping-failure"
+        daemon.event_handler._handle_rack_mgr_command(command_key, {
+            bmcctld.FIELD_COMMAND: command,
+            bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_PENDING,
+        })
+
+        get_power_state = daemon.controller.get_db_power_state
+        get_device_status = daemon.controller.get_db_device_status
+
+        def fail_worker_power_state_read():
+            if threading.current_thread().name == "bmcctld-op":
+                raise RuntimeError("power-state read failed")
+            return get_power_state()
+
+        def fail_worker_device_status_read():
+            if threading.current_thread().name == "bmcctld-op":
+                raise RuntimeError("device-status read failed")
+            return get_device_status()
+
+        update_host_state = daemon.controller._update_host_state
+
+        def fail_downward_state_writes(power_state, device_status=None):
+            if power_state in (
+                    bmcctld.SWITCH_HOST_POWERING_OFF,
+                    bmcctld.POWER_STATE_OFF):
+                raise RuntimeError("power-state write failed")
+            return update_host_state(power_state, device_status)
+
+        daemon.controller.get_db_power_state = MagicMock(
+            side_effect=fail_worker_power_state_read)
+        daemon.controller.get_db_device_status = MagicMock(
+            side_effect=fail_worker_device_status_read)
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_downward_state_writes)
+        set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=set_admin_state)
+
+        assert runner.process_next(timeout=0) is True
+        operation = runner.current
+        assert operation.item.action == action
+        operation.thread.join(2)
+        assert operation.thread.is_alive() is False
+        runner.process_next(timeout=0)
+
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False)]
+        assert chassis.switch_host.get_oper_status() == \
+            MockModule.MODULE_STATUS_OFFLINE
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_CONFIRMED
+        assert operation.outcome == expected_outcome
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == expected_outcome[0]
+        assert state[bmcctld.FIELD_OP_REASON] == expected_outcome[1]
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == expected_state
+        command_row = dict(daemon.event_handler._thread_database.table(
+            "STATE_DB", bmcctld.RACK_MANAGER_COMMAND_TABLE).get(
+                command_key)[1])
+        assert command_row[bmcctld.FIELD_STATUS] == expected_cmd_status
+        assert command_row[bmcctld.FIELD_RESULT] == (
+            "SUCCESS" if expected_outcome[2]
+            else bmcctld.OP_RESULT_POWER_ON_FAILED)
+        assert command_row[bmcctld.FIELD_REQUEST_ID] == operation.request_id
+
+    def test_graceful_restart_bookkeeping_failure_preserves_leg_reason(
+            self, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_ON, bmcctld.SWITCH_HOST_ONLINE)
+        daemon.policy_reader.get_graceful_shutdown_timeout = MagicMock(
+            return_value=10)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=True)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        daemon.gnoi_requester_factory = MagicMock(return_value=requester)
+
+        update_host_state = daemon.controller._update_host_state
+
+        def fail_downward_state_writes(power_state, device_status=None):
+            if power_state in (
+                    bmcctld.SWITCH_HOST_POWERING_OFF,
+                    bmcctld.POWER_STATE_OFF):
+                raise RuntimeError("power-state write failed")
+            return update_host_state(power_state, device_status)
+
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_downward_state_writes)
+        set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=set_admin_state)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+
+        runner._run_worker(operation)
+
+        assert operation.leg_graceful is True
+        assert operation.leg_reason == "-"
+        assert chassis.switch_host.set_admin_state.call_args_list == [
+            call(False)]
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_CONFIRMED
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_POWER_ON_FAILED, "-", False)
+
+    @pytest.mark.parametrize(
+        "action, expected_reason",
+        [
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             bmcctld.OP_REASON_NOT_QUALIFIED),
+            (bmcctld.ACTION_GRACEFUL_RESTART,
+             bmcctld.OP_REASON_NOT_QUALIFIED),
+            (bmcctld.ACTION_POWER_OFF, "-"),
+        ],
+    )
+    def test_downward_platform_exception_is_not_retried(
+            self, action, expected_reason, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_ON, bmcctld.SWITCH_HOST_ONLINE)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=False)
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=RuntimeError("platform call failed"))
+        operation = _make_operation(action)
+
+        runner._run_worker(operation)
+
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_ISSUED
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_POWER_OFF_FAILED, expected_reason, False)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_OFF
+
+    @pytest.mark.parametrize(
+        "failure_point",
+        ["prior-state-read", "transitional-write", "critical-state-read"],
+    )
+    def test_power_on_bookkeeping_failure_remains_fail_closed(
+            self, failure_point, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_OFF, bmcctld.SWITCH_HOST_OFFLINE)
+        chassis.switch_host.set_admin_state = MagicMock()
+
+        if failure_point == "prior-state-read":
+            daemon.controller.get_db_power_state = MagicMock(
+                side_effect=RuntimeError("power-state read failed"))
+        elif failure_point == "transitional-write":
+            update_host_state = daemon.controller._update_host_state
+
+            def fail_powering_on_write(power_state, device_status=None):
+                if power_state == bmcctld.SWITCH_HOST_POWERING_ON:
+                    raise RuntimeError("power-state write failed")
+                return update_host_state(power_state, device_status)
+
+            daemon.controller._update_host_state = MagicMock(
+                side_effect=fail_powering_on_write)
+        else:
+            daemon.controller.critical_event_checker.has_any_critical_event = \
+                MagicMock(side_effect=RuntimeError(
+                    "critical-state read failed"))
+
+        operation = _make_operation(bmcctld.ACTION_POWER_ON)
+        runner._run_worker(operation)
+
+        chassis.switch_host.set_admin_state.assert_not_called()
+        assert operation.stage == bmcctld.STAGE_POWER_ON_PENDING
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_POWER_ON_FAILED, "-", False)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.POWER_STATE_OFF
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == \
+            bmcctld.SWITCH_HOST_OFFLINE
+        if failure_point == "transitional-write":
+            assert daemon.controller._update_host_state.call_args_list == [
+                call(bmcctld.SWITCH_HOST_POWERING_ON),
+                call(bmcctld.POWER_STATE_OFF, bmcctld.SWITCH_HOST_OFFLINE),
+            ]
+
+    @pytest.mark.parametrize(
+        "command, action, expected_reason, expected_state",
+        [
+            (bmcctld.CMD_GRACEFUL_SHUT,
+             bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             bmcctld.OP_REASON_NOT_QUALIFIED,
+             bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN),
+            (bmcctld.CMD_GRACEFUL_RESTART,
+             bmcctld.ACTION_GRACEFUL_RESTART,
+             bmcctld.OP_REASON_NOT_QUALIFIED,
+             bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN),
+            (bmcctld.CMD_POWER_OFF,
+             bmcctld.ACTION_POWER_OFF, "-", bmcctld.POWER_STATE_ON),
+        ],
+    )
+    def test_bookkeeping_and_platform_failures_issue_one_downward_call(
+            self, command, action, expected_reason, expected_state, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon.controller._update_host_state(
+            bmcctld.POWER_STATE_ON, bmcctld.SWITCH_HOST_ONLINE)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=False)
+        command_key = "bookkeeping-and-platform-failure"
+        daemon.event_handler._handle_rack_mgr_command(command_key, {
+            bmcctld.FIELD_COMMAND: command,
+            bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_PENDING,
+        })
+
+        get_power_state = daemon.controller.get_db_power_state
+
+        def fail_worker_power_state_read():
+            if threading.current_thread().name == "bmcctld-op":
+                raise RuntimeError("power-state read failed")
+            return get_power_state()
+
+        update_host_state = daemon.controller._update_host_state
+
+        def fail_downward_state_writes(power_state, device_status=None):
+            if power_state in (
+                    bmcctld.SWITCH_HOST_POWERING_OFF,
+                    bmcctld.POWER_STATE_OFF):
+                raise RuntimeError("power-state write failed")
+            return update_host_state(power_state, device_status)
+
+        daemon.controller.get_db_power_state = MagicMock(
+            side_effect=fail_worker_power_state_read)
+        daemon.controller.get_db_device_status = MagicMock(
+            side_effect=RuntimeError("device-status read failed"))
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_downward_state_writes)
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=RuntimeError("platform call failed"))
+
+        assert runner.process_next(timeout=0) is True
+        operation = runner.current
+        assert operation.item.action == action
+        operation.thread.join(2)
+        assert operation.thread.is_alive() is False
+        runner.process_next(timeout=0)
+
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_ISSUED
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_POWER_OFF_FAILED, expected_reason, False)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+        assert state[bmcctld.FIELD_OP_REASON] == expected_reason
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == expected_state
+        command_row = dict(daemon.event_handler._thread_database.table(
+            "STATE_DB", bmcctld.RACK_MANAGER_COMMAND_TABLE).get(
+                command_key)[1])
+        assert command_row[bmcctld.FIELD_STATUS] == \
+            bmcctld.CMD_STATUS_FAILED
+        assert command_row[bmcctld.FIELD_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+        assert command_row[bmcctld.FIELD_REQUEST_ID] == operation.request_id
+
+    @pytest.mark.parametrize(
+        "action, stage, power_result, expected, expected_power_calls",
+        [
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.STAGE_HANDSHAKE,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_SUCCESS_FORCED,
+              bmcctld.OP_REASON_UNCLASSIFIED, True), 1),
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.STAGE_HANDSHAKE,
+             bmcctld.PowerCallResult.NOT_CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 1),
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.STAGE_HANDSHAKE,
+             bmcctld.PowerCallResult.CANCELLED,
+             (bmcctld.OP_RESULT_PREEMPTED,
+              bmcctld.OP_REASON_PREEMPTED, False), 1),
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             bmcctld.STAGE_POWER_OFF_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.ACTION_POWER_OFF, bmcctld.STAGE_POWER_OFF_PENDING,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_SUCCESS, "-", True), 1),
+            (bmcctld.ACTION_POWER_OFF, bmcctld.STAGE_POWER_OFF_PENDING,
+             bmcctld.PowerCallResult.NOT_CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 1),
+            (bmcctld.ACTION_POWER_OFF, bmcctld.STAGE_POWER_OFF_PENDING,
+             bmcctld.PowerCallResult.CANCELLED,
+             (bmcctld.OP_RESULT_PREEMPTED,
+              bmcctld.OP_REASON_PREEMPTED, False), 1),
+            (bmcctld.ACTION_POWER_OFF, bmcctld.STAGE_POWER_OFF_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.ACTION_POWER_CYCLE, bmcctld.STAGE_POWER_CYCLE_PENDING,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.ACTION_POWER_CYCLE, bmcctld.STAGE_POWER_CYCLE_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.ACTION_POWER_ON, bmcctld.STAGE_POWER_ON_PENDING,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED, "-", False), 0),
+            (bmcctld.ACTION_POWER_ON, bmcctld.STAGE_POWER_ON_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED, "-", False), 0),
+        ],
+    )
+    def test_q_stage_recovery_never_reissues_ambiguous_calls(
+            self, action, stage, power_result, expected,
+            expected_power_calls, chassis):
+        daemon, runner = self._make_runner(chassis)
+        operation = _make_operation(action)
+        operation.stage = stage
+        daemon.controller.power_off = MagicMock(return_value=power_result)
+        daemon.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        daemon.controller.power_cycle = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        assert runner._recover_worker_exception(operation) == expected
+        assert daemon.controller.power_off.call_count == expected_power_calls
+        daemon.controller.power_on.assert_not_called()
+        daemon.controller.power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, stage, leg_graceful, leg_reason, expected",
+        [
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             bmcctld.STAGE_POWER_OFF_CONFIRMED, True, None,
+             (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)),
+            (bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+             bmcctld.STAGE_POWER_OFF_CONFIRMED, False,
+             bmcctld.OP_REASON_DEADLINE,
+             (bmcctld.OP_RESULT_SUCCESS_FORCED,
+              bmcctld.OP_REASON_DEADLINE, True)),
+            (bmcctld.ACTION_GRACEFUL_RESTART,
+             bmcctld.STAGE_POWER_ON_CONFIRMED, True, None,
+             (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)),
+            (bmcctld.ACTION_GRACEFUL_RESTART,
+             bmcctld.STAGE_POWER_ON_CONFIRMED, False,
+             bmcctld.OP_REASON_CHECK_FAILED,
+             (bmcctld.OP_RESULT_SUCCESS_FORCED,
+              bmcctld.OP_REASON_CHECK_FAILED, True)),
+            (bmcctld.ACTION_POWER_OFF,
+             bmcctld.STAGE_POWER_OFF_CONFIRMED, False, None,
+             (bmcctld.OP_RESULT_SUCCESS, "-", True)),
+            (bmcctld.ACTION_POWER_ON,
+             bmcctld.STAGE_POWER_ON_CONFIRMED, False, None,
+             (bmcctld.OP_RESULT_SUCCESS, "-", True)),
+            (bmcctld.ACTION_POWER_CYCLE,
+             bmcctld.STAGE_POWER_CYCLE_CONFIRMED, False, None,
+             (bmcctld.OP_RESULT_SUCCESS, "-", True)),
+        ],
+    )
+    def test_q_confirmed_stage_never_becomes_false_failure(
+            self, action, stage, leg_graceful, leg_reason, expected,
+            chassis):
+        daemon, runner = self._make_runner(chassis)
+        operation = _make_operation(action)
+        operation.stage = stage
+        operation.leg_graceful = leg_graceful
+        operation.leg_reason = leg_reason
+        daemon.controller.power_off = MagicMock()
+        daemon.controller.power_on = MagicMock()
+        daemon.controller.power_cycle = MagicMock()
+        assert runner._recover_worker_exception(operation) == expected
+        daemon.controller.power_off.assert_not_called()
+        daemon.controller.power_on.assert_not_called()
+        daemon.controller.power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "stage, power_result, leg_reason, expected, expected_power_calls",
+        [
+            (bmcctld.STAGE_HANDSHAKE,
+             bmcctld.PowerCallResult.CONFIRMED, None,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 1),
+            (bmcctld.STAGE_HANDSHAKE,
+             bmcctld.PowerCallResult.NOT_CONFIRMED, None,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 1),
+            (bmcctld.STAGE_POWER_OFF_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED, None,
+             (bmcctld.OP_RESULT_POWER_OFF_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.STAGE_POWER_OFF_CONFIRMED,
+             bmcctld.PowerCallResult.CONFIRMED, None,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_UNCLASSIFIED, False), 0),
+            (bmcctld.STAGE_PAUSE,
+             bmcctld.PowerCallResult.CONFIRMED,
+             bmcctld.OP_REASON_DEADLINE,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_DEADLINE, False), 0),
+            (bmcctld.STAGE_POWER_ON_ISSUED,
+             bmcctld.PowerCallResult.CONFIRMED,
+             bmcctld.OP_REASON_CHECK_FAILED,
+             (bmcctld.OP_RESULT_POWER_ON_FAILED,
+              bmcctld.OP_REASON_CHECK_FAILED, False), 0),
+        ],
+    )
+    def test_q_restart_stage_recovery_never_adds_a_raise(
+            self, stage, power_result, leg_reason, expected,
+            expected_power_calls, chassis):
+        daemon, runner = self._make_runner(chassis)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_RESTART)
+        operation.stage = stage
+        operation.leg_reason = leg_reason
+        daemon.controller.power_off = MagicMock(return_value=power_result)
+        daemon.controller.power_on = MagicMock()
+        daemon.controller.power_cycle = MagicMock()
+
+        assert runner._recover_worker_exception(operation) == expected
+        assert daemon.controller.power_off.call_count == expected_power_calls
+        daemon.controller.power_on.assert_not_called()
+        daemon.controller.power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "action, initial_status, final_state, confirmed_stage",
+        [
+            (bmcctld.ACTION_POWER_OFF, MockModule.MODULE_STATUS_ONLINE,
+             bmcctld.POWER_STATE_OFF, bmcctld.STAGE_POWER_OFF_CONFIRMED),
+            (bmcctld.ACTION_POWER_ON, MockModule.MODULE_STATUS_OFFLINE,
+             bmcctld.POWER_STATE_ON, bmcctld.STAGE_POWER_ON_CONFIRMED),
+            (bmcctld.ACTION_POWER_CYCLE, MockModule.MODULE_STATUS_ONLINE,
+             bmcctld.POWER_STATE_CYCLE,
+             bmcctld.STAGE_POWER_CYCLE_CONFIRMED),
+        ],
+    )
+    def test_q_confirmed_wrapper_bookkeeping_failure_reaches_recovery(
+            self, action, initial_status, final_state, confirmed_stage,
+            chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(initial_status)
+        operation = _make_operation(action)
+        update_state = daemon.controller._update_host_state
+
+        def fail_final_state(power_state, device_status=None):
+            if power_state == final_state:
+                raise RuntimeError("final state write failed")
+            return update_state(power_state, device_status)
+
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_final_state)
+        runner._run_worker(operation)
+
+        assert operation.stage == confirmed_stage
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_SUCCESS, "-", True)
+
+    def test_graceful_shutdown_transitional_write_failure_preserves_reason(
+            self, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(
+            return_value=False)
+
+        update_state = daemon.controller._update_host_state
+        failed_once = [False]
+
+        def fail_first_powering_off(power_state, device_status=None):
+            if power_state == bmcctld.SWITCH_HOST_POWERING_OFF and \
+                    not failed_once[0]:
+                failed_once[0] = True
+                raise RuntimeError("transitional state write failed")
+            return update_state(power_state, device_status)
+
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_first_powering_off)
+        set_admin_state = chassis.switch_host.set_admin_state
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=set_admin_state)
+
+        runner._run_worker(operation)
+
+        assert failed_once[0] is True
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_CONFIRMED
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_NOT_QUALIFIED,
+            True,
+        )
+
+    def test_q_recovery_power_off_always_leaves_an_outcome(self, chassis):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        daemon.graceful_shutdown.execute = MagicMock(
+            side_effect=RuntimeError("operation body failed"))
+        update_state = daemon.controller._update_host_state
+
+        def fail_final_state(power_state, device_status=None):
+            if power_state == bmcctld.POWER_STATE_OFF:
+                raise RuntimeError("final state write failed")
+            return update_state(power_state, device_status)
+
+        daemon.controller._update_host_state = MagicMock(
+            side_effect=fail_final_state)
+        runner._run_worker(operation)
+
+        assert chassis.switch_host.get_admin_state() is False
+        assert operation.stage == bmcctld.STAGE_POWER_OFF_CONFIRMED
+        assert operation.outcome == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED,
+            bmcctld.OP_REASON_UNCLASSIFIED,
+            True,
+        )
+
+    def test_q_cancel_during_recovery_fallback_prevents_retry(self, chassis):
+        daemon, runner = self._make_runner(chassis)
+        operation = _make_operation(bmcctld.ACTION_POWER_OFF)
+
+        def cancel_then_raise(_operation, cancel):
+            cancel.set()
+            raise RuntimeError("fallback call failed after cancellation")
+
+        daemon.controller.power_off = MagicMock(side_effect=cancel_then_raise)
+        assert runner._recover_worker_exception(operation) == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        daemon.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+
+    def test_q_cancel_wins_before_exception_recovery_call(self, chassis):
+        daemon, runner = self._make_runner(chassis)
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        operation.cancel.set()
+        daemon.controller.power_off = MagicMock()
+        assert runner._recover_worker_exception(operation) == (
+            bmcctld.OP_RESULT_PREEMPTED,
+            bmcctld.OP_REASON_PREEMPTED,
+            False,
+        )
+        daemon.controller.power_off.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -1397,6 +4053,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon.policy_reader.get_switch_host_admin_status = MagicMock(return_value=bmcctld.ADMIN_DOWN)
         daemon.controller.power_on = MagicMock()
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_skips_power_on_when_admin_status_not_set(self, chassis):
@@ -1407,15 +4064,17 @@ class TestBmcctldDaemonInitialSequence:
         daemon.policy_reader.get_switch_host_admin_status = MagicMock(return_value=bmcctld.ADMIN_DOWN)
         daemon.controller.power_on = MagicMock()
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_powers_on_when_no_leak_and_host_offline(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
-        daemon.controller.power_on = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
-        daemon.controller.power_on.assert_called_once()
+        item = _dequeue_item(daemon.action_queue)
+        assert item.action == bmcctld.ACTION_POWER_ON
+        assert item.event_desc == "STARTUP"
 
     def test_skips_power_on_if_critical_leak_present(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
@@ -1423,6 +4082,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
         daemon.controller.power_on = MagicMock()
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_refreshes_state_when_already_online(self, chassis):
@@ -1432,6 +4092,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_on = MagicMock()
         daemon.controller.init_host_state = MagicMock()
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
 
@@ -1441,7 +4102,6 @@ class TestBmcctldDaemonInitialSequence:
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
-        daemon.controller.power_on = MagicMock(return_value=True)
         # Pretend the system has been up for 10 minutes — bmcctld restart mid-life
         # must not re-arm the full 60s delay.
         with patch('time.clock_gettime', return_value=600):
@@ -1449,7 +4109,8 @@ class TestBmcctldDaemonInitialSequence:
             daemon._initial_power_on_sequence()
             elapsed = time.monotonic() - t0
         assert elapsed < 1.0, "boot delay should have been skipped (elapsed={:.2f}s)".format(elapsed)
-        daemon.controller.power_on.assert_called_once()
+        item = _dequeue_item(daemon.action_queue)
+        assert item.action == bmcctld.ACTION_POWER_ON
 
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
@@ -1459,6 +4120,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon.stop_event.set()  # Signal stop before delay expires
         with patch('time.clock_gettime', return_value=0):
             daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_boot_delay_processes_queued_actions(self, chassis):
@@ -1468,16 +4130,114 @@ class TestBmcctldDaemonInitialSequence:
         # Use a small non-zero delay so the queue-drain loop runs at least once
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
         daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
-        daemon.controller.power_off = MagicMock(return_value=True)
+        daemon.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        daemon.action_queue.put(bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "RACK_MGR_BOOT_DELAY"))
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "RACK_MGR_BOOT_DELAY", 2))
         # Force system uptime to 0 so the full configured delay applies.
         with patch('time.clock_gettime', return_value=0):
             daemon._initial_power_on_sequence()
         # The POWER_OFF must have been consumed from the queue during the delay
         assert daemon.action_queue.empty()
         daemon.controller.power_off.assert_called_once()
+
+    def test_q_boot_delay_hands_off_live_worker_without_startup_tail(
+            self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
+        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=False)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(
+            return_value=False)
+        daemon.controller.init_host_state = MagicMock()
+        verifying = threading.Event()
+        release = threading.Event()
+
+        def unconfirmed_power_off(up):
+            assert up is False
+            chassis.switch_host._admin_state = up
+
+        def blocked_verify(_expected, _timeout, _context, cancel=None):
+            verifying.set()
+            assert release.wait(3)
+            return bmcctld.PowerCallResult.NOT_CONFIRMED
+
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=unconfirmed_power_off)
+        daemon.controller._verify_oper_status = MagicMock(
+            side_effect=blocked_verify)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "boot-delay-worker", 2))
+
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
+
+        assert verifying.is_set()
+        assert daemon.operation_runner.current is not None
+        assert daemon.operation_runner.current.thread.is_alive()
+        assert daemon.action_queue.empty()
+        daemon._rack_mgr_power_cmd_executed.assert_not_called()
+        daemon.critical_event_checker.has_any_critical_event.assert_not_called()
+        daemon.controller.init_host_state.assert_not_called()
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == "-"
+
+        release.set()
+        daemon.operation_runner.current.thread.join(1)
+        daemon.operation_runner.process_next(timeout=0)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+
+    def test_q_boot_delay_hands_off_reaped_worker_without_startup_tail(
+            self, chassis):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=2)
+        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=False)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(
+            return_value=False)
+        daemon.controller.init_host_state = MagicMock()
+
+        def unconfirmed_power_off(up):
+            assert up is False
+            chassis.switch_host._admin_state = up
+
+        chassis.switch_host.set_admin_state = MagicMock(
+            side_effect=unconfirmed_power_off)
+        daemon.controller._verify_oper_status = MagicMock(
+            return_value=bmcctld.PowerCallResult.NOT_CONFIRMED)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "boot-delay-reaped-worker", 2))
+
+        with patch('time.clock_gettime', return_value=0):
+            daemon._initial_power_on_sequence()
+
+        assert daemon.operation_runner.current is None
+        assert daemon.action_queue.empty()
+        daemon._rack_mgr_power_cmd_executed.assert_not_called()
+        daemon.critical_event_checker.has_any_critical_event.assert_not_called()
+        daemon.controller.init_host_state.assert_not_called()
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        state = dict(daemon.controller.host_state_table.get(
+            bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == \
+            bmcctld.SWITCH_HOST_POWERING_OFF
+        assert state[bmcctld.FIELD_OP_RESULT] == \
+            bmcctld.OP_RESULT_POWER_OFF_FAILED
+
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        retry = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "retry-after-unconfirmed-off", 2)
+        assert daemon.operation_runner._guard_should_skip(retry) is False
 
     def test_rack_mgr_power_off_during_boot_delay_skips_auto_power_on(self, chassis):
         """If Rack Manager POWER_OFF cmd executed during boot delay, automatic power-on is skipped."""
@@ -1487,6 +4247,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_rack_mgr_power_on_during_boot_delay_skips_auto_power_on(self, chassis):
@@ -1497,12 +4258,14 @@ class TestBmcctldDaemonInitialSequence:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
 
     def test_rack_mgr_power_cmd_executed_detects_done_power_off(self, chassis):
         """_rack_mgr_power_cmd_executed returns True when POWER_OFF is DONE in RACK_MANAGER_COMMAND."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         tbl.set("CMD_1", FieldValuePairs([
             (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
             (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
@@ -1513,7 +4276,8 @@ class TestBmcctldDaemonInitialSequence:
     def test_rack_mgr_power_cmd_executed_detects_in_progress_power_on(self, chassis):
         """_rack_mgr_power_cmd_executed returns True when POWER_ON is IN_PROGRESS."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         tbl.set("CMD_1", FieldValuePairs([
             (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_ON),
             (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_IN_PROGRESS),
@@ -1522,9 +4286,9 @@ class TestBmcctldDaemonInitialSequence:
             assert daemon._rack_mgr_power_cmd_executed() is True
 
     def test_rack_mgr_power_cmd_executed_ignores_power_cycle(self, chassis):
-        """_rack_mgr_power_cmd_executed returns False for POWER_CYCLE (not POWER_ON/OFF/GRACEFUL_SHUT)."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         tbl.set("CMD_1", FieldValuePairs([
             (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_CYCLE),
             (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
@@ -1535,7 +4299,8 @@ class TestBmcctldDaemonInitialSequence:
     def test_rack_mgr_power_cmd_executed_detects_graceful_shut(self, chassis):
         """_rack_mgr_power_cmd_executed returns True when GRACEFUL_SHUT is DONE."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         tbl.set("CMD_1", FieldValuePairs([
             (bmcctld.FIELD_COMMAND, bmcctld.CMD_GRACEFUL_SHUT),
             (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_DONE),
@@ -1543,10 +4308,27 @@ class TestBmcctldDaemonInitialSequence:
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             assert daemon._rack_mgr_power_cmd_executed() is True
 
+    @pytest.mark.parametrize("status", [
+        bmcctld.CMD_STATUS_IN_PROGRESS,
+        bmcctld.CMD_STATUS_DONE,
+    ])
+    def test_rack_mgr_power_cmd_executed_detects_graceful_restart(
+            self, chassis, status):
+        daemon = self._make_daemon(chassis)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl.set("CMD_1", FieldValuePairs([
+            (bmcctld.FIELD_COMMAND, bmcctld.CMD_GRACEFUL_RESTART),
+            (bmcctld.FIELD_STATUS, status),
+        ]))
+        with patch('bmcctld.swsscommon.Table', return_value=tbl):
+            assert daemon._rack_mgr_power_cmd_executed() is True
+
     def test_rack_mgr_power_cmd_executed_ignores_pending(self, chassis):
         """_rack_mgr_power_cmd_executed returns False when command is still PENDING."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         tbl.set("CMD_1", FieldValuePairs([
             (bmcctld.FIELD_COMMAND, bmcctld.CMD_POWER_OFF),
             (bmcctld.FIELD_STATUS, bmcctld.CMD_STATUS_PENDING),
@@ -1557,7 +4339,8 @@ class TestBmcctldDaemonInitialSequence:
     def test_rack_mgr_power_cmd_executed_empty_table(self, chassis):
         """_rack_mgr_power_cmd_executed returns False when no commands exist."""
         daemon = self._make_daemon(chassis)
-        tbl = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        tbl = Table(daemon._thread_database.connection("STATE_DB"),
+                    bmcctld.RACK_MANAGER_COMMAND_TABLE)
         with patch('bmcctld.swsscommon.Table', return_value=tbl):
             assert daemon._rack_mgr_power_cmd_executed() is False
 
@@ -1585,8 +4368,8 @@ class TestBmcctldDaemonInitialSequence:
         daemon._initial_power_on_sequence()
         # Boot delay is skipped → get_power_on_delay must NOT be called
         daemon.policy_reader.get_power_on_delay.assert_not_called()
-        # And we still proceeded to the power-on check
-        daemon.controller.power_on.assert_called_once()
+        item = _dequeue_item(daemon.action_queue)
+        assert item.action == bmcctld.ACTION_POWER_ON
 
     def test_reboot_cause_exception_falls_back_to_cold_boot(self, chassis):
         """If chassis.get_reboot_cause() raises, fall back to cold-boot behavior (apply delay)."""
@@ -1615,13 +4398,15 @@ class TestBmcctldDaemonRun:
         """Non-liquid-cooled + admin up: power_on is called immediately."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
-        daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
-        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=daemon.event_handler._subscription_ready.set)
         chassis.set_liquid_cooled(False)
         result = daemon.run()
         assert result is False
-        daemon.controller.power_on.assert_called_once()
+        item = _dequeue_item(daemon.action_queue)
+        assert item.action == bmcctld.ACTION_POWER_ON
+        assert item.event_desc == "STARTUP"
         daemon._run_action_loop.assert_called_once()
 
     def test_run_not_liquid_cooled_skips_power_on_when_admin_down(self, chassis):
@@ -1632,9 +4417,11 @@ class TestBmcctldDaemonRun:
             return_value=bmcctld.ADMIN_DOWN)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
-        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=daemon.event_handler._subscription_ready.set)
         chassis.set_liquid_cooled(False)
         daemon.run()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
         daemon._run_action_loop.assert_called_once()
 
@@ -1645,7 +4432,8 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon._initial_power_on_sequence = MagicMock()
-        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=daemon.event_handler._subscription_ready.set)
         chassis.set_liquid_cooled(False)
         daemon.run()
         daemon._initial_power_on_sequence.assert_not_called()
@@ -1659,11 +4447,13 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on = MagicMock()
         daemon.controller.init_host_state = MagicMock()
         daemon._run_action_loop = MagicMock()
-        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=daemon.event_handler._subscription_ready.set)
         chassis.set_liquid_cooled(True)
         result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_not_called()
+        assert daemon.action_queue.empty()
         daemon.controller.power_on.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
         daemon._run_action_loop.assert_called_once()
@@ -1681,6 +4471,7 @@ class TestBmcctldDaemonRun:
             call_order.append("seed")
 
         def track_event_loop():
+            daemon.event_handler._subscription_ready.set()
             call_order.append("event_loop")
 
         daemon.controller.init_host_state = MagicMock(side_effect=track_init)
@@ -1698,13 +4489,25 @@ class TestBmcctldDaemonRun:
         daemon = self._make_daemon(chassis)
         daemon._initial_power_on_sequence = MagicMock()
         daemon._run_action_loop = MagicMock()
-        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock(
+            side_effect=daemon.event_handler._subscription_ready.set)
         # Set stop_event so _run_action_loop returns without looping
         daemon._initial_power_on_sequence.side_effect = lambda: daemon.stop_event.set()
         chassis.set_liquid_cooled(True)
         result = daemon.run()
         assert result is False
         daemon._initial_power_on_sequence.assert_called_once()
+
+    def test_run_propagates_event_subscription_setup_error(self, chassis):
+        daemon = self._make_daemon(chassis)
+        daemon.event_handler._create_event_subscriptions = MagicMock(
+            side_effect=RuntimeError("subscription setup failed"))
+        daemon._run_action_loop = MagicMock()
+
+        with pytest.raises(RuntimeError, match="subscription setup failed"):
+            daemon.run()
+
+        daemon._run_action_loop.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -1750,7 +4553,7 @@ class TestChassisModuleInfo:
 
     def test_power_on_mirrors_oper_status_online(self, chassis, controller):
         """power_on updates oper_status=ONLINE in CHASSIS_MODULE_TABLE."""
-        controller.power_on()
+        controller.power_on(_make_operation(bmcctld.ACTION_POWER_ON))
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])
@@ -1759,7 +4562,7 @@ class TestChassisModuleInfo:
     def test_power_off_mirrors_oper_status_offline(self, chassis, controller):
         """power_off updates oper_status=OFFLINE in CHASSIS_MODULE_TABLE."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
-        controller.power_off()
+        controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         assert result[0] is True
         info = dict(result[1])
@@ -1779,7 +4582,7 @@ class TestChassisModuleInfo:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         controller.initialize_chassis_module(bmcctld.ADMIN_UP)
         # Now power off — oper_status should update but name/serial/etc. must survive
-        controller.power_off()
+        controller.power_off(_make_operation(bmcctld.ACTION_POWER_OFF))
         result = controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
         info = dict(result[1])
         assert info[bmcctld.CHASSIS_MODULE_INFO_NAME_FIELD] == "SWITCH-HOST"
@@ -1916,3 +4719,336 @@ class TestEventLogger:
         """_daemon_logger is syslog-only; _event_logger keeps the host file."""
         assert bmcctld._daemon_logger._file_logger.name.endswith("syslog_only")
         assert bmcctld._event_logger._file_logger.name.endswith("event_log")
+
+
+class TestDatabaseThreadOwnership:
+
+    def test_subscription_wait_returns_when_daemon_stops(self, event_handler):
+        event_handler.stop_event.clear()
+        result = []
+        waiter = threading.Thread(
+            target=lambda: result.append(
+                event_handler.wait_for_event_subscriptions()))
+        waiter.start()
+        event_handler.stop_event.set()
+        waiter.join(2)
+
+        assert not waiter.is_alive()
+        assert result == [False]
+
+    def test_each_execution_thread_owns_its_database_objects(
+            self, monkeypatch, chassis):
+        import weakref
+
+        store = {}
+        created = []
+        connection_records = []
+        connection_sequence = itertools.count()
+        errors = []
+        admission_thread_name = threading.current_thread().name
+        release = threading.Event()
+        event_write_started = threading.Event()
+        worker_write_started = threading.Event()
+        stop_event = None
+
+        def table_data(db_name, table_name):
+            return store.setdefault((db_name, table_name), {})
+
+        table_data("STATE_DB", bmcctld.RACK_MANAGER_COMMAND_TABLE)["CMD_THREAD"] = {
+            bmcctld.FIELD_COMMAND: bmcctld.CMD_POWER_OFF,
+            bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_PENDING,
+        }
+        table_data("CONFIG_DB", bmcctld.CHASSIS_MODULE_TABLE)[
+            bmcctld.SWITCH_HOST_MODULE_KEY] = {
+                bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP,
+                bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "10",
+            }
+        table_data("STATE_DB", bmcctld.SYSTEM_LEAK_STATUS_TABLE)[
+            bmcctld.SYSTEM_LEAK_STATUS_KEY] = {
+                bmcctld.FIELD_DEVICE_LEAK_STATUS: "NORMAL",
+            }
+
+        class OwnedObject:
+            def __init__(self, kind, retain=True):
+                self.kind = kind
+                self.owner_id = threading.get_ident()
+                self.owner_name = threading.current_thread().name
+                self._active = threading.Lock()
+                if retain:
+                    created.append(self)
+
+            def check_owner(self):
+                assert threading.get_ident() == self.owner_id, (
+                    "{} created by {} used by {}".format(
+                        self.kind, self.owner_name,
+                        threading.current_thread().name))
+
+            def enter(self):
+                self.check_owner()
+                assert self._active.acquire(False), (
+                    "overlapping use of {} owned by {}".format(
+                        self.kind, self.owner_name))
+
+            def leave(self):
+                self._active.release()
+
+        class Connection(OwnedObject):
+            def __init__(self, db_name):
+                self.db_name = db_name
+                self.token = next(connection_sequence)
+                super().__init__("{} connector".format(db_name), retain=False)
+                connection_records.append(
+                    (self.token, self.db_name, self.owner_name))
+
+        class StrictTable(OwnedObject):
+            def __init__(self, db, table_name, kind="table", retain_db=True):
+                db.check_owner()
+                self._db = db if retain_db else weakref.ref(db)
+                self.connector_id = db.token
+                self.table_name = table_name
+                self._waited = False
+                self._active_db = None
+                super().__init__("{} {}".format(table_name, kind))
+
+            def connection(self):
+                db = self._db() if isinstance(
+                    self._db, weakref.ReferenceType) else self._db
+                assert db is not None, (
+                    "{} lost its source connector".format(self.kind))
+                return db
+
+            def enter(self):
+                db = self.connection()
+                db.enter()
+                try:
+                    super().enter()
+                except Exception:
+                    db.leave()
+                    raise
+                self._active_db = db
+
+            def leave(self):
+                super().leave()
+                self._active_db.leave()
+                self._active_db = None
+
+            def _maybe_wait(self, method):
+                if self._waited or method != "set":
+                    return
+                role = threading.current_thread().name
+                if role == "db-owner-event" and \
+                        self.table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE:
+                    started = event_write_started
+                elif role == "db-owner-worker" and \
+                        self.table_name == bmcctld.HOST_STATE_TABLE:
+                    started = worker_write_started
+                else:
+                    return
+                self._waited = True
+                started.set()
+                assert release.wait(3), "timed out waiting for concurrent DB access"
+
+            def set(self, key, fvs):
+                self.enter()
+                try:
+                    self._maybe_wait("set")
+                    values = fvs.fv_dict if hasattr(fvs, "fv_dict") else dict(fvs)
+                    table_data(self.connection().db_name, self.table_name).setdefault(
+                        key, {}).update(values)
+                finally:
+                    self.leave()
+
+            def get(self, key):
+                self.enter()
+                try:
+                    value = table_data(
+                        self.connection().db_name, self.table_name).get(key)
+                    return [value is not None, list(value.items()) if value else []]
+                finally:
+                    self.leave()
+
+            def getKeys(self):
+                self.enter()
+                try:
+                    return list(table_data(
+                        self.connection().db_name, self.table_name))
+                finally:
+                    self.leave()
+
+        class StrictSubscriber(StrictTable):
+            def __init__(self, db, table_name):
+                super().__init__(
+                    db, table_name, "subscriber", retain_db=False)
+
+            def getFd(self):
+                self.check_owner()
+                return id(self)
+
+            def pop(self):
+                self.enter()
+                try:
+                    rows = table_data(
+                        self.connection().db_name, self.table_name)
+                    key = next(iter(rows))
+                    return key, "SET", list(rows[key].items())
+                finally:
+                    self.leave()
+
+        class StrictSelect(OwnedObject):
+            OBJECT = 0
+            TIMEOUT = 1
+
+            def __init__(self):
+                self.selectables = []
+                self.event_index = 0
+                super().__init__("select")
+
+            def addSelectable(self, selectable):
+                self.enter()
+                try:
+                    selectable.check_owner()
+                    self.selectables.append(selectable)
+                finally:
+                    self.leave()
+
+            def select(self, timeout=-1, interrupt_on_signal=False):
+                self.enter()
+                try:
+                    event_tables = (
+                        bmcctld.RACK_MANAGER_COMMAND_TABLE,
+                        bmcctld.CHASSIS_MODULE_TABLE,
+                    )
+                    if self.event_index == len(event_tables):
+                        return self.TIMEOUT, None
+                    table_name = event_tables[self.event_index]
+                    self.event_index += 1
+                    selected = next(
+                        item for item in self.selectables
+                        if item.table_name == table_name)
+                    if self.event_index == len(event_tables):
+                        stop_event.set()
+                    return self.OBJECT, SelectedObject(selected)
+                finally:
+                    self.leave()
+
+        class SelectedObject(OwnedObject):
+            def __init__(self, subscriber):
+                self.fd = subscriber.getFd()
+                super().__init__("selected object")
+
+            def getFd(self):
+                self.check_owner()
+                return self.fd
+
+        monkeypatch.setattr(
+            bmcctld.daemon_base, "db_connect", lambda db_name: Connection(db_name))
+        monkeypatch.setattr(
+            bmcctld.swsscommon, "Table",
+            lambda db, table_name: StrictTable(db, table_name))
+        monkeypatch.setattr(
+            bmcctld.swsscommon, "SubscriberStateTable", StrictSubscriber)
+        monkeypatch.setattr(bmcctld.swsscommon, "Select", StrictSelect)
+
+        with patch('sonic_platform.platform.Platform') as mock_platform:
+            mock_platform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+        controller = daemon.controller
+        policy_reader = daemon.policy_reader
+        critical_checker = daemon.critical_event_checker
+        action_queue = daemon.action_queue
+        event_handler = daemon.event_handler
+        stop_event = daemon.stop_event
+
+        def capture_errors(function):
+            try:
+                function()
+            except Exception as error:
+                errors.append((threading.current_thread().name, error))
+
+        def event_access():
+            event_handler.run_event_loop()
+            controller.get_db_device_status()
+            policy_reader.get_graceful_shutdown_timeout()
+            critical_checker.get_system_leak_status()
+
+        def worker_access():
+            controller._update_host_state(
+                bmcctld.SWITCH_HOST_POWERING_OFF,
+                bmcctld.SWITCH_HOST_OFFLINE)
+            policy_reader.get_graceful_shutdown_timeout()
+            critical_checker.get_system_leak_status()
+
+        event_thread = threading.Thread(
+            target=capture_errors, args=(event_access,), name="db-owner-event")
+        worker_thread = threading.Thread(
+            target=capture_errors, args=(worker_access,), name="db-owner-worker")
+        event_thread.start()
+        worker_thread.start()
+
+        both_started = event_write_started.wait(2) and worker_write_started.wait(2)
+        if both_started:
+            controller.write_operation_start(TEST_UUID4, "test")
+            policy_reader.get_graceful_shutdown_timeout()
+            critical_checker.get_system_leak_status()
+            event_handler._set_cmd_request_id("CMD_THREAD", TEST_UUID4)
+        release.set()
+        event_thread.join(3)
+        worker_thread.join(3)
+
+        assert both_started, errors
+        assert not event_thread.is_alive()
+        assert not worker_thread.is_alive()
+        assert errors == []
+
+        item = _dequeue_item(action_queue)
+        item.on_complete(True, "")
+        command = table_data(
+            "STATE_DB", bmcctld.RACK_MANAGER_COMMAND_TABLE)["CMD_THREAD"]
+        assert command[bmcctld.FIELD_REQUEST_ID] == TEST_UUID4
+        assert command[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_DONE
+
+        for role in (
+                admission_thread_name, "db-owner-event", "db-owner-worker"):
+            assert {
+                db_name for _, db_name, owner_name in connection_records
+                if owner_name == role
+            } == {
+                "STATE_DB", "CONFIG_DB"}
+
+        role_connector_ids = {
+            role: {
+                object_id for object_id, _, owner_name in connection_records
+                if owner_name == role
+            }
+            for role in (
+                admission_thread_name, "db-owner-event", "db-owner-worker")
+        }
+        assert role_connector_ids[admission_thread_name].isdisjoint(
+            role_connector_ids["db-owner-event"])
+        assert role_connector_ids[admission_thread_name].isdisjoint(
+            role_connector_ids["db-owner-worker"])
+        assert role_connector_ids["db-owner-event"].isdisjoint(
+            role_connector_ids["db-owner-worker"])
+
+        event_command_tables = [
+            obj for obj in created
+            if isinstance(obj, StrictTable) and
+            not isinstance(obj, StrictSubscriber) and
+            obj.owner_name == "db-owner-event" and
+            obj.table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE]
+        admission_command_tables = [
+            obj for obj in created
+            if isinstance(obj, StrictTable) and
+            not isinstance(obj, StrictSubscriber) and
+            obj.owner_name == admission_thread_name and
+            obj.table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE]
+        command_subscribers = [
+            obj for obj in created
+            if isinstance(obj, StrictSubscriber) and
+            obj.table_name == bmcctld.RACK_MANAGER_COMMAND_TABLE]
+        assert len(event_command_tables) == 1
+        assert len(admission_command_tables) == 1
+        assert len(command_subscribers) == 1
+        assert event_command_tables[0] is not admission_command_tables[0]
+        assert event_command_tables[0].connector_id != \
+            command_subscribers[0].connector_id
