@@ -1403,8 +1403,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
             # NPU kernel crash recovery: unconditionally power-cycle
             # admin-up DPUs to guarantee a known-good starting state.
             admin_status = self.get_module_admin_status(name)
-            if admin_status == 'down':
-                # Admin-down DPU; leave powered off.
+            if admin_status != 'up':
+                # Not admin-up DPU; leave powered off.
                 continue
             if not self._is_auto_recovery_enabled():
                 self.dpu_recovery_state[name]['state'] = DPU_STATE_MANUAL_INTERVENTION
@@ -1458,11 +1458,11 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
 
         all_up = (states.mp_state == 'up' and states.cp_state == 'up' and states.dp_state == 'up')
 
-        # DPU is administratively down — no automatic recovery; just
+        # DPU is not administratively up — no automatic recovery; just
         # reflect the offline state and wait for `module startup`.
         # This check must precede the Unrecoverable check so that an
         # operator can shut down an unrecoverable DPU and then restart it.
-        if admin_status == 'down':
+        if admin_status != 'up':
             if current_state != DPU_STATE_ADMIN_DOWN:
                 if current_state == DPU_STATE_UNRECOVERABLE:
                     recovery[WAS_UNRECOVERABLE_KEY] = True
