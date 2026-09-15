@@ -105,10 +105,30 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 #
 # Helper functions =============================================================
 #
+def _wrapper_get_port_device(physical_port):
+    """The device at this physical port, CPO or pluggable.
+
+    get_sfp() answers for pluggable ports only, and a CPO port is not one, so
+    the wrappers below would see every CPO port as absent if they asked it
+    alone. Ordered like common.get_port_device(): a CPO port is served without
+    consulting get_sfp() at all.
+    """
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    return platform_chassis.get_sfp(physical_port)
+
+
 def _wrapper_get_transceiver_info(physical_port):
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
+            device = _wrapper_get_port_device(physical_port)
+            if device is None:
+                return None
+            return device.get_transceiver_info()
         except NotImplementedError:
             pass
         except Exception as e:
@@ -135,7 +155,7 @@ def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
 def _wrapper_get_sfp_type(physical_port):
     if platform_chassis:
         try:
-            sfp = platform_chassis.get_sfp(physical_port)
+            sfp = _wrapper_get_port_device(physical_port)
         except (NotImplementedError, AttributeError):
             return None
         try:
