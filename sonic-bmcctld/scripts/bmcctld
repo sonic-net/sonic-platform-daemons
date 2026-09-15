@@ -838,7 +838,7 @@ class SwitchHostController(EventLogger):
         """Populate CHASSIS_MODULE|SWITCH-HOST in both CONFIG_DB and STATE_DB at daemon startup.
 
         CONFIG_DB|CHASSIS_MODULE|SWITCH-HOST is seeded with the supplied admin_status
-        and default timings (power_on_delay=0, graceful_shutdown_timeout=0) only when
+        and default timings only when
         no entry exists, so any operator override persisted from a prior boot is preserved.
         STATE_DB|CHASSIS_MODULE_TABLE|SWITCH-HOST is always (re)populated with module
         identity, current oper_status, and the supplied admin_status.
@@ -922,7 +922,7 @@ class PolicyReader(EventLogger):
         return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, default)
 
     def get_power_on_delay(self):
-        """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
+        """Return the configured power_on_delay in seconds, or the default delay."""
         raw = self._get_chassis_module_entry().get(FIELD_POWER_ON_DELAY)
         if raw is not None:
             try:
@@ -1169,8 +1169,6 @@ class GracefulShutdownHandler(EventLogger):
                         requester.close()
                     except GnoiRpcError as e:
                         self.log_warning("GNOI channel close failed: {}".format(str(e)))
-                        if reason is None and not graceful:
-                            reason = OP_REASON_RPC_FAILURE
 
         operation.leg_graceful = graceful
         operation.leg_reason = "-" if graceful else reason
@@ -1390,6 +1388,19 @@ class BmcEventHandler(EventLogger):
         self.log_notice("Rack Manager command: key={} command={}".format(key, command))
         self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
 
+        action_map = {
+            CMD_POWER_OFF:    ACTION_POWER_OFF,
+            CMD_GRACEFUL_SHUT: ACTION_GRACEFUL_SHUTDOWN,
+            CMD_GRACEFUL_RESTART: ACTION_GRACEFUL_RESTART,
+            CMD_POWER_ON:    ACTION_POWER_ON,
+            CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
+        }
+        if command not in action_map:
+            self._event_log.log_warning(
+                "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
+            self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
+            return
+
         if command in (CMD_POWER_ON, CMD_POWER_CYCLE):
             if self.critical_event_checker.has_any_critical_event():
                 self._event_log.log_warning(
@@ -1398,23 +1409,7 @@ class BmcEventHandler(EventLogger):
                 self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
                 return
 
-        elif command not in (
-                CMD_POWER_OFF, CMD_GRACEFUL_SHUT,
-                CMD_GRACEFUL_RESTART, CMD_POWER_CYCLE):
-            self._event_log.log_warning(
-                "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
-            self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
-            return
-
-        action_map = {
-            CMD_POWER_OFF:    ACTION_POWER_OFF,
-            CMD_GRACEFUL_SHUT: ACTION_GRACEFUL_SHUTDOWN,
-            CMD_GRACEFUL_RESTART: ACTION_GRACEFUL_RESTART,
-            CMD_POWER_ON:    ACTION_POWER_ON,
-            CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
-        }
-
-        def on_complete(success, detail="", cmd_key=key, cmd=command):
+        def on_complete(success, detail="", cmd_key=key):
             self._set_cmd_status(cmd_key,
                                  CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
                                  "SUCCESS" if success else (detail or "ERROR"))
@@ -2041,9 +2036,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
           1. Check CHASSIS_MODULE admin_status for SWITCH-HOST. If 'down' (the default),
              Switch-Host stays powered off — exit immediately. The operator must run
              'config chassis modules startup SWITCH-HOST' to bring it up.
-          2. Sleep SWITCH_HOST_POWER_ON_DELAY seconds to allow Rack Manager to come
-             up and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
-             While sleeping, keep draining the action_queue so Rack Manager commands
+          2. On a cold boot, wait for the configured power-on delay minus system
+             uptime, allowing Rack Manager to start and verify liquid flow.
+             While waiting, keep draining the action_queue so Rack Manager commands
              (e.g. POWER_OFF) arriving during the delay are acted on immediately.
           3. After the delay, check if Rack Manager issued POWER_ON, POWER_OFF,
              GRACEFUL_SHUT, or GRACEFUL_RESTART (CMD_STATUS_IN_PROGRESS or DONE

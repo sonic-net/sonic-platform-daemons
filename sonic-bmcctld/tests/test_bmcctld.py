@@ -151,8 +151,6 @@ def policy_reader():
 @pytest.fixture
 def critical_event_checker(policy_reader):
     lc = bmcctld.CriticalEventChecker(policy_reader)
-    lc._system_leak_table = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
-    lc._rack_alert_table = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
     return lc
 
 
@@ -1801,13 +1799,59 @@ class TestBmcEventHandlerRackMgrCommands:
         assert event_handler.action_queue.empty()
 
     def test_already_processed_command_is_skipped(self, event_handler):
+        event_handler._set_cmd_status = MagicMock()
         event_handler._handle_rack_mgr_command(
             "CMD_5", self._cmd_fvs(bmcctld.CMD_POWER_ON, bmcctld.CMD_STATUS_DONE))
         assert event_handler.action_queue.empty()
+        event_handler._set_cmd_status.assert_not_called()
 
     def test_unknown_command_is_logged(self, event_handler):
+        event_handler._set_cmd_status = MagicMock(wraps=event_handler._set_cmd_status)
         event_handler._handle_rack_mgr_command("CMD_6", self._cmd_fvs("INVALID_CMD"))
         assert event_handler.action_queue.empty()
+        assert event_handler._set_cmd_status.call_args_list == [
+            call("CMD_6", bmcctld.CMD_STATUS_IN_PROGRESS),
+            call("CMD_6", bmcctld.CMD_STATUS_FAILED, "UNKNOWN_COMMAND"),
+        ]
+
+    def test_command_callbacks_preserve_their_own_rows(self, event_handler):
+        commands = [
+            (bmcctld.CMD_POWER_ON, bmcctld.ACTION_POWER_ON, 5),
+            (bmcctld.CMD_POWER_OFF, bmcctld.ACTION_POWER_OFF, 2),
+            (bmcctld.CMD_POWER_CYCLE, bmcctld.ACTION_POWER_CYCLE, 4),
+            (bmcctld.CMD_GRACEFUL_SHUT, bmcctld.ACTION_GRACEFUL_SHUTDOWN, 3),
+            (bmcctld.CMD_GRACEFUL_RESTART, bmcctld.ACTION_GRACEFUL_RESTART, 4),
+        ]
+        leak_check = MagicMock(return_value=False)
+        event_handler.critical_event_checker.has_any_critical_event = leak_check
+        table = event_handler._thread_database.table(
+            "STATE_DB", bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        callbacks = []
+        for index, (command, action, priority) in enumerate(commands):
+            key = "CMD_{}".format(index)
+            fields = self._cmd_fvs(command)
+            fields["requester"] = "test-{}".format(index)
+            fields[bmcctld.FIELD_REQUEST_ID] = "request-{}".format(index)
+            table.set(key, FieldValuePairs(list(fields.items())))
+            event_handler._handle_rack_mgr_command(key, fields)
+            item = _dequeue_item(event_handler.action_queue)
+            assert (item.action, item.priority, item.rack_cmd_key) == (action, priority, key)
+            assert item.event_desc == "RACK_MGR_CMD:" + command
+            assert dict(table.get(key)[1])[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_IN_PROGRESS
+            callbacks.append((item.on_complete, key, fields, index))
+        assert leak_check.call_count == 2
+
+        for callback, key, fields, index in reversed(callbacks):
+            success = index % 2 == 0
+            detail = "BUSY" if index == 1 else ""
+            callback(success, detail)
+            row = dict(table.get(key)[1])
+            assert row[bmcctld.FIELD_STATUS] == (
+                bmcctld.CMD_STATUS_DONE if success else bmcctld.CMD_STATUS_FAILED)
+            assert row[bmcctld.FIELD_RESULT] == (
+                "SUCCESS" if success else (detail or "ERROR"))
+            for field in (bmcctld.FIELD_COMMAND, bmcctld.FIELD_REQUEST_ID, "requester"):
+                assert row[field] == fields[field]
 
     def test_q_graceful_restart_command_is_admitted_without_early_leak_gate(
             self, event_handler):
@@ -3448,6 +3492,56 @@ class TestWorkerExceptionRecovery:
             platform.return_value.get_chassis.return_value = chassis
             daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
         return daemon, daemon.operation_runner
+
+    @pytest.mark.parametrize("action", [
+        bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.ACTION_GRACEFUL_RESTART])
+    @pytest.mark.parametrize("scenario", ["graceful", "rpc_failure", "deadline", "classifier_error"])
+    @pytest.mark.parametrize("close_error", [False, True])
+    def test_channel_close_preserves_worker_outcome(self, chassis, action, scenario, close_error):
+        daemon, runner = self._make_runner(chassis)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        chassis.switch_host.set_admin_state = MagicMock(wraps=chassis.switch_host.set_admin_state)
+        chassis.switch_host.do_power_cycle = MagicMock()
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        daemon.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=1)
+        operation = _make_operation(action)
+        clock = FakeClock()
+        operation.cancel.wait = MagicMock(side_effect=lambda delay: clock.advance(delay) or False)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "done [bmc-req:{}]".format(operation.request_id), active=scenario == "deadline")
+        if scenario == "rpc_failure":
+            requester.poll_status.side_effect = bmcctld.GnoiRpcError("poll failed")
+        if close_error:
+            requester.close.side_effect = bmcctld.GnoiRpcError("close failed")
+        daemon.gnoi_requester_factory = MagicMock(return_value=requester)
+
+        with patch('bmcctld.time.monotonic', side_effect=clock), \
+                patch('bmcctld.classify_report', wraps=bmcctld.classify_report) as classify:
+            if scenario == "classifier_error":
+                classify.side_effect = RuntimeError("classification failed")
+            runner._run_worker(operation)
+
+        restart = action == bmcctld.ACTION_GRACEFUL_RESTART
+        restart_failed = restart and scenario == "classifier_error"
+        reason = {
+            "graceful": "-", "rpc_failure": bmcctld.OP_REASON_RPC_FAILURE,
+            "deadline": bmcctld.OP_REASON_DEADLINE,
+            "classifier_error": bmcctld.OP_REASON_UNCLASSIFIED,
+        }[scenario]
+        result = (bmcctld.OP_RESULT_POWER_ON_FAILED if restart_failed else
+                  bmcctld.OP_RESULT_SUCCESS_GRACEFUL if scenario == "graceful" else
+                  bmcctld.OP_RESULT_SUCCESS_FORCED)
+        assert operation.outcome == (result, reason, not restart_failed)
+        assert chassis.switch_host.set_admin_state.call_args_list == (
+            [call(False), call(True)] if restart and not restart_failed else [call(False)])
+        chassis.switch_host.do_power_cycle.assert_not_called()
+        daemon.gnoi_requester_factory.assert_called_once()
+        requester.open.assert_called_once()
+        requester.send_halt.assert_called_once()
+        requester.poll_status.assert_called_once()
+        requester.close.assert_called_once()
+        assert not operation.cancel.is_set()
 
     @pytest.mark.parametrize(
         "command, action, expected_outcome, expected_cmd_status, expected_state",
