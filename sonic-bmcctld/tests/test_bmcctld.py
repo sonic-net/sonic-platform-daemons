@@ -4394,6 +4394,236 @@ class TestBmcctldDaemonRun:
                 return_value=bmcctld.ADMIN_UP)
         return daemon
 
+    @pytest.fixture
+    def lifecycle(self, chassis, monkeypatch):
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        chassis.switch_host.set_admin_state = MagicMock()
+        chassis.switch_host.do_power_cycle = MagicMock()
+        daemon.controller.write_operation_result = MagicMock(
+            wraps=daemon.controller.write_operation_result)
+        daemon._run_action_loop = MagicMock(wraps=daemon._run_action_loop)
+        event_thread = MagicMock(name="event_thread")
+        event_thread.start.side_effect = daemon.event_handler._subscription_ready.set
+        worker = MagicMock(name="operation_thread")
+        worker.is_alive.return_value = True
+        worker.start.side_effect = daemon.stop_event.set
+
+        def join_worker(timeout):
+            assert daemon.operation_runner.current.cancel.is_set()
+
+        def join_events(timeout):
+            assert daemon.stop_event.is_set()
+            operation = daemon.operation_runner.current
+            if operation is not None and worker.is_alive():
+                assert operation.cancel.is_set()
+
+        worker.join.side_effect = join_worker
+        event_thread.join.side_effect = join_events
+
+        def make_thread(*, target, name, daemon, args=()):
+            if name == "bmcctld-events":
+                return event_thread
+            assert name == "bmcctld-op"
+            return worker
+
+        monkeypatch.setattr(bmcctld.threading, "Thread", make_thread)
+        monkeypatch.setattr(bmcctld, "BmcctldDaemon", MagicMock(return_value=daemon))
+        yield daemon, event_thread, worker
+        chassis.switch_host.set_admin_state.assert_not_called()
+        chassis.switch_host.do_power_cycle.assert_not_called()
+
+    @pytest.mark.parametrize("completion", ["alive", "before_stop", "worker_join", "event_join"])
+    def test_main_shutdown_joins_worker_once(self, lifecycle, completion):
+        daemon, event_thread, worker = lifecycle
+        first_callback, joined_callback = MagicMock(), MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "test", 4,
+            on_complete=first_callback))
+        operation = None
+
+        def finish():
+            worker.is_alive.return_value = False
+            operation.outcome = (bmcctld.OP_RESULT_PREEMPTED, "-", False)
+
+        def start():
+            nonlocal operation
+            operation = daemon.operation_runner.current
+            operation.joined_callbacks.append((joined_callback, None))
+            daemon.stop_event.set()
+            if completion == "before_stop":
+                finish()
+
+        worker.start.side_effect = start
+        if completion == "worker_join":
+            def finish_on_worker_join(timeout):
+                assert operation.cancel.is_set()
+                finish()
+            worker.join.side_effect = finish_on_worker_join
+        elif completion == "event_join":
+            def finish_on_event_join(timeout):
+                assert daemon.stop_event.is_set()
+                assert operation.cancel.is_set()
+                finish()
+            event_thread.join.side_effect = finish_on_event_join
+
+        assert bmcctld.main() == bmcctld.exit_code
+
+        worker.start.assert_called_once()
+        assert worker.join.call_args_list == (
+            [] if completion == "before_stop" else [call(timeout=5)])
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon.action_queue.empty()
+        if completion in ("before_stop", "worker_join"):
+            assert daemon.operation_runner.current is None
+            daemon.controller.write_operation_result.assert_called_once_with(
+                bmcctld.OP_RESULT_PREEMPTED, "-")
+            for callback in (first_callback, joined_callback):
+                callback.assert_called_once_with(False, bmcctld.OP_RESULT_PREEMPTED)
+            daemon.operation_runner.stop()
+            daemon.controller.write_operation_result.assert_called_once()
+            first_callback.assert_called_once()
+            joined_callback.assert_called_once()
+        else:
+            assert daemon.operation_runner.current is operation
+            daemon.controller.write_operation_result.assert_not_called()
+            first_callback.assert_not_called()
+            joined_callback.assert_not_called()
+            state = dict(daemon.controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+            assert state[bmcctld.FIELD_OP_RESULT] == "-"
+
+    @pytest.mark.parametrize("fail_after_admission", [False, True])
+    def test_startup_drain_cleans_up_before_event_join(
+            self, lifecycle, chassis, monkeypatch, fail_after_admission):
+        daemon, event_thread, worker = lifecycle
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        chassis.set_liquid_cooled(True)
+        chassis.set_reboot_cause(bmcctld.ChassisBase.REBOOT_CAUSE_POWER_LOSS)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=20)
+        monkeypatch.setattr(bmcctld.time, "clock_gettime", lambda clock: 10)
+        monkeypatch.setattr(bmcctld.time, "monotonic", lambda: 0)
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "test", 4))
+        process_next = daemon.operation_runner.process_next
+
+        def drain(timeout):
+            assert process_next(timeout=0)
+            worker.start.assert_called_once()
+            if fail_after_admission:
+                raise RuntimeError("drain failed")
+            return True
+
+        daemon.operation_runner.process_next = MagicMock(side_effect=drain)
+        if fail_after_admission:
+            with pytest.raises(RuntimeError, match="drain failed"):
+                bmcctld.main()
+        else:
+            assert bmcctld.main() == bmcctld.exit_code
+        daemon.policy_reader.get_power_on_delay.assert_called_once()
+        daemon.operation_runner.process_next.assert_called_once_with(timeout=1.0)
+        daemon._run_action_loop.assert_not_called()
+        worker.join.assert_called_once_with(timeout=5)
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon.operation_runner.current.cancel.is_set()
+        assert daemon.action_queue.empty()
+        daemon.controller.write_operation_result.assert_not_called()
+
+    def test_action_loop_error_after_admission_still_cleans_up(self, lifecycle):
+        daemon, event_thread, worker = lifecycle
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "test", 4))
+        process_next = daemon.operation_runner.process_next
+
+        def admit_then_fail(timeout):
+            assert process_next(timeout=0)
+            worker.start.assert_called_once()
+            raise RuntimeError("action loop failed")
+
+        daemon.operation_runner.process_next = MagicMock(side_effect=admit_then_fail)
+        with pytest.raises(RuntimeError, match="action loop failed"):
+            bmcctld.main()
+        daemon._run_action_loop.assert_called_once()
+        worker.join.assert_called_once_with(timeout=5)
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon.stop_event.is_set()
+        assert daemon.operation_runner.current.cancel.is_set()
+        assert daemon.action_queue.empty()
+        daemon.controller.write_operation_result.assert_not_called()
+
+    def test_stop_time_record_failure_still_joins_event_thread(self, lifecycle):
+        daemon, event_thread, worker = lifecycle
+        callback, joined_callback = MagicMock(), MagicMock()
+        daemon.operation_runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "test", 4, on_complete=callback))
+
+        def finish(timeout):
+            operation = daemon.operation_runner.current
+            assert operation.cancel.is_set()
+            operation.joined_callbacks.append((joined_callback, None))
+            operation.outcome = (bmcctld.OP_RESULT_PREEMPTED, "-", False)
+            worker.is_alive.return_value = False
+
+        worker.join.side_effect = finish
+        daemon.controller.write_operation_result.side_effect = RuntimeError("record failed")
+        with pytest.raises(RuntimeError, match="record failed"):
+            bmcctld.main()
+        worker.join.assert_called_once_with(timeout=5)
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon.stop_event.is_set()
+        assert daemon.operation_runner.current is not None
+        daemon.controller.write_operation_result.assert_called_once_with(
+            bmcctld.OP_RESULT_PREEMPTED, "-")
+        callback.assert_not_called()
+        joined_callback.assert_not_called()
+
+    @pytest.mark.parametrize("subscription_error", [False, True])
+    def test_subscription_exit_cleans_up_without_worker(self, lifecycle, subscription_error):
+        daemon, event_thread, worker = lifecycle
+        wait = MagicMock(return_value=False)
+        if subscription_error:
+            wait.side_effect = RuntimeError("subscription failed")
+        daemon.event_handler.wait_for_event_subscriptions = wait
+        if subscription_error:
+            with pytest.raises(RuntimeError, match="subscription failed"):
+                bmcctld.main()
+        else:
+            assert bmcctld.main() == bmcctld.exit_code
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon.stop_event.is_set()
+        assert daemon.operation_runner.current is None
+        worker.start.assert_not_called()
+        worker.join.assert_not_called()
+        daemon._run_action_loop.assert_not_called()
+        daemon.controller.write_operation_result.assert_not_called()
+
+    @pytest.mark.parametrize("failure", ["init", "seed", "thread_start"])
+    def test_failure_before_event_start_has_no_worker_or_join(self, lifecycle, failure):
+        daemon, event_thread, worker = lifecycle
+        target = {
+            "init": (daemon.controller, "init_host_state"),
+            "seed": (daemon.event_handler, "seed_chassis_module_admin_status"),
+            "thread_start": (event_thread, "start"),
+        }[failure]
+        with patch.object(*target, side_effect=RuntimeError("startup failed")):
+            with pytest.raises(RuntimeError, match="startup failed"):
+                bmcctld.main()
+        event_thread.join.assert_not_called()
+        worker.start.assert_not_called()
+        worker.join.assert_not_called()
+        assert daemon.operation_runner.current is None
+        daemon._run_action_loop.assert_not_called()
+        daemon.controller.write_operation_result.assert_not_called()
+
+    def test_main_stop_without_current_worker(self, lifecycle):
+        daemon, event_thread, worker = lifecycle
+        daemon.stop_event.set()
+        assert bmcctld.main() == bmcctld.exit_code
+        event_thread.join.assert_called_once_with(timeout=5)
+        worker.start.assert_not_called()
+        worker.join.assert_not_called()
+        assert daemon.operation_runner.current is None
+        daemon.controller.write_operation_result.assert_not_called()
+
     def test_run_not_liquid_cooled_powers_on_immediately(self, chassis):
         """Non-liquid-cooled + admin up: power_on is called immediately."""
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)

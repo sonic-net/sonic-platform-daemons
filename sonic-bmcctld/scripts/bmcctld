@@ -2147,7 +2147,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self.log_info("Entering action processing loop")
         while not self.stop_event.is_set():
             self.operation_runner.process_next(timeout=1.0)
-        self.operation_runner.stop()
 
     def run(self):
         """
@@ -2183,42 +2182,45 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             name="bmcctld-events",
         )
         event_thread.start()
-        if not self.event_handler.wait_for_event_subscriptions():
-            event_thread.join(timeout=5)
-            return False
-
-        # If Switch-Host is already ONLINE (daemon restart), skip the boot
-        # sequence entirely and go straight to the action loop.
-        if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
-                                       "skipping boot sequence")
-        elif not self.chassis.is_liquid_cooled():
-            admin_status = self.policy_reader.get_switch_host_admin_status()
-            if admin_status != ADMIN_UP:
-                self._event_log.log_notice(
-                    "STARTUP: SWITCH-HOST admin_status='{}'; "
-                    "Switch-Host will remain powered off. "
-                    "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
-                        admin_status))
-            else:
-                self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
-                                           "enqueueing power_on, no additional checks")
-                self.operation_runner.enqueue(ActionItem(
-                    ACTION_POWER_ON,
-                    "STARTUP",
-                    action_priority(ACTION_POWER_ON),
-                ))
-        else:
-            # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
-            # leaks/alerts, then power on if safe.
-            self._initial_power_on_sequence()
-            if self.stop_event.is_set():
-                event_thread.join(timeout=5)
+        try:
+            if not self.event_handler.wait_for_event_subscriptions():
                 return False
 
-        self._run_action_loop()
-        event_thread.join(timeout=5)
-        return False
+            # If Switch-Host is already ONLINE (daemon restart), skip the boot
+            # sequence entirely and go straight to the action loop.
+            if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
+                self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
+                                           "skipping boot sequence")
+            elif not self.chassis.is_liquid_cooled():
+                admin_status = self.policy_reader.get_switch_host_admin_status()
+                if admin_status != ADMIN_UP:
+                    self._event_log.log_notice(
+                        "STARTUP: SWITCH-HOST admin_status='{}'; "
+                        "Switch-Host will remain powered off. "
+                        "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
+                            admin_status))
+                else:
+                    self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
+                                               "enqueueing power_on, no additional checks")
+                    self.operation_runner.enqueue(ActionItem(
+                        ACTION_POWER_ON,
+                        "STARTUP",
+                        action_priority(ACTION_POWER_ON),
+                    ))
+            else:
+                # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
+                # leaks/alerts, then power on if safe.
+                self._initial_power_on_sequence()
+                if self.stop_event.is_set():
+                    return False
+
+            self._run_action_loop()
+            return False
+        finally:
+            try:
+                self.deinit()
+            finally:
+                event_thread.join(timeout=5)
 
     def deinit(self):
         self.log_notice("bmcctld shutting down")
@@ -2238,7 +2240,6 @@ def main():
         pass
 
     daemon.log_info("Shutting down with exit code {}...".format(exit_code))
-    daemon.deinit()
     return exit_code
 
 
