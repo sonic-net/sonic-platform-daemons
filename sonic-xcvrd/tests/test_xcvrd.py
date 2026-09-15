@@ -1598,9 +1598,14 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api')
-    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
+    def test_get_media_settings_key(self, mock_common_chassis, mock_is_cmis_api, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        # The parser resolves the port through common.get_port_device(), which
+        # asks for a CPO port first. This one is pluggable.
+        mock_common_chassis.get_cpo = MagicMock(return_value=None)
+        mock_common_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
         mock_is_cmis_api.return_value = False
