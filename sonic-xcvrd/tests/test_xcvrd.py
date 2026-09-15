@@ -1840,6 +1840,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_is_copper_exception(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
         result = common.is_copper(0)
@@ -2832,8 +2834,19 @@ class TestXcvrdScript(object):
         # A mix of pluggable and CPO ports must yield both sets of tasks
         names = [thread.name for thread in xcvrd.threads]
         for expected in ('CmisManagerTask', 'DomInfoUpdateTask', 'SfpStateUpdateTask',
-                         'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
+                         'CpoManagerTask'):
             assert expected in names
+
+        # Neither the CPO DOM nor the CPO state thread runs: the pluggable
+        # thread of each pair covers both port kinds, so both must have been
+        # handed the union of the two dicts. The state thread in particular
+        # cannot be duplicated - get_change_event() is chassis-wide and two
+        # threads polling it raise "concurrent poll() invocation".
+        assert 'CpoDomInfoUpdateTask' not in names
+        assert 'CpoStateUpdateTask' not in names
+        for name in ('DomInfoUpdateTask', 'SfpStateUpdateTask'):
+            task = next(t for t in xcvrd.threads if t.name == name)
+            assert set(task.port_obj_dict) == {1, 2}, name
 
     def test_CmisManagerTask_on_port_update_event_without_index(self):
         port_mapping = PortMapping()
@@ -6156,6 +6169,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
     def test_wrapper_get_transceiver_info(self, mock_sfputil, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_info = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6294,6 +6309,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.platform_sfputil')
     def test_wrapper_get_transceiver_firmware_info(self, mock_sfputil, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_dom_real_value = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6383,6 +6400,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_get_transceiver_pm(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_pm = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6411,6 +6430,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_wrapper_get_sfp_type(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.sfp_type = 'QSFP'
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6438,6 +6459,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_api = MagicMock()
         mock_api.is_flat_memory = MagicMock(return_value=True)
         mock_object = MagicMock()
@@ -6452,6 +6475,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory_no_xcvr_api(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_xcvr_api = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)

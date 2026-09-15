@@ -297,7 +297,10 @@ def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
         try:
-            return platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+            device = get_port_device(physical_port)
+            if device is None:
+                return True
+            return device.get_xcvr_api().is_copper()
         except (NotImplementedError, AttributeError):
             helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
     return True
@@ -487,7 +490,9 @@ def _wrapper_is_flat_memory(physical_port):
     """Check if transceiver is flat memory"""
     if platform_chassis is not None:
         try:
-            sfp = platform_chassis.get_sfp(physical_port)
+            sfp = get_port_device(physical_port)
+            if sfp is None:
+                return None
             api = sfp.get_xcvr_api()
             if not api:
                 return True
@@ -500,7 +505,10 @@ def _wrapper_get_transceiver_firmware_info(physical_port):
     """Get transceiver firmware info"""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info_firmware_versions()
+            device = get_port_device(physical_port)
+            if device is None:
+                return {}
+            return device.get_transceiver_info_firmware_versions()
         except NotImplementedError:
             pass
     return {}
@@ -509,7 +517,10 @@ def _wrapper_get_transceiver_pm(physical_port):
     """Get transceiver PM info"""
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_pm()
+            device = get_port_device(physical_port)
+            if device is None:
+                return {}
+            return device.get_transceiver_pm()
         except NotImplementedError:
             pass
     return {}

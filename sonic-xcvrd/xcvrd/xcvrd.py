@@ -105,10 +105,30 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 #
 # Helper functions =============================================================
 #
+def _wrapper_get_port_device(physical_port):
+    """The device at this physical port, CPO or pluggable.
+
+    get_sfp() answers for pluggable ports only, and a CPO port is not one, so
+    the wrappers below would see every CPO port as absent if they asked it
+    alone. Ordered like common.get_port_device(): a CPO port is served without
+    consulting get_sfp() at all.
+    """
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    return platform_chassis.get_sfp(physical_port)
+
+
 def _wrapper_get_transceiver_info(physical_port):
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
+            device = _wrapper_get_port_device(physical_port)
+            if device is None:
+                return None
+            return device.get_transceiver_info()
         except NotImplementedError:
             pass
         except Exception as e:
@@ -135,7 +155,7 @@ def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
 def _wrapper_get_sfp_type(physical_port):
     if platform_chassis:
         try:
-            sfp = platform_chassis.get_sfp(physical_port)
+            sfp = _wrapper_get_port_device(physical_port)
         except (NotImplementedError, AttributeError):
             return None
         try:
@@ -1185,16 +1205,27 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
+        #
+        # Polls pluggable and CPO ports alike. is_pluggable_port() is defined as
+        # the complement of is_cpo_port(), so the two dicts partition the ports
+        # and the union below is the single dict this task was written against.
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, {**self.sfp_obj_dict, **self.cpo_obj_dict}, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
 
-        # Start the CPO dom sensor info update thread
-        cpo_dom_info_update = None
-        if self.cpo_obj_dict:
-            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
-            cpo_dom_info_update.start()
-            self.threads.append(cpo_dom_info_update)
+        # The CPO half of that used to run as a thread of its own, and the class
+        # for it is kept in cpo/dom_mgr.py for when the statistics work wants a
+        # cadence per technology. It is parked rather than started, because
+        # CpoDomInfoUpdateTask does nothing but rename DomInfoUpdateTask, so a
+        # second thread over cpo_obj_dict would poll the ports the one above
+        # already covers. To bring it back, drop cpo_obj_dict from the union
+        # above and uncomment this together with its join below.
+        #
+        # cpo_dom_info_update = None
+        # if self.cpo_obj_dict:
+        #     cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
+        #     cpo_dom_info_update.start()
+        #     self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
@@ -1205,21 +1236,28 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(dom_thermal_info_update)
 
         # Start the sfp state info update thread
-        sfp_state_update = None
-        if self.sfp_obj_dict:
-            sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
-            sfp_state_update.start()
-            self.threads.append(sfp_state_update)
-        else:
-            self.log_notice("Skipping SfpStateUpdateTask as no pluggable modules are present")
+        #
+        # Covers pluggable and CPO ports together. It must be one thread and not
+        # two: the change events it waits on come from get_change_event(), which
+        # reports the whole chassis rather than a subset of it, and two threads
+        # polling that one source raise "concurrent poll() invocation".
+        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, {**self.sfp_obj_dict, **self.cpo_obj_dict}, self.stop_event, self.sfp_error_event)
+        sfp_state_update.start()
+        self.threads.append(sfp_state_update)
 
-        # Start the CPO state info update thread
-        cpo_state_update = None
-        if self.cpo_obj_dict:
-            from .cpo.cpo_state_task import CpoStateUpdateTask
-            cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
-            cpo_state_update.start()
-            self.threads.append(cpo_state_update)
+        # Kept and parked for the same reason, in cpo/cpo_state_task.py, but
+        # this one cannot simply be switched back on: a second thread on the
+        # chassis-wide change event is the "concurrent poll() invocation" above,
+        # so the event source has to be split per technology first. Its import
+        # belongs inside this function rather than at the top of the module,
+        # because cpo_state_task imports SfpStateUpdateTask back out of here.
+        #
+        # cpo_state_update = None
+        # if self.cpo_obj_dict:
+        #     from .cpo.cpo_state_task import CpoStateUpdateTask
+        #     cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
+        #     cpo_state_update.start()
+        #     self.threads.append(cpo_state_update)
 
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
@@ -1263,10 +1301,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if dom_info_update.is_alive():
             dom_info_update.join()
 
-        # Stop the CPO dom sensor info update thread
-        if cpo_dom_info_update is not None:
-            if cpo_dom_info_update.is_alive():
-                cpo_dom_info_update.join()
+        # Stop the CPO dom sensor info update thread (parked, see above)
+        #
+        # if cpo_dom_info_update is not None:
+        #     if cpo_dom_info_update.is_alive():
+        #         cpo_dom_info_update.join()
 
         # Stop the dom thermal sensor info update thread
         if dom_thermal_info_update is not None:
@@ -1279,11 +1318,12 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 sfp_state_update.raise_exception()
                 sfp_state_update.join()
 
-        # Stop the CPO state info update thread
-        if cpo_state_update is not None:
-            if cpo_state_update.is_alive():
-                cpo_state_update.raise_exception()
-                cpo_state_update.join()
+        # Stop the CPO state info update thread (parked, see above)
+        #
+        # if cpo_state_update is not None:
+        #     if cpo_state_update.is_alive():
+        #         cpo_state_update.raise_exception()
+        #         cpo_state_update.join()
 
         # Start daemon deinitialization sequence
         self.deinit()
