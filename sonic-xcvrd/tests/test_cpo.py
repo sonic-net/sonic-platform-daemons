@@ -63,6 +63,17 @@ class TestPortDeviceResolver:
         with patch.object(common, 'platform_chassis', None):
             assert common.get_port_device(1) is None
 
+    def test_get_port_device_api_returns_the_device_api(self):
+        chassis = MagicMock()
+        cpo = MagicMock()
+        chassis.get_cpo.return_value = cpo
+        with patch.object(common, 'platform_chassis', chassis):
+            assert common.get_port_device_api(1) is cpo.get_xcvr_api.return_value
+
+    def test_get_port_device_api_none_when_no_device(self):
+        with patch.object(common, 'platform_chassis', None):
+            assert common.get_port_device_api(1) is None
+
 
 class TestObjDictAccessors:
     def _make_port_mapping(self, physical_ports=(0, 1, 2)):
