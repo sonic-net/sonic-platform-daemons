@@ -16,49 +16,32 @@ blocking selects and logger configuration access. No Redis instance, native
 swsscommon library, database configuration file or host SONiC database is used.
 This tests the daemon/database boundary, not Redis or swsscommon itself.
 
-## Run in Docker
+## Running the tests
 
-From this worktree's repository root:
+Use Python 3.10+ with `sonic-platform-common`, `sonic-py-common`, and xcvrd's
+other runtime dependencies installed.
 
-```bash
-bash sonic-xcvrd/tests/integration/run_in_docker.sh
-```
-
-The runner uses the local `sonic-xcvrd-test:bookworm` image. An alternative image
-can be supplied with `XCVRD_TEST_IMAGE`; it must already contain Python 3.10+,
-`sonic-platform-common`, `sonic-py-common`, and xcvrd's other runtime dependencies.
-Python 3.11 is used by the local Bookworm image.
-
-The runner mounts **this worktree**, installs the `testing` extra from
-[setup.py](../../setup.py) inside the disposable test container,
-and executes pytest with automatic discovery of both unit and integration tests.
-It does not build, pull or start an xcvr-emu Docker image,
-publish ports, mount the Docker socket, or require privileged mode. Each
-emulator is a regular Python subprocess **inside the pytest container**.
-Pytest caches stay inside the container rather than creating root-owned cache
-directories in the mounted worktree.
-
-To install and run in an already-running test container, with this worktree
-mounted at `/workspace`:
+From the repository root, install the `testing` extra from
+[setup.py](../../setup.py) and run pytest:
 
 ```bash
-docker exec -w /workspace/sonic-xcvrd -e PIP_BREAK_SYSTEM_PACKAGES=1 \
-  <container> python3 -m pip install ".[testing]"
-docker exec -w /workspace/sonic-xcvrd -e PYTHONDONTWRITEBYTECODE=1 \
-  <container> python3 -m pytest tests/integration
-```
-
-Additional pytest arguments pass through the runner, for example:
-
-```bash
-bash sonic-xcvrd/tests/integration/run_in_docker.sh -k reinsertion
+cd sonic-xcvrd
+python3 -m pip install ".[testing]"
+python3 -m pytest
 ```
 
 Ordinary xcvrd `pytest` discovery includes all integration tests alongside the
 unit tests. The integration fixtures isolate their SONiC imports and swsscommon
 replacement from the unit tests' import-time mocks, so both suites can run in
-the same pytest process. Use `pytest -m integration` to select only integration
-tests. Missing integration dependencies are failures, not silently skipped tests.
+the same pytest process. Use `python3 -m pytest -m integration` to select only
+integration tests. Missing integration dependencies are failures, not silently
+skipped tests.
+
+Additional pytest arguments can narrow the selection, for example:
+
+```bash
+python3 -m pytest -m integration -k reinsertion
+```
 
 ## Coverage
 
