@@ -1,0 +1,12 @@
+Package: sonic-thermalctld-rs-dbgsym
+Source: sonic
+Version: 1.0.0
+Auto-Built-Package: debug-symbols
+Architecture: amd64
+Maintainer: SONiC Team <sonic-dev@lists.sonicfoundation.dev>
+Installed-Size: 383
+Depends: sonic-thermalctld-rs (= 1.0.0)
+Section: debug
+Priority: optional
+Description: debug symbols for sonic-thermalctld-rs
+Build-Ids: 40149abdcdb9da9153e9d784f8a77afcdb50bb2d

@@ -1,0 +1,3 @@
+sonic-thermalctld-rs-dbgsym_1.0.0_amd64.deb debug optional automatic=yes
+sonic-thermalctld-rs_1.0.0_amd64.deb net optional
+sonic_1.0.0_amd64.buildinfo net optional

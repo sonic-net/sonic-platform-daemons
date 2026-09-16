@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+#export DH_VERBOSE = 1
+
+# Phase 1: the daemon reaches the platform through the generated PyO3 bridge
+# onto whatever sonic_platform the image installs, so nothing here names a
+# vendor and there is no path to symlink.  In phase 2 a vendor crate replaces
+# platform-pyo3 in crates/thermalctld/Cargo.toml; this file does not change.
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --locked --release
+
+override_dh_auto_install:
+	# do nothing
+	:
+
+# Deliberately not `cargo clean`: cargo has to load every workspace member's
+# manifest before it will do anything, and removing the directory is what
+# `cargo clean` would have done anyway, without needing one.
+override_dh_auto_clean:
+	rm -rf target
+
+override_dh_auto_test:
+	cargo test --locked --release

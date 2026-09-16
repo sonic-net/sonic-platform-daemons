@@ -1,0 +1,29 @@
+Source: sonic
+Maintainer: SONiC Team <sonic-dev@lists.sonicfoundation.dev>
+Section: net
+Priority: optional
+Build-Depends: debhelper-compat (= 13),
+                cargo,
+                rustc,
+                libswsscommon-dev,
+                libyang-dev,
+                python3-dev
+Standards-Version: 1.0.0
+
+Package: sonic-thermalctld-rs
+Architecture: any
+Depends: ${shlibs:Depends}, python3, sonic-platform-common
+Description: SONiC thermal control daemon, in Rust
+ Rust port of thermalctld.  It reaches the platform through the generated
+ cross-language facade in sonic-platform-common, which calls whichever
+ vendor's Python sonic_platform package the image installs -- so this one
+ binary runs on any platform that has one, and no vendor has to change
+ anything to get it.
+ .
+ Writes the same TEMPERATURE_INFO, FAN_INFO, FAN_DRAWER_INFO and
+ PHYSICAL_ENTITY_INFO entries to STATE_DB as the Python implementation; the
+ two are compared field for field by the differential test.
+ .
+ The binary embeds a CPython interpreter to make those calls.  A later phase
+ replaces the bridge with a native Rust implementation of the same trait,
+ which removes the interpreter without touching the daemon.
