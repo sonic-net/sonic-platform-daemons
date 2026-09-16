@@ -136,6 +136,11 @@ def get_port_device(physical_port: int) -> Any:
     except (NotImplementedError, AttributeError, IndexError):
         return None
 
+def get_port_device_api(physical_port):
+    """The transceiver api of the port's device, or None if the port has no device"""
+    port_device = get_port_device(physical_port)
+    return port_device.get_xcvr_api() if port_device is not None else None
+
 def is_cpo_port(physical_port: int) -> bool:
     if platform_chassis is None:
         return False
