@@ -95,10 +95,7 @@ class VDMDBUtils(DBUtils):
                             asic_id = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
                             self._update_flag_metadata_tables(logical_port_name, threshold_value_dict,
                                                              vdm_values_dict_update_time,
-                                                             self.xcvr_table_helper.get_vdm_flag_tbl(asic_id, threshold_type),
-                                                             self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_id, threshold_type),
-                                                             self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_id, threshold_type),
-                                                             self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_id, threshold_type),
+                                                             *self.xcvr_table_helper.get_vdm_flag_tables(asic_id, threshold_type),
                                                              f"VDM {threshold_type}")
 
                 if db_cache is not None:

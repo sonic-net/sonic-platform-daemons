@@ -47,9 +47,6 @@ class StatusDBUtils(DBUtils):
 
         return self.post_flag_values_to_db(logical_port_name,
                                            self.status_utils.get_transceiver_status_flags,
-                                           self.xcvr_table_helper.get_status_flag_tbl(asic_index),
-                                           self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
-                                           self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
-                                           self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
+                                           self.xcvr_table_helper.get_status_flag_tables(asic_index),
                                            "Status flags",
                                            db_cache=db_cache)

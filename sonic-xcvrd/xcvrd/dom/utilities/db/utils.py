@@ -76,26 +76,57 @@ class DBUtils:
 
         self._write_values_to_table(table, logical_port_name, values_dict, beautify_func=beautify_func)
 
-    def post_flag_values_to_db(self, logical_port_name, get_values_func,
-                               flag_tbl, flag_change_count_tbl, flag_set_time_tbl, flag_clear_time_tbl,
+    def post_flag_values_from_dict_to_db(self, logical_port_name, flags_dict, flag_tables,
+                                         log_context, beautify_func=None, enable_flat_memory_check=False):
+        """
+        Posts a caller-supplied dictionary of flag values to the database and updates
+        the corresponding flag metadata tables.
+
+        This is the counterpart to post_flag_values_to_db for callers that have already
+        read the flag values from hardware. Since the caller performs the read, there is
+        no get_values_func to invoke lazily and therefore no db_cache to consult. The
+        same ordering constraints apply: the metadata tables are updated from the raw
+        values before the flag table is overwritten and before beautification.
+
+        Args:
+            logical_port_name (str): Logical port name.
+            flags_dict (dict): Pre-read flag values. Beautified in place.
+            flag_tables (FlagTables): The flag table and its metadata tables.
+            log_context (str): Name of the flags for logging purposes.
+            beautify_func (function, optional): Function to beautify the flag values. Defaults to self.beautify_info_dict.
+            enable_flat_memory_check (bool, optional): Flag to check for flat memory support. Defaults to False.
+        """
+        physical_port = self._validate_and_get_physical_port(logical_port_name, enable_flat_memory_check)
+        if physical_port is None:
+            return
+
+        if not flags_dict:
+            return
+
+        self._update_flag_metadata_tables(logical_port_name, flags_dict,
+                                          self.get_current_time(),
+                                          flag_tables.flag_tbl, flag_tables.change_count_tbl,
+                                          flag_tables.set_time_tbl, flag_tables.clear_time_tbl,
+                                          log_context)
+        self._write_values_to_table(flag_tables.flag_tbl, logical_port_name, flags_dict,
+                                    beautify_func=beautify_func)
+
+    def post_flag_values_to_db(self, logical_port_name, get_values_func, flag_tables,
                                log_context, db_cache=None, beautify_func=None,
                                enable_flat_memory_check=False):
         """
         Posts the flag values to the database and updates the corresponding flag metadata tables.
 
         This differs from post_diagnostic_values_to_db in that the metadata tables (change count,
-        last set time, last clear time) must be updated before flag_tbl is overwritten, since
+        last set time, last clear time) must be updated before the flag table is overwritten, since
         _update_flag_metadata_tables diffs the newly read values against the ones already in
-        flag_tbl. The metadata update also has to run on the raw values, before beautification
+        the flag table. The metadata update also has to run on the raw values, before beautification
         turns booleans into strings (a beautified False is truthy and would be recorded as a set).
 
         Args:
             logical_port_name (str): Logical port name.
             get_values_func (function): Function to get the flag values.
-            flag_tbl (swsscommon.Table): Table containing flag values.
-            flag_change_count_tbl (swsscommon.Table): Table for change counts.
-            flag_set_time_tbl (swsscommon.Table): Table for last set times.
-            flag_clear_time_tbl (swsscommon.Table): Table for last clear times.
+            flag_tables (FlagTables): The flag table and its metadata tables.
             log_context (str): Name of the flags for logging purposes.
             db_cache (dict, optional): Cache for flag values.
             beautify_func (function, optional): Function to beautify the flag values. Defaults to self.beautify_info_dict.
@@ -119,8 +150,8 @@ class DBUtils:
                 if flags_dict:
                     self._update_flag_metadata_tables(logical_port_name, flags_dict,
                                                       self.get_current_time(),
-                                                      flag_tbl, flag_change_count_tbl,
-                                                      flag_set_time_tbl, flag_clear_time_tbl,
+                                                      flag_tables.flag_tbl, flag_tables.change_count_tbl,
+                                                      flag_tables.set_time_tbl, flag_tables.clear_time_tbl,
                                                       log_context)
 
                 if db_cache is not None:
@@ -130,7 +161,7 @@ class DBUtils:
             if not flags_dict:
                 return
 
-            self._write_values_to_table(flag_tbl, logical_port_name, flags_dict,
+            self._write_values_to_table(flag_tables.flag_tbl, logical_port_name, flags_dict,
                                         beautify_func=beautify_func)
 
         except NotImplementedError:

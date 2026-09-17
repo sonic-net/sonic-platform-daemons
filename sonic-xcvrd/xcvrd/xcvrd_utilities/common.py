@@ -262,6 +262,22 @@ def get_cpo_devices_of_pport(physical_port: int, device_type: str) -> Dict[str, 
             for device_id in topology.devices_by_pport.get(physical_port, ())
             if device_id in pports_by_device}
 
+def get_cpo_device_pports(device_type: str, device_id: str) -> FrozenSet[int]:
+    """
+    Get all physical ports driven by the given CPO device.
+
+    Args:
+        device_type (str): cpo.json device type
+        device_id (str): cpo.json device id
+
+    Returns:
+        FrozenSet[int]: Physical port indexes, taken straight from the immutable
+        platform topology. Empty if the topology is not available or no such
+        device exists.
+    """
+    topology = _build_cpo_topology()
+    return (topology.pports_by_device.get(device_type) or {}).get(device_id, frozenset())
+
 def _get_sibling_pports(physical_port: int, device_type: str) -> FrozenSet[int]:
     """
     Get all physical ports sharing the given type of CPO device with physical_port.

@@ -5193,7 +5193,7 @@ class TestXcvrdScript(object):
         mock_sub_table.return_value = mock_selectable
 
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = {'1': MagicMock()}
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
@@ -5227,7 +5227,7 @@ class TestXcvrdScript(object):
         mock_detect_error.return_value = False
         mock_select.return_value = (swsscommon.Select.TIMEOUT, None)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, False, False, False, False, False, True])
-        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(side_effect=('disabled', 'enabled'))
         task.task_worker()
@@ -5251,14 +5251,14 @@ class TestXcvrdScript(object):
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_pm_info_to_db')
     def test_DomInfoUpdateTask_task_worker_vdm_failure(self, mock_post_pm_info):
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = {'1': MagicMock()}
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
         task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, mock_cmis_manager, 0)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
-        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5375,7 +5375,7 @@ class TestXcvrdScript(object):
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True, True])
 
         task.port_mapping.logical_port_list = ['Ethernet0']
-        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5402,7 +5402,7 @@ class TestXcvrdScript(object):
     def test_DomInfoUpdateTask_task_worker_vdm_freeze_conditions(self, mock_post_pm_info):
         """Test various need_freeze condition combinations"""
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = {'1': MagicMock()}
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         mock_cmis_manager = MagicMock()
 
@@ -5412,7 +5412,7 @@ class TestXcvrdScript(object):
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task.port_mapping.logical_port_list = ['Ethernet0']
-        task.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5439,7 +5439,7 @@ class TestXcvrdScript(object):
         task2.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task2.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task2.port_mapping.logical_port_list = ['Ethernet0']
-        task2.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task2.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task2.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task2.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task2.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5466,7 +5466,7 @@ class TestXcvrdScript(object):
         task3.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task3.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task3.port_mapping.logical_port_list = ['Ethernet0']
-        task3.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task3.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task3.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task3.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task3.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5492,7 +5492,7 @@ class TestXcvrdScript(object):
         task4.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task4.task_stopping_event.is_set = MagicMock(side_effect=[False, False, False, True])
         task4.port_mapping.logical_port_list = ['Ethernet0']
-        task4.port_mapping.physical_to_logical = {'1': ['Ethernet0']}
+        task4.port_mapping.physical_to_logical = {1: ['Ethernet0']}
         task4.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
         task4.get_dom_polling_from_config_db = MagicMock(return_value='enabled')
         task4.is_port_in_cmis_terminal_state = MagicMock(return_value=False)
@@ -5524,10 +5524,10 @@ class TestXcvrdScript(object):
             (1, ["Ethernet0"], 0, True, False, True, []),
 
             # Case 2: Invalid physical port (logical_port_list is None)
-            (2, None, None, False, False, False, ["Update DB diagnostics during link change: Unknown physical port index 2"]),
+            (2, None, None, False, False, False, ["No logical ports found for physical port index 2"]),
 
             # Case 3: Invalid ASIC index
-            (3, ["Ethernet1"], None, False, False, False, ["Update DB diagnostics during link change: Got invalid asic index for Ethernet1, ignored"]),
+            (3, ["Ethernet1"], None, False, False, False, ["Got invalid asic index for Ethernet1, ignored"]),
 
             # Case 4: Port in error status
             (4, ["Ethernet2"], 1, True, True, False, []),
@@ -5559,7 +5559,6 @@ class TestXcvrdScript(object):
         task.task_stopping_event.is_set = MagicMock(return_value=False)
         task.port_mapping.get_physical_to_logical = MagicMock(return_value=logical_port_list)
         task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=asic_index)
-        task.xcvrd_utils.get_transceiver_presence = MagicMock(return_value=transceiver_presence)
         task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
         task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=vdm_supported)
         task.xcvr_table_helper.get_status_sw_tbl = MagicMock()
@@ -5568,8 +5567,9 @@ class TestXcvrdScript(object):
         task.vdm_db_utils.post_port_vdm_flags_to_db = MagicMock()
         task.log_warning = MagicMock()
 
-        # Mock sfp_status_helper
-        with patch("xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status", return_value=port_in_error_status):
+        # Mock sfp_status_helper and presence
+        with patch("xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status", return_value=port_in_error_status), \
+             patch("xcvrd.xcvrd_utilities.common._wrapper_get_presence", return_value=transceiver_presence):
             # Call the function
             task.update_port_db_diagnostics_on_link_change(physical_port)
 

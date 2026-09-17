@@ -73,6 +73,12 @@ class DomInfoUpdateBase(threading.Thread):
     def on_remove_logical_port(self, port_change_event):
         pass
 
+    def create_xcvr_table_helper(self, namespaces):
+        return XcvrTableHelper(namespaces)
+
+    def create_dom_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        return DOMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
+
     def get_dom_polling_from_config_db(self, lport):
         """
             Returns the value of dom_polling field from PORT table in CONFIG_DB
@@ -111,6 +117,42 @@ class DomInfoUpdateBase(threading.Thread):
 
     def is_port_dom_monitoring_disabled(self, logical_port_name):
         return self.get_dom_polling_from_config_db(logical_port_name) == 'disabled'
+
+    def _validate_and_resolve_port(self, physical_port):
+        """Validate that the given physical_port should be processed by this task
+        and resolve the objects needed to poll the port if so.
+
+        Returns:
+            tuple: (port object, first subport's logical port name, asic index) if
+            the port should be polled, None if it should be skipped.
+        """
+        if physical_port not in self.port_obj_dict:
+            return None
+
+        logical_ports = self.port_mapping.get_physical_to_logical(physical_port)
+        if not logical_ports:
+            self.log_warning("No logical ports found for physical port index {}".format(physical_port))
+            return None
+        # Get the first logical port name since it corresponds to the first subport
+        # of the breakout group
+        logical_port_name = logical_ports[0]
+
+        # Get the asic to which this port belongs
+        asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
+        if asic_index is None:
+            self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
+            return None
+
+        if self.is_port_dom_monitoring_disabled(logical_port_name):
+            return None
+
+        if sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
+            return None
+
+        if not common._wrapper_get_presence(physical_port):
+            return None
+
+        return self.port_obj_dict[physical_port], logical_port_name, asic_index
 
     def task_worker(self):
         pass
@@ -151,9 +193,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event)
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)
         self.xcvrd_utils = XCVRDUtils(self.port_obj_dict, self.helper_logger)
-        self.dom_db_utils = DOMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.dom_db_utils = self.create_dom_db_utils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
         self.db_utils = self.dom_db_utils
         self.vdm_utils = VDMUtils(self.port_obj_dict, self.helper_logger)
         self.vdm_db_utils = VDMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
@@ -322,107 +364,90 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
                 break
 
             dom_loop_start_time = datetime.datetime.now()
-            for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
-                self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS)
-
-                if self.task_stopping_event.is_set():
-                    self.log_notice("Stop event generated during DOM monitoring loop")
-                    break
-
-                if physical_port not in self.port_obj_dict:
-                    continue
-
-                # Get the first logical port name since it corresponds to the first subport
-                # of the breakout group
-                logical_port_name = logical_ports[0]
-
-                if self.is_port_dom_monitoring_disabled(logical_port_name):
-                    continue
-
-                # Get the asic to which this port belongs
-                asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
-                if asic_index is None:
-                    self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
-                    continue
-
-                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-                    if not common._wrapper_get_presence(physical_port):
-                        continue
-
-                    try:
-                        self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since execption could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing firmware info for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        self.dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since exception could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        self.dom_db_utils.post_port_dom_flags_to_db(logical_port_name)
-                    except (KeyError, TypeError) as e:
-                        self.log_warning("Got exception {} while processing dom flags for "
-                                         "port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        self.status_db_utils.post_port_transceiver_hw_status_to_db(logical_port_name)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since exception could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing transceiver status hw for "
-                                         "port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    try:
-                        self.status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name)
-                    except (KeyError, TypeError) as e:
-                        #continue to process next port since exception could be raised due to port reset, transceiver removal
-                        self.log_warning("Got exception {} while processing transceiver status hw flags for "
-                                         "port {}, ignored".format(repr(e), logical_port_name))
-                        continue
-                    if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
-                        # Step (a): If statistic observables are supported and not in LPMODE,
-                        #           freeze VDM, capture statistic observables and PM info,
-                        #           then unfreeze VDM.
-                        vdm_statistic_values = {}
-                        need_freeze = self.vdm_utils.is_vdm_statistic_supported(physical_port) and \
-                                       not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)
-                        if need_freeze:
-                            with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
-                                if not vdm_frozen:
-                                    self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
-                                else:
-                                    try:
-                                        vdm_statistic_values = self.vdm_utils.get_vdm_real_values_statistic(physical_port) or {}
-                                    except (KeyError, TypeError) as e:
-                                        self.log_warning("Got exception {} while processing vdm statistic values for port {}, ignored".format(repr(e), logical_port_name))
-                                    try:
-                                        self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
-                                    except (KeyError, TypeError) as e:
-                                        self.log_warning("Got exception {} while posting pm info to DB for port {}, ignored".format(repr(e), logical_port_name))
-
-                        # Step (b): Capture basic observables, merge with statistic
-                        #           observables, and post to DB
-                        try:
-                            vdm_basic_values = self.vdm_utils.get_vdm_real_values_basic(physical_port) or {}
-                            vdm_merged_values = {**vdm_basic_values, **vdm_statistic_values}
-                            self.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_merged_values)
-                        except (KeyError, TypeError) as e:
-                            self.log_warning("Got exception {} while posting vdm values to DB for port {}, ignored".format(repr(e), logical_port_name))
-
-                        # Step (c): Update VDM flags to DB.
-                        #           Flags are COR (Clear On Read), so read them last
-                        #           to capture the most recent state.
-                        try:
-                            self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
-                        except (KeyError, TypeError) as e:
-                            self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
-
+            self.collect_and_publish_data(port_change_observer)
             # Schedule next poll from loop start time for consistent intervals
             next_periodic_db_update_time = dom_loop_start_time + datetime.timedelta(seconds=dom_info_update_periodic_secs)
 
         self.log_notice("Stop DOM monitoring loop")
+
+    def collect_and_publish_data(self, port_change_observer):
+        for physical_port in self.port_mapping.physical_to_logical:
+            self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS)
+
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during DOM monitoring loop")
+                break
+
+            port_info = self._validate_and_resolve_port(physical_port)
+            if port_info is None:
+                continue
+            _, logical_port_name, asic_index = port_info
+
+            try:
+                self.post_port_sfp_firmware_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_firmware_info_tbl(asic_index), self.task_stopping_event)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing firmware info for port {}, ignored".format(repr(e), logical_port_name))
+                continue
+            try:
+                self.dom_db_utils.post_port_dom_sensor_info_to_db(logical_port_name)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
+                continue
+            try:
+                self.dom_db_utils.post_port_dom_flags_to_db(logical_port_name)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing dom flags for "
+                                 "port {}, ignored".format(repr(e), logical_port_name))
+                continue
+            try:
+                self.status_db_utils.post_port_transceiver_hw_status_to_db(logical_port_name)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing transceiver status hw for "
+                                 "port {}, ignored".format(repr(e), logical_port_name))
+                continue
+            try:
+                self.status_db_utils.post_port_transceiver_hw_status_flags_to_db(logical_port_name)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing transceiver status hw flags for "
+                                 "port {}, ignored".format(repr(e), logical_port_name))
+                continue
+            if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                # Step (a): If statistic observables are supported and not in LPMODE,
+                #           freeze VDM, capture statistic observables and PM info,
+                #           then unfreeze VDM.
+                vdm_statistic_values = {}
+                need_freeze = self.vdm_utils.is_vdm_statistic_supported(physical_port) and \
+                               not self.xcvrd_utils.is_transceiver_lpmode_on(physical_port)
+                if need_freeze:
+                    with self.vdm_utils.vdm_freeze_context(physical_port) as vdm_frozen:
+                        if not vdm_frozen:
+                            self.log_error("Failed to freeze VDM stats for port {}".format(physical_port))
+                        else:
+                            try:
+                                vdm_statistic_values = self.vdm_utils.get_vdm_real_values_statistic(physical_port) or {}
+                            except (KeyError, TypeError) as e:
+                                self.log_warning("Got exception {} while processing vdm statistic values for port {}, ignored".format(repr(e), logical_port_name))
+                            try:
+                                self.post_port_pm_info_to_db(logical_port_name, self.port_mapping, self.xcvr_table_helper.get_pm_tbl(asic_index), self.task_stopping_event)
+                            except (KeyError, TypeError) as e:
+                                self.log_warning("Got exception {} while posting pm info to DB for port {}, ignored".format(repr(e), logical_port_name))
+
+                # Step (b): Capture basic observables, merge with statistic
+                #           observables, and post to DB
+                try:
+                    vdm_basic_values = self.vdm_utils.get_vdm_real_values_basic(physical_port) or {}
+                    vdm_merged_values = {**vdm_basic_values, **vdm_statistic_values}
+                    self.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db(logical_port_name, vdm_merged_values)
+                except (KeyError, TypeError) as e:
+                    self.log_warning("Got exception {} while posting vdm values to DB for port {}, ignored".format(repr(e), logical_port_name))
+
+                # Step (c): Update VDM flags to DB.
+                #           Flags are COR (Clear On Read), so read them last
+                #           to capture the most recent state.
+                try:
+                    self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
+                except (KeyError, TypeError) as e:
+                    self.log_warning("Got exception {} while processing vdm flags for port {}, ignored".format(repr(e), logical_port_name))
 
     def on_port_update_event(self, port_change_event):
         """Called when a port change event is received
@@ -446,32 +471,10 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         if self.task_stopping_event.is_set():
             return
 
-        if physical_port not in self.port_obj_dict:
+        port_info = self._validate_and_resolve_port(physical_port)
+        if port_info is None:
             return
-
-        logical_port_list = self.port_mapping.get_physical_to_logical(physical_port)
-        if logical_port_list is None:
-            self.log_warning("Update DB diagnostics during link change: Unknown physical port index {}".format(physical_port))
-            return
-
-        # First logical port corresponds to the first subport
-        first_logical_port = logical_port_list[0]
-
-        if self.is_port_dom_monitoring_disabled(first_logical_port):
-            return
-
-        # Get the asic to which this port belongs
-        asic_index = self.port_mapping.get_asic_id_for_logical_port(first_logical_port)
-        if asic_index is None:
-            self.log_warning(f"Update DB diagnostics during link change: Got invalid asic index for {first_logical_port}, ignored")
-            return
-
-        # Check if the port is in error status
-        if sfp_status_helper.detect_port_in_error_status(first_logical_port, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-            return
-
-        if not self.xcvrd_utils.get_transceiver_presence(physical_port):
-            return
+        _, first_logical_port, _ = port_info
 
         # Update TRANSCEIVER_DOM_FLAG and metadata tables
         try:
@@ -509,24 +512,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         # so we don't have to remove entries from TRANSCEIVER_INFO, TRANSCEIVER_DOM_THRESHOLD and VDM threshold value tables.
         common.del_port_sfp_dom_info_from_db(port_change_event.port_name,
                                       self.port_mapping,
-                                      [self.xcvr_table_helper.get_dom_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_temperature_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_change_count_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_set_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_dom_flag_clear_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_vdm_real_value_tbl(port_change_event.asic_id),
-                                      *[self.xcvr_table_helper.get_vdm_flag_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(port_change_event.asic_id, key) for key in VDM_THRESHOLD_TYPES],
-                                      self.xcvr_table_helper.get_status_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_change_count_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_set_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_status_flag_clear_time_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_pm_tbl(port_change_event.asic_id),
-                                      self.xcvr_table_helper.get_firmware_info_tbl(port_change_event.asic_id)
+                                      [*self.xcvr_table_helper.get_dom_tables(port_change_event.asic_id, include_thresholds=False),
+                                      *self.xcvr_table_helper.get_vdm_tables(port_change_event.asic_id, include_thresholds=False),
+                                      *self.xcvr_table_helper.get_status_tables(port_change_event.asic_id, include_sw=False)
                                       ])
 
 
@@ -536,8 +524,8 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, poll_interval):
         super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event)
         self.poll_interval = poll_interval
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        self.dom_db_utils = DOMDBUtils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
+        self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)
+        self.dom_db_utils = self.create_dom_db_utils(self.port_obj_dict, self.port_mapping, self.xcvr_table_helper, self.task_stopping_event, self.helper_logger)
 
     def task_worker(self):
         self.log_notice("Start DOM thermal monitoring loop")
@@ -557,34 +545,22 @@ class DomThermalInfoUpdateTask(DomInfoUpdateBase):
                time.sleep(max(0, min(1, (next_periodic_db_update_time - now).total_seconds())))
                continue
 
-            for physical_port, logical_ports in self.port_mapping.physical_to_logical.items():
-                if physical_port not in self.port_obj_dict:
-                    continue
-
-                # Get the first logical port name since it corresponds to the first subport
-                # of the breakout group
-                logical_port_name = logical_ports[0]
-
-                if self.is_port_dom_monitoring_disabled(logical_port_name):
-                    continue
-
-                # Get the asic to which this port belongs
-                asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port_name)
-                if asic_index is None:
-                    self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
-                    continue
-
-                if not sfp_status_helper.detect_port_in_error_status(logical_port_name, self.xcvr_table_helper.get_status_sw_tbl(asic_index)):
-                    if not common._wrapper_get_presence(physical_port):
-                        continue
-
-                try:
-                    self.dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
-                except (KeyError, TypeError) as e:
-                    #continue to process next port since exception could be raised due to port reset, transceiver removal
-                    self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))
+            self.collect_and_publish_temperature_data()
 
             # Set the periodic db update time after all the ports are processed
             next_periodic_db_update_time = now + datetime.timedelta(seconds=dom_info_update_periodic_secs)
 
         self.log_notice("Stop DOM thermal monitoring loop")
+
+    def collect_and_publish_temperature_data(self):
+        for physical_port in self.port_mapping.physical_to_logical:
+            port_info = self._validate_and_resolve_port(physical_port)
+            if port_info is None:
+                continue
+            _, logical_port_name, _ = port_info
+
+            try:
+                self.dom_db_utils.post_port_dom_temperature_info_to_db(logical_port_name)
+            except (KeyError, TypeError) as e:
+                #continue to process next port since exception could be raised due to port reset, transceiver removal
+                self.log_warning("Got exception {} while processing dom info for port {}, ignored".format(repr(e), logical_port_name))

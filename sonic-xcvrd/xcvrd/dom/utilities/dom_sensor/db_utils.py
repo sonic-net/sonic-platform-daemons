@@ -54,10 +54,7 @@ class DOMDBUtils(DOMBeautifyMixin, DBUtils):
 
         return self.post_flag_values_to_db(logical_port_name,
                                            self.dom_utils.get_transceiver_dom_flags,
-                                           self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-                                           self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-                                           self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-                                           self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
+                                           self.xcvr_table_helper.get_dom_flag_tables(asic_index),
                                            "DOM flags",
                                            db_cache=db_cache,
                                            beautify_func=self._beautify_dom_info_dict)
