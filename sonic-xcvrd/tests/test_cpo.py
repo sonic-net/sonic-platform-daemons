@@ -13,7 +13,7 @@ from xcvrd.cpo import cpo_state_task
 from xcvrd.cpo.cpo_manager_task import CpoManagerTask
 from xcvrd.cpo.cpo_state_task import CpoStateUpdateTask
 from xcvrd.cpo.db_utils import CPODOMDBUtils, CPOVDMDBUtils
-from xcvrd.cpo.dom_mgr import CpoDomInfoUpdateTask
+from xcvrd.cpo.dom_mgr import CpoDomInfoUpdateTask, CpoDomThermalInfoUpdateTask
 from xcvrd.cpo.xcvr_table_helper import CpoXcvrTableHelper
 from xcvrd.xcvrd import PHYSICAL_PORT_NOT_EXIST, SFP_EEPROM_NOT_READY
 from xcvrd.xcvrd_utilities import common, sfp_status_helper
@@ -808,3 +808,122 @@ class TestCpoDomInfoUpdateTask:
         }
         for device in devices.values():
             device.oe.get_api.return_value.get_non_banked_transceiver_dom_flags.assert_not_called()
+
+
+class TestCpoDomThermalInfoUpdateTask:
+    @contextlib.contextmanager
+    def mocked_db_tables(self):
+        def new_table(*args, **kwargs):
+            return MagicMock()
+
+        with patch.object(daemon_base, 'db_connect', MagicMock()), \
+             patch.object(swsscommon, 'Table', MagicMock(side_effect=new_table)), \
+             patch.object(swsscommon, 'ProducerStateTable', MagicMock(side_effect=new_table)):
+            yield
+
+    def make_port_mapping(self):
+        # Matches CPO_DATA: pports 1 and 2 share OE1, ELS1 is shared by pports 1-3
+        port_mapping = PortMapping()
+        for logical_port, physical_port in (('Ethernet0', 1), ('Ethernet8', 2), ('Ethernet16', 3)):
+            port_mapping.handle_port_change_event(
+                PortChangeEvent(logical_port, physical_port, 0, PortChangeEvent.PORT_ADD))
+        return port_mapping
+
+    def make_cpo_device(self, p):
+        """Mock CPO device whose OE and ELSFP module temperatures encode which
+        device performed the read (40 + pport and 20 + pport respectively)."""
+        device = MagicMock()
+        device.oe.get_api.return_value.get_module_temperature.return_value = 40.0 + p
+        device.elsfp.get_api.return_value.get_module_temperature.return_value = 20.0 + p
+        return device
+
+    def make_devices(self):
+        return {p: self.make_cpo_device(p) for p in (1, 2, 3)}
+
+    def make_task(self, port_obj_dict):
+        with self.mocked_db_tables():
+            task = CpoDomThermalInfoUpdateTask(DEFAULT_NAMESPACE, self.make_port_mapping(), port_obj_dict,
+                                               threading.Event(), 1)
+        task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
+        return task
+
+    def run_collect_and_publish(self, task, presence=lambda physical_port: True):
+        task.dom_db_utils = MagicMock()
+        with patched_topology(), \
+             patch.object(common, '_wrapper_get_presence', side_effect=presence), \
+             patch.object(sfp_status_helper, 'detect_port_in_error_status', return_value=False):
+            task.collect_and_publish_temperature_data()
+
+        # Map (logical port, table) -> published values dict
+        published = {}
+        for call_args in task.dom_db_utils.post_diagnostic_values_from_dict_to_db.call_args_list:
+            logical_port, table, values = call_args.args
+            published[(logical_port, table)] = values
+        return published
+
+    def test_collect_and_publish_temperature_data(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        # Module temperature is read once per device: OE1 and ELS1 through pport 1
+        # (the first sibling processed), OE2 through pport 3
+        devices[1].oe.get_api.return_value.get_module_temperature.assert_called_once()
+        devices[2].oe.get_api.return_value.get_module_temperature.assert_not_called()
+        devices[3].oe.get_api.return_value.get_module_temperature.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_module_temperature.assert_called_once()
+        devices[2].elsfp.get_api.return_value.get_module_temperature.assert_not_called()
+        devices[3].elsfp.get_api.return_value.get_module_temperature.assert_not_called()
+
+        # Every interface gets the module temperature of its device sharing group
+        temperature_tbl = task.xcvr_table_helper.get_dom_temperature_tbl(0)
+        els_temperature_tbl = task.xcvr_table_helper.get_els_dom_temperature_tbl(0)
+        assert published[('Ethernet0', temperature_tbl)] == {'temperature': 41.0}
+        assert published[('Ethernet8', temperature_tbl)] == {'temperature': 41.0}
+        assert published[('Ethernet16', temperature_tbl)] == {'temperature': 43.0}
+        assert published[('Ethernet0', els_temperature_tbl)] == {'temperature': 21.0}
+        assert published[('Ethernet8', els_temperature_tbl)] == {'temperature': 21.0}
+        assert published[('Ethernet16', els_temperature_tbl)] == {'temperature': 21.0}
+
+    def test_non_present_port_is_skipped(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task, presence=lambda physical_port: physical_port != 1)
+
+        # OE1's snapshot is read through pport 2 instead, and Ethernet0 (pport 1)
+        # publishes nothing
+        devices[1].oe.get_api.return_value.get_module_temperature.assert_not_called()
+        devices[2].oe.get_api.return_value.get_module_temperature.assert_called_once()
+        assert not any(logical_port == 'Ethernet0' for logical_port, _ in published)
+        temperature_tbl = task.xcvr_table_helper.get_dom_temperature_tbl(0)
+        assert published[('Ethernet8', temperature_tbl)] == {'temperature': 42.0}
+
+    def test_none_temperature_read_is_skipped(self):
+        # A None reading means the read failed: the table is left untouched so
+        # the last good value survives, and the read is retried next period
+        devices = self.make_devices()
+        devices[1].oe.get_api.return_value.get_module_temperature.return_value = None
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        temperature_tbl = task.xcvr_table_helper.get_dom_temperature_tbl(0)
+        els_temperature_tbl = task.xcvr_table_helper.get_els_dom_temperature_tbl(0)
+
+        # OE1's failed snapshot suppresses the OE table for both its member
+        # ports without re-reading through the sibling pport
+        assert ('Ethernet0', temperature_tbl) not in published
+        assert ('Ethernet8', temperature_tbl) not in published
+        devices[2].oe.get_api.return_value.get_module_temperature.assert_not_called()
+
+        # The other device tables still publish normally
+        assert published[('Ethernet16', temperature_tbl)] == {'temperature': 43.0}
+        assert published[('Ethernet0', els_temperature_tbl)] == {'temperature': 21.0}
+
+    def test_stop_event_halts_collection(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        task.task_stopping_event.set()
+        published = self.run_collect_and_publish(task)
+        assert published == {}
+        for device in devices.values():
+            device.oe.get_api.return_value.get_module_temperature.assert_not_called()

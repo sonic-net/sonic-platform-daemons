@@ -31,7 +31,7 @@ try:
     from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .cpo.cpo_manager_task import CpoManagerTask
-    from .cpo.dom_mgr import CpoDomInfoUpdateTask
+    from .cpo.dom_mgr import CpoDomInfoUpdateTask, CpoDomThermalInfoUpdateTask
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -1170,6 +1170,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             dom_thermal_info_update.start()
             self.threads.append(dom_thermal_info_update)
 
+        # Start the CPO dom thermal sensor info update thread
+        cpo_dom_thermal_info_update = None
+        if self.cpo_obj_dict and self.dom_temperature_poll_interval is not None:
+            cpo_dom_thermal_info_update = CpoDomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event,
+                                                                      self.dom_temperature_poll_interval)
+            cpo_dom_thermal_info_update.start()
+            self.threads.append(cpo_dom_thermal_info_update)
+
         # Start the sfp state info update thread
         sfp_state_update = None
         if self.sfp_obj_dict:
@@ -1239,6 +1247,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if dom_thermal_info_update is not None:
             if dom_thermal_info_update.is_alive():
                 dom_thermal_info_update.join()
+
+        # Stop the CPO dom thermal sensor info update thread
+        if cpo_dom_thermal_info_update is not None:
+            if cpo_dom_thermal_info_update.is_alive():
+                cpo_dom_thermal_info_update.join()
 
         # Stop the sfp state info update thread
         if sfp_state_update is not None:
