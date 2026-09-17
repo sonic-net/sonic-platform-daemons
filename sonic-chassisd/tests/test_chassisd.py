@@ -713,6 +713,80 @@ def test_smartswitch_module_db_update():
         module_updater.update_dpu_reboot_cause_to_db(name)
 
 
+def test_persist_dpu_reboot_cause_includes_user_field():
+    """The reboot-cause JSON written by chassisd must contain a 'user' field so
+    that entries rewritten by update_dpu_reboot_cause_to_db stay schema-consistent
+    with the entries produced by process-reboot-cause (which always sets 'user').
+    For hardware/auto-detected reboots no user is recorded, so 'user' is 'N/A'
+    (matching the NPU determine-reboot-cause default)."""
+    chassis = MockSmartSwitchChassis()
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    captured = {}
+
+    def capture_dump(obj, fp, *args, **kwargs):
+        captured.update(obj)
+
+    with patch("os.path.exists", return_value=True), \
+         patch("os.makedirs"), \
+         patch("builtins.open", mock_open(read_data="Power loss")), \
+         patch("os.remove"), \
+         patch("os.symlink"), \
+         patch.object(module_updater, "_rotate_files"), \
+         patch.object(module_updater, "retrieve_dpu_reboot_time", return_value="2024_11_13_15_06_40"), \
+         patch.object(module_updater, "retrieve_dpu_reboot_user", return_value="N/A"), \
+         patch("chassisd.json.dump", side_effect=capture_dump):
+
+        module_updater.persist_dpu_reboot_cause("Power loss,test comment", "DPU0")
+
+    assert "user" in captured
+    assert captured["user"] == "N/A"
+
+
+def test_persist_dpu_reboot_cause_records_user_for_user_initiated_reboot():
+    """For a user-initiated DPU reboot, reboot_smartswitch_helper persists the
+    operator's username (via retrieve_dpu_reboot_user); chassisd must record it
+    in the reboot-cause 'user' field, mirroring the NPU reboot-cause flow."""
+    chassis = MockSmartSwitchChassis()
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    captured = {}
+
+    def capture_dump(obj, fp, *args, **kwargs):
+        captured.update(obj)
+
+    with patch("os.path.exists", return_value=True), \
+         patch("os.makedirs"), \
+         patch("builtins.open", mock_open(read_data="Power loss")), \
+         patch("os.remove"), \
+         patch("os.symlink"), \
+         patch.object(module_updater, "_rotate_files"), \
+         patch.object(module_updater, "retrieve_dpu_reboot_time", return_value="2024_11_13_15_06_40"), \
+         patch.object(module_updater, "retrieve_dpu_reboot_user", return_value="admin"), \
+         patch("chassisd.json.dump", side_effect=capture_dump):
+
+        module_updater.persist_dpu_reboot_cause("Power loss,test comment", "DPU0")
+
+    assert captured["user"] == "admin"
+
+
+def test_retrieve_dpu_reboot_user():
+    """retrieve_dpu_reboot_user returns the recorded username (stripped), and
+    'N/A' when no prev_reboot_user.txt marker exists or it is empty (matching
+    the NPU non-user-reboot default)."""
+    chassis = MockSmartSwitchChassis()
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    with patch("builtins.open", mock_open(read_data="admin\n")):
+        assert module_updater.retrieve_dpu_reboot_user("DPU0") == "admin"
+
+    with patch("builtins.open", mock_open(read_data="  \n")):
+        assert module_updater.retrieve_dpu_reboot_user("DPU0") == "N/A"
+
+    with patch("builtins.open", side_effect=FileNotFoundError):
+        assert module_updater.retrieve_dpu_reboot_user("DPU0") == "N/A"
+
+
 def test_platform_json_file_exists_and_valid():
     """Test case where the platform JSON file exists with valid data."""
     chassis = MockSmartSwitchChassis()
