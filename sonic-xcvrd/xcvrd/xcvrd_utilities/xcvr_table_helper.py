@@ -1,9 +1,14 @@
+from collections import namedtuple
+
 try:
     from sonic_py_common import daemon_base, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
+
+# The latched flag table of a data family together with its metadata tables
+FlagTables = namedtuple('FlagTables', ['flag_tbl', 'change_count_tbl', 'set_time_tbl', 'clear_time_tbl'])
 
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
@@ -174,30 +179,67 @@ class XcvrTableHelper:
     def get_firmware_info_tbl(self, asic_id):
         return self.firmware_info_tbl[asic_id]
 
-    def get_dom_tables(self, asic_id):
-        """Returns the tables holding DOM data, including PM and firmware info."""
-        return [
+    def get_dom_flag_tables(self, asic_id):
+        """Returns the DOM flag table and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_dom_flag_tbl(asic_id),
+                          self.get_dom_flag_change_count_tbl(asic_id),
+                          self.get_dom_flag_set_time_tbl(asic_id),
+                          self.get_dom_flag_clear_time_tbl(asic_id))
+
+    def get_status_flag_tables(self, asic_id):
+        """Returns the transceiver status flag table and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_status_flag_tbl(asic_id),
+                          self.get_status_flag_change_count_tbl(asic_id),
+                          self.get_status_flag_set_time_tbl(asic_id),
+                          self.get_status_flag_clear_time_tbl(asic_id))
+
+    def get_vdm_flag_tables(self, asic_id, threshold_type):
+        """Returns the VDM flag table of the given threshold type and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_vdm_flag_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_change_count_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_set_time_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_clear_time_tbl(asic_id, threshold_type))
+
+    def get_dom_tables(self, asic_id, include_thresholds):
+        """Returns the tables holding DOM data, including PM and firmware info.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_thresholds (bool): also include TRANSCEIVER_DOM_THRESHOLD, which
+                is owned by SfpStateUpdateTask.
+        """
+        tables = [
             self.get_dom_tbl(asic_id),
             self.get_dom_temperature_tbl(asic_id),
             self.get_dom_flag_tbl(asic_id),
             self.get_dom_flag_change_count_tbl(asic_id),
             self.get_dom_flag_set_time_tbl(asic_id),
             self.get_dom_flag_clear_time_tbl(asic_id),
-            self.get_dom_threshold_tbl(asic_id),
             self.get_pm_tbl(asic_id),
             self.get_firmware_info_tbl(asic_id),
         ]
+        if include_thresholds:
+            tables.append(self.get_dom_threshold_tbl(asic_id))
+        return tables
 
-    def get_vdm_tables(self, asic_id):
-        """Returns the tables holding VDM data."""
-        return [
+    def get_vdm_tables(self, asic_id, include_thresholds):
+        """Returns the tables holding VDM data.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_thresholds (bool): also include the TRANSCEIVER_VDM_XXX_THRESHOLD
+                tables, which are owned by SfpStateUpdateTask.
+        """
+        tables = [
             self.get_vdm_real_value_tbl(asic_id),
-            *[self.get_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
             *[self.get_vdm_flag_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
             *[self.get_vdm_flag_change_count_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
             *[self.get_vdm_flag_set_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
             *[self.get_vdm_flag_clear_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
         ]
+        if include_thresholds:
+            tables.extend(self.get_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES)
+        return tables
 
     def get_status_tables(self, asic_id, include_sw):
         """Returns the tables holding transceiver status data.

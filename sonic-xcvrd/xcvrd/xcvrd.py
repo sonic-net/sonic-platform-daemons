@@ -794,8 +794,8 @@ class SfpStateUpdateTask(threading.Thread):
                 the logical port exists, since the SFP status/error is recorded there.
         """
         tbl_to_del_list = [
-            *self.xcvr_table_helper.get_dom_tables(asic_index),
-            *self.xcvr_table_helper.get_vdm_tables(asic_index),
+            *self.xcvr_table_helper.get_dom_tables(asic_index, include_thresholds=True),
+            *self.xcvr_table_helper.get_vdm_tables(asic_index, include_thresholds=True),
             *self.xcvr_table_helper.get_status_tables(asic_index, include_sw=delete_status_sw_tbl),
         ]
         if delete_intf_tbl:
@@ -1205,31 +1205,22 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
-        #
-        # Polls pluggable and CPO ports alike. is_pluggable_port() is defined as
-        # the complement of is_cpo_port(), so the two dicts partition the ports
-        # and the union below is the single dict this task was written against.
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, {**self.sfp_obj_dict, **self.cpo_obj_dict}, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
-        dom_info_update.start()
-        self.threads.append(dom_info_update)
+        dom_info_update = None
+        if self.sfp_obj_dict:
+            dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
+            dom_info_update.start()
+            self.threads.append(dom_info_update)
 
-        # The CPO half of that used to run as a thread of its own, and the class
-        # for it is kept in cpo/dom_mgr.py for when the statistics work wants a
-        # cadence per technology. It is parked rather than started, because
-        # CpoDomInfoUpdateTask does nothing but rename DomInfoUpdateTask, so a
-        # second thread over cpo_obj_dict would poll the ports the one above
-        # already covers. To bring it back, drop cpo_obj_dict from the union
-        # above and uncomment this together with its join below.
-        #
-        # cpo_dom_info_update = None
-        # if self.cpo_obj_dict:
-        #     cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
-        #     cpo_dom_info_update.start()
-        #     self.threads.append(cpo_dom_info_update)
+        # Start the CPO dom sensor info update thread
+        cpo_dom_info_update = None
+        if self.cpo_obj_dict:
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.skip_cpo_mgr, self.dom_update_interval)
+            cpo_dom_info_update.start()
+            self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
-        if self.dom_temperature_poll_interval is not None:
+        if self.sfp_obj_dict and self.dom_temperature_poll_interval is not None:
             dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event,
                                                                self.dom_temperature_poll_interval)
             dom_thermal_info_update.start()
@@ -1291,14 +1282,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 cpo_manager.join()
 
         # Stop the dom sensor info update thread
-        if dom_info_update.is_alive():
-            dom_info_update.join()
+        if dom_info_update is not None:
+            if dom_info_update.is_alive():
+                dom_info_update.join()
 
-        # Stop the CPO dom sensor info update thread (parked, see above)
-        #
-        # if cpo_dom_info_update is not None:
-        #     if cpo_dom_info_update.is_alive():
-        #         cpo_dom_info_update.join()
+        # Stop the CPO dom sensor info update thread
+        if cpo_dom_info_update is not None:
+            if cpo_dom_info_update.is_alive():
+                cpo_dom_info_update.join()
 
         # Stop the dom thermal sensor info update thread
         if dom_thermal_info_update is not None:
