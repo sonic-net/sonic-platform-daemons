@@ -4,7 +4,7 @@ import datetime
 
 try:
     from swsscommon import swsscommon
-    from ..dom.dom_mgr import DomInfoUpdateTask, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS
+    from ..dom.dom_mgr import DomInfoUpdateTask, DomThermalInfoUpdateTask, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities import port_event_helper
     from .db_utils import CPODOMDBUtils
@@ -352,3 +352,62 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                                     elsfp_bank_flags[bank_key]['status_flags'])
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing ELSFP flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
+
+
+class CpoDomThermalInfoUpdateTask(DomThermalInfoUpdateTask):
+    name = "CpoDomThermalInfoUpdateTask"
+
+    def create_xcvr_table_helper(self, namespaces) -> CpoXcvrTableHelper:
+        return CpoXcvrTableHelper(namespaces)
+
+    def create_dom_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper,
+                            task_stopping_event, logger) -> CPODOMDBUtils:
+        return CPODOMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
+
+    def collect_and_publish_temperature_data(self):
+        # Module case temperature keyed by the first physical port sharing the device.
+        # The temperature registers are device-wide (bank-independent), so the first
+        # port processed in this pass reads them and the remaining ports sharing the
+        # device re-use the snapshot.
+        oe_temperature = {}
+        elsfp_temperature = {}
+
+        for physical_port in sorted(self.port_obj_dict):
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during CPO DOM thermal monitoring loop")
+                break
+
+            port_info = self._validate_and_resolve_port(physical_port)
+            if port_info is None:
+                continue
+            cpo_obj, logical_port_name, asic_index = port_info
+
+            self._collect_and_publish_temperature(
+                "OE", cpo_obj.oe, common.get_oe_sibling_pports, oe_temperature, physical_port,
+                logical_port_name, self.xcvr_table_helper.get_dom_temperature_tbl(asic_index))
+            self._collect_and_publish_temperature(
+                "ELSFP", cpo_obj.elsfp, common.get_elsfp_sibling_pports, elsfp_temperature, physical_port,
+                logical_port_name, self.xcvr_table_helper.get_els_dom_temperature_tbl(asic_index))
+
+    def _collect_and_publish_temperature(self, device_name, device, get_sibling_pports, temperature_cache,
+                                         physical_port, logical_port_name, temperature_tbl):
+        try:
+            api = device.get_api()
+        except ValueError as e:
+            self.log_warning("Got exception {} while getting {} API for port {}, ignored".format(repr(e), device_name, logical_port_name))
+            return
+
+        try:
+            device_key = min(get_sibling_pports(physical_port))
+            if device_key not in temperature_cache:
+                temperature_cache[device_key] = api.get_module_temperature()
+
+            # Publish to the first subport's logical interface, matching the
+            # existing DomThermalInfoUpdateTask convention for breakout groups.
+            # A None value here means the read failed: skip publishing so the last
+            # good value is kept, and retry on the next polling period.
+            if temperature_cache[device_key] is not None:
+                self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+                    logical_port_name, temperature_tbl, {'temperature': temperature_cache[device_key]})
+        except (KeyError, TypeError) as e:
+            self.log_warning("Got exception {} while processing {} temperature for port {}, ignored".format(repr(e), device_name, logical_port_name))
