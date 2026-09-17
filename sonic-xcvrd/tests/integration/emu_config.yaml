@@ -4,11 +4,11 @@ transceivers:
     defaults:
       SFF8024Identifier: QSFP_DD
       SFF8024IdentifierCopy: QSFP_DD
-      VendorName: "xcvr-emu        "
-      VendorPN: "EMU-400G-DR4    "
+      VendorName: "xcvr-emu"
+      VendorPN: "EMU-400G-DR4"
       VendorRev: "01"
       VendorOUI: 0x010203
-      VendorSN: "EMU000000000001 "
+      VendorSN: "EMU000000000001"
       DateCode:
         Year: "26"
         Month: "09"

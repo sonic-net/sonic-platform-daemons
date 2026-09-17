@@ -78,6 +78,6 @@ At that revision all transceivers in one emulator process share EEPROM storage,
 so each emulated physical port gets a separate process containing index 1.
 [emu_config.yaml](./emu_config.yaml) advertises bank zero, 400G/4-lane and
 100G/1-lane applications with matching host/media lane counts. Identity strings
-are space-padded as required by CMIS. The adapter explicitly rejects other banks.
+in this configuration have no trailing spaces. The adapter explicitly rejects other banks.
 This suite does not claim to model optical links, real hardware timing,
 coherent modules, CPO devices, or the complete xcvrd service startup.
