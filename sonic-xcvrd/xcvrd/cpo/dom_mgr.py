@@ -3,7 +3,7 @@
 import datetime
 
 try:
-    from ..dom.dom_mgr import DomInfoUpdateTask, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS
+    from ..dom.dom_mgr import DomInfoUpdateTask, DomThermalInfoUpdateTask, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities import port_event_helper
     from .db_utils import CPODOMDBUtils
@@ -267,3 +267,53 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 {**elsfp_module_flags['status_flags'], **banked_status_flags},
                 self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
                 "ELS Status flags")
+
+
+class CpoDomThermalInfoUpdateTask(DomThermalInfoUpdateTask):
+    name = "CpoDomThermalInfoUpdateTask"
+
+    def create_xcvr_table_helper(self, namespaces) -> CpoXcvrTableHelper:
+        return CpoXcvrTableHelper(namespaces)
+
+    def create_dom_db_utils(self, port_obj_dict, port_mapping, xcvr_table_helper,
+                            task_stopping_event, logger) -> CPODOMDBUtils:
+        return CPODOMDBUtils(port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger)
+
+    def collect_and_publish_temperature_data(self):
+        # Module case temperature keyed by the first physical port sharing the device.
+        # The temperature registers are device-wide (bank-independent), so the first
+        # port processed in this pass reads them and the remaining ports sharing the
+        # device re-use the snapshot.
+        oe_temperature = {}
+        elsfp_temperature = {}
+
+        for physical_port in sorted(self.port_obj_dict):
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during CPO DOM thermal monitoring loop")
+                break
+
+            port_info = self._validate_and_resolve_port(physical_port)
+            if port_info is None:
+                continue
+            cpo_obj, logical_port_name, asic_index = port_info
+
+            oe_key = min(common.get_oe_sibling_pports(physical_port))
+            if oe_key not in oe_temperature:
+                oe_temperature[oe_key] = cpo_obj.oe.get_api().get_module_temperature()
+
+            elsfp_key = min(common.get_elsfp_sibling_pports(physical_port))
+            if elsfp_key not in elsfp_temperature:
+                elsfp_temperature[elsfp_key] = cpo_obj.elsfp.get_api().get_module_temperature()
+
+            # Publish to the first subport's logical interface, matching the
+            # existing DomThermalInfoUpdateTask convention for breakout groups.
+            # A None value here means the read failed: skip publishing so the last
+            # good value is kept, and retry on the next polling period.
+            if oe_temperature[oe_key] is not None:
+                self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+                    logical_port_name, self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
+                    {'temperature': oe_temperature[oe_key]})
+            if elsfp_temperature[elsfp_key] is not None:
+                self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+                    logical_port_name, self.xcvr_table_helper.get_els_dom_temperature_tbl(asic_index),
+                    {'temperature': elsfp_temperature[elsfp_key]})
