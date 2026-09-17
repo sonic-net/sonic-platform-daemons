@@ -19,13 +19,6 @@ from .helpers import NAMESPACES, TaskRunner, post_transceiver_info
 INTEGRATION_DIR = Path(__file__).parent
 
 
-def pytest_configure(config):
-    """Register the integration marker without changing shared import state."""
-    config.addinivalue_line(
-        'markers',
-        'integration: real xcvr-emu process and SONiC platform APIs, mocked swsscommon')
-
-
 @pytest.fixture(scope='module', autouse=True)
 def isolated_sonic_modules():
     """Keep unit-test import-time mocks separate from real integration APIs."""
