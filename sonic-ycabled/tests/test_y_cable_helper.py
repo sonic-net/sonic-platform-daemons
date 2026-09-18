@@ -1268,6 +1268,79 @@ class TestYCableScript(object):
         assert(rc == None)
 
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_y_cable(self):
+        port_instance = MagicMock()
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {0: port_instance}, clear=True), patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status',
+                {0: True}, clear=True):
+            assert is_initialized_y_cable("Ethernet0") is True
+
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_y_cable_without_instance(self):
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {}, clear=True), patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status',
+                {0: True}, clear=True):
+            assert is_initialized_y_cable("Ethernet0") is False
+
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_y_cable_incomplete_instance(self):
+        port_instance = MagicMock()
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {0: port_instance}, clear=True), patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status',
+                {0: False}, clear=True):
+            assert is_initialized_y_cable("Ethernet0") is False
+
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
+    def test_is_initialized_y_cable_for_hardware_instance(self):
+        hardware_port_instance = MagicMock()
+        with patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_instances',
+                {0: hardware_port_instance}, clear=True), patch.dict(
+                'ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status',
+                {0: True}, clear=True):
+            assert is_initialized_y_cable("Ethernet0") is True
+
+    def test_check_identifier_presence_marks_hardware_y_cable_initialized(self):
+        class HardwareYCable(object):
+            def __init__(self, port, logger):
+                pass
+
+            def get_vendor(self):
+                return "molex"
+
+        port_tbl = {0: MagicMock()}
+        port_tbl[0].get.return_value = (True, [('state', 'auto')])
+        y_cable_tbl = {0: MagicMock()}
+        static_tbl = {0: MagicMock()}
+        mux_tbl = {0: MagicMock()}
+
+        with patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', return_value=[0]), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', return_value=True), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_transceiver_info', return_value={
+                    'manufacturer': 'molex', 'model': '2164351001'}), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_vendor_mapping.mapping') as mapping, \
+                patch('ycable.ycable_utilities.y_cable_helper.import_module') as import_module, \
+                patch('ycable.ycable_utilities.y_cable_helper.read_y_cable_and_update_statedb_port_tbl'), \
+                patch('ycable.ycable_utilities.y_cable_helper.post_port_mux_static_info_to_db'), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances', {}, clear=True), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status', {}, clear=True), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', {}, clear=True):
+            mapping.get.return_value = {'2164351001': 'hardware.y_cable'}
+            import_module.return_value.YCable = HardwareYCable
+            y_cable_presence = [True]
+            check_identifier_presence_and_update_mux_table_entry(
+                {}, port_tbl, y_cable_tbl, static_tbl, mux_tbl, 0,
+                'Ethernet0', y_cable_presence)
+
+            assert is_initialized_y_cable('Ethernet0') is True
+
+    @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))
     def test_check_identifier_presence_and_update_mux_table_entry_no_port_info(self):
