@@ -23,8 +23,7 @@
                              keeps STATE_DB:HOST_STATE current.  Writes
                              transitional states (POWERING_ON/OFF/CYCLING)
                              before each call; rolls back on exception.
-      PolicyReader           Reads admin_status, power_on_delay, and
-                             graceful_shutdown_timeout from CHASSIS_MODULE|SWITCH-HOST in CONFIG_DB.
+      PolicyReader           Reads bmcctld configuration from CONFIG_DB.
       CriticalEventChecker   Checks STATE_DB for active critical system leaks or
                              Rack Manager alerts; gates power-on decisions.
       GracefulShutdownHandler  Sends tagged gNOI System.Reboot(HALT), evaluates
@@ -338,12 +337,12 @@ BMC_JSON_PATHS = [
 DEFAULT_SWITCH_HOST_ADDR = "169.254.100.2"
 DEFAULT_SWITCH_HOST_GNMI_PORT = 8080
 GNOI_SERVER_NAME = "switch-host.bmc-link.sonic"
-BMC_LINK_CERT_DIR = "/etc/sonic/bmc-link"
-BMC_LINK_CERT_PATHS = (
-    os.path.join(BMC_LINK_CERT_DIR, "client.crt"),
-    os.path.join(BMC_LINK_CERT_DIR, "client.key"),
-    os.path.join(BMC_LINK_CERT_DIR, "ca.crt"),
-)
+BMC_GNOI_TABLE = "BMC_GNOI"
+DEFAULT_GNOI_CERT_PATHS = {
+    "ca_crt": "/etc/sonic/bmc-link/ca.crt",
+    "client_crt": "/etc/sonic/bmc-link/client.crt",
+    "client_key": "/etc/sonic/bmc-link/client.key",
+}
 TAG_RE = r"\[bmc-req:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]"
 
 SELECT_TIMEOUT_MSECS = 1000
@@ -471,20 +470,20 @@ class GnoiRpcError(Exception):
 class GnoiRequester:
     """One-operation mTLS wrapper around the in-process gNOI client."""
 
-    def __init__(self, target_addr, target_port, cert_dir, server_name):
+    def __init__(self, target_addr, target_port, cert_paths, server_name):
         self.target_addr = target_addr
         self.target_port = target_port
-        self.cert_dir = cert_dir
+        self.cert_paths = cert_paths
         self.server_name = server_name
         self._client = None
 
     def open(self):
         try:
-            with open(os.path.join(self.cert_dir, "ca.crt"), "rb") as cert_file:
+            with open(self.cert_paths["ca_crt"], "rb") as cert_file:
                 ca_cert = cert_file.read()
-            with open(os.path.join(self.cert_dir, "client.key"), "rb") as key_file:
+            with open(self.cert_paths["client_key"], "rb") as key_file:
                 client_key = key_file.read()
-            with open(os.path.join(self.cert_dir, "client.crt"), "rb") as cert_file:
+            with open(self.cert_paths["client_crt"], "rb") as cert_file:
                 client_cert = cert_file.read()
 
             credentials = grpc.ssl_channel_credentials(
@@ -898,7 +897,7 @@ class SwitchHostController(EventLogger):
 # ============================================================
 
 class PolicyReader(EventLogger):
-    """Reads bmcctld timing and leak policy configuration from CONFIG_DB."""
+    """Reads bmcctld configuration from CONFIG_DB."""
 
     def __init__(self, thread_database=None):
         super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER)
@@ -940,6 +939,14 @@ class PolicyReader(EventLogger):
             except (ValueError, TypeError):
                 pass
         return DEFAULT_SHUTDOWN_DELAY_SECS
+
+    def get_gnoi_cert_paths(self):
+        """Resolve the three client credential paths for one operation."""
+        table = self._thread_database.table("CONFIG_DB", BMC_GNOI_TABLE)
+        result = table.get("certs")
+        entry = fvs_to_dict(result[1]) if result and result[0] else {}
+        return {field: entry.get(field, default)
+                for field, default in DEFAULT_GNOI_CERT_PATHS.items()}
 
     def get_leak_control_policy(self):
         """Return LEAK_CONTROL_POLICY as a dict with action defaults filled in."""
@@ -1045,7 +1052,7 @@ class GracefulShutdownHandler(EventLogger):
         self.controller = controller
         self.policy_reader = policy_reader
 
-    def _is_graceful_qualified(self):
+    def _is_graceful_qualified(self, cert_paths):
         """Return whether this BMC is currently qualified for the graceful leg."""
         try:
             if not device_info.is_switch_bmc():
@@ -1056,14 +1063,23 @@ class GracefulShutdownHandler(EventLogger):
             return False
 
         try:
-            return all(os.path.isfile(path) and os.path.getsize(path) > 0
-                       for path in BMC_LINK_CERT_PATHS)
-        except OSError:
+            for field in DEFAULT_GNOI_CERT_PATHS:
+                path = cert_paths[field]
+                if not isinstance(path, str) or not os.path.isabs(path):
+                    self.log_warning("Invalid BMC gNOI {} path: {!r}".format(field, path))
+                    return False
+                if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                    self.log_warning("Missing or empty BMC gNOI {} file: {}".format(field, path))
+                    return False
+            return True
+        except OSError as e:
+            self.log_warning("Cannot check BMC gNOI {} file {}: {}".format(field, path, e))
             return False
 
     def _run_shutdown_leg(self, operation, requester_factory):
         """Run one tagged graceful-shutdown handshake and retain its evidence."""
         timeout = self.policy_reader.get_graceful_shutdown_timeout()
+        cert_paths = self.policy_reader.get_gnoi_cert_paths()
         self.log_notice(
             "Initiating graceful shutdown of Switch-Host (timeout={}s)".format(timeout))
         self.controller._update_host_state(SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
@@ -1072,7 +1088,7 @@ class GracefulShutdownHandler(EventLogger):
         graceful = False
         requester = None
 
-        if not self._is_graceful_qualified():
+        if not self._is_graceful_qualified(cert_paths):
             reason = OP_REASON_NOT_QUALIFIED
         elif timeout == 0:
             reason = OP_REASON_TIMEOUT_ZERO
@@ -1087,7 +1103,7 @@ class GracefulShutdownHandler(EventLogger):
                     requester = requester_factory(
                         self._get_switch_host_addr(),
                         self._get_switch_host_gnoi_port(),
-                        BMC_LINK_CERT_DIR,
+                        cert_paths,
                         GNOI_SERVER_NAME,
                     )
                     if operation.cancel.is_set():

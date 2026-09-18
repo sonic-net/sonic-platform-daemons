@@ -689,6 +689,31 @@ class TestPolicyReader:
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert policy_reader.get_graceful_shutdown_timeout() == 0
 
+    @pytest.mark.parametrize("field", [None, "ca_crt", "client_crt", "client_key"])
+    def test_certificate_defaults_and_partial_overrides(self, field, policy_reader):
+        table = policy_reader._thread_database.table("CONFIG_DB", "BMC_GNOI")
+        expected = {
+            "ca_crt": "/etc/sonic/bmc-link/ca.crt",
+            "client_crt": "/etc/sonic/bmc-link/client.crt",
+            "client_key": "/etc/sonic/bmc-link/client.key",
+        }
+        if field:
+            _set_table_entry(table, "certs", {field: "/etc/sonic/custom.pem"})
+            expected[field] = "/etc/sonic/custom.pem"
+        with patch.object(table, "set") as write_row:
+            paths = policy_reader.get_gnoi_cert_paths()
+            assert paths == expected
+            paths["ca_crt"] = "modified local copy"
+            assert policy_reader.get_gnoi_cert_paths() == expected
+        write_row.assert_not_called()
+
+    def test_certificate_reader_projects_only_known_fields(self, policy_reader):
+        table = policy_reader._thread_database.table("CONFIG_DB", "BMC_GNOI")
+        _set_table_entry(table, "certs", {"ca_crt": "", "extra": "not a path"})
+        paths = policy_reader.get_gnoi_cert_paths()
+        assert set(paths) == {"ca_crt", "client_crt", "client_key"}
+        assert paths["ca_crt"] == ""
+
     def test_chassis_module_entry_all_fields(self, policy_reader):
         """All three fields coexist in CHASSIS_MODULE|SWITCH-HOST."""
         tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
@@ -1065,20 +1090,20 @@ class TestGracefulQualification:
     def _configure_qualified(self, monkeypatch, tmp_path, graceful_shutdown):
         cert_dir = tmp_path / "certs"
         cert_dir.mkdir()
-        cert_paths = tuple(cert_dir / name for name in ("client.crt", "client.key", "ca.crt"))
-        for path in cert_paths:
-            path.write_bytes(b"certificate-data")
+        cert_paths = {field: str(cert_dir / os.path.basename(default))
+                      for field, default in bmcctld.DEFAULT_GNOI_CERT_PATHS.items()}
+        for path in cert_paths.values():
+            with open(path, "wb") as stream:
+                stream.write(b"certificate-data")
 
         monkeypatch.setattr(bmcctld.device_info, "is_switch_bmc", lambda: True)
-        monkeypatch.setattr(bmcctld, "BMC_LINK_CERT_PATHS",
-                            tuple(str(path) for path in cert_paths))
         return cert_paths
 
     def test_g_qualification_accepts_only_complete_positive_gate(
             self, monkeypatch, tmp_path, graceful_shutdown):
-        self._configure_qualified(monkeypatch, tmp_path, graceful_shutdown)
+        cert_paths = self._configure_qualified(monkeypatch, tmp_path, graceful_shutdown)
         with patch("builtins.open") as direct_open:
-            assert graceful_shutdown._is_graceful_qualified() is True
+            assert graceful_shutdown._is_graceful_qualified(cert_paths) is True
         direct_open.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -1093,19 +1118,20 @@ class TestGracefulQualification:
         if failure == "wrong-role":
             monkeypatch.setattr(bmcctld.device_info, "is_switch_bmc", lambda: False)
         elif failure == "missing-cert":
-            cert_paths[0].unlink()
+            os.unlink(cert_paths["client_crt"])
         elif failure == "empty-cert":
-            cert_paths[0].write_bytes(b"")
+            with open(cert_paths["client_crt"], "wb"):
+                pass
         else:
             monkeypatch.setattr(bmcctld.os.path, "isfile", lambda _path: True)
             monkeypatch.setattr(bmcctld.os.path, "getsize",
                                 MagicMock(side_effect=FileNotFoundError))
 
-        assert graceful_shutdown._is_graceful_qualified() is False
+        assert graceful_shutdown._is_graceful_qualified(cert_paths) is False
 
     def test_g_qualification_identity_exception_is_logged(
             self, monkeypatch, tmp_path, graceful_shutdown):
-        self._configure_qualified(
+        cert_paths = self._configure_qualified(
             monkeypatch, tmp_path, graceful_shutdown)
         failure = RuntimeError("unexpected identity failure")
         monkeypatch.setattr(
@@ -1113,7 +1139,7 @@ class TestGracefulQualification:
             MagicMock(side_effect=failure))
         graceful_shutdown.log_error = MagicMock()
 
-        assert graceful_shutdown._is_graceful_qualified() is False
+        assert graceful_shutdown._is_graceful_qualified(cert_paths) is False
         graceful_shutdown.log_error.assert_called_once()
         assert str(failure) in graceful_shutdown.log_error.call_args.args[0]
 
@@ -1121,10 +1147,11 @@ class TestGracefulQualification:
             self, monkeypatch, tmp_path, graceful_shutdown):
         cert_paths = self._configure_qualified(
             monkeypatch, tmp_path, graceful_shutdown)
-        cert_paths[0].unlink()
-        assert graceful_shutdown._is_graceful_qualified() is False
-        cert_paths[0].write_bytes(b"certificate-data")
-        assert graceful_shutdown._is_graceful_qualified() is True
+        os.unlink(cert_paths["client_crt"])
+        assert graceful_shutdown._is_graceful_qualified(cert_paths) is False
+        with open(cert_paths["client_crt"], "wb") as stream:
+            stream.write(b"certificate-data")
+        assert graceful_shutdown._is_graceful_qualified(cert_paths) is True
 
 
 class FakeGrpcError(Exception):
@@ -1146,6 +1173,7 @@ class TestGnoiRequester:
         )
         proto_api = SimpleNamespace(
             HALT=3,
+            RebootStatus=SimpleNamespace(STATUS_SUCCESS=1),
             RebootRequest=MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
             RebootStatusRequest=MagicMock(return_value="status-request"),
         )
@@ -1157,7 +1185,11 @@ class TestGnoiRequester:
         monkeypatch.setattr(bmcctld, "GnoiClient", client_factory)
 
         requester = bmcctld.GnoiRequester(
-            "169.254.100.2", 8080, str(cert_dir), bmcctld.GNOI_SERVER_NAME)
+            "169.254.100.2", 8080,
+            {"ca_crt": str(cert_dir / "ca.crt"),
+             "client_crt": str(cert_dir / "client.crt"),
+             "client_key": str(cert_dir / "client.key")},
+            bmcctld.GNOI_SERVER_NAME)
         return requester, grpc_api, proto_api, client_factory, client, cert_dir
 
     def test_f_requester_uses_exact_mtls_and_rpc_shapes(self, monkeypatch, tmp_path):
@@ -1237,6 +1269,182 @@ class TestGnoiRequester:
             assert client.__exit__.call_count == 1
         else:
             client_factory.assert_not_called()
+
+
+class TestConfiguredCertificatePaths:
+
+    def _setup(self, monkeypatch, tmp_path, graceful_shutdown, chassis):
+        _, grpc_api, _, _, client, _ = TestGnoiRequester()._make_requester(
+            monkeypatch, tmp_path)
+        paths = {
+            "ca_crt": str(tmp_path / "trust" / "root.pem"),
+            "client_crt": str(tmp_path / "identity" / "certificate.pem"),
+            "client_key": str(tmp_path / "identity" / "private.key"),
+        }
+        for field, path in paths.items():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as stream:
+                stream.write(field.encode())
+        table = graceful_shutdown.policy_reader._thread_database.table(
+            "CONFIG_DB", "BMC_GNOI")
+        _set_table_entry(table, "certs", paths)
+        timeout_table = graceful_shutdown.policy_reader._thread_database.table(
+            "CONFIG_DB", bmcctld.CHASSIS_MODULE_TABLE)
+        _set_table_entry(timeout_table, bmcctld.SWITCH_HOST_MODULE_KEY,
+                         {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "10"})
+        monkeypatch.setattr(bmcctld.device_info, "is_switch_bmc", lambda: True)
+        graceful_shutdown._get_switch_host_addr = MagicMock(return_value="169.254.100.2")
+        graceful_shutdown._get_switch_host_gnoi_port = MagicMock(return_value=8080)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        graceful_shutdown.controller.power_off = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        graceful_shutdown.controller.power_on = MagicMock(
+            return_value=bmcctld.PowerCallResult.CONFIRMED)
+        client.system.RebootStatus.return_value = _report(
+            "done [bmc-req:{}]".format(TEST_REQUEST_ID))
+        return paths, table, grpc_api, client
+
+    @pytest.mark.parametrize("action", [
+        bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.ACTION_GRACEFUL_RESTART,
+    ])
+    def test_configured_files_reach_tls_through_operation(
+            self, action, monkeypatch, tmp_path, graceful_shutdown, chassis):
+        paths, table, grpc_api, client = self._setup(
+            monkeypatch, tmp_path, graceful_shutdown, chassis)
+        operation = _make_operation(action)
+        operation.cancel.wait = MagicMock(return_value=False)
+        execute = (graceful_shutdown.execute_restart
+                   if action == bmcctld.ACTION_GRACEFUL_RESTART
+                   else graceful_shutdown.execute)
+        with patch.object(table, "get", wraps=table.get) as read_row, \
+                patch("builtins.open", wraps=builtins.open) as read_file:
+            outcome = execute(operation, bmcctld.GnoiRequester)
+
+        assert outcome == (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+        read_row.assert_called_once_with("certs")
+        assert read_file.call_args_list == [
+            call(paths["ca_crt"], "rb"), call(paths["client_key"], "rb"),
+            call(paths["client_crt"], "rb"),
+        ]
+        grpc_api.ssl_channel_credentials.assert_called_once_with(
+            root_certificates=b"ca_crt", private_key=b"client_key",
+            certificate_chain=b"client_crt")
+        client.system.Reboot.assert_called_once()
+        client.__exit__.assert_called_once_with(None, None, None)
+        graceful_shutdown.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+        if action == bmcctld.ACTION_GRACEFUL_RESTART:
+            graceful_shutdown.controller.power_on.assert_called_once_with(
+                operation, operation.cancel)
+        else:
+            graceful_shutdown.controller.power_on.assert_not_called()
+
+    def test_snapshot_is_shared_until_next_operation(
+            self, monkeypatch, tmp_path, graceful_shutdown, chassis):
+        paths, table, grpc_api, _ = self._setup(
+            monkeypatch, tmp_path, graceful_shutdown, chassis)
+        replacement = tmp_path / "replacement.pem"
+        replacement.write_bytes(b"new-ca")
+        qualify = graceful_shutdown._is_graceful_qualified
+
+        def change_config_after_resolution(selected):
+            table.set("certs", FieldValuePairs([
+                ("ca_crt", str(replacement)), ("extra", "ignored")]))
+            return qualify(selected)
+
+        monkeypatch.setattr(graceful_shutdown, "_is_graceful_qualified",
+                            change_config_after_resolution)
+        with patch.object(table, "get", wraps=table.get) as read_row:
+            for _ in range(2):
+                outcome = graceful_shutdown.execute(
+                    _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN),
+                    bmcctld.GnoiRequester)
+                assert outcome == (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+        assert read_row.call_args_list == [call("certs"), call("certs")]
+        assert grpc_api.ssl_channel_credentials.call_args_list == [
+            call(root_certificates=b"ca_crt", private_key=b"client_key",
+                 certificate_chain=b"client_crt"),
+            call(root_certificates=b"new-ca", private_key=b"client_key",
+                 certificate_chain=b"client_crt"),
+        ]
+
+    @pytest.mark.parametrize("field", ["ca_crt", "client_crt", "client_key"])
+    @pytest.mark.parametrize("failure", ["empty", "relative", "missing", "empty-file"])
+    def test_invalid_selected_path_does_not_fall_back(
+            self, field, failure, monkeypatch, tmp_path, graceful_shutdown, chassis):
+        paths, table, _, _ = self._setup(
+            monkeypatch, tmp_path, graceful_shutdown, chassis)
+        monkeypatch.setattr(bmcctld, "DEFAULT_GNOI_CERT_PATHS", dict(paths))
+        empty_file = tmp_path / "empty.pem"
+        empty_file.touch()
+        invalid = {"empty": "", "relative": "relative.pem",
+                   "missing": str(tmp_path / "missing.pem"),
+                   "empty-file": str(empty_file)}[failure]
+        _set_table_entry(table, "certs", {field: invalid})
+        factory = MagicMock()
+        operation = _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        assert graceful_shutdown.execute(operation, factory) == (
+            bmcctld.OP_RESULT_SUCCESS_FORCED, bmcctld.OP_REASON_NOT_QUALIFIED, True)
+        factory.assert_not_called()
+        graceful_shutdown.controller.power_off.assert_called_once_with(
+            operation, operation.cancel)
+        assert field in graceful_shutdown.log_warning.call_args.args[0]
+
+    @pytest.mark.parametrize("failure", [FileNotFoundError, PermissionError])
+    def test_selected_file_read_failure_uses_rpc_failure(
+            self, failure, monkeypatch, tmp_path, graceful_shutdown, chassis):
+        paths, _, grpc_api, client = self._setup(
+            monkeypatch, tmp_path, graceful_shutdown, chassis)
+        with patch("builtins.open", side_effect=failure("file changed")) as read_file:
+            outcome = graceful_shutdown.execute(
+                _make_operation(bmcctld.ACTION_GRACEFUL_SHUTDOWN),
+                bmcctld.GnoiRequester)
+        assert outcome == (bmcctld.OP_RESULT_SUCCESS_FORCED,
+                           bmcctld.OP_REASON_RPC_FAILURE, True)
+        read_file.assert_called_once_with(paths["ca_crt"], "rb")
+        grpc_api.ssl_channel_credentials.assert_not_called()
+        client.system.Reboot.assert_not_called()
+
+    @pytest.mark.parametrize("action,confirmed_result", [
+        (bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.OP_RESULT_SUCCESS_FORCED),
+        (bmcctld.ACTION_GRACEFUL_RESTART, bmcctld.OP_RESULT_POWER_ON_FAILED),
+    ])
+    @pytest.mark.parametrize("power_result", [
+        bmcctld.PowerCallResult.CONFIRMED, bmcctld.PowerCallResult.NOT_CONFIRMED,
+    ])
+    @pytest.mark.parametrize("cancelled", [False, True])
+    def test_db_read_error_uses_existing_worker_recovery(
+            self, action, confirmed_result, power_result, cancelled,
+            monkeypatch, tmp_path, graceful_shutdown, chassis):
+        _, table, _, _ = self._setup(
+            monkeypatch, tmp_path, graceful_shutdown, chassis)
+        table.get = MagicMock(side_effect=RuntimeError("DB unavailable"))
+        controller = graceful_shutdown.controller
+        controller.power_off.return_value = power_result
+        controller._update_host_state = MagicMock()
+        factory = MagicMock()
+        daemon = SimpleNamespace(graceful_shutdown=graceful_shutdown,
+                                 controller=controller, gnoi_requester_factory=factory)
+        runner = bmcctld.OperationRunner(daemon, queue.PriorityQueue(), itertools.count())
+        runner.log_error = MagicMock()
+        operation = _make_operation(action)
+        if cancelled:
+            operation.cancel.set()
+        runner._run_worker(operation)
+        table.get.assert_called_once_with("certs")
+        factory.assert_not_called()
+        controller._update_host_state.assert_not_called()
+        controller.power_on.assert_not_called()
+        if cancelled:
+            controller.power_off.assert_not_called()
+            assert operation.outcome[0] == bmcctld.OP_RESULT_PREEMPTED
+        else:
+            controller.power_off.assert_called_once_with(operation, operation.cancel)
+            expected = (confirmed_result if power_result == bmcctld.PowerCallResult.CONFIRMED
+                        else bmcctld.OP_RESULT_POWER_OFF_FAILED)
+            assert operation.outcome == (
+                expected, bmcctld.OP_REASON_UNCLASSIFIED,
+                expected == bmcctld.OP_RESULT_SUCCESS_FORCED)
 
 
 class FakeClock:
@@ -5293,6 +5501,7 @@ class TestDatabaseThreadOwnership:
             event_handler.run_event_loop()
             controller.get_db_device_status()
             policy_reader.get_graceful_shutdown_timeout()
+            policy_reader.get_gnoi_cert_paths()
             critical_checker.get_system_leak_status()
 
         def worker_access():
@@ -5300,6 +5509,7 @@ class TestDatabaseThreadOwnership:
                 bmcctld.SWITCH_HOST_POWERING_OFF,
                 bmcctld.SWITCH_HOST_OFFLINE)
             policy_reader.get_graceful_shutdown_timeout()
+            policy_reader.get_gnoi_cert_paths()
             critical_checker.get_system_leak_status()
 
         event_thread = threading.Thread(
@@ -5313,6 +5523,7 @@ class TestDatabaseThreadOwnership:
         if both_started:
             controller.write_operation_start(TEST_UUID4, "test")
             policy_reader.get_graceful_shutdown_timeout()
+            policy_reader.get_gnoi_cert_paths()
             critical_checker.get_system_leak_status()
             event_handler._set_cmd_request_id("CMD_THREAD", TEST_UUID4)
         release.set()
@@ -5333,6 +5544,9 @@ class TestDatabaseThreadOwnership:
 
         for role in (
                 admission_thread_name, "db-owner-event", "db-owner-worker"):
+            assert any(obj.table_name == bmcctld.BMC_GNOI_TABLE and
+                       obj.owner_name == role for obj in created
+                       if isinstance(obj, StrictTable))
             assert {
                 db_name for _, db_name, owner_name in connection_records
                 if owner_name == role
