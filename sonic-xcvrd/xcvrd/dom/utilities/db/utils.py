@@ -190,7 +190,7 @@ class DBUtils:
 
         if physical_port not in self.port_obj_dict:
             self.logger.log_error(f"Validate and get physical port failed for {logical_port_name} "
-                                   "as no sfp object found")
+                                   "as no port object found")
             return None
 
         if not self.xcvrd_utils.get_transceiver_presence(physical_port):

@@ -627,7 +627,7 @@ class SfpStateUpdateTask(threading.Thread):
                                         if error_dict:
                                             vendor_specific_error_description = error_dict.get(key)
                                         else:
-                                            vendor_specific_error_description = self._get_port_error_description(key)
+                                            vendor_specific_error_description = self._get_port_error_description(int(key))
                                         error_descriptions.append(vendor_specific_error_description)
 
                                     # Add error info to database

@@ -49,7 +49,8 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
             helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
             return PHYSICAL_PORT_NOT_EXIST
 
-        assert len(physical_port_list) == 1, "Ganged ports are not yet supported on CPO"
+        if len(physical_port_list) > 1:
+            raise NotImplementedError("Ganged ports are not yet supported on CPO")
 
         for physical_port in physical_port_list:
             if stop_event.is_set():
