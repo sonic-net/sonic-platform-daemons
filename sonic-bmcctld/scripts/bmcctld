@@ -52,6 +52,7 @@ try:
 
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.chassis_base import ChassisBase
+    from sonic_platform_base.liquid_cooling_base import SystemLeakStatus
 
     if os.getenv("BMCCTLD_UNIT_TESTING") == "1":
         from tests import mock_swsscommon as swsscommon
@@ -212,10 +213,6 @@ CMD_STATUS_FAILED = "FAILED"
 ADMIN_UP = "up"
 ADMIN_DOWN = "down"
 
-# Leak status values (SYSTEM_LEAK_STATUS table) — match LeakSeverity.value from liquid_cooling_base.py
-SYSTEM_LEAK_CRITICAL = "CRITICAL"
-SYSTEM_LEAK_MINOR = "MINOR"
-
 # Alert severity values
 ALERT_SEVERITY_CRITICAL = "CRITICAL"
 ALERT_SEVERITY_MAJOR = "MAJOR"
@@ -232,9 +229,11 @@ ACTION_POWER_CYCLE = "power_cycle"
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
 DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION = ACTION_POWER_OFF
+DEFAULT_SYSTEM_MAJOR_LEAK_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_SYSTEM_MINOR_LEAK_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_LEAK_POLICY = "enabled"
 DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION = ACTION_SYSLOG_ONLY
+DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
@@ -611,9 +610,11 @@ class PolicyReader(EventLogger):
         policy = {
             "system_leak_policy": DEFAULT_SYSTEM_LEAK_POLICY,
             "system_critical_leak_action": DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION,
+            "system_major_leak_action": DEFAULT_SYSTEM_MAJOR_LEAK_ACTION,
             "system_minor_leak_action": DEFAULT_SYSTEM_MINOR_LEAK_ACTION,
             "rack_mgr_leak_policy": DEFAULT_RACK_MGR_LEAK_POLICY,
             "rack_mgr_critical_alert_action": DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION,
+            "rack_mgr_major_alert_action": DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION,
             "rack_mgr_minor_alert_action": DEFAULT_RACK_MGR_MINOR_ALERT_ACTION,
         }
         tbl = swsscommon.Table(self.config_db, LEAK_CONTROL_POLICY_TABLE)
@@ -651,7 +652,7 @@ class CriticalEventChecker(logger.Logger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
+            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SystemLeakStatus.CRITICAL:
                 return True
         return False
 
@@ -999,13 +1000,19 @@ class BmcEventHandler(EventLogger):
                     key, leak_status))
             return
 
-        if leak_status == SYSTEM_LEAK_CRITICAL:
+        if leak_status == SystemLeakStatus.CRITICAL:
             action = policy.get("system_critical_leak_action", DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION)
             self._event_log.log_notice("CRITICAL SYSTEM LEAK detected (status={}); "
                                        "action={}".format(leak_status, action))
             self._dispatch_action(action, "CRITICAL_SYSTEM_LEAK")
 
-        elif leak_status == SYSTEM_LEAK_MINOR:
+        elif leak_status == SystemLeakStatus.MAJOR:
+            action = policy.get("system_major_leak_action", DEFAULT_SYSTEM_MAJOR_LEAK_ACTION)
+            self._event_log.log_notice("MAJOR SYSTEM LEAK detected (status={}); "
+                                       "action={}".format(leak_status, action))
+            self._dispatch_action(action, "MAJOR_SYSTEM_LEAK")
+
+        elif leak_status == SystemLeakStatus.MINOR:
             action = policy.get("system_minor_leak_action", DEFAULT_SYSTEM_MINOR_LEAK_ACTION)
             self._dispatch_action(action, "MINOR_SYSTEM_LEAK")
 
@@ -1038,7 +1045,11 @@ class BmcEventHandler(EventLogger):
                                        "action={}".format(severity, key, action))
             self._dispatch_action(action, "RACK_MGR_CRITICAL_EVENT key={}".format(key))
 
-        elif severity in (ALERT_SEVERITY_MINOR, ALERT_SEVERITY_MAJOR):
+        elif severity == ALERT_SEVERITY_MAJOR:
+            action = policy.get("rack_mgr_major_alert_action", DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION)
+            self._dispatch_action(action, "RACK_MGR_MAJOR_EVENT key={}".format(key))
+
+        elif severity == ALERT_SEVERITY_MINOR:
             action = policy.get("rack_mgr_minor_alert_action", DEFAULT_RACK_MGR_MINOR_ALERT_ACTION)
             self._dispatch_action(action, "RACK_MGR_MINOR_EVENT key={}".format(key))
 
