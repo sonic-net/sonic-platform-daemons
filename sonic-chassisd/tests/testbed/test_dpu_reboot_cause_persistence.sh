@@ -10,6 +10,8 @@
 #   Test 5: Deferred EMPTY→OFFLINE→ONLINE with same cause (no duplicate)
 #   Test 6: Back-to-back reboot skips duplicate persist
 #   Test 7: Reboot during pmon restart — same cause skips persist (Path C3)
+#   Test 8: Planned midplane-down reason is updated and persisted
+#   Test 9: Unplanned midplane-down reason is updated and persisted
 #
 
 SCRIPT_NAME=$(basename "$0")
@@ -18,9 +20,10 @@ usage() {
     cat <<EOF
 Usage: sudo bash $SCRIPT_NAME [OPTIONS]
 
-Verify SmartSwitch DPU reboot-cause tracking across all status transitions
-on a real testbed.  The script installs a patched chassisd inside the pmon
-container, runs 6 end-to-end tests, and optionally restores the original.
+Verify SmartSwitch DPU reboot-cause and midplane-down reason tracking across
+status transitions on a real testbed. The script installs a patched chassisd
+inside the pmon container, runs 9 end-to-end tests, and optionally restores
+the original.
 
 Prerequisites:
   - Run on a SmartSwitch with at least one DPU
@@ -76,6 +79,14 @@ Tests:
      is unchanged, persist is skipped but STATE_DB is repopulated.
      Validates sonic-net/sonic-buildimage#24275 reproducer.
 
+  8. Planned midplane-down reason
+     Administratively shuts down the DPU and verifies that the reason is
+     classified as planned in CHASSIS_STATE_DB and persisted on disk.
+
+  9. Unplanned midplane-down reason
+     Forces the DPU midplane interface down and verifies that the reason is
+     classified as unplanned in CHASSIS_STATE_DB and persisted on disk.
+
 Examples:
   sudo bash $SCRIPT_NAME
   sudo bash $SCRIPT_NAME -d DPU1
@@ -113,6 +124,8 @@ MAX_HISTORY_FILES=10
 PASSED=0
 FAILED=0
 SKIPPED=0
+MIDPLANE_INTERFACE_FOR_CLEANUP=""
+DPU_SHUTDOWN_FOR_TEST=false
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -182,6 +195,55 @@ wait_for_dpu_online() {
         (( elapsed += 10 ))
     done
     log_error "$dpu did not come online within ${timeout}s"
+    return 1
+}
+
+wait_for_midplane_recovery() {
+    local dpu=$1
+    local reason_path=$2
+    local timeout=${3:-600}
+    local elapsed=0
+    local oper_status=""
+    local midplane_state=""
+    local midplane_reason=""
+    local reason_file_state=""
+    local db_reads_succeeded=false
+
+    log_info "Waiting for complete midplane recovery of $dpu (timeout: ${timeout}s)..."
+    while (( elapsed < timeout )); do
+        oper_status=""
+        midplane_state=""
+        midplane_reason=""
+
+        if oper_status=$(sonic-db-cli STATE_DB HGET "CHASSIS_MODULE_TABLE|${dpu}" \
+                         "oper_status" 2>/dev/null) &&
+           midplane_state=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${dpu}" \
+                            "dpu_midplane_link_state" 2>/dev/null) &&
+           midplane_reason=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${dpu}" \
+                             "dpu_midplane_link_reason" 2>/dev/null); then
+            db_reads_succeeded=true
+            if [[ "$oper_status" == "Online" &&
+                  "$midplane_state" == "up" &&
+                  -z "$midplane_reason" &&
+                  ! -e "$reason_path" ]]; then
+                log_info "$dpu completed midplane recovery after ${elapsed}s"
+                return 0
+            fi
+        else
+            db_reads_succeeded=false
+        fi
+
+        sleep 5
+        (( elapsed += 5 ))
+    done
+
+    reason_file_state="absent"
+    if [[ -e "$reason_path" ]]; then
+        reason_file_state="present"
+    fi
+    log_error "$dpu recovery incomplete: oper_status='$oper_status', " \
+              "midplane_state='$midplane_state', reason='$midplane_reason', " \
+              "reason_file='$reason_file_state', db_reads_succeeded='$db_reads_succeeded'"
     return 1
 }
 
@@ -330,6 +392,47 @@ restart_chassisd() {
     log_info "pmon restarted"
 }
 
+cleanup_midplane_tests() {
+    local cleanup_failed=false
+
+    if [[ -n "$MIDPLANE_INTERFACE_FOR_CLEANUP" ]]; then
+        log_warn "Restoring midplane interface $MIDPLANE_INTERFACE_FOR_CLEANUP"
+        if ip link set dev "$MIDPLANE_INTERFACE_FOR_CLEANUP" up; then
+            MIDPLANE_INTERFACE_FOR_CLEANUP=""
+        else
+            log_error "Failed to restore midplane interface $MIDPLANE_INTERFACE_FOR_CLEANUP"
+            cleanup_failed=true
+        fi
+    fi
+
+    if [[ "$DPU_SHUTDOWN_FOR_TEST" == true ]]; then
+        log_warn "Restoring $DPU to admin-up"
+        if config chassis modules startup "$DPU"; then
+            DPU_SHUTDOWN_FOR_TEST=false
+        else
+            log_error "Failed to restore $DPU to admin-up"
+            cleanup_failed=true
+        fi
+    fi
+
+    [[ "$cleanup_failed" == false ]]
+}
+
+handle_exit() {
+    local exit_code=$?
+
+    trap - EXIT
+    if ! cleanup_midplane_tests && (( exit_code == 0 )); then
+        exit_code=1
+    fi
+
+    exit "$exit_code"
+}
+
+trap handle_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
@@ -337,6 +440,11 @@ log_step "Pre-flight checks"
 
 if [[ $EUID -ne 0 ]]; then
     log_error "This script must be run as root (sudo)"
+    exit 1
+fi
+
+if [[ ! "$DPU" =~ ^DPU[0-9]+$ ]]; then
+    log_error "DPU name must match DPU<number>, got: $DPU"
     exit 1
 fi
 
@@ -407,8 +515,8 @@ wait_for_dpu_online "$DPU" 600 || {
     fail "Test 1: $DPU did not come back online"
 }
 
-# Give chassisd a few poll cycles
-sleep 30
+# DPU-side chassisd can publish the new boot_id well after oper_status is Online.
+sleep 120
 
 snapshot_reboot_state "Test 1 — AFTER"
 
@@ -987,6 +1095,130 @@ if [[ -z "$NEW_REBOOT_LOG_T7" ]]; then
     pass "Test 7: No 'New reboot detected' syslog (expected)"
 else
     fail "Test 7: Unexpected 'New reboot detected' in syslog: $NEW_REBOOT_LOG_T7"
+fi
+
+# ===========================================================================
+# Test 8: Planned midplane-down reason
+# ===========================================================================
+log_step "Test 8: Planned midplane-down reason"
+
+MIDPLANE_REASON_PATH="${REBOOT_CAUSE_DIR}/${DPU,,}/midplane-down-reason.txt"
+TEST_8_RECOVERED=false
+EXPECTED_PLANNED_REASON="Planned: 'shutdown'"
+
+DPU_SHUTDOWN_FOR_TEST=true
+if config chassis modules shutdown "$DPU"; then
+    wait_for_dpu_offline "$DPU" 300 || fail "Test 8: $DPU did not go offline"
+
+    PLANNED_STATE=""
+    for _ in $(seq 1 18); do
+        PLANNED_STATE=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${DPU}" \
+                        "dpu_midplane_link_state" 2>/dev/null || true)
+        [[ "$PLANNED_STATE" == "down" ]] && break
+        sleep 5
+    done
+
+    PLANNED_REASON=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${DPU}" \
+                     "dpu_midplane_link_reason" 2>/dev/null || true)
+    PERSISTED_PLANNED_REASON=$(cat "$MIDPLANE_REASON_PATH" 2>/dev/null || true)
+
+    if [[ "$PLANNED_STATE" == "down" &&
+          "$PLANNED_REASON" == "$EXPECTED_PLANNED_REASON" ]]; then
+        pass "Test 8: DB recorded the expected planned shutdown reason"
+    else
+        fail "Test 8: state='$PLANNED_STATE' reason='$PLANNED_REASON', " \
+             "expected='$EXPECTED_PLANNED_REASON'"
+    fi
+
+    if [[ "$PERSISTED_PLANNED_REASON" == "$EXPECTED_PLANNED_REASON" ]]; then
+        pass "Test 8: Planned shutdown reason persisted to disk"
+    else
+        fail "Test 8: persisted='$PERSISTED_PLANNED_REASON', " \
+             "expected='$EXPECTED_PLANNED_REASON'"
+    fi
+else
+    DPU_SHUTDOWN_FOR_TEST=false
+    fail "Test 8: Failed to shut down $DPU"
+fi
+
+if config chassis modules startup "$DPU"; then
+    if wait_for_midplane_recovery "$DPU" "$MIDPLANE_REASON_PATH" 600; then
+        DPU_SHUTDOWN_FOR_TEST=false
+        TEST_8_RECOVERED=true
+        pass "Test 8: DPU and midplane state recovered completely"
+    else
+        fail "Test 8: $DPU did not complete midplane recovery"
+    fi
+else
+    fail "Test 8: Failed to start $DPU"
+fi
+
+# ===========================================================================
+# Test 9: Unplanned midplane-down reason
+# ===========================================================================
+if [[ "$TEST_8_RECOVERED" != true ]]; then
+    skip "Test 9: Test 8 did not recover cleanly"
+else
+    log_step "Test 9: Unplanned midplane-down reason"
+
+    MIDPLANE_INTERFACE=$(docker exec "$PMON_CONTAINER" python3 -c "
+from sonic_platform.platform import Platform
+module = Platform().get_chassis().get_module(int('${DPU#DPU}'))
+print(module.get_midplane_interface())
+")
+
+    if [[ ! "$MIDPLANE_INTERFACE" =~ ^[A-Za-z0-9_.:-]+$ ]] ||
+       [[ ! -e "/sys/class/net/$MIDPLANE_INTERFACE" ]]; then
+        fail "Test 9: Could not resolve a valid midplane interface for $DPU"
+    else
+        TRANSITION_IN_PROGRESS=$(sonic-db-cli STATE_DB HGET "CHASSIS_MODULE_TABLE|${DPU}" \
+                                 "transition_in_progress" 2>/dev/null || true)
+        if [[ "$TRANSITION_IN_PROGRESS" =~ ^([Tt]rue|1)$ ]]; then
+            fail "Test 9: $DPU has an active chassis transition; link loss not forced"
+        else
+            MIDPLANE_INTERFACE_FOR_CLEANUP="$MIDPLANE_INTERFACE"
+            if ip link set dev "$MIDPLANE_INTERFACE" down; then
+                UNPLANNED_STATE=""
+                for _ in $(seq 1 18); do
+                    UNPLANNED_STATE=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${DPU}" \
+                                      "dpu_midplane_link_state" 2>/dev/null || true)
+                    [[ "$UNPLANNED_STATE" == "down" ]] && break
+                    sleep 5
+                done
+
+                UNPLANNED_REASON=$(sonic-db-cli CHASSIS_STATE_DB HGET "DPU_STATE|${DPU}" \
+                                   "dpu_midplane_link_reason" 2>/dev/null || true)
+                PERSISTED_UNPLANNED_REASON=$(cat "$MIDPLANE_REASON_PATH" 2>/dev/null || true)
+
+                if [[ "$UNPLANNED_STATE" == "down" && "$UNPLANNED_REASON" == Unplanned:* ]]; then
+                    pass "Test 9: DB classified the forced link loss as unplanned"
+                else
+                    fail "Test 9: state='$UNPLANNED_STATE' reason='$UNPLANNED_REASON'"
+                fi
+
+                if [[ -n "$UNPLANNED_REASON" &&
+                      "$PERSISTED_UNPLANNED_REASON" == "$UNPLANNED_REASON" ]]; then
+                    pass "Test 9: Unplanned reason persisted to disk"
+                else
+                    fail "Test 9: Persisted reason differs from DB reason"
+                fi
+
+                if ip link set dev "$MIDPLANE_INTERFACE" up; then
+                    MIDPLANE_INTERFACE_FOR_CLEANUP=""
+                    if wait_for_midplane_recovery "$DPU" "$MIDPLANE_REASON_PATH" 600; then
+                        pass "Test 9: DPU and midplane state recovered completely"
+                    else
+                        fail "Test 9: Recovery remained incomplete after restoring the midplane"
+                    fi
+                else
+                    fail "Test 9: Failed to restore midplane interface $MIDPLANE_INTERFACE"
+                fi
+            else
+                MIDPLANE_INTERFACE_FOR_CLEANUP=""
+                fail "Test 9: Failed to force midplane interface down"
+            fi
+        fi
+    fi
 fi
 
 # ===========================================================================

@@ -5,11 +5,25 @@ import tempfile
 import json
 import pytest
 import time
+import importlib.util
+import importlib.machinery
+
 from mock import Mock, MagicMock, patch, mock_open
 from sonic_py_common import daemon_base
+from sonic_platform_base.chassis_base import ChassisBase
 
 from .mock_platform import MockChassis, MockSmartSwitchChassis, MockModule
 from .mock_module_base import ModuleBase
+
+# imp is deprecated in Python 3.12
+def load_source(module_name, file_path):
+    loader = importlib.machinery.SourceFileLoader(module_name, file_path)
+    spec = importlib.util.spec_from_file_location(module_name, file_path, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module   # required: `from chassisd import *` relies on this
+    loader.exec_module(module)
+    return module
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../scripts"))
 
 # Assuming OBJECT should be a specific value, define it manually
@@ -31,6 +45,7 @@ scripts_path = os.path.join(modules_path, "scripts")
 sys.path.insert(0, modules_path)
 
 os.environ["CHASSISD_UNIT_TESTING"] = "1"
+import chassisd
 from chassisd import *
 
 
@@ -221,65 +236,170 @@ def test_smartswitch_moduleupdater_status_transitions():
     # Create the updater
     module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
 
-    # Mock dependent methods
-    with patch.object(module_updater, 'retrieve_dpu_reboot_info', return_value=("Switch rebooted DPU", "2023_01_01_00_00_00")) as mock_reboot_info, \
-        patch.object(module_updater, '_is_first_boot', return_value=False) as mock_is_first_boot, \
-        patch.object(module_updater, 'persist_dpu_reboot_cause') as mock_persist_reboot_cause, \
-        patch.object(module_updater, 'update_dpu_reboot_cause_to_db') as mock_update_reboot_db, \
-        patch("os.makedirs") as mock_makedirs, \
-        patch("builtins.open", mock_open()) as mock_file, \
-        patch.object(module_updater, '_get_history_path', return_value="/tmp/prev_reboot_time.txt") as mock_get_history_path:
+    # Transition from ONLINE to OFFLINE
+    offline_status = ModuleBase.MODULE_STATUS_OFFLINE
+    module.set_oper_status(offline_status)
+    module_updater.module_db_update()
+    assert module.get_oper_status() == offline_status
 
-        # Transition from ONLINE to OFFLINE
-        offline_status = ModuleBase.MODULE_STATUS_OFFLINE
-        module.set_oper_status(offline_status)
-        module_updater.module_db_update()
-        assert module.get_oper_status() == offline_status
+    # Ensure ONLINE transition is handled correctly
+    online_status = ModuleBase.MODULE_STATUS_ONLINE
+    module.set_oper_status(online_status)
+    module_updater.module_db_update()
+    assert module.get_oper_status() == online_status
 
-        # Reset mocks for next transition
-        mock_file.reset_mock()
-        mock_makedirs.reset_mock()
-        mock_persist_reboot_cause.reset_mock()
-        mock_update_reboot_db.reset_mock()
 
-        # Ensure ONLINE transition is handled correctly
-        online_status = ModuleBase.MODULE_STATUS_ONLINE
-        module.set_oper_status(online_status)
-        module_updater.module_db_update()
-        assert module.get_oper_status() == online_status
-
-        # Validate mock calls for ONLINE transition
-        mock_persist_reboot_cause.assert_called_once()
-        mock_update_reboot_db.assert_called_once()
-
-def test_online_transition_skips_reboot_update():
+def _make_boot_id_updater():
+    """Helper: build a SmartSwitchModuleUpdater with one DPU for boot_id consumer tests."""
     chassis = MockSmartSwitchChassis()
-    index = 0
-    name = "DPU0"
-    module = MockModule(index, name, "DPU", ModuleBase.MODULE_TYPE_DPU, 0, "SN123")
-    module.set_oper_status(ModuleBase.MODULE_STATUS_OFFLINE)
+    module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "DPU0-0000")
     chassis.module_list.append(module)
-
     updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    return updater
 
-    # Mock the module going ONLINE
-    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
 
-    with patch.object(updater, 'retrieve_dpu_reboot_info',
-                      return_value=("Switch rebooted DPU", datetime.now(timezone.utc).strftime("%Y_%m_%d_%H_%M_%S"))), \
-         patch.object(module, 'get_reboot_cause', return_value="Switch rebooted DPU"), \
-         patch.object(updater, '_is_first_boot', return_value=False), \
+def _patch_persisted_boot_id(updater, boot_id):
+    """Make the persisted record report boot_id as the baseline."""
+    return patch.object(updater, 'retrieve_dpu_reboot_info',
+                        return_value=("Kernel Panic", "2026_05_19_10_00_00", boot_id))
+
+
+def test_dpu_boot_id_update_new_boot():
+    """New boot_id -> reboot cause captured."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
          patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
-         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update, \
-         patch("builtins.open", mock_open()), \
-         patch("os.makedirs"), \
-         patch.object(updater, '_get_history_path', return_value="/tmp/fake.json"):
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
 
-        updater.module_db_update()
+        mock_persist.assert_called_once()
+        # boot_id must be forwarded to persist so it lands in the json/db.
+        assert mock_persist.call_args.kwargs.get("boot_id") == "new-boot-id"
+        mock_update_db.assert_called_once_with("DPU0")
 
-        # Ensure no reboot update due to is_reboot = True
+
+def test_dpu_boot_id_update_same_boot():
+    """Unchanged boot_id -> nothing captured (avoids duplicate on every event)."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, "same-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
+        updater.dpu_boot_id_update("DPU0", "same-boot-id")
+
         mock_persist.assert_not_called()
-        mock_update.assert_not_called()
+        mock_update_db.assert_not_called()
+
+
+@pytest.mark.parametrize("boot_id", [None, ""])
+def test_dpu_boot_id_update_no_boot_id(boot_id):
+    """Empty/None boot_id -> nothing captured."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
+        updater.dpu_boot_id_update("DPU0", boot_id)
+
+        mock_persist.assert_not_called()
+        mock_update_db.assert_not_called()
+
+
+def test_dpu_boot_id_update_db_failure_keeps_record(tmp_path):
+    """A failed DB refresh is logged, and the record it persisted still becomes the baseline.
+
+    retrieve_dpu_reboot_info is left unmocked and the record is written to a real directory, so
+    the second event has to read the file back from disk. Feeding the baseline in from a mock
+    would assert nothing about whether the DB failure cost us the record.
+    """
+    updater = _make_boot_id_updater()
+    history_dir = tmp_path / "dpu0" / "history"
+    history_dir.mkdir(parents=True)
+
+    with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", str(tmp_path)), \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db', side_effect=Exception("db down")), \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        assert mock_log_error.called
+        records = list(history_dir.glob("*_reboot_cause.json"))
+        assert len(records) == 1
+        assert json.loads(records[0].read_text())["boot_id"] == "new-boot-id"
+
+    # The same boot_id again: the record on disk is now the baseline, so nothing is re-captured
+    # even though the DB never received the first one. Those rows are restored by the next
+    # capture or at NPU boot.
+    with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", str(tmp_path)), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_persist.assert_not_called()
+
+
+def test_dpu_boot_id_update_unknown_module():
+    """Unknown DPU name (no module index) -> nothing captured."""
+    updater = _make_boot_id_updater()
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db:
+        updater.dpu_boot_id_update("DPU_NONEXISTENT", "new-boot-id")
+
+        mock_persist.assert_not_called()
+        mock_update_db.assert_not_called()
+
+
+@pytest.mark.parametrize("lookup, expected_log", [
+    ({"target": "get_module_index", "side_effect": KeyError("DPU0")}, "Failed to look up module"),
+    ({"target": "get_module_index", "side_effect": RuntimeError("platform not ready")}, "Failed to look up module"),
+    ({"target": "get_module", "side_effect": IndexError("out of range")}, "Failed to look up module"),
+    ({"target": "get_module", "return_value": None}, "No module object"),
+])
+def test_dpu_boot_id_update_module_lookup_failure_is_contained(lookup, expected_log):
+    """A platform lookup that raises or yields no module is logged, never propagated.
+
+    The subscriber loop that calls this has no exception boundary, so an escaping exception
+    would silently end DPU reboot-cause capture for the rest of the daemon's lifetime.
+
+    A platform that returns no module must be reported as such: without an explicit check it
+    surfaces one step later as an AttributeError blamed on reading the reboot cause.
+    """
+    updater = _make_boot_id_updater()
+    behavior = dict(lookup)
+    target = behavior.pop("target")
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(updater.chassis, target, **behavior), \
+         patch.object(updater, 'persist_dpu_reboot_cause') as mock_persist, \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db, \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_persist.assert_not_called()
+        mock_update_db.assert_not_called()
+        assert expected_log in mock_log_error.call_args.args[0]
+
+
+@pytest.mark.parametrize("failing_call, expected_log", [
+    ("module.get_reboot_cause", "Failed to get reboot cause"),
+    ("updater.persist_dpu_reboot_cause", "Failed to persist reboot cause"),
+])
+def test_dpu_boot_id_update_capture_failure_is_contained(failing_call, expected_log):
+    """A failing capture step is logged and abandons the capture, leaving the DB untouched."""
+    updater = _make_boot_id_updater()
+    owner_name, attr = failing_call.split(".")
+    owner = updater if owner_name == "updater" else updater.chassis.get_module(0)
+
+    with _patch_persisted_boot_id(updater, "old-boot-id"), \
+         patch.object(owner, attr, side_effect=Exception("boom")), \
+         patch.object(updater, 'update_dpu_reboot_cause_to_db') as mock_update_db, \
+         patch.object(updater, 'log_error') as mock_log_error:
+        updater.dpu_boot_id_update("DPU0", "new-boot-id")
+
+        mock_update_db.assert_not_called()
+        assert expected_log in mock_log_error.call_args.args[0]
+
 
 def test_retrieve_dpu_reboot_info_success():
     class DummyChassis:
@@ -287,12 +407,13 @@ def test_retrieve_dpu_reboot_info_success():
         def init_midplane_switch(self): return False
 
     updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
-    sample_json = {"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52"}
+    sample_json = {"cause": "Switch rebooted DPU", "name": "2025_06_25_17_18_52", "boot_id": "e4252288-be0d-40ec-8338-d1e5ec206771"}
     with patch("os.path.exists", return_value=True), \
          patch("builtins.open", mock_open(read_data=json.dumps(sample_json))):
-        cause, time_str = updater.retrieve_dpu_reboot_info("dpu0")
+        cause, time_str, boot_id = updater.retrieve_dpu_reboot_info("dpu0")
         assert cause == "Switch rebooted DPU"
         assert time_str == "2025_06_25_17_18_52"
+        assert boot_id == "e4252288-be0d-40ec-8338-d1e5ec206771"
 
 def test_retrieve_dpu_reboot_info_file_missing():
     class DummyChassis:
@@ -301,9 +422,126 @@ def test_retrieve_dpu_reboot_info_file_missing():
 
     updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, DummyChassis())
     with patch("os.path.exists", return_value=False):
-        cause, time_str = updater.retrieve_dpu_reboot_info("dpu0")
+        cause, time_str, boot_id = updater.retrieve_dpu_reboot_info("dpu0")
         assert cause is None
         assert time_str is None
+        assert boot_id is None
+
+
+def test_reboot_cause_subscriber_processes_boot_id():
+    """Subscriber creates its updater in the child and forwards a valid boot_id event."""
+    module_updater = MagicMock(spec=SmartSwitchModuleUpdater)
+    chassis = MagicMock()
+    subscriber = RebootCauseSubscriberTask()
+    subscriber_db = MagicMock()
+    mock_select = MagicMock()
+    mock_sst = MagicMock()
+    select_object = swsscommon.Select.OBJECT
+    select_timeout = swsscommon.Select.TIMEOUT
+
+    mock_select.select.side_effect = [(select_object, None), KeyboardInterrupt]
+    mock_sst.pop.return_value = ("DPU0", "SET", (("boot_id", "new-boot-id"),))
+
+    with patch("chassisd.get_chassis", return_value=chassis) as mock_get_chassis, \
+         patch("chassisd.SmartSwitchModuleUpdater", return_value=module_updater) as mock_updater_class, \
+         patch("chassisd.daemon_base.db_connect", return_value=subscriber_db) as mock_db_connect, \
+         patch("chassisd.swsscommon.Select", return_value=mock_select) as mock_select_class, \
+         patch("chassisd.swsscommon.SubscriberStateTable", return_value=mock_sst) as mock_sst_class:
+        mock_select_class.TIMEOUT = select_timeout
+        mock_select_class.OBJECT = select_object
+        subscriber.task_worker()
+
+    mock_get_chassis.assert_called_once_with()
+    mock_updater_class.assert_called_once_with(SYSLOG_IDENTIFIER, chassis)
+    mock_db_connect.assert_called_once_with("CHASSIS_STATE_DB")
+    mock_sst_class.assert_called_once_with(subscriber_db, "DPU_STATE")
+    mock_select.addSelectable.assert_called_once_with(mock_sst)
+    module_updater.dpu_boot_id_update.assert_called_once_with("DPU0", "new-boot-id")
+
+def test_fsync_parent_directory(tmp_path):
+    """The parent directory is opened, synced, and closed."""
+    with patch("chassisd.os.open", return_value=42) as mock_os_open, \
+         patch("chassisd.os.fsync") as mock_fsync, \
+         patch("chassisd.os.close") as mock_close:
+        chassisd._fsync_parent_directory(str(tmp_path / "record.json"))
+
+    mock_os_open.assert_called_once_with(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+    mock_fsync.assert_called_once_with(42)
+    mock_close.assert_called_once_with(42)
+
+
+def test_atomic_write_json_replaces_content(tmp_path):
+    """The final path holds the new content and no temporary file is left behind."""
+    target = tmp_path / "record.json"
+    target.write_text('{"cause": "old"}')
+
+    with patch("chassisd._fsync_parent_directory") as mock_fsync_parent:
+        chassisd._atomic_write_json(str(target), {"cause": "new"})
+
+    assert json.loads(target.read_text()) == {"cause": "new"}
+    assert list(p.name for p in tmp_path.iterdir()) == ["record.json"]
+    mock_fsync_parent.assert_called_once_with(str(target))
+
+
+def test_atomic_write_json_keeps_previous_content_on_failure(tmp_path):
+    """A failed write leaves the previous record intact and removes the temporary file."""
+    target = tmp_path / "record.json"
+    target.write_text('{"cause": "old"}')
+
+    with patch("builtins.open", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            chassisd._atomic_write_json(str(target), {"cause": "new"})
+
+    assert json.loads(target.read_text()) == {"cause": "old"}
+    assert not (tmp_path / "record.json.tmp").exists()
+
+
+def test_atomic_replace_symlink_never_leaves_link_absent(tmp_path):
+    """Replacing the link repoints it in one step instead of removing and recreating it."""
+    old_record = tmp_path / "old_reboot_cause.json"
+    new_record = tmp_path / "new_reboot_cause.json"
+    old_record.write_text("{}")
+    new_record.write_text("{}")
+    link = tmp_path / "previous-reboot-cause.json"
+    os.symlink(str(old_record), str(link))
+
+    removed = []
+    real_remove = os.remove
+
+    def tracking_remove(path):
+        removed.append(path)
+        real_remove(path)
+
+    with patch("chassisd.os.remove", side_effect=tracking_remove), \
+         patch("chassisd._fsync_parent_directory") as mock_fsync_parent:
+        chassisd._atomic_replace_symlink(str(new_record), str(link))
+
+    assert os.path.realpath(str(link)) == os.path.realpath(str(new_record))
+    # Removing the live link, even briefly, would lose the persisted baseline on a crash.
+    assert str(link) not in removed
+    mock_fsync_parent.assert_called_once_with(str(link))
+
+
+def test_get_boot_id_reads_kernel_boot_id():
+    """get_boot_id returns the stripped kernel boot ID."""
+    updater = DpuStateUpdater.__new__(DpuStateUpdater)
+    updater._syslog = MagicMock()
+
+    with patch("builtins.open", mock_open(read_data="test-boot-id\n")):
+        assert updater.get_boot_id() == "test-boot-id"
+
+
+def test_get_boot_id_returns_none_on_oserror():
+    """get_boot_id returns None and logs a warning when the file cannot be read."""
+    updater = DpuStateUpdater.__new__(DpuStateUpdater)
+    updater._syslog = MagicMock()
+    updater.log_warning = MagicMock()
+
+    with patch("builtins.open", side_effect=OSError("boot ID unavailable")):
+        assert updater.get_boot_id() is None
+
+    updater.log_warning.assert_called_once()
+
 
 def test_smartswitch_moduleupdater_check_invalid_name():
     chassis = MockSmartSwitchChassis()
@@ -677,40 +915,6 @@ def test_update_dpu_reboot_cause_to_db(mock_open, mock_glob):
     with patch.object(module_updater, "log_warning") as mock_log_warning:
         module_updater.update_dpu_reboot_cause_to_db(module)
         mock_log_warning.assert_any_call("Error processing file /host/reboot-cause/module/dpu0/history/file1.txt: Unable to read file")
-
-
-def test_smartswitch_module_db_update():
-    chassis = MockSmartSwitchChassis()
-    reboot_cause = "Power loss"
-    key = "DPU0"
-    index = 0
-    name = "DPU0"
-    desc = "DPU Module 0"
-    slot = 0
-    serial = "DPU0-0000"
-    module_type = ModuleBase.MODULE_TYPE_DPU
-    module = MockModule(index, name, desc, module_type, slot, serial)
-
-    # Set initial state
-    status = ModuleBase.MODULE_STATUS_ONLINE
-    module.set_oper_status(status)
-    chassis.module_list.append(module)
-
-    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
-    expected_path = "/host/reboot-cause/module/reboot_cause/dpu0/history/2024_11_13_15_06_40_reboot_cause.txt"
-    symlink_path = "/host/reboot-cause/module/dpu0/previous-reboot-cause.json"
-
-    with patch("os.path.exists", return_value=True), \
-         patch("os.makedirs") as mock_makedirs, \
-         patch("builtins.open", mock_open(read_data="Power loss")) as mock_file, \
-         patch("os.remove") as mock_remove, \
-         patch("os.symlink") as mock_symlink:
-
-        # Call the function to test
-        module_updater.persist_dpu_reboot_cause(reboot_cause, key)
-        module_updater._is_first_boot(name)
-        module_updater.persist_dpu_reboot_time(name)
-        module_updater.update_dpu_reboot_cause_to_db(name)
 
 
 def test_platform_json_file_exists_and_valid():
@@ -1499,7 +1703,7 @@ def test_set_initial_dpu_admin_state_up():
         mock_submit_callback.assert_not_called()
 
 
-def test_set_initial_dpu_admin_state_empty_offline():
+def test_set_initial_dpu_admin_state_empty_offline(midplane_reason_dir):
     """Test set_initial_dpu_admin_state when admin state is empty and operational state is offline"""
     chassis = MockSmartSwitchChassis()
    
@@ -1529,6 +1733,10 @@ def test_set_initial_dpu_admin_state_empty_offline():
     daemon_chassisd.platform_chassis = chassis
     daemon_chassisd.smartswitch = True
 
+    reason_dir = midplane_reason_dir / "dpu0"
+    reason_dir.mkdir()
+    (reason_dir / "midplane-down-reason.txt").write_text("Unplanned: 'Thermal Overload: ASIC'\n")
+
     # Mock the necessary methods - admin state is EMPTY, operational state is OFFLINE
     with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
          patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
@@ -1543,8 +1751,9 @@ def test_set_initial_dpu_admin_state_empty_offline():
         mock_clear_transition.assert_called_once()
         mock_clear_gnoi.assert_called_once()
 
-        # Verify DPU state was updated with 'down' since operational state is OFFLINE
-        mock_update_dpu_state.assert_called_once_with("DPU_STATE|DPU0", 'down')
+        # Verify the persisted reason is restored with the down state.
+        mock_update_dpu_state.assert_called_once_with(
+            "DPU_STATE|DPU0", 'down', "Unplanned: 'Thermal Overload: ASIC'")
 
         # Verify callback was submitted with MODULE_ADMIN_DOWN when admin state is EMPTY
         mock_submit_callback.assert_called_once_with(0, MODULE_ADMIN_DOWN)
@@ -1582,6 +1791,7 @@ def test_set_initial_dpu_admin_state_empty_not_offline():
 
     # Mock the necessary methods - admin state is EMPTY, operational state is PRESENT
     with patch.object(module_updater, 'get_module_admin_status', return_value=ModuleBase.MODULE_STATUS_EMPTY), \
+         patch.object(module_updater, '_read_midplane_down_reason', return_value=None), \
          patch.object(module_updater, 'update_dpu_state') as mock_update_dpu_state, \
          patch.object(daemon_chassisd, 'submit_dpu_callback') as mock_submit_callback, \
          patch.object(module, 'clear_module_state_transition') as mock_clear_transition, \
@@ -1950,7 +2160,7 @@ def test_smartswitch_time_format():
         AssertionError("Date is not set!")
     assert is_valid_date(date_value)
 
-def test_smartswitch_moduleupdater_midplane_state_change():
+def test_smartswitch_moduleupdater_midplane_state_change(midplane_reason_dir):
     """Test that when midplane goes down, control plane and data plane states are set to down"""
     chassis = MockSmartSwitchChassis()
     index = 0
@@ -1990,6 +2200,12 @@ def test_smartswitch_moduleupdater_midplane_state_change():
         # Verify initial state
         key = "DPU_STATE|" + name
         assert chassis_state_db[key]["dpu_midplane_link_state"] == "up"
+        chassis_state_db[key].update({
+            CP_UPDATE_TIME: "original-cp-time",
+            "dpu_control_plane_reason": "original-cp-reason",
+            DP_UPDATE_TIME: "original-dp-time",
+            "dpu_data_plane_reason": "original-dp-reason",
+        })
 
         # Now set midplane as down
         module.set_midplane_reachable(False)
@@ -1999,6 +2215,10 @@ def test_smartswitch_moduleupdater_midplane_state_change():
         assert chassis_state_db[key]["dpu_midplane_link_state"] == "down"
         assert chassis_state_db[key]["dpu_control_plane_state"] == "down"
         assert chassis_state_db[key]["dpu_data_plane_state"] == "down"
+        assert chassis_state_db[key][CP_UPDATE_TIME] == "original-cp-time"
+        assert chassis_state_db[key]["dpu_control_plane_reason"] == "original-cp-reason"
+        assert chassis_state_db[key][DP_UPDATE_TIME] == "original-dp-time"
+        assert chassis_state_db[key]["dpu_data_plane_reason"] == "original-dp-reason"
 
         # Verify timestamps are set
         assert "dpu_midplane_link_time" in chassis_state_db[key]
@@ -2013,6 +2233,162 @@ def test_smartswitch_moduleupdater_midplane_state_change():
                 return False
 
         assert is_valid_date(chassis_state_db[key]["dpu_midplane_link_time"])
+
+
+def _make_smartswitch_updater_with_dpu(name="DPU0"):
+    """Helper: build a SmartSwitchModuleUpdater with a single DPU module."""
+    chassis = MockSmartSwitchChassis()
+    module = MockModule(0, name, "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "{}-0000".format(name))
+    module.set_midplane_ip()
+    chassis.module_list.append(module)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+    module_updater.midplane_initialized = True
+    return module_updater, module
+
+
+@pytest.fixture
+def midplane_reason_dir(tmp_path, monkeypatch):
+    """Redirect persisted midplane-down-reason files to a per-test temp dir."""
+    import chassisd
+    monkeypatch.setattr(chassisd, "MODULE_REBOOT_CAUSE_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.mark.parametrize("platform_reason, expected", [
+    # (major, "") -> only the major part is rendered
+    ((ChassisBase.REBOOT_CAUSE_THERMAL_OVERLOAD_ASIC, ""),
+     "Unplanned: 'Thermal Overload: ASIC'"),
+    # (major, minor) -> both parts are rendered
+    ((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "kernel panic"),
+     "Unplanned: 'Hardware - Other, kernel panic'"),
+    # falsy-but-valid minor (0) is kept; guards against `if minor` truthiness,
+    # only None/"" should omit the minor part.
+    ((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, 0),
+     "Unplanned: 'Hardware - Other, 0'"),
+])
+def test_resolve_midplane_down_reason_unplanned(platform_reason, expected, midplane_reason_dir):
+    """Unplanned down: platform reason tuple is rendered as Unplanned: '<reason>'."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.clear_module_state_transition("DPU0")
+    module.set_midplane_down_reason(platform_reason)
+
+    reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
+    assert reason == expected
+
+
+def test_resolve_midplane_down_reason_unplanned_unknown(midplane_reason_dir):
+    """Unplanned down: no platform reason falls back to Unknown."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.clear_module_state_transition("DPU0")
+    module.set_midplane_down_reason(None)
+
+    reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
+    assert reason == "Unplanned: 'Unknown'"
+
+
+def test_resolve_midplane_down_reason_planned(midplane_reason_dir):
+    """Planned down: transition flag set -> Planned: '<transition_type>'."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.set_module_state_transition("DPU0", "shutdown")
+
+    module_updater.state_db.hget = MagicMock(return_value="shutdown")
+    reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
+
+    assert reason == "Planned: 'shutdown'"
+
+
+def test_resolve_midplane_down_reason_missing_transition_type(midplane_reason_dir):
+    """A disappearing transition type must not produce Planned: 'unknown'."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.set_module_state_transition("DPU0", "shutdown")
+    module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "link failure"))
+    module_updater.state_db.hget = MagicMock(return_value=None)
+
+    reason = module_updater._resolve_midplane_down_reason(module, "DPU0")
+
+    assert reason == "Unplanned: 'Hardware - Other, link failure'"
+
+
+def test_midplane_down_state_retried_after_partial_db_failure(midplane_reason_dir):
+    """A partial DB write leaves state unchanged so the next poll retries the full update."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.clear_module_state_transition("DPU0")
+    module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "link failure"))
+    module.set_midplane_reachable(False)
+    key = "DPU_STATE|DPU0"
+    chassis_state_db = {key: {"dpu_midplane_link_state": "up"}}
+    fail_cp_write = [True]
+
+    def mock_hset(db_key, field, value):
+        if field == CP_STATE and fail_cp_write[0]:
+            fail_cp_write[0] = False
+            raise RuntimeError("DB write failed")
+        chassis_state_db.setdefault(db_key, {})[field] = value
+
+    def mock_hget(db_key, field):
+        return chassis_state_db.get(db_key, {}).get(field)
+
+    with patch.object(module_updater, 'chassis_state_db') as mock_db:
+        mock_db.hset = MagicMock(side_effect=mock_hset)
+        mock_db.hget = MagicMock(side_effect=mock_hget)
+
+        module_updater.check_midplane_reachability()
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "up"
+
+        module_updater.check_midplane_reachability()
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "down"
+        assert chassis_state_db[key]["dpu_midplane_link_reason"] == "Unplanned: 'Hardware - Other, link failure'"
+        assert chassis_state_db[key][CP_STATE] == "down"
+        assert chassis_state_db[key][DP_STATE] == "down"
+
+
+def test_midplane_down_reason_persisted_to_file_and_cleared(midplane_reason_dir):
+    """Full lifecycle: down persists the reason to file, restart reads it back, up clears it."""
+    module_updater, module = _make_smartswitch_updater_with_dpu()
+    module.clear_module_state_transition("DPU0")
+    module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_THERMAL_OVERLOAD_ASIC, ""))
+    path = module_updater._midplane_reason_path("DPU0")
+
+    chassis_state_db = {}
+
+    def mock_hset(key, field, value):
+        chassis_state_db.setdefault(key, {})[field] = value
+
+    def mock_hget(key, field):
+        return chassis_state_db.get(key, {}).get(field)
+
+    with patch.object(module_updater, 'chassis_state_db') as mock_db:
+        mock_db.hset = MagicMock(side_effect=mock_hset)
+        mock_db.hget = MagicMock(side_effect=mock_hget)
+
+        module.set_midplane_reachable(False)
+        module_updater.check_midplane_reachability()
+        key = "DPU_STATE|DPU0"
+        with open(path) as f:
+            assert f.read().strip() == "Unplanned: 'Thermal Overload: ASIC'"
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "down"
+        assert chassis_state_db[key]["dpu_midplane_link_reason"] == "Unplanned: 'Thermal Overload: ASIC'"
+
+        # Repeated down polls keep the first reason even if the live reason changes.
+        module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "boom"))
+        module_updater.check_midplane_reachability()
+        assert chassis_state_db[key]["dpu_midplane_link_reason"] == "Unplanned: 'Thermal Overload: ASIC'"
+        with open(path) as f:
+            assert f.read().strip() == "Unplanned: 'Thermal Overload: ASIC'"
+
+        restarted_updater, restarted_module = _make_smartswitch_updater_with_dpu()
+        restarted_module.clear_module_state_transition("DPU0")
+        restarted_module.set_midplane_down_reason((ChassisBase.REBOOT_CAUSE_HARDWARE_OTHER, "boom"))
+        resolved = restarted_updater._resolve_midplane_down_reason(restarted_module, "DPU0")
+        assert resolved == "Unplanned: 'Thermal Overload: ASIC'"
+
+        # Up: persisted reason file removed.
+        module.set_midplane_reachable(True)
+        module_updater.check_midplane_reachability()
+        assert not os.path.exists(path)
+        assert chassis_state_db[key]["dpu_midplane_link_state"] == "up"
+        assert chassis_state_db[key]["dpu_midplane_link_reason"] == ""
+
 
 def test_submit_dpu_callback():
     """Test that submit_dpu_callback calls the right functions in the correct order"""

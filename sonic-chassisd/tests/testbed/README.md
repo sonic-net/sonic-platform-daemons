@@ -7,9 +7,10 @@ chassisd behavior across various status transitions.
 ## Scripts
 
 - **test_dpu_reboot_cause_persistence.sh** — Full testbed script covering
-  6 scenarios: normal reboot, config-reload during reboot, config-reload with
-  DPU offline, history preservation, deferred same-cause, and back-to-back
-  reboot deduplication.
+  9 scenarios: normal reboot, config-reload during reboot, config-reload with
+  DPU offline, history preservation, deferred same-cause, back-to-back reboot
+  deduplication, reboot during a pmon restart, and planned/unplanned
+  midplane-down reason persistence.
 
 ## Usage
 
@@ -20,6 +21,10 @@ scp sonic-chassisd/scripts/chassisd admin@<SWITCH>:/tmp/chassisd_patched
 # SSH to the switch and run
 sudo bash test_dpu_reboot_cause_persistence.sh -d DPU0
 ```
+
+The script changes DPU power state, restarts pmon, and temporarily forces the
+DPU midplane interface down. Run it only on a dedicated testbed. The script
+restores the midplane interface and DPU admin state on exit.
 
 ## Prerequisites
 
