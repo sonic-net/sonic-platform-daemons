@@ -37,6 +37,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 
 from sonic_py_common import daemon_base, device_info
 from sonic_platform_base.liquid_cooling_base import LeakSeverity
+from datetime import datetime, timedelta
 
 from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockThermal
 from .mock_swsscommon import Table
@@ -579,6 +580,127 @@ class TestLiquidCoolingUpdater(object):
             assert scope_name == "system"
             assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
 
+    def test_restore_state_from_db(self):
+        """_restore_state_from_db rebuilds the escalation clock, latch and status."""
+        updater = thermalctld.LiquidCoolingUpdater(MockChassis(), 0.5)
+        updater.system_table.set('system', thermalctld.swsscommon.FieldValuePairs([
+            ('device_leak_status', 'CRITICAL'),
+            ('timestamp', '20250101 00:05:00'),
+        ]))
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_status', 'Yes'),
+            ('leak_sensor_status', 'Good'), ('type', 'mock_sensor'), ('location', 'unknown'),
+            ('leak_severity', 'CRITICAL'), ('timestamp', '20250101 00:05:00'),
+        ]))
+        # Simulate a fresh restart: in-memory state is empty.
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+        updater.last_leak_status = None
+
+        updater._restore_state_from_db()
+
+        assert updater.last_leak_status == LeakSeverity.CRITICAL
+        # Escalation clock resumed from the recorded row timestamp.
+        assert updater.leaking_sensors['leakage1'] == datetime(2025, 1, 1, 0, 5, 0)
+        # A recorded CRITICAL is latched so it is not transiently downgraded.
+        assert 'leakage1' in updater.critical_sensors
+        assert 'leakage1' in updater.latched_critical_sensors
+        # Dedup cache seeded so the unchanged row is not rewritten on first refresh.
+        assert 'leakage1' in updater.last_sensor_fvs
+
+    @mock.patch('thermalctld.try_get')
+    def test_restart_latches_critical_even_if_platform_reads_minor(self, mock_try_get):
+        """A restored CRITICAL stays CRITICAL after restart even if the platform reads MINOR."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        lc.make_sensor_leak(0)
+        # Platform now reports MINOR natively, but it was recorded CRITICAL.
+        lc.leakage_sensors[0].leak_severity = LeakSeverity.MINOR
+        updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        updater.event_logger = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        now_str = datetime.now().strftime('%Y%m%d %H:%M:%S')
+        updater.system_table.set('system', thermalctld.swsscommon.FieldValuePairs([
+            ('device_leak_status', 'CRITICAL'), ('timestamp', now_str)]))
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_status', 'Yes'),
+            ('leak_sensor_status', 'Good'), ('type', 'mock_sensor'), ('location', 'unknown'),
+            ('leak_severity', 'CRITICAL'), ('timestamp', now_str)]))
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+        updater.last_leak_status = None
+
+        updater._restore_state_from_db()
+        updater._refresh_leak_status()
+
+        # The latch keeps it CRITICAL despite the live MINOR reading.
+        assert updater.system_table.get('system')['device_leak_status'] == 'CRITICAL'
+        assert updater.last_leak_status == LeakSeverity.CRITICAL
+
+    @mock.patch('thermalctld.try_get')
+    def test_restart_resumes_minor_timer_and_escalates(self, mock_try_get):
+        """A recorded MINOR whose window has elapsed escalates immediately after restart."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        lc.make_sensor_leak(0)
+        lc.leakage_sensors[0].leak_severity = LeakSeverity.MINOR
+        updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        updater.event_logger = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        # Recorded leak-start well beyond the mock max_minor_duration (1s).
+        old_start = (datetime.now() - timedelta(seconds=3600)).strftime('%Y%m%d %H:%M:%S')
+        updater.system_table.set('system', thermalctld.swsscommon.FieldValuePairs([
+            ('device_leak_status', 'MINOR'), ('timestamp', old_start)]))
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_status', 'Yes'),
+            ('leak_sensor_status', 'Good'), ('type', 'mock_sensor'), ('location', 'unknown'),
+            ('leak_severity', 'MINOR'), ('timestamp', old_start)]))
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+        updater.last_leak_status = None
+
+        updater._restore_state_from_db()
+        # No latch for a recorded MINOR; escalation is purely time-based.
+        assert 'leakage1' not in updater.latched_critical_sensors
+        updater._refresh_leak_status()
+
+        assert updater.system_table.get('system')['device_leak_status'] == 'CRITICAL'
+
+    @mock.patch('thermalctld.try_get')
+    def test_restart_clears_when_sensor_reads_no_leak(self, mock_try_get):
+        """A recorded CRITICAL clears if the sensor physically reads no-leak after restart."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        # Sensor physically NOT leaking now (default make_sensor_leak not called).
+        updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        updater.event_logger = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        now_str = datetime.now().strftime('%Y%m%d %H:%M:%S')
+        updater.system_table.set('system', thermalctld.swsscommon.FieldValuePairs([
+            ('device_leak_status', 'CRITICAL'), ('timestamp', now_str)]))
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_status', 'Yes'),
+            ('leak_sensor_status', 'Good'), ('type', 'mock_sensor'), ('location', 'unknown'),
+            ('leak_severity', 'CRITICAL'), ('timestamp', now_str)]))
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+        updater.last_leak_status = None
+
+        updater._restore_state_from_db()
+        updater._refresh_leak_status()
+
+        # Physical no-leak wins: state clears despite the recorded CRITICAL.
+        assert updater.system_table.get('system')['device_leak_status'] == 'None'
+        assert 'leakage1' not in updater.leaking_sensors
+        assert 'leakage1' not in updater.latched_critical_sensors
+
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_with_multiple_leaks(self, mock_try_get):
         """Test _refresh_leak_status when multiple sensors are leaking"""
@@ -971,7 +1093,7 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
-        liquid_cooling_updater.leaking_sensors = []
+        liquid_cooling_updater.leaking_sensors = {}
         db_tables = _mock_liquid_cooling_db_tables(liquid_cooling_updater)
 
         mock_try_get.side_effect = lambda func, default: func()
@@ -1170,6 +1292,81 @@ class TestLiquidCoolingUpdater(object):
         assert liquid_cooling_updater.update.call_count == 1
 
         assert mock_sleep.call_count == 0
+
+    @mock.patch('time.sleep')
+    def test_task_worker_survives_update_exception(self, mock_sleep):
+        """A platform error in update() is caught so the monitoring thread stays alive."""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        liquid_cooling_updater.log_debug = mock.MagicMock()
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.update = mock.MagicMock(
+            side_effect=Exception("boom from platform plugin"))
+
+        stopping_event = threading.Event()
+
+        def side_effect_sleep(interval):
+            stopping_event.set()
+
+        mock_sleep.side_effect = side_effect_sleep
+
+        # Must not raise, must complete one cycle and go back to sleep (thread alive).
+        liquid_cooling_updater.task_worker(stopping_event)
+
+        assert liquid_cooling_updater.update.call_count == 1
+        assert liquid_cooling_updater.log_error.call_count == 1
+        assert 'Error during liquid cooling update cycle' in \
+            liquid_cooling_updater.log_error.call_args[0][0]
+        assert mock_sleep.call_count == 1
+        assert liquid_cooling_updater.exc is None
+        assert not liquid_cooling_updater.task_stopping_event.is_set()
+
+    @mock.patch('thermalctld.try_get')
+    def test_faulty_sensor_logged_to_event_log(self, mock_try_get):
+        """A faulty leak sensor and its recovery are recorded to the durable event log."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = \
+            mock.MagicMock(return_value=False)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 reported faulty')
+
+        # Recovery is also written to the event log.
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].is_leak_sensor_ok = \
+            mock.MagicMock(return_value=True)
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_notice.assert_any_call(
+            'Liquid cooling leaking sensor leakage1 recovered from fault')
+
+    @mock.patch('thermalctld.try_get')
+    def test_leaking_without_severity_logs_event_error(self, mock_try_get):
+        """A leaking healthy sensor reporting no severity logs an error to the event log."""
+        mock_chassis = MockChassis()
+        mock_chassis.get_liquid_cooling().make_sensor_leak(0)
+        mock_chassis.get_liquid_cooling().leakage_sensors[0].get_leak_severity = \
+            mock.MagicMock(return_value=None)
+
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+
+        liquid_cooling_updater._refresh_leak_status()
+
+        liquid_cooling_updater.event_logger.log_error.assert_any_call(
+            'Liquid cooling leakage sensor leakage1 is leaking but reported no severity (None)')
 
 
 class TestThermalMonitor(object):
