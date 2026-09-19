@@ -1,0 +1,19 @@
+Source: sonic
+Maintainer: SONiC Team <sonic-dev@lists.sonicfoundation.dev>
+Section: net
+Priority: optional
+Build-Depends: debhelper-compat (= 13),
+                cargo,
+                rustc
+Standards-Version: 1.0.0
+
+Package: sonic-thermalctld-rs
+Architecture: any
+Depends: ${shlibs:Depends}
+Description: SONiC thermal control daemon in Rust (native Mellanox sysfs)
+ Rust port of thermalctld for Mellanox/NVIDIA platforms. Reads thermal and
+ fan state directly from hw-management sysfs instead of importing a Python
+ platform plugin or using a gRPC server, so the daemon carries no Python
+ interpreter and no extra process. Writes the same TEMPERATURE_INFO,
+ FAN_INFO, FAN_DRAWER_INFO and PHYSICAL_ENTITY_INFO entries to STATE_DB
+ as the Python implementation.
