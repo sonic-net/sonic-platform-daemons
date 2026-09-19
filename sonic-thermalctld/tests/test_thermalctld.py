@@ -1,6 +1,8 @@
 import logging
 import os
 import sys
+import datetime
+import multiprocessing
 import threading
 import time
 import importlib.util
@@ -300,6 +302,40 @@ class TestFanUpdater(object):
         assert fan_list[0].get_status_led() == MockFan.STATUS_LED_COLOR_GREEN
         assert fan_updater.log_notice.call_count == 1
         fan_updater.log_notice.assert_called_with('Fan high speed warning cleared: FanDrawer 0 fan 1 speed is back to normal')
+
+    @mock.patch('thermalctld.update_entity_info', mock.MagicMock())
+    @mock.patch('thermalctld.datetime')
+    def test_refresh_fan_status_includes_speed_rpm(self, mock_datetime):
+        fake_time = datetime.datetime(2021, 1, 1, 12, 34, 56)
+        mock_datetime.now.return_value = fake_time
+
+        fan_drawer = MockFanDrawer(0)
+        mock_fan = MockFan()
+        mock_fan._speed_rpm = 4321
+        fan_drawer._fan_list.append(mock_fan)
+
+        fan_updater = thermalctld.FanUpdater(MockChassis(), multiprocessing.Event())
+        fan_updater.table = mock.MagicMock()
+        fan_updater._set_fan_led = mock.MagicMock()
+
+        expected_fvp = thermalctld.swsscommon.FieldValuePairs(
+            [('presence', 'True'),
+             ('drawer_name', 'FanDrawer 0'),
+             ('model', 'Fan Model'),
+             ('serial', 'Fan Serial'),
+             ('status', 'True'),
+             ('direction', mock_fan.get_direction()),
+             ('speed', str(mock_fan.get_speed())),
+             ('speed_rpm', str(mock_fan.get_speed_rpm())),
+             ('speed_target', str(mock_fan.get_target_speed())),
+             ('is_under_speed', 'False'),
+             ('is_over_speed', 'False'),
+             ('is_replaceable', 'True'),
+             ('timestamp', fake_time.strftime('%Y%m%d %H:%M:%S'))
+             ])
+
+        fan_updater._refresh_fan_status(fan_drawer, 0, mock_fan, 0, thermalctld.FanType.DRAWER)
+        fan_updater.table.set.assert_called_with('FanDrawer 0 fan 1', expected_fvp)
 
     def test_update_psu_fans(self):
         chassis = MockChassis()
