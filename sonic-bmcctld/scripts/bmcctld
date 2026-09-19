@@ -49,6 +49,7 @@ try:
     import threading
     import time
     from datetime import datetime
+    from collections import deque
 
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.chassis_base import ChassisBase
@@ -208,6 +209,10 @@ CMD_STATUS_IN_PROGRESS = "IN_PROGRESS"
 CMD_STATUS_DONE = "DONE"
 CMD_STATUS_FAILED = "FAILED"
 
+# Upper bound on retained RACK_MANAGER_COMMAND entries.
+# entries beyond this are trimmed oldest-first so the table stays bounded.
+MAX_RACK_MGR_CMD_ENTRIES = 100
+
 # Module admin status values (CHASSIS_MODULE table)
 ADMIN_UP = "up"
 ADMIN_DOWN = "down"
@@ -228,6 +233,9 @@ ACTION_GRACEFUL_SHUTDOWN = "graceful_shutdown"
 ACTION_POWER_OFF = "power_off"
 ACTION_POWER_ON = "power_on"
 ACTION_POWER_CYCLE = "power_cycle"
+
+# Prefix for ActionItem.event_desc of Rack-Manager-originated commands.
+RACK_MGR_CMD_EVENT_PREFIX = "RACK_MGR_CMD:"
 
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
@@ -651,7 +659,13 @@ class CriticalEventChecker(logger.Logger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SYSTEM_LEAK_CRITICAL:
+            # Normalise to upper-case ASCII to match the ingest handler: producers
+            # may report the leak status in mixed case (Critical/Minor), but the
+            # STATE_DB schema and its consumers compare against upper-case
+            # constants. Normalise here so a mixed-case "Critical" leak is not
+            # silently missed by the power-on gate.
+            leak_status = str(fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS, "")).upper()
+            if leak_status == SYSTEM_LEAK_CRITICAL:
                 return True
         return False
 
@@ -662,8 +676,12 @@ class CriticalEventChecker(logger.Logger):
             result = tbl.get(alert_key)
             if result and result[0]:
                 d = fvs_to_dict(result[1])
-                # severity field for temperature/flow/pressure; leak field for rack-level leak
-                severity = d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+                # severity field for temperature/flow/pressure; leak field for rack-level leak.
+                # Normalise to upper-case ASCII to match the ingest handler: redfish
+                # clients may send the severity in mixed case (Critical), but consumers
+                # compare against upper-case constants. Normalise here so a mixed-case
+                # "Critical" alert is not silently missed by the power-on gate.
+                severity = str(d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)).upper()
                 if severity == ALERT_SEVERITY_CRITICAL:
                     return True
         return False
@@ -831,6 +849,11 @@ class BmcEventHandler(EventLogger):
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
+        # Bounded FIFO of completed (DONE/FAILED) RACK_MANAGER_COMMAND keys. On each
+        # completion the oldest is evicted from STATE_DB once the cap is exceeded,
+        # keeping the table bounded in O(1) without scanning it on the data path.
+        self._completed_cmd_keys = deque()
+
         # Act on RACK_MANAGER_ALERT severity changes only.
         # Rack Manager (redfish docker) may republish identical rows each cycle.
         self._last_rack_mgr_alert_severity = {}
@@ -893,18 +916,27 @@ class BmcEventHandler(EventLogger):
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() returned unexpected state: {}".format(state))
+                # ERROR/SIGNALINT are transient, benign select() results (not a real
+                # event); handle silently at debug to avoid flooding the log.
+                self.log_debug("sel.select() returned non-object state: {}".format(state))
                 continue
             fd = selectable.getFd()
             entry = self._subscribers.get(fd)
             if entry is None:
-                self.log_warning("sel.select() returned unknown fd={}".format(fd))
+                self.log_debug("sel.select() returned unknown fd={}".format(fd))
                 continue
             table, handler = entry
-            key, op, fvs = table.pop()
-            if op != "SET":
+            try:
+                key, op, fvs = table.pop()
+                if op != "SET":
+                    continue
+                handler(key, fvs_to_dict(fvs))
+            except Exception as e:
+                # A single malformed event must not kill the event thread and leave
+                # the daemon deaf to leaks, alerts, admin and Rack Manager commands.
+                self.log_error("Error handling event on fd={}: {}; continuing".format(
+                    fd, repr(e)))
                 continue
-            handler(key, fvs_to_dict(fvs))
 
     # ---- internal event handlers ----
 
@@ -920,7 +952,9 @@ class BmcEventHandler(EventLogger):
         self.log_notice("Rack Manager command: key={} command={}".format(key, command))
         self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
 
-        if command == CMD_POWER_ON:
+        if command in (CMD_POWER_ON, CMD_POWER_CYCLE):
+            # Both POWER_ON and POWER_CYCLE leave the Switch-Host ONLINE, so both
+            # must be blocked while a critical leak/alert is active.
             if self.critical_event_checker.has_any_critical_event():
                 self._event_log.log_warning(
                     "RACK_MGR_CMD FAILED: key={} command={} reason=CRITICAL_LEAK_PRESENT "
@@ -928,7 +962,7 @@ class BmcEventHandler(EventLogger):
                 self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
                 return
 
-        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
+        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT):
             self._event_log.log_warning(
                 "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
             self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
@@ -942,12 +976,17 @@ class BmcEventHandler(EventLogger):
         }
 
         def on_complete(success, cmd_key=key, cmd=command):
+            # Write the terminal status (DONE on success, FAILED on error), then record
+            # the key in the bounded FIFO so old entries are trimmed and the table stays
+            # bounded while the just-completed status remains readable.
             self._set_cmd_status(cmd_key,
                                  CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
                                  "SUCCESS" if success else "ERROR")
+            self._record_completed_cmd(cmd_key)
 
+        # Add the RACK_MGR_CMD_EVENT_PREFIX only for rack manager commands, to identify them.
         self.action_queue.put(ActionItem(action_map[command],
-                                         "RACK_MGR_CMD:{}".format(command),
+                                         "{}{}".format(RACK_MGR_CMD_EVENT_PREFIX, command),
                                          on_complete))
 
     def _handle_chassis_module(self, key, fvs):
@@ -1073,6 +1112,49 @@ class BmcEventHandler(EventLogger):
         ])
         tbl.set(cmd_id, fvs)
 
+    def _record_completed_cmd(self, cmd_id):
+        """Track a completed command key in the bounded FIFO; evict the oldest
+        entry from STATE_DB once the cap is exceeded. O(1), no table scan."""
+        self._completed_cmd_keys.append(cmd_id)
+        while len(self._completed_cmd_keys) > MAX_RACK_MGR_CMD_ENTRIES:
+            oldest = self._completed_cmd_keys.popleft()
+            tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+            tbl._del(oldest)
+
+    def _bound_cmd_table_on_startup(self, max_entries=None):
+        """One-time reconcile at startup: the FIFO is in-memory and empty after a
+        restart, so scan the table once, delete terminal (DONE/FAILED) entries
+        beyond the newest max_entries (oldest first by timestamp), and seed the
+        FIFO with the survivors.
+
+        IN_PROGRESS entries are stale orphans after a restart: the subscriber
+        replay only re-processes PENDING entries (see _handle_rack_mgr_command),
+        so an IN_PROGRESS command can never complete or be retried. Delete them
+        to reclaim the slot. PENDING entries are kept because the replay executes
+        them."""
+        if max_entries is None:
+            max_entries = MAX_RACK_MGR_CMD_ENTRIES
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+        terminal = []
+        for k in tbl.getKeys():
+            result = tbl.get(k)
+            if not (result and result[0]):
+                continue
+            entry = fvs_to_dict(result[1])
+            status = entry.get(FIELD_STATUS)
+            if status == CMD_STATUS_IN_PROGRESS:
+                self.log_notice(
+                    "Deleting stale IN_PROGRESS rack manager command on startup: key={}".format(k))
+                tbl._del(k)
+                continue
+            if status in (CMD_STATUS_DONE, CMD_STATUS_FAILED):
+                terminal.append((entry.get(FIELD_LAST_CHANGE_TIMESTAMP, ""), k))
+        terminal.sort()  # oldest timestamp first
+        survivors = terminal[-max_entries:] if max_entries else []
+        for _, k in terminal[:len(terminal) - len(survivors)]:
+            tbl._del(k)
+        self._completed_cmd_keys = deque(k for _, k in survivors)
+
 
 # ============================================================
 # BmcctldDaemon
@@ -1109,6 +1191,10 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self.critical_event_checker = CriticalEventChecker(self.policy_reader)
         self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
         self.action_queue = queue.Queue()
+
+        # This flag is used to indicate if there was a Rack Manager power CMD during the initial boot delay.
+        self._rack_mgr_power_cmd_during_boot = False
+
         self.event_handler = BmcEventHandler(
             self.action_queue,
             self.policy_reader,
@@ -1144,25 +1230,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         else:
             self.log_warning("Caught unhandled signal '{}'; ignoring".format(
                 SIGNALS_TO_NAMES_DICT.get(sig, sig)))
-
-    def _rack_mgr_power_cmd_executed(self):
-        """
-        Return True if any RACK_MANAGER_COMMAND entry for POWER_ON or POWER_OFF
-        has status IN_PROGRESS or DONE — indicating the Rack Manager issued an
-        explicit power directive during the boot delay.
-        """
-        tbl = swsscommon.Table(self.event_handler.state_db, RACK_MANAGER_COMMAND_TABLE)
-        for key in tbl.getKeys():
-            result = tbl.get(key)
-            if not (result and result[0]):
-                continue
-            entry = fvs_to_dict(result[1])
-            command = entry.get(FIELD_COMMAND, "")
-            status = entry.get(FIELD_STATUS, "")
-            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
-               status in (CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
-                return True
-        return False
 
     def _initial_power_on_sequence(self):
         """
@@ -1234,12 +1301,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             except queue.Empty:
                 continue
 
-        # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
-        # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
-        # table for any entry whose command is POWER_ON/POWER_OFF and whose status
-        # is IN_PROGRESS or DONE (set by the event handler and on_complete callback).
-        if self._rack_mgr_power_cmd_executed():
-            self.log_notice("STARTUP: Rack Manager POWER_ON/POWER_OFF command executed "
+        # A Rack Manager power CMD came in during the boot delay; honour it and skip the automatic power-on.
+        if self._rack_mgr_power_cmd_during_boot:
+            self.log_notice("STARTUP: Rack Manager power directive executed "
                                        "during boot delay; skipping automatic power-on")
             return
 
@@ -1300,6 +1364,12 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             return
         self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' "
                                    "success={}".format(item.action, item.event_desc, success))
+
+        # Mark Rack Manager power CMD for the boot-delay skip check.
+        if item.event_desc.startswith(RACK_MGR_CMD_EVENT_PREFIX) and item.action in (
+                ACTION_POWER_ON, ACTION_POWER_OFF, ACTION_GRACEFUL_SHUTDOWN):
+            self._rack_mgr_power_cmd_during_boot = True
+
         if item.on_complete:
             item.on_complete(success)
 
@@ -1343,6 +1413,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         # replays can enqueue ACTION_POWER_ON before the action loop is ready.
         self.controller.init_host_state()
         self.event_handler.seed_chassis_module_admin_status()
+        # Reconcile the in-memory completed-command FIFO with STATE_DB and trim any
+        # stale RACK_MANAGER_COMMAND entries left over a restart.
+        self.event_handler._bound_cmd_table_on_startup()
 
         # Start the event thread — it handles CLI admin up/down commands
         # (CHASSIS_MODULE admin_status) regardless of cooling type.
