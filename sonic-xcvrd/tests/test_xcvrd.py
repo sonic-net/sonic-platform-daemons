@@ -1424,7 +1424,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': '22.75',
                                                                                 'vendor_rev': '0.5',
                                                                                 'serial': '0.7',
@@ -1466,29 +1466,35 @@ class TestXcvrdScript(object):
                                                                                 'supported_min_tx_power': -15.0,
                                                                                 'supported_max_laser_freq': 196100,
                                                                                 'supported_min_laser_freq': 191300}))
-    def test_post_port_sfp_info_to_db(self):
+    def test_post_port_info_to_db(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
+        sfp_error_event = threading.Event()
         dom_tbl = Table("STATE_DB", TRANSCEIVER_DOM_SENSOR_TABLE)
         transceiver_dict = {}
-        post_port_sfp_info_to_db(logical_port_name, port_mapping, dom_tbl, transceiver_dict, stop_event)
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task.post_port_info_to_db(logical_port_name, port_mapping, dom_tbl, transceiver_dict, stop_event)
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=False))
-    def test_post_port_sfp_info_to_db_with_sfp_not_present(self):
+    def test_post_port_info_to_db_with_sfp_not_present(self):
         logical_port_name = "Ethernet0"
         port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
+        sfp_error_event = threading.Event()
         intf_tbl = Table("STATE_DB", TRANSCEIVER_INFO_TABLE)
         transceiver_dict = {}
-        post_port_sfp_info_to_db(logical_port_name, port_mapping, intf_tbl , transceiver_dict, stop_event)
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+        task.post_port_info_to_db(logical_port_name, port_mapping, intf_tbl , transceiver_dict, stop_event)
         assert common._wrapper_get_presence.call_count == 1
 
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_get_transceiver_info', MagicMock(return_value={'type': '22.75',
                                                                                 'vendor_rev': '0.5',
@@ -1523,7 +1529,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.PortMapping.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd.platform_sfputil', MagicMock(return_value=[0]))
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd._wrapper_is_replaceable', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._wrapper_is_replaceable', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_init_port_sfp_status_sw_tbl(self):
         port_mapping = PortMapping()
@@ -2769,6 +2775,9 @@ class TestXcvrdScript(object):
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
         xcvrd.load_feature_flags = MagicMock()
         xcvrd.stop_event.wait = MagicMock()
+        # init() is mocked out, so populate the pluggable port dict directly.
+        # SfpStateUpdateTask is only created when there is at least one pluggable port.
+        xcvrd.sfp_obj_dict = {1: MagicMock()}
         xcvrd.run()
         assert mock_task_stop1.call_count == 1
         assert mock_task_stop2.call_count == 1
@@ -5645,7 +5654,7 @@ class TestXcvrdScript(object):
             assert wait_until(5, 1, lambda: task.is_alive() is False)
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
-    @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_cfg_port_tbl', MagicMock())
     def test_SfpStateUpdateTask_retry_eeprom_reading(self, mock_post_sfp_info):
         mock_table = MagicMock()
@@ -5738,11 +5747,11 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
     @patch('os.kill')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
-    @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
     @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw')
     def test_SfpStateUpdateTask_task_worker(self, mock_update_status, mock_post_sfp_info,
                                             mock_post_firmware_info, mock_update_media_setting,
@@ -5840,7 +5849,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.XcvrTableHelper')
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
-    @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
     @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw')
     def test_SfpStateUpdateTask_on_add_logical_port(self, mock_update_status, mock_post_sfp_info,
             mock_update_media_setting, mock_get_presence, mock_table_helper):
@@ -5905,8 +5914,8 @@ class TestXcvrdScript(object):
         mock_post_sfp_info.assert_called_with('Ethernet0', task.port_mapping, int_tbl, {})
         assert task.dom_db_utils.post_port_dom_thresholds_to_db.call_count == 1
         assert task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_count == 1
-        task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_with('Ethernet0')
-        task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_with('Ethernet0')
+        task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_with('Ethernet0', db_cache=None)
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_with('Ethernet0', db_cache=None)
         assert mock_update_media_setting.call_count == 1
         assert 'Ethernet0' not in task.retry_eeprom_set
 
@@ -5971,19 +5980,21 @@ class TestXcvrdScript(object):
         mock_sfputil.get_presence = MagicMock(return_value=False)
         assert not _wrapper_get_presence(1)
 
-    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_replaceable(self, mock_chassis):
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), MagicMock(),
+                                  threading.Event(), threading.Event())
         mock_object = MagicMock()
         mock_object.is_replaceable = MagicMock(return_value=True)
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
-        from xcvrd.xcvrd import _wrapper_is_replaceable
-        assert _wrapper_is_replaceable(1)
+        assert task._wrapper_is_replaceable(1)
 
         mock_object.is_replaceable = MagicMock(return_value=False)
-        assert not _wrapper_is_replaceable(1)
+        assert not task._wrapper_is_replaceable(1)
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
-        assert not _wrapper_is_replaceable(1)
+        assert not task._wrapper_is_replaceable(1)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
@@ -6229,15 +6240,17 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
-    def test_wrapper_get_transceiver_change_event(self, mock_sfputil, mock_chassis):
+    def test_get_port_change_event(self, mock_sfputil, mock_chassis):
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), MagicMock(),
+                                  threading.Event(), threading.Event())
+
         mock_chassis.get_change_event = MagicMock(return_value=(True, {'sfp': 1, 'sfp_error': 'N/A'}))
-        from xcvrd.xcvrd import _wrapper_get_transceiver_change_event
-        assert _wrapper_get_transceiver_change_event(0) == (True, 1, 'N/A')
+        assert task._get_port_change_event(0) == (True, 1, 'N/A')
 
         mock_chassis.get_change_event = MagicMock(side_effect=NotImplementedError)
         mock_sfputil.get_transceiver_change_event = MagicMock(return_value=(True, 1))
 
-        assert _wrapper_get_transceiver_change_event(0) == (True, 1, None)
+        assert task._get_port_change_event(0) == (True, 1, None)
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_wrapper_get_sfp_type(self, mock_chassis):
@@ -6251,15 +6264,20 @@ class TestXcvrdScript(object):
         assert not _wrapper_get_sfp_type(1)
 
     @patch('xcvrd.xcvrd.platform_chassis')
-    def test_wrapper_get_sfp_error_description(self, mock_chassis):
+    def test_get_port_error_description(self, mock_chassis):
+        port_mapping = PortMapping()
+        mock_sfp_obj_dict = MagicMock()
+        stop_event = threading.Event()
+        sfp_error_event = threading.Event()
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
+
         mock_object = MagicMock()
         mock_object.get_error_description = MagicMock(return_value='N/A')
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
-        from xcvrd.xcvrd import _wrapper_get_sfp_error_description
-        assert _wrapper_get_sfp_error_description(1) == 'N/A'
+        assert task._get_port_error_description(1) == 'N/A'
 
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
-        assert not _wrapper_get_sfp_error_description(1)
+        assert not task._get_port_error_description(1)
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory(self, mock_chassis):
@@ -6635,22 +6653,23 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
     @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
     @patch('xcvrd.xcvrd.SfpStateUpdateTask.init', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device')
     @patch('os.kill')
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
     @patch('xcvrd.dom.dom_mgr.DomInfoUpdateTask.post_port_sfp_firmware_info_to_db')
-    @patch('xcvrd.xcvrd.post_port_sfp_info_to_db')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
     @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw')
-    @patch('xcvrd.xcvrd.platform_chassis')
-    def test_sfp_removal_from_dict(self, mock_platform_chassis, mock_update_status, mock_post_sfp_info,
+    def test_sfp_removal_from_dict(self, mock_update_status, mock_post_sfp_info,
                                             mock_post_firmware_info, mock_update_media_setting,
-                                            mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill):
+                                            mock_del_dom, mock_change_event, mock_mapping_event, mock_os_kill,
+                                            mock_get_port_device):
         port_mapping = PortMapping()
         mock_sfp = MagicMock()
         mock_sfp.remove_xcvr_api = MagicMock(return_value=None)
-        mock_platform_chassis.get_sfp.return_value = mock_sfp
+        mock_get_port_device.return_value = mock_sfp
         mock_sfp_obj_dict = MagicMock()
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
