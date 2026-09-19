@@ -1206,9 +1206,8 @@ class CmisManagerTask(threading.Thread):
                     # Check datapath init pending on module that supports CMIS 5.x
                     majorRev = int(api.get_cmis_rev().split('.')[0])
                     if majorRev >= 5 and not self.check_datapath_init_pending(api, host_lanes_mask):
-                        self.log_notice("{}: datapath init not pending".format(lport))
-                        self.force_cmis_reinit(lport, retries + 1)
-                        return
+                        self.log_notice("{}: datapath init not pending but ConfigSuccess; "
+                                        "proceeding with datapath init".format(lport))
 
                 # Ensure the Datapath is NOT Activated unless the host Tx siganl is good.
                 # NOTE: Some CMIS compliant modules may have 'auto-squelch' feature where
