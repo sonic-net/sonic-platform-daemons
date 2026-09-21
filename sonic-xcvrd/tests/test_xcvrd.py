@@ -3573,6 +3573,32 @@ class TestXcvrdScript(object):
 
         assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
 
+    @pytest.mark.parametrize("staged_map, expected", [
+        ([0, 0, 0, 0, 0, 0, 0, 0], False),
+        ([3, 0, 0, 0, 0, 0, 0, 0], True),
+        ([0, 0, 0, 0, 0, 0, 0, 3], True),
+    ])
+    def test_CmisManagerTask_is_decommission_required_staged_zero(self, staged_map, expected):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_application = MagicMock(side_effect=lambda lane: staged_map[lane])
+        mock_xcvr_api.get_active_apsel_hostlane = MagicMock(return_value={
+            'ActiveAppSelLane{}'.format(lane + 1): 1
+            for lane in range(CmisManagerTask.CMIS_MAX_HOST_LANES)
+        })
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0}
+        task.get_desired_app_map = MagicMock(return_value=[3] * CmisManagerTask.CMIS_MAX_HOST_LANES)
+
+        assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is expected
+        if not expected:
+            mock_xcvr_api.get_active_apsel_hostlane.assert_not_called()
+            task.get_desired_app_map.assert_not_called()
+        else:
+            mock_xcvr_api.get_active_apsel_hostlane.assert_called_once_with()
+            task.get_desired_app_map.assert_called_once_with(mock_xcvr_api, 'Ethernet0')
+
     def test_CmisManagerTask_is_decommission_required_invalid_active_appsel(self):
         mock_xcvr_api = MagicMock()
         desired_map = [2,2,2,2,2,2,2,2]
