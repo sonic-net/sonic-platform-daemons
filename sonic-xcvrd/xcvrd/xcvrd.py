@@ -256,7 +256,10 @@ class SfpStateUpdateTask(threading.Thread):
             helper_logger.log_error("No port device found for port {}".format(physical_port))
             return False
 
-        return port_device.is_replaceable()
+        try:
+            return port_device.is_replaceable()
+        except NotImplementedError:
+            return False
 
     # Update port sfp info in db
     def post_port_info_to_db(self, logical_port_name, port_mapping, table, transceiver_dict,

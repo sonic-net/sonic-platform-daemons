@@ -5993,6 +5993,9 @@ class TestXcvrdScript(object):
         mock_object.is_replaceable = MagicMock(return_value=False)
         assert not task._wrapper_is_replaceable(1)
 
+        mock_object.is_replaceable = MagicMock(side_effect=NotImplementedError)
+        assert not task._wrapper_is_replaceable(1)
+
         mock_chassis.get_sfp = MagicMock(side_effect=NotImplementedError)
         assert not task._wrapper_is_replaceable(1)
 
