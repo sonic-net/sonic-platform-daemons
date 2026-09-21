@@ -564,6 +564,10 @@ class SfpStateUpdateTask(threading.Thread):
                     #      this is for the vendors who don't implement "system_not_ready/system_becom_ready" logic
                     logical_port_dict = {}
                     for key, value in port_dict.items():
+                        # Validate that this event belongs to the set of ports this task is responsible for.
+                        if int(key) not in self.port_obj_dict:
+                            helper_logger.log_error("Got event for port {} not owned by {}, ignored".format(key, self.name))
+                            continue
                         # SFP error event should be cached because: when a logical port is created, there is no way to
                         # detect the SFP error by platform API.
                         if value != sfp_status_helper.SFP_STATUS_INSERTED and value != sfp_status_helper.SFP_STATUS_REMOVED:
