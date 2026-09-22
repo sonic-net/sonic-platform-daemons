@@ -505,6 +505,9 @@ class CmisManagerTask(threading.Thread):
         Lanes that are currently unused (AppSel=0) are ignored — adding new DPs
         on unused lanes does not require decommission.
 
+        If all staged AppSel values are 0, skip decommission even when active
+        AppSel has not changed, allowing initialization after rejected decommission.
+
         Args:
             api:
                 XcvrApi object
@@ -514,6 +517,10 @@ class CmisManagerTask(threading.Thread):
             True, if decommission is required
             False, if decommission is not required
         """
+        if all(api.get_application(lane) == 0 for lane in range(self.CMIS_MAX_HOST_LANES)):
+            self.log_notice("{}: all staged AppSel values are 0, skipping decommission".format(lport))
+            return False
+
         desired_map = self.get_desired_app_map(api, lport)
         active_apsel = api.get_active_apsel_hostlane()
         current_map = []
