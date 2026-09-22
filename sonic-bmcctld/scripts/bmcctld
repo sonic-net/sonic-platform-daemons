@@ -1883,12 +1883,17 @@ class OperationRunner(EventLogger):
                 operation.request_id, operation.item.priority,
                 new_item.action, new_item.priority))
         operation.cancel.set()
+        next_warning = time.monotonic() + 30
         while operation.thread.is_alive():
-            operation.thread.join(timeout=30)
-            if operation.thread.is_alive():
+            if self.daemon.stop_event.is_set():
+                self.action_queue.put(new_entry)
+                return
+            operation.thread.join(timeout=1)
+            if operation.thread.is_alive() and time.monotonic() >= next_warning:
                 self.log_warning(
                     "Still joining preempted operation request_id={}".format(
                         operation.request_id))
+                next_warning = time.monotonic() + 30
 
         if operation.outcome is None or \
                 operation.outcome[0] == OP_RESULT_PREEMPTED:

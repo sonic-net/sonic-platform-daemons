@@ -3247,6 +3247,101 @@ class TestOperationRunnerConcurrency:
         first_callback.assert_called_once()
         second_callback.assert_called_once()
 
+    @pytest.mark.parametrize("stop_before_join", [False, True])
+    @pytest.mark.parametrize("outcome", [
+        None, (bmcctld.OP_RESULT_SUCCESS, "-", True),
+    ])
+    def test_displacement_stop_preserves_live_worker_and_queue(
+            self, chassis, stop_before_join, outcome):
+        daemon = self._make_daemon(chassis)
+        runner = daemon.operation_runner
+        callback, joined_callback = MagicMock(), MagicMock()
+        operation = _make_operation(
+            bmcctld.ACTION_POWER_ON, callback=callback)
+        operation.joined_callbacks.append((joined_callback, None))
+        operation.outcome = outcome
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = True
+        runner.current = operation
+        runner._spawn = MagicMock()
+        daemon.controller.write_operation_start(
+            operation.request_id, operation.item.event_desc)
+        daemon.controller.write_operation_result = MagicMock()
+        successor = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "stop", 2)
+        entry = (successor.priority, 42, successor)
+        daemon.action_queue.put(entry)
+
+        def stop_during_join(timeout):
+            assert operation.cancel.is_set()
+            assert not daemon.stop_event.is_set(), "joined again after daemon stop"
+            daemon.stop_event.set()
+
+        operation.thread.join.side_effect = stop_during_join
+        if stop_before_join:
+            daemon.stop_event.set()
+
+        assert runner.process_next(timeout=0) is True
+
+        assert operation.thread.join.call_args_list == (
+            [] if stop_before_join else [call(timeout=1)])
+        assert operation.cancel.is_set()
+        assert runner.current is operation
+        assert operation.outcome is outcome
+        assert daemon.action_queue.get_nowait() is entry
+        assert daemon.action_queue.empty()
+        runner._spawn.assert_not_called()
+        daemon.controller.write_operation_result.assert_not_called()
+        callback.assert_not_called()
+        joined_callback.assert_not_called()
+        state = dict(daemon.controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_OP_RESULT] == "-"
+
+    def test_displacement_waits_for_worker_with_periodic_warnings(
+            self, chassis, monkeypatch):
+        daemon = self._make_daemon(chassis)
+        runner = daemon.operation_runner
+        callback = MagicMock()
+        operation = _make_operation(
+            bmcctld.ACTION_POWER_ON, callback=callback)
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = True
+        runner.current = operation
+        runner._spawn = MagicMock()
+        daemon.controller.write_operation_result = MagicMock()
+        successor = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "next", 2)
+        entry = (successor.priority, 42, successor)
+        daemon.action_queue.put(entry)
+        now = 0
+        warnings = []
+        monkeypatch.setattr(bmcctld.time, "monotonic", lambda: now)
+        runner.log_warning = MagicMock(side_effect=lambda message: warnings.append(now))
+
+        def join_worker(timeout):
+            nonlocal now
+            assert timeout == 1
+            assert operation.cancel.is_set()
+            runner._spawn.assert_not_called()
+            daemon.controller.write_operation_result.assert_not_called()
+            callback.assert_not_called()
+            now += timeout
+            if now == 61:
+                operation.outcome = (
+                    bmcctld.OP_RESULT_PREEMPTED, bmcctld.OP_REASON_PREEMPTED, False)
+                operation.thread.is_alive.return_value = False
+
+        operation.thread.join.side_effect = join_worker
+
+        assert runner.process_next(timeout=0) is True
+
+        assert operation.thread.join.call_args_list == [call(timeout=1)] * 61
+        assert warnings == [30, 60]
+        assert runner.current is None
+        assert daemon.action_queue.get_nowait() is entry
+        runner._spawn.assert_not_called()
+        daemon.controller.write_operation_result.assert_called_once_with(
+            bmcctld.OP_RESULT_PREEMPTED, bmcctld.OP_REASON_PREEMPTED)
+        callback.assert_called_once_with(False, bmcctld.OP_RESULT_PREEMPTED)
+
     def test_p_completed_worker_is_reaped_after_blocking_get(self, chassis):
         daemon = self._make_daemon(chassis)
         release = threading.Event()
@@ -4793,6 +4888,74 @@ class TestBmcctldDaemonRun:
             joined_callback.assert_not_called()
             state = dict(daemon.controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
             assert state[bmcctld.FIELD_OP_RESULT] == "-"
+
+    @pytest.mark.parametrize("startup_drain", [False, True])
+    @pytest.mark.parametrize("completion", ["alive", "displacement", "cleanup"])
+    def test_displacement_stop_reaches_run_cleanup(
+            self, lifecycle, chassis, monkeypatch, startup_drain, completion):
+        daemon, event_thread, worker = lifecycle
+        callback, joined_callback, successor_callback = MagicMock(), MagicMock(), MagicMock()
+        runner = daemon.operation_runner
+        runner.enqueue(bmcctld.ActionItem(
+            bmcctld.ACTION_GRACEFUL_RESTART, "running", 4, on_complete=callback))
+        successor = bmcctld.ActionItem(
+            bmcctld.ACTION_POWER_OFF, "next", 2, on_complete=successor_callback)
+        entry = (successor.priority, 42, successor)
+        operation = None
+        if startup_drain:
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+            chassis.set_liquid_cooled(True)
+            chassis.set_reboot_cause(bmcctld.ChassisBase.REBOOT_CAUSE_POWER_LOSS)
+            daemon.policy_reader.get_power_on_delay = MagicMock(return_value=20)
+            monkeypatch.setattr(bmcctld.time, "clock_gettime", lambda clock: 10)
+            monkeypatch.setattr(bmcctld.time, "monotonic", lambda: 0)
+
+        def start_worker():
+            nonlocal operation
+            operation = runner.current
+            operation.joined_callbacks.append((joined_callback, None))
+            if completion != "alive":
+                operation.outcome = (bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-", True)
+            daemon.action_queue.put(entry)
+
+        def join_worker(timeout):
+            assert operation.cancel.is_set()
+            if not daemon.stop_event.is_set():
+                assert timeout == 1
+                daemon.stop_event.set()
+                if completion == "displacement":
+                    worker.is_alive.return_value = False
+            else:
+                assert timeout == 5
+                if completion == "cleanup":
+                    worker.is_alive.return_value = False
+
+        worker.start.side_effect = start_worker
+        worker.join.side_effect = join_worker
+
+        assert bmcctld.main() == bmcctld.exit_code
+
+        worker.start.assert_called_once()
+        assert worker.join.call_args_list == (
+            [call(timeout=1)] if completion == "displacement" else
+            [call(timeout=1), call(timeout=5)])
+        event_thread.join.assert_called_once_with(timeout=5)
+        assert daemon._run_action_loop.call_count == (0 if startup_drain else 1)
+        assert daemon.action_queue.get_nowait() is entry
+        assert daemon.action_queue.empty()
+        successor_callback.assert_not_called()
+        if completion == "alive":
+            assert runner.current is operation
+            assert operation.outcome is None
+            daemon.controller.write_operation_result.assert_not_called()
+            callback.assert_not_called()
+            joined_callback.assert_not_called()
+        else:
+            assert runner.current is None
+            daemon.controller.write_operation_result.assert_called_once_with(
+                bmcctld.OP_RESULT_SUCCESS_GRACEFUL, "-")
+            callback.assert_called_once_with(True, bmcctld.OP_RESULT_SUCCESS_GRACEFUL)
+            joined_callback.assert_called_once_with(True, bmcctld.OP_RESULT_SUCCESS_GRACEFUL)
 
     @pytest.mark.parametrize("fail_after_admission", [False, True])
     def test_startup_drain_cleans_up_before_event_join(
