@@ -248,6 +248,22 @@ media_settings_port_overrides_global_default = {
     }
 }
 
+# Fixture: a platform key match should take precedence over a vendor/media match.
+# The vendor entry is listed first on purpose so the test fails if the platform
+# key is not checked ahead of the vendor/media keys.
+media_settings_platform_key_priority = {
+    'GLOBAL_MEDIA_SETTINGS': {
+        '0-31': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example
+            },
+            'MY_PLATFORM_KEY': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example2
+            }
+        }
+    }
+}
+
 media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {
     LANE_SPEED_DEFAULT_KEY: asic_serdes_si_settings_example,
@@ -1574,6 +1590,7 @@ class TestXcvrdScript(object):
     def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        mock_chassis.get_media_settings_key = MagicMock(return_value=None)
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
         mock_is_cmis_api.return_value = False
@@ -1591,12 +1608,12 @@ class TestXcvrdScript(object):
 
         # Test a good 'specification_compliance' value
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-10GBase-SR-255M', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50', 'platform_key': None}
 
         # Test a bad 'specification_compliance' value
         xcvr_info_dict[0]['specification_compliance'] = 'N/A'
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50'}
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP+-*', 'lane_speed_key': 'speed:50G', 'medium_lane_speed_key': 'COPPER50', 'platform_key': None}
         # TODO: Ensure that error message was logged
 
         xcvr_info_dict_for_qsfp28 = {
@@ -1628,6 +1645,7 @@ class TestXcvrdScript(object):
             "media_key": "QSFP28-100GBASE-SR4 or 25GBASE-SR-50.0M",
             "lane_speed_key": "speed:25G",
             "medium_lane_speed_key": "COPPER25",
+            "platform_key": None,
         }
 
         mock_is_cmis_api.return_value = True
@@ -1655,7 +1673,7 @@ class TestXcvrdScript(object):
 
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
-        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'medium_lane_speed_key': 'COPPER50' }
+        assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'medium_lane_speed_key': 'COPPER50', 'platform_key': None }
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], (400000, 8, 0)),
@@ -1755,6 +1773,10 @@ class TestXcvrdScript(object):
     (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
     (media_settings_port_overrides_global_default, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
     (media_settings_port_overrides_global_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
+    # Platform key match takes precedence over vendor/media match
+    (media_settings_platform_key_priority, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN', 'platform_key': 'MY_PLATFORM_KEY'}, asic_serdes_si_settings_example2),
+    # When platform key is None, resolution falls through to the vendor/media match
+    (media_settings_platform_key_priority, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN', 'platform_key': None}, asic_serdes_si_settings_example),
     (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'COPPER50'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
