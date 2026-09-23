@@ -2569,13 +2569,16 @@ class TestXcvrdScript(object):
         }
         assert observer.port_event_cache == expected_cache
 
-        # Test update event if it's a subset of cached event:
+        # Test update event if it's a subset of cached event: this must still be
+        # dispatched, since it represents fields disappearing relative to the cache
+        # (e.g. a partial STATE_DB update), not a truly duplicate event.
         side_effect_list = [
             ('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )),
             (None, None, None)
         ]
         mock_selectable.pop.side_effect = iter(side_effect_list)
-        assert not observer.handle_port_update_event()
+        assert observer.handle_port_update_event()
+        expected_processed_event_count += 1
         assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
         expected_cache = {
             ('Ethernet0', CONFIG_DB, PORT_TABLE): {
@@ -2585,6 +2588,17 @@ class TestXcvrdScript(object):
                 'asic_id': 0,
             }
         }
+        assert observer.port_event_cache == expected_cache
+
+        # Test that a genuinely-identical event (same fields, same values) is still
+        # deduped, even with the symmetric diff.
+        side_effect_list = [
+            ('Ethernet0', swsscommon.DEL_COMMAND, (('index', '1'), )),
+            (None, None, None)
+        ]
+        mock_selectable.pop.side_effect = iter(side_effect_list)
+        assert not observer.handle_port_update_event()
+        assert len(port_change_event_handler.port_event_cache) == expected_processed_event_count
         assert observer.port_event_cache == expected_cache
 
     @patch('swsscommon.swsscommon.Select.addSelectable', MagicMock())
