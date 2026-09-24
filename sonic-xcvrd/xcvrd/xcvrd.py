@@ -16,7 +16,6 @@ try:
     import time
     import datetime
     import subprocess
-    import argparse
     import re
     import traceback
     import ctypes
@@ -38,6 +37,7 @@ try:
     from .xcvrd_utilities import media_settings_parser
     from .xcvrd_utilities import optics_si_parser
     from .xcvrd_utilities import common
+    from .xcvrd_utilities.xcvrd_config import XcvrdConfig
     from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
     
@@ -890,15 +890,22 @@ class SfpStateUpdateTask(threading.Thread):
 
 
 class DaemonXcvrd(daemon_base.DaemonBase):
-    def __init__(self, log_identifier, skip_cmis_mgr=False, enable_sff_mgr=False, dom_temperature_poll_interval=None, dom_update_interval=None, skip_cpo_mgr=False):
+    def __init__(self, log_identifier):
         super(DaemonXcvrd, self).__init__(log_identifier, enable_runtime_log_config=True)
         self.stop_event = threading.Event()
         self.sfp_error_event = threading.Event()
-        self.skip_cmis_mgr = skip_cmis_mgr
-        self.skip_cpo_mgr = skip_cpo_mgr
-        self.enable_sff_mgr = enable_sff_mgr
-        self.dom_temperature_poll_interval = dom_temperature_poll_interval
-        self.dom_update_interval = dom_update_interval
+        # Resolve xcvrd tunables from the "xcvrd" section of the per-platform
+        # pmon_daemon_control.json (see XcvrdConfig). The manager toggles and the
+        # dom_* cadences are read from the resolved config; an absent or
+        # unreadable file/section degrades to built-in defaults.
+        self.config = XcvrdConfig.resolve()
+        # self.config is authoritative; the booleans below are convenience views
+        # derived from it once for signature compatibility with the manager task
+        # constructors. Do not mutate them independently - re-derive from
+        # self.config if a toggle ever needs to change.
+        self.skip_cmis_mgr = not self.config.cmis_mgr.enabled
+        self.skip_cpo_mgr = not self.config.cpo_mgr.enabled
+        self.enable_sff_mgr = self.config.sff_mgr.enabled
         self.namespaces = ['']
         self.threads = []
         self.sfp_obj_dict = {}
@@ -1162,22 +1169,22 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
+        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.config.dom.update_interval)
         dom_info_update.start()
         self.threads.append(dom_info_update)
 
         # Start the CPO dom sensor info update thread
         cpo_dom_info_update = None
         if self.cpo_obj_dict:
-            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.config.dom.update_interval)
             cpo_dom_info_update.start()
             self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
-        if self.dom_temperature_poll_interval is not None:
+        if self.config.dom.temperature_poll_interval is not None:
             dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event,
-                                                               self.dom_temperature_poll_interval)
+                                                               self.config.dom.temperature_poll_interval)
             dom_thermal_info_update.start()
             self.threads.append(dom_thermal_info_update)
 
@@ -1274,17 +1281,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--skip_cmis_mgr', action='store_true')
-    parser.add_argument('--skip_cpo_mgr', action='store_true')
-    parser.add_argument('--enable_sff_mgr', action='store_true')
-    parser.add_argument('--dom_temperature_poll_interval', default=None, type=int)
-    parser.add_argument('--dom_update_interval', default=None, type=int)
-
-    args = parser.parse_args()
-    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER, args.skip_cmis_mgr, args.enable_sff_mgr,
-                        args.dom_temperature_poll_interval, args.dom_update_interval,
-                        args.skip_cpo_mgr)
+    xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
     xcvrd.run()
 
 
