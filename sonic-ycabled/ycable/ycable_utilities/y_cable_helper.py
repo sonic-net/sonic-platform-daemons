@@ -376,36 +376,27 @@ def retry_setup_grpc_channel_for_port(port, asic_index, port_tbl, grpc_client):
                 grpc_port_stubs[port] = stub
                 return True
 
+
 def apply_grpc_secrets_configuration(SECRETS_PATH, grpc_config):
-
-
-    f = open(SECRETS_PATH, 'rb')
-    parsed_data = json.load(f)
+    with open(SECRETS_PATH, 'rb') as f:
+        parsed_data = json.load(f)
 
     asic_index = multi_asic.get_asic_index_from_namespace(DEFAULT_NAMESPACE)
     grpc_client_config = parsed_data.get("GRPCCLIENT", None)
     if grpc_client_config is not None:
-        config = grpc_client_config.get("config", None)
-        if config is not None:
-            type_chan = config.get("type",None)
-            auth_level = config.get("auth_level",None)
-            log_level = config.get("log_level", None)
-            fvs_updated = swsscommon.FieldValuePairs([('type', type_chan),
-                                                      ('auth_level',auth_level ),
-                                                      ('log_level',log_level)])
-            grpc_config[asic_index].set('config', fvs_updated)
-        certs = grpc_client_config.get("certs", None)
-        if certs is not None:
-            client_crt = certs.get("client_crt", None)
-            client_key = certs.get("client_key", None)
-            ca_crt = certs.get("ca_crt", None)
-            grpc_ssl_credential = certs.get("grpc_ssl_credential",None)
-            fvs_updated = swsscommon.FieldValuePairs([('client_crt', client_crt),
-                                                      ('client_key', client_key),
-                                                      ('grpc_ssl_credential', grpc_ssl_credential),
-                                                      ('ca_crt',ca_crt)])
-            grpc_config[asic_index].set('certs', fvs_updated)
-    
+        for key in ("config", "certs"):
+            secrets = grpc_client_config.get(key, {})
+            if not secrets:
+                continue
+
+            status, fvs = grpc_config[asic_index].get(key)
+            configured_fields = set(dict(fvs)) if status else set()
+            missing_fvs = [(field, value) for field, value in secrets.items()
+                           if field not in configured_fields and value is not None]
+            if missing_fvs:
+                grpc_config[asic_index].set(
+                    key, swsscommon.FieldValuePairs(missing_fvs))
+
 
 def get_grpc_credentials(type_chan, kvp):
 
