@@ -3,3 +3,4 @@
 '''
 
 from . import swsscommon
+from .swsscommon import SonicDBConfig

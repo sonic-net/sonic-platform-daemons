@@ -4,6 +4,19 @@
 
 STATE_DB = ''
 
+
+class SonicDBConfig:
+    _global_init = False
+
+    @staticmethod
+    def initializeGlobalConfig(global_db_file_path=None):
+        SonicDBConfig._global_init = True
+
+    @staticmethod
+    def reset():
+        SonicDBConfig._global_init = False
+
+
 class ConfigDBConnector:
     """
     Mock ConfigDBConnector that avoids real Redis connections.

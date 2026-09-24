@@ -1389,3 +1389,29 @@ class TestThermalControlDaemon(object):
 
             # Clean up
             daemon_thermalctld.deinit()
+
+    @mock.patch('thermalctld.multi_asic.is_multi_asic')
+    def test_global_db_config_initialized_on_multi_asic(self, mock_is_multi_asic):
+        """Test that initializeGlobalConfig is called on multi-ASIC platforms"""
+        mock_is_multi_asic.return_value = True
+        swsscommon.SonicDBConfig.reset()
+
+        with mock.patch.object(swsscommon.SonicDBConfig, 'initializeGlobalConfig', wraps=swsscommon.SonicDBConfig.initializeGlobalConfig) as mock_init_global:
+            daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+            mock_init_global.assert_called_once()
+            daemon_thermalctld.deinit()
+
+        swsscommon.SonicDBConfig.reset()
+
+    @mock.patch('thermalctld.multi_asic.is_multi_asic')
+    def test_global_db_config_not_initialized_on_single_asic(self, mock_is_multi_asic):
+        """Test that initializeGlobalConfig is not called on single-ASIC platforms"""
+        mock_is_multi_asic.return_value = False
+        swsscommon.SonicDBConfig.reset()
+
+        with mock.patch.object(swsscommon.SonicDBConfig, 'initializeGlobalConfig') as mock_init_global:
+            daemon_thermalctld = thermalctld.ThermalControlDaemon(5, 60, 30)
+            mock_init_global.assert_not_called()
+            daemon_thermalctld.deinit()
+
+        swsscommon.SonicDBConfig.reset()
