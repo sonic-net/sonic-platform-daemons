@@ -1,0 +1,43 @@
+[package]
+name = "sonic-thermalctld-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
+description = "SONiC thermal control daemon in Rust (native sysfs, no gRPC)"
+license = "Apache-2.0"
+homepage = "https://github.com/Azure/sonic-buildimage"
+repository = "https://github.com/Azure/sonic-buildimage"
+keywords = ["sonic", "thermal", "networking"]
+
+[[bin]]
+name = "thermalctld-rs"
+path = "src/main.rs"
+
+[dependencies]
+platform-traits = { path = "../../../sonic-platform-common/crates/platform-traits" }
+# The vendor's platform API.  Every vendor names its crate "sonic-platform";
+# "vendor-platform" is a symlink debian/rules points at the directory that
+# platform/<vendor>/rules.mk supplies, so nothing here names a vendor.
+sonic-platform  = { path = "../../vendor-platform" }
+swss-common     = { path = "../../../sonic-swss-common/crates/swss-common" }
+# "rt", not "rt-multi-thread": one worker thread is plenty at ~0.4 polls/s, and
+# the thread count is part of what this daemon exists to measure.
+tokio   = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
+# Held below 4.6: from 4.6 the clap family is edition 2024, and the
+# cargo-auditable the slave image wraps rustc in cannot parse that edition
+# out of `cargo metadata` (sonic-slave-bookworm pins 0.6.4). The committed
+# lock is what actually holds the version; this says why, so a later
+# `cargo update` does not silently put the build back.
+clap    = { version = ">=4.0, <4.6", features = ["derive"] }
+chrono  = "0.4"
+serde_json = "1"
+log     = "0.4"
+syslog  = "6.0"
+
+[dev-dependencies]
+# Same constraint: 3.15 onward pulls getrandom 0.4, which is edition 2024.
+tempfile = ">=3, <3.15"
+# "test-util" gives the tests `tokio::time::pause()`, which makes the polling
+# loop's wait arithmetic observable without any test sleeping.  It is a
+# dev-only feature: the shipped binary keeps the four features above.
+tokio = { version = "1", features = ["test-util"] }
