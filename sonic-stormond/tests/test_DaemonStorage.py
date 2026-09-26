@@ -71,6 +71,34 @@ class TestDaemonStorage(object):
         assert (stormon_daemon.timeout) == 3600
         assert (stormon_daemon.fsstats_sync_interval) == 86400
 
+    @pytest.mark.parametrize('raw_value, expected', [
+        (None, 3600), ('60', 60), (0, 3600), ('-1', 3600),
+        ('not-an-integer', 3600), ('2147483648', 3600),
+    ])
+    def test_parse_positive_interval(self, raw_value, expected):
+        daemon = stormond.DaemonStorage.__new__(stormond.DaemonStorage)
+        daemon._syslog = MagicMock()
+        daemon.log = MagicMock()
+        assert daemon._parse_positive_interval(
+            'daemon_polling_interval', raw_value, 3600) == expected
+
+    def test_configdb_interval_fields_fall_back_independently(self):
+        daemon = stormond.DaemonStorage.__new__(stormond.DaemonStorage)
+        daemon._syslog = MagicMock()
+        daemon.log = MagicMock()
+        daemon.config_db = MagicMock()
+        daemon.config_db.hgetall.return_value = {
+            'daemon_polling_interval': '0',
+            'fsstats_sync_interval': '120',
+        }
+        daemon.timeout = 3600
+        daemon.fsstats_sync_interval = 86400
+
+        daemon.get_configdb_intervals()
+
+        assert daemon.timeout == 3600
+        assert daemon.fsstats_sync_interval == 120
+
     
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_storage_devices(self):
