@@ -893,6 +893,97 @@ class TestBmcEventHandlerRackMgrAlerts:
 
 
 # --------------------------------------------------------------------------
+# Tests: BmcEventHandler - Rack Manager telemetry (RACK_MANAGER_DATA)
+# --------------------------------------------------------------------------
+
+class TestBmcEventHandlerRackMgrData:
+
+    def test_data_subscriber_registered(self, event_handler):
+        """RACK_MANAGER_DATA is subscribed and routed to _handle_rack_mgr_data."""
+        fd = event_handler.rack_mgr_data_sub.getFd()
+        assert fd in event_handler._subscribers
+        assert event_handler._subscribers[fd][1] == event_handler._handle_rack_mgr_data
+
+    def test_normal_telemetry_clears_active_alert(self, event_handler):
+        """NORMAL telemetry deletes the matching RACK_MANAGER_ALERT row and resets dedup."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_temperature",
+                         {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL})
+        event_handler._last_rack_mgr_alert_severity["Inlet_liquid_temperature"] = \
+            bmcctld.ALERT_SEVERITY_CRITICAL
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Inlet_liquid_temperature",
+                {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_NORMAL},
+            )
+        assert "Inlet_liquid_temperature" not in tbl.mock_dict
+        assert "Inlet_liquid_temperature" not in event_handler._last_rack_mgr_alert_severity
+
+    def test_normal_telemetry_no_active_alert_is_noop(self, event_handler):
+        """NORMAL telemetry with no active alert does nothing (no error, no delete)."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Inlet_liquid_pressure",
+                {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_NORMAL},
+            )
+        assert tbl.mock_dict == {}
+
+    def test_non_normal_telemetry_leaves_alert(self, event_handler):
+        """Non-NORMAL telemetry never clears an alert (alerts are raised via ALERT table)."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_flow_rate",
+                         {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL})
+        event_handler._last_rack_mgr_alert_severity["Inlet_liquid_flow_rate"] = \
+            bmcctld.ALERT_SEVERITY_CRITICAL
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Inlet_liquid_flow_rate",
+                {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_MINOR},
+            )
+        assert "Inlet_liquid_flow_rate" in tbl.mock_dict
+        assert event_handler._last_rack_mgr_alert_severity["Inlet_liquid_flow_rate"] == \
+            bmcctld.ALERT_SEVERITY_CRITICAL
+
+    def test_rack_level_leak_telemetry_clears_via_leak_field(self, event_handler):
+        """Rack_level_leak telemetry reports NORMAL via the 'leak' field and clears the alert."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Rack_level_leak",
+                         {bmcctld.FIELD_LEAK: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Rack_level_leak",
+                {bmcctld.FIELD_LEAK: bmcctld.ALERT_SEVERITY_NORMAL},
+            )
+        assert "Rack_level_leak" not in tbl.mock_dict
+
+    def test_mixed_case_normal_clears(self, event_handler):
+        """A mixed-case 'Normal' telemetry severity still clears the alert."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_pressure",
+                         {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Inlet_liquid_pressure",
+                {bmcctld.FIELD_SEVERITY: "Normal"},
+            )
+        assert "Inlet_liquid_pressure" not in tbl.mock_dict
+
+    def test_unknown_telemetry_key_ignored(self, event_handler):
+        """Telemetry under a key outside ALERT_KEYS is ignored (no table access, no error)."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_temperature",
+                         {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data(
+                "Some_unexpected_key",
+                {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_NORMAL},
+            )
+        # Unrelated active alert must be untouched.
+        assert "Inlet_liquid_temperature" in tbl.mock_dict
+
+
+# --------------------------------------------------------------------------
 # Tests: BmcctldDaemon - action loop
 # --------------------------------------------------------------------------
 
