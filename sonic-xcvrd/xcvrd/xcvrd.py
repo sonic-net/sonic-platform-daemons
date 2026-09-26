@@ -938,6 +938,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
         sel.addSelectable(port_tbl)
 
+        # A completion marker may have been written before this subscription.
+        # Subscribe first so a concurrent write is not missed by the snapshot.
+        table = swsscommon.Table(appl_db, swsscommon.APP_PORT_TABLE_NAME)
+        for marker in ('PortConfigDone', 'PortInitDone'):
+            found, _ = table.get(marker)
+            if found:
+                return
+
         # Make sure this daemon started after all port configured
         while not self.stop_event.is_set():
             (state, c) = sel.select(port_event_helper.SELECT_TIMEOUT_MSECS)
@@ -945,6 +953,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 continue
             if state != swsscommon.Select.OBJECT:
                 self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                self.stop_event.wait(port_event_helper.SELECT_TIMEOUT_MSECS / 1000.0)
                 continue
 
             (key, op, fvp) = port_tbl.pop()
