@@ -33,6 +33,7 @@ FSIO_RW_JSON_FILE = "/usr/share/stormond/fsio-rw-stats.json"
 
 STORMOND_PERIODIC_STATEDB_SYNC_SECS = 3600 #one hour
 STORMOND_SYNC_TO_DISK_SECS = 86400 #one day
+MAX_CONFIG_INTERVAL_SECS = 2147483647
 
 STORAGEUTIL_LOAD_ERROR = 127
 
@@ -120,6 +121,19 @@ class DaemonStorage(daemon_base.DaemonBase):
     def get_formatted_time(self, time_since_epoch):
         return datetime.fromtimestamp(time_since_epoch).strftime(self.time_format_string)
 
+    def _parse_positive_interval(self, field_name, raw_value, default):
+        if raw_value is None:
+            return default
+        value_text = str(raw_value)
+        if (value_text.isascii() and value_text.isdigit() and
+                len(value_text) <= len(str(MAX_CONFIG_INTERVAL_SECS))):
+            value = int(value_text)
+            if 0 < value <= MAX_CONFIG_INTERVAL_SECS:
+                return value
+        self.log.log_warning("Invalid {} in CONFIG_DB; using default {} seconds".format(
+            field_name, default))
+        return default
+
     # This function is used to configure the polling and sync intervals for the daemon.
     # Uses the CONFIG_DB connection established once during initialization to avoid
     # creating redundant connections that could lead to resource leaks.
@@ -135,8 +149,12 @@ class DaemonStorage(daemon_base.DaemonBase):
             
         try:
             config_info = dict(self.config_db.hgetall('STORMOND_CONFIG|INTERVALS'))
-            self.timeout = int(config_info.get('daemon_polling_interval', STORMOND_PERIODIC_STATEDB_SYNC_SECS))
-            self.fsstats_sync_interval = int(config_info.get('fsstats_sync_interval', STORMOND_SYNC_TO_DISK_SECS))
+            self.timeout = self._parse_positive_interval(
+                'daemon_polling_interval', config_info.get('daemon_polling_interval'),
+                STORMOND_PERIODIC_STATEDB_SYNC_SECS)
+            self.fsstats_sync_interval = self._parse_positive_interval(
+                'fsstats_sync_interval', config_info.get('fsstats_sync_interval'),
+                STORMOND_SYNC_TO_DISK_SECS)
 
             self.log.log_notice("Polling Interval set to {} seconds".format(self.timeout))
             self.log.log_notice("FSIO JSON file Interval set to {} seconds".format(self.fsstats_sync_interval))
