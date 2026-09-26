@@ -2657,8 +2657,84 @@ class TestXcvrdScript(object):
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        xcvrd.wait_for_port_config_done('')
+        with patch.object(swsscommon.Table.return_value, 'get', return_value=(False, [])):
+            xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
+
+    @pytest.mark.parametrize('marker', ['PortConfigDone', 'PortInitDone'])
+    def test_wait_for_port_config_done_existing_marker(self, marker):
+        table = swsscommon.Table.return_value
+        with patch.object(table, 'get', side_effect=lambda key: (key == marker, [])):
+            with patch('swsscommon.swsscommon.SubscriberStateTable'), \
+                    patch('swsscommon.swsscommon.Select') as select:
+                DaemonXcvrd(SYSLOG_IDENTIFIER).wait_for_port_config_done('')
+                select.return_value.select.assert_not_called()
+
+                cmis = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {}, threading.Event())
+                cmis.wait_for_port_config_done('')
+                select.return_value.select.assert_not_called()
+
+    def test_invalid_port_indices_are_ignored(self):
+        logger = MagicMock()
+        events = []
+        with patch('swsscommon.swsscommon.Select') as select, \
+                patch('swsscommon.swsscommon.SubscriberStateTable') as subscriber:
+            select.return_value.select.return_value = (swsscommon.Select.OBJECT, None)
+            subscriber.return_value.pop.side_effect = [
+                ('Ethernet0', swsscommon.SET_COMMAND, [('index', 'invalid')]),
+                ('Ethernet4', swsscommon.SET_COMMAND, [('index', '2')]),
+                (None, None, None),
+            ]
+            observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, threading.Event(), events.append,
+                                          [{'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME}])
+            assert observer.handle_port_update_event()
+            assert [event.port_name for event in events] == ['Ethernet4']
+
+        mapping = PortMapping()
+        table = MagicMock()
+        table.pop.side_effect = [
+            ('Ethernet0', swsscommon.SET_COMMAND, [('index', 'invalid')]),
+            ('Ethernet4', swsscommon.SET_COMMAND, [('index', '2')]),
+            (None, None, None),
+        ]
+        read_port_config_change({table: 0}, mapping, logger, mapping.handle_port_change_event)
+        assert mapping.logical_port_list == ['Ethernet4']
+
+        with patch.object(swsscommon.Table.return_value, 'getKeys', return_value=['Ethernet0', 'Ethernet4']), \
+                patch.object(swsscommon.Table.return_value, 'get', side_effect=[
+                    (True, [('index', 'invalid')]), (True, [('index', '2')]),
+                ]):
+            mapping = get_port_mapping(DEFAULT_NAMESPACE)
+            assert mapping.logical_port_list == ['Ethernet4']
+
+    def test_port_select_error_is_throttled(self):
+        logger = MagicMock()
+        stop_event = MagicMock()
+        stop_event.is_set.return_value = False
+        with patch('swsscommon.swsscommon.Select') as select, \
+                patch('swsscommon.swsscommon.SubscriberStateTable'):
+            select.return_value.select.return_value = (-1, None)
+            observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event, MagicMock())
+            assert not observer.handle_port_update_event()
+            stop_event.wait.assert_called_with(SELECT_TIMEOUT_MSECS / 1000.0)
+            stop_event.wait.reset_mock()
+            handle_port_config_change(select.return_value, {}, stop_event, PortMapping(), logger, MagicMock())
+            stop_event.wait.assert_called_with(SELECT_TIMEOUT_MSECS / 1000.0)
+
+    def test_invalid_utf8_port_notification_is_throttled(self):
+        logger = MagicMock()
+        stop_event = MagicMock()
+        stop_event.is_set.return_value = False
+        with patch('swsscommon.swsscommon.Select') as select, \
+                patch('swsscommon.swsscommon.SubscriberStateTable') as subscriber:
+            select.return_value.select.return_value = (swsscommon.Select.OBJECT, None)
+            subscriber.return_value.pop.side_effect = UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid')
+            observer = PortChangeObserver(DEFAULT_NAMESPACE, logger, stop_event, MagicMock(),
+                                          [{'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME}])
+            assert not observer.handle_port_update_event()
+            stop_event.wait.assert_called_with(SELECT_TIMEOUT_MSECS / 1000.0)
+            read_port_config_change({subscriber.return_value: 0}, PortMapping(), logger, MagicMock())
+            logger.log_warning.assert_called()
 
     def test_DaemonXcvrd_initialize_port_init_control_fields_in_port_table(self):
         port_mapping = PortMapping()

@@ -128,12 +128,18 @@ class PortChangeObserver:
                 return has_event
             if state != swsscommon.Select.OBJECT:
                 self.logger.log_warning('sel.select() did not return swsscommon.Select.OBJECT')
+                self.stop_event.wait(SELECT_TIMEOUT_MSECS / 1000.0)
                 return has_event
 
             port_event_cache = {}
             for port_tbl in self.asic_context.keys():
                 while True:
-                    (port_name, op, fvp) = port_tbl.pop()
+                    try:
+                        (port_name, op, fvp) = port_tbl.pop()
+                    except UnicodeDecodeError:
+                        self.logger.log_warning('Invalid UTF-8 in port notification key')
+                        self.stop_event.wait(SELECT_TIMEOUT_MSECS / 1000.0)
+                        break
                     if not port_name:
                         break
  
@@ -153,8 +159,17 @@ class PortChangeObserver:
 
                     self.logger.log_info("$$$ {} handle_port_update_event() : op={} DB:{} Table:{} fvp {}".format(
                                          port_name, op, port_tbl.db_name, port_tbl.table_name, fvp))
-                    if 'index' not in fvp:
-                       fvp['index'] = '-1'
+                    is_config_set = (op == swsscommon.SET_COMMAND and
+                                     port_tbl.db_name == 'CONFIG_DB' and
+                                     port_tbl.table_name == swsscommon.CFG_PORT_TABLE_NAME)
+                    try:
+                        int(fvp['index'])
+                    except (KeyError, TypeError, ValueError):
+                        if is_config_set:
+                            self.logger.log_warning('Ignoring port configuration with invalid index')
+                            continue
+                        # Other notifications do not require a physical index.
+                        fvp['index'] = '-1'
                     fvp['port_name'] = port_name
                     fvp['asic_id'] = self.asic_context[port_tbl]
                     fvp['op'] = op
@@ -166,7 +181,11 @@ class PortChangeObserver:
             for key, fvp in port_event_cache.items():
                 db_name = key[1]
                 table_name = key[2]
-                port_index = int(fvp['index'])
+                try:
+                    port_index = int(fvp['index'])
+                except (TypeError, ValueError):
+                    self.logger.log_warning('Ignoring port notification with invalid index')
+                    continue
                 port_change_event = None
                 filter = fvp['FILTER']
                 del fvp['FILTER']
@@ -300,14 +319,21 @@ def handle_port_config_change(sel, asic_context, stop_event, port_mapping, logge
             return
         if state != swsscommon.Select.OBJECT:
             logger.log_warning('sel.select() did not return swsscommon.Select.OBJECT')
+            stop_event.wait(SELECT_TIMEOUT_MSECS / 1000.0)
             return
 
-        read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler)
+        read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler, stop_event)
 
-def read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler):
+def read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler, stop_event=None):
     for port_tbl in asic_context.keys():
         while True:
-            (key, op, fvp) = port_tbl.pop()
+            try:
+                (key, op, fvp) = port_tbl.pop()
+            except UnicodeDecodeError:
+                logger.log_warning('Invalid UTF-8 in port configuration key')
+                if stop_event is not None:
+                    stop_event.wait(SELECT_TIMEOUT_MSECS / 1000.0)
+                return
             if not key:
                 break
             fvp = dict(fvp)
@@ -317,7 +343,11 @@ def read_port_config_change(asic_context, port_mapping, logger, port_change_even
                 if 'index' not in fvp:
                     continue
 
-                new_physical_index = int(fvp['index'])
+                try:
+                    new_physical_index = int(fvp['index'])
+                except (TypeError, ValueError):
+                    logger.log_warning('Ignoring port configuration with invalid index')
+                    continue
                 if not port_mapping.is_logical_port(key):
                     # New logical port created
                     port_change_event = PortChangeEvent(key, new_physical_index, asic_context[port_tbl], PortChangeEvent.PORT_ADD)
@@ -356,6 +386,10 @@ def get_port_mapping(namespaces):
             port_config_dict = dict(port_config)
             if not multi_asic.is_front_panel_port(key, port_config_dict.get(multi_asic.PORT_ROLE, None)):
                 continue
-            port_change_event = PortChangeEvent(key, port_config_dict['index'], asic_id, PortChangeEvent.PORT_ADD)
+            try:
+                port_index = int(port_config_dict['index'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            port_change_event = PortChangeEvent(key, port_index, asic_id, PortChangeEvent.PORT_ADD)
             port_mapping.handle_port_change_event(port_change_event)
     return port_mapping
