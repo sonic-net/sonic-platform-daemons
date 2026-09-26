@@ -7,6 +7,7 @@
 
 import getopt
 import sys
+import time
 
 from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
@@ -246,7 +247,8 @@ class DaemonLedd(daemon_base.DaemonBase):
 
         if state != swsscommon.Select.OBJECT:
             self.log_warning("sel.select() did not return swsscommon.Select.OBJECT - May be socket closed???")
-            return -1 ## Fail here so that the daemon can be restarted
+            time.sleep(SELECT_TIMEOUT / 1000)
+            return -1  # Fail here so that the daemon can be restarted
 
         portEvent = self.portObserver.getPortTableEvent(event)
         if portEvent:
