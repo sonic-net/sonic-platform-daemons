@@ -175,7 +175,7 @@ class PortChangeObserver:
                 if key in self.port_event_cache:
                     # Compare current event with last event on this key, to see if
                     # there's really a need to update.
-                    diff = set(fvp.items()) - set(self.port_event_cache[key].items())
+                    diff = set(fvp.items()) ^ set(self.port_event_cache[key].items())
                     # Ignore duplicate events
                     if not diff:
                        self.port_event_cache[key] = fvp
