@@ -4,6 +4,16 @@ import distutils.command
 from importlib.metadata import version
 import os.path
 import sys
+# The shared library of protobuf will be used in the swsscommon
+# So, when we execute python setup.py test, the protobuf.so will be
+# imported twice simultaneously in `GrpcTool run` and
+# `test_y_cable_helper.py: from swsscommon import swsscommon`,
+# The initialization of some global variables in protobuf.so will be conflicted
+# so that raises an import error.
+# To avoid this issue, we need to explicitly import swsscommon before
+# above two steps.
+from swsscommon import swsscommon
+
 
 GRPC_VERSION = '1.71.0'
 PROTOBUF_VERSION = '5.29.6'
