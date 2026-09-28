@@ -7199,18 +7199,52 @@ class TestYCableScript(object):
         parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure', 'auth_level': 'server', 'log_level': 'info'}, 'certs': {'client_crt': 'one.crt', 'client_key': 'one.key', 'ca_crt': 'ss.crt', 'grpc_ssl_credential': 'jj.tsl'}}}
 
         asic_index = 0
-        grpc_client = {}
-        test_db = {}
-        test_db[asic_index] = 'xyz'
-        grpc_client[asic_index] = swsscommon.Table(
-            test_db[asic_index], "PORT_INFO_TABLE")
-        #json_load.return_value = parsed_data
-        with patch('json.load') as patched_util:
+        grpc_table = MagicMock()
+        grpc_table.get.side_effect = [
+            (True, [('type', 'insecure'), ('log_level', 'debug')]),
+            (True, [('client_crt', 'config-db.crt'),
+                    ('client_key', 'config-db.key')])
+        ]
+        grpc_client = {asic_index: grpc_table}
+
+        with patch('json.load') as patched_util, \
+                patch.object(swsscommon, 'FieldValuePairs',
+                             side_effect=lambda fvs: fvs):
             patched_util.return_value = parsed_data
-            rc = apply_grpc_secrets_configuration(None, grpc_client)
-            assert(rc == None)
+            apply_grpc_secrets_configuration(None, grpc_client)
 
+        assert grpc_table.set.call_count == 2
+        assert grpc_table.set.call_args_list[0].args == (
+            'config', [('auth_level', 'server')])
+        assert grpc_table.set.call_args_list[1].args == (
+            'certs', [('ca_crt', 'ss.crt'),
+                      ('grpc_ssl_credential', 'jj.tsl')])
 
+    @patch('builtins.open')
+    def test_apply_grpc_secrets_configuration_does_not_override_config_db(self, open):
+        parsed_data = {'GRPCCLIENT': {'config': {'type': 'secure',
+                                                'auth_level': 'server',
+                                                'log_level': 'info'},
+                                     'certs': {'client_crt': 'one.crt',
+                                               'client_key': 'one.key',
+                                               'ca_crt': 'ss.crt',
+                                               'grpc_ssl_credential': 'jj.tsl'}}}
+
+        grpc_table = MagicMock()
+        grpc_table.get.side_effect = [
+            (True, [('type', 'config-db-type'),
+                    ('auth_level', 'config-db-auth'),
+                    ('log_level', 'config-db-log')]),
+            (True, [('client_crt', 'config-db.crt'),
+                    ('client_key', 'config-db.key'),
+                    ('ca_crt', 'config-db-ca.crt'),
+                    ('grpc_ssl_credential', 'config-db-credential')])
+        ]
+
+        with patch('json.load', return_value=parsed_data):
+            apply_grpc_secrets_configuration(None, {0: grpc_table})
+
+        grpc_table.set.assert_not_called()
 
     def test_handle_ycable_active_standby_probe_notification(self):
 
