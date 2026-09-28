@@ -85,6 +85,8 @@ helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
 SFP_STATUS_REMOVED = '0'
 SFP_STATUS_INSERTED = '1'
 
+MUX_SIMULATOR_CONFIG_FILE = "/etc/sonic/mux_simulator.json"
+
 # SFP error codes, stored as strings. Can add more as needed.
 SFP_STATUS_ERR_I2C_STUCK = '2'
 SFP_STATUS_ERR_BAD_EEPROM = '3'
@@ -102,6 +104,7 @@ errors_block_eeprom_reading = {
 }
 
 y_cable_port_instances = {}
+y_cable_port_initialization_status = {}
 y_cable_port_locks = {}
 
 disable_telemetry = False
@@ -273,6 +276,23 @@ def get_ycable_port_instance_from_logical_port(logical_port_name):
         helper_logger.log_warning(
             "Error: Retreived multiple ports for a Y cable table port {} while trying to toggle the mux".format(logical_port_name))
         return -1
+
+
+def is_initialized_y_cable(logical_port_name):
+    """Return True when a Y-cable driver is ready for the port.
+
+    The status is tracked by ycabled rather than inferred from the driver
+    object. This works for both physical and simulated drivers and ensures
+    failed or incomplete initialization can be retried on a later SET.
+    """
+    physical_port_list = logical_port_name_to_physical_port_list(logical_port_name)
+    if not physical_port_list or len(physical_port_list) != 1:
+        return False
+
+    physical_port = physical_port_list[0]
+    return (y_cable_port_instances.get(physical_port) is not None and
+            y_cable_port_initialization_status.get(physical_port) is True)
+
 
 def set_show_firmware_fields(port, mux_info_dict, xcvrd_show_fw_rsp_tbl):
     fvs = swsscommon.FieldValuePairs(
@@ -1247,6 +1267,7 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                 return
 
                             y_cable_port_instances[physical_port] = y_cable_attribute(physical_port, helper_logger)
+                            y_cable_port_initialization_status[physical_port] = False
                             y_cable_port_locks[physical_port] = threading.Lock()
                             with y_cable_port_locks[physical_port]:
                                 try:
@@ -1258,11 +1279,14 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
 
                             if format_mapping_identifier(vendor_name_api) != vendor:
                                 y_cable_port_instances.pop(physical_port)
+                                y_cable_port_initialization_status.pop(physical_port, None)
                                 y_cable_port_locks.pop(physical_port)
                                 create_tables_and_insert_mux_unknown_entries(state_db, y_cable_tbl, static_tbl, mux_tbl, asic_index, logical_port_name)
                                 helper_logger.log_warning("Error: Y Cable api does not work for {}, {} actual vendor name {}".format(
                                     logical_port_name, vendor_name_api, vendor))
                                 return
+
+                            y_cable_port_initialization_status[physical_port] = True
 
                             y_cable_asic_table = y_cable_tbl.get(
                                 asic_index, None)
@@ -1349,6 +1373,7 @@ def check_identifier_presence_and_delete_mux_table_entry(state_db, port_tbl, asi
                     physical_port = physical_port_list[0]
                     if y_cable_port_instances.get(physical_port) is not None:
                         y_cable_port_instances.pop(physical_port)
+                    y_cable_port_initialization_status.pop(physical_port, None)
                     if y_cable_port_instances.get(physical_port) is not None:
                         y_cable_port_locks.pop(physical_port)
                 else:
@@ -1513,6 +1538,7 @@ def delete_ports_status_for_y_cable(y_cable_tbl, static_tbl, mux_tbl, port_tbl, 
                 physical_port = physical_port_list[0]
                 if y_cable_port_instances.get(physical_port) is not None:
                     y_cable_port_instances.pop(physical_port)
+                y_cable_port_initialization_status.pop(physical_port, None)
                 if y_cable_port_locks.get(physical_port) is not None:
                     y_cable_port_locks.pop(physical_port)
             else:
