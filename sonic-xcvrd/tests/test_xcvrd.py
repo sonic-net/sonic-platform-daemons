@@ -1519,7 +1519,7 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
@@ -1535,37 +1535,12 @@ class TestXcvrdScript(object):
         port_mapping = PortMapping()
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
         port_mapping.handle_port_change_event(port_change_event)
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         sfp_error_event = threading.Event()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
         task._init_port_sfp_status_sw_tbl(port_mapping, xcvr_table_helper, stop_event)
-
-    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
-    @patch('xcvrd.xcvrd.common.update_port_transceiver_status_table_sw')
-    def test_init_port_sfp_status_sw_tbl_no_physical_port_found(self, mock_update_status):
-        """
-        Test that when a logical port has no physical port, we successfully mark the transceiver
-        as removed and move on to the next logical port.
-        """
-        port_mapping = PortMapping()
-        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD)
-        port_mapping.handle_port_change_event(port_change_event)
-        # Simulate the "no physical ports found" condition
-        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=None)
-        mock_sfp_obj_dict = MagicMock()
-        stop_event = threading.Event()
-        xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
-        sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
-        task._init_port_sfp_status_sw_tbl(port_mapping, xcvr_table_helper, stop_event)
-
-        # The port with no physical mapping should be marked REMOVED
-        mock_update_status.assert_called_once()
-        assert mock_update_status.call_args.args[0] == 'Ethernet0'
-        assert mock_update_status.call_args.args[2] == SFP_STATUS_REMOVED
 
     @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/invalid/path', '/invalid/path')))
     def test_load_media_settings_missing_file(self):
@@ -5598,7 +5573,7 @@ class TestXcvrdScript(object):
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
         port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
+        mock_sfp_obj_dict = {1: MagicMock()}
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
         task.xcvr_table_helper.get_status_tbl = mock_table_helper.get_status_tbl
@@ -6807,6 +6782,94 @@ class TestXcvrdScript(object):
         mock_post_sfp_info.assert_not_called()
         mock_get_port_device.assert_not_called()
         mock_device.remove_xcvr_api.assert_not_called()
+
+    def make_mixed_ownership_task(self):
+        """A task owning physical port 1 (Ethernet0), with a foreign port 2 (Ethernet8) also in the mapping."""
+        OWNED_PORT, FOREIGN_PORT = 1, 2
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', OWNED_PORT, 0, PortChangeEvent.PORT_ADD))
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet8', FOREIGN_PORT, 0, PortChangeEvent.PORT_ADD))
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, {OWNED_PORT: MagicMock()},
+                                  threading.Event(), threading.Event())
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        return task
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.helper_logger.log_error')
+    def test_SfpStateUpdateTask_get_owned_physical_ports(self, mock_log_error):
+        """The physical ports of a logical port are returned only if every one of them is in port_obj_dict."""
+        task = self.make_mixed_ownership_task()
+        assert task._get_owned_physical_ports('Ethernet0', task.port_mapping) == [1]
+        assert task._get_owned_physical_ports('Ethernet8', task.port_mapping) is None
+        mock_log_error.assert_not_called()
+
+        # A port with no physical mapping is not owned, with an error
+        with patch.object(task.port_mapping, 'logical_port_name_to_physical_port_list', return_value=None):
+            assert task._get_owned_physical_ports('Ethernet0', task.port_mapping) is None
+        mock_log_error.assert_called_once()
+        assert "'Ethernet0'" in mock_log_error.call_args.args[0]
+        mock_log_error.reset_mock()
+
+        # A ganged port is owned only if all of its members are; a partially owned one is an error
+        task.port_obj_dict[3] = MagicMock()
+        with patch.object(task.port_mapping, 'logical_port_name_to_physical_port_list', return_value=[1, 3]):
+            assert task._get_owned_physical_ports('Ethernet0', task.port_mapping) == [1, 3]
+        mock_log_error.assert_not_called()
+        with patch.object(task.port_mapping, 'logical_port_name_to_physical_port_list', return_value=[1, 2]):
+            assert task._get_owned_physical_ports('Ethernet0', task.port_mapping) is None
+        mock_log_error.assert_called_once()
+        assert "'Ethernet0'" in mock_log_error.call_args.args[0]
+        assert "[2]" in mock_log_error.call_args.args[0]
+        assert task._is_owned_physical_port(1)
+        assert not task._is_owned_physical_port(2)
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.post_port_info_to_db')
+    def test_SfpStateUpdateTask_init_skips_ports_not_in_obj_dict(self, mock_post_sfp_info, mock_update_status):
+        """During init, transceiver info, thresholds and status are only posted for the ports this task owns."""
+        task = self.make_mixed_ownership_task()
+        task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
+        mock_post_sfp_info.return_value = None
+        stop_event = threading.Event()
+
+        task._post_port_sfp_info_and_dom_thr_to_db_once(task.port_mapping, task.xcvr_table_helper, stop_event)
+        assert [call.args[0] for call in mock_post_sfp_info.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in task.dom_db_utils.post_port_dom_thresholds_to_db.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in task.vdm_db_utils.post_port_vdm_thresholds_to_db.call_args_list] == ['Ethernet0']
+
+        task._init_port_sfp_status_sw_tbl(task.port_mapping, task.xcvr_table_helper, stop_event)
+        assert [(call.args[0], call.args[2]) for call in mock_update_status.call_args_list] == [('Ethernet0', SFP_STATUS_INSERTED)]
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.on_remove_logical_port')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask.on_add_logical_port')
+    def test_SfpStateUpdateTask_on_port_config_change_ignores_ports_not_in_obj_dict(self, mock_on_add, mock_on_remove):
+        """Config changes for ports this task does not own update the port mapping but nothing else."""
+        OWNED_PORT, FOREIGN_PORT = 1, 2
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), {OWNED_PORT: MagicMock()},
+                                  threading.Event(), threading.Event())
+
+        task.on_port_config_change(PortChangeEvent('Ethernet8', FOREIGN_PORT, 0, PortChangeEvent.PORT_ADD))
+        assert task.port_mapping.get_logical_to_physical('Ethernet8') == [FOREIGN_PORT]
+        mock_on_add.assert_not_called()
+
+        task.on_port_config_change(PortChangeEvent('Ethernet0', OWNED_PORT, 0, PortChangeEvent.PORT_ADD))
+        assert task.port_mapping.get_logical_to_physical('Ethernet0') == [OWNED_PORT]
+        mock_on_add.assert_called_once()
+        assert mock_on_add.call_args.args[0].port_name == 'Ethernet0'
+
+        task.on_port_config_change(PortChangeEvent('Ethernet8', FOREIGN_PORT, 0, PortChangeEvent.PORT_REMOVE))
+        assert task.port_mapping.get_logical_to_physical('Ethernet8') is None
+        mock_on_remove.assert_not_called()
+
+        task.on_port_config_change(PortChangeEvent('Ethernet0', OWNED_PORT, 0, PortChangeEvent.PORT_REMOVE))
+        assert task.port_mapping.get_logical_to_physical('Ethernet0') is None
+        mock_on_remove.assert_called_once()
+        assert mock_on_remove.call_args.args[0].port_name == 'Ethernet0'
 
     @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
     def test_DomInfoUpdateTask_check_port_update(self):

@@ -566,3 +566,25 @@ class TestCpoStateUpdateTask:
             'Ethernet0', db_cache=dom_db_cache)
         task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_once_with(
             'Ethernet0', db_cache=vdm_db_cache)
+
+    def test_init_only_handles_cpo_ports(self):
+        """On a mixed platform, the CPO task's init does not touch pluggable ports."""
+        CPO_PORT, PLUGGABLE_PORT = 1, 2
+        port_mapping = self.make_port_mapping('Ethernet0', CPO_PORT)
+        port_mapping.handle_port_change_event(
+            PortChangeEvent('Ethernet8', PLUGGABLE_PORT, 0, PortChangeEvent.PORT_ADD))
+        task = self.make_task(port_mapping, {CPO_PORT: self.make_cpo_device()})
+        task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
+
+        with patch.object(task, 'post_port_info_to_db', return_value=None) as mock_post_info, \
+             patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'update_port_transceiver_status_table_sw') as mock_update_status, \
+             patch.object(xcvrd.media_settings_parser, 'notify_media_setting'):
+            task._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping, task.xcvr_table_helper, threading.Event())
+            task._init_port_sfp_status_sw_tbl(port_mapping, task.xcvr_table_helper, threading.Event())
+
+        assert [call.args[0] for call in mock_post_info.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in task.dom_db_utils.post_port_dom_thresholds_to_db.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in mock_update_status.call_args_list] == ['Ethernet0']
+        assert not task._is_owned_physical_port(PLUGGABLE_PORT)

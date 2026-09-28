@@ -332,6 +332,30 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_error("This functionality is currently not implemented for this platform")
                 sys.exit(NOT_IMPLEMENTED_ERROR)
 
+    def _is_owned_physical_port(self, physical_port):
+        """Return whether this task is responsible for physical_port"""
+        return physical_port in self.port_obj_dict
+
+    def _get_owned_physical_ports(self, logical_port_name, port_mapping):
+        """Return the physical ports of logical_port_name if this task is responsible for every one of them, else None"""
+        physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
+        if not physical_port_list:
+            helper_logger.log_error("{}: No physical ports found for logical port '{}', ignored".format(
+                self.name, logical_port_name))
+            return None
+
+        physical_port_ownership = {physical_port: self._is_owned_physical_port(physical_port) for physical_port in physical_port_list}
+        # All ports owned. This task owns the logical port.
+        if all(physical_port_ownership.values()):
+            return physical_port_list
+        # Some ports owned, some unowned. This should not happen, report an error.
+        if any(physical_port_ownership.values()):
+            unowned_physical_ports = [physical_port for physical_port, owned in physical_port_ownership.items() if not owned]
+            helper_logger.log_error("{}: This task only owns some of the physical ports for logical port '{}', unowned: {}".format(
+                self.name, logical_port_name, unowned_physical_ports))
+        # Not all ports owned. This task does not own the logical port.
+        return None
+
     def post_port_thresholds_to_db(self, logical_port_name, dom_db_cache=None, vdm_db_cache=None):
         """Post the DOM and VDM thresholds for a port to the DB.
 
@@ -355,6 +379,9 @@ class SfpStateUpdateTask(threading.Thread):
             if stop_event.is_set():
                 break
 
+            if self._get_owned_physical_ports(logical_port_name, port_mapping) is None:
+                continue
+
             # Get the asic to which this port belongs
             asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
             if asic_index is None:
@@ -377,7 +404,10 @@ class SfpStateUpdateTask(threading.Thread):
         for logical_port_name in logical_port_list:
             if stop_event.is_set():
                 break
-            
+
+            if self._get_owned_physical_ports(logical_port_name, port_mapping) is None:
+                continue
+
             if logical_port_name not in retry_eeprom_set:
                 self.post_port_thresholds_to_db(logical_port_name,
                                                 dom_db_cache=dom_thresholds_cache,
@@ -399,10 +429,8 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored during sfp status table init".format(logical_port_name))
                 continue
 
-            physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
+            physical_port_list = self._get_owned_physical_ports(logical_port_name, port_mapping)
             if physical_port_list is None:
-                helper_logger.log_error("No physical ports found for logical port '{}' during sfp status table init".format(logical_port_name))
-                common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
                 continue
 
             for physical_port in physical_port_list:
@@ -739,12 +767,18 @@ class SfpStateUpdateTask(threading.Thread):
         common.del_port_sfp_dom_info_from_db(logical_port_name, self.port_mapping, tbl_to_del_list)
 
     def on_port_config_change(self , port_change_event):
+        # The port mapping contains all ports on the switch, so it is kept up to date for every port.
+        # The DB updates are only performed for the ports this task is responsible for.
+        is_owned_port = self._is_owned_physical_port(port_change_event.port_index)
+
         if port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_REMOVE:
-            self.on_remove_logical_port(port_change_event)
+            if is_owned_port:
+                self.on_remove_logical_port(port_change_event)
             self.port_mapping.handle_port_change_event(port_change_event)
         elif port_change_event.event_type == port_event_helper.PortChangeEvent.PORT_ADD:
+            if is_owned_port:
+                self.on_add_logical_port(port_change_event)
             self.port_mapping.handle_port_change_event(port_change_event)
-            self.on_add_logical_port(port_change_event)
 
     def on_remove_logical_port(self, port_change_event):
         """Called when a logical port is removed from CONFIG_DB.
