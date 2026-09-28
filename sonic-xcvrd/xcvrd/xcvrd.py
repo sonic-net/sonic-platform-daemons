@@ -1236,28 +1236,21 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(dom_thermal_info_update)
 
         # Start the sfp state info update thread
-        #
-        # Covers pluggable and CPO ports together. It must be one thread and not
-        # two: the change events it waits on come from get_change_event(), which
-        # reports the whole chassis rather than a subset of it, and two threads
-        # polling that one source raise "concurrent poll() invocation".
-        sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, {**self.sfp_obj_dict, **self.cpo_obj_dict}, self.stop_event, self.sfp_error_event)
-        sfp_state_update.start()
-        self.threads.append(sfp_state_update)
+        sfp_state_update = None
+        if self.sfp_obj_dict:
+            sfp_state_update = SfpStateUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.sfp_error_event)
+            sfp_state_update.start()
+            self.threads.append(sfp_state_update)
+        else:
+            self.log_notice("Skipping SfpStateUpdateTask as no pluggable modules are present")
 
-        # Kept and parked for the same reason, in cpo/cpo_state_task.py, but
-        # this one cannot simply be switched back on: a second thread on the
-        # chassis-wide change event is the "concurrent poll() invocation" above,
-        # so the event source has to be split per technology first. Its import
-        # belongs inside this function rather than at the top of the module,
-        # because cpo_state_task imports SfpStateUpdateTask back out of here.
-        #
-        # cpo_state_update = None
-        # if self.cpo_obj_dict:
-        #     from .cpo.cpo_state_task import CpoStateUpdateTask
-        #     cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
-        #     cpo_state_update.start()
-        #     self.threads.append(cpo_state_update)
+        # Start the CPO state info update thread
+        cpo_state_update = None
+        if self.cpo_obj_dict:
+            from .cpo.cpo_state_task import CpoStateUpdateTask
+            cpo_state_update = CpoStateUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.sfp_error_event)
+            cpo_state_update.start()
+            self.threads.append(cpo_state_update)
 
         # Start main loop
         self.log_notice("Start daemon main loop with thread count {}".format(len(self.threads)))
@@ -1318,12 +1311,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 sfp_state_update.raise_exception()
                 sfp_state_update.join()
 
-        # Stop the CPO state info update thread (parked, see above)
-        #
-        # if cpo_state_update is not None:
-        #     if cpo_state_update.is_alive():
-        #         cpo_state_update.raise_exception()
-        #         cpo_state_update.join()
+        # Stop the CPO state info update thread
+        if cpo_state_update is not None:
+            if cpo_state_update.is_alive():
+                cpo_state_update.raise_exception()
+                cpo_state_update.join()
 
         # Start daemon deinitialization sequence
         self.deinit()
