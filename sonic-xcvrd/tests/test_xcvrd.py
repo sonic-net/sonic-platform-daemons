@@ -2839,19 +2839,14 @@ class TestXcvrdScript(object):
         # A mix of pluggable and CPO ports must yield both sets of tasks
         names = [thread.name for thread in xcvrd.threads]
         for expected in ('CmisManagerTask', 'DomInfoUpdateTask', 'SfpStateUpdateTask',
-                         'CpoManagerTask'):
+                         'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
             assert expected in names
 
-        # Neither the CPO DOM nor the CPO state thread runs: the pluggable
-        # thread of each pair covers both port kinds, so both must have been
-        # handed the union of the two dicts. The state thread in particular
-        # cannot be duplicated - get_change_event() is chassis-wide and two
-        # threads polling it raise "concurrent poll() invocation".
-        assert 'CpoDomInfoUpdateTask' not in names
-        assert 'CpoStateUpdateTask' not in names
-        for name in ('DomInfoUpdateTask', 'SfpStateUpdateTask'):
+        # Each task covers only its own kind of port
+        for name, ports in (('DomInfoUpdateTask', {1}), ('SfpStateUpdateTask', {1}),
+                            ('CpoDomInfoUpdateTask', {2}), ('CpoStateUpdateTask', {2})):
             task = next(t for t in xcvrd.threads if t.name == name)
-            assert set(task.port_obj_dict) == {1, 2}, name
+            assert set(task.port_obj_dict) == ports, name
 
     def test_CmisManagerTask_on_port_update_event_without_index(self):
         port_mapping = PortMapping()
