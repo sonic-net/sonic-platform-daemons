@@ -5027,6 +5027,112 @@ class TestXcvrdScript(object):
         # or already transition to FAILED after retries are exhausted.
         assert cmis_state in (CMIS_STATE_AP_CONF, CMIS_STATE_FAILED)
 
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
+    @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
+    @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
+    @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', MagicMock(return_value=1))
+    def test_CmisManagerTask_task_worker_decommission_success(self, mock_get_status_sw_tbl):
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
+        mock_xcvr_api.set_datapath_init = MagicMock(return_value=True)
+        mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
+        mock_xcvr_api.set_lpmode = MagicMock(return_value=True)
+        mock_xcvr_api.set_application = MagicMock(return_value=True)
+        mock_xcvr_api.scs_apply_datapath_init = MagicMock(return_value=True)
+        mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
+        mock_xcvr_api.is_coherent_module = MagicMock(return_value=True)
+        mock_xcvr_api.get_tx_config_power = MagicMock(return_value=0)
+        mock_xcvr_api.get_laser_config_freq = MagicMock(return_value=0)
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        mock_xcvr_api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        mock_xcvr_api.get_datapath_tx_turnon_duration = MagicMock(return_value=5000.0)
+        mock_xcvr_api.get_module_pwr_up_duration = MagicMock(return_value=70000.0)
+        mock_xcvr_api.get_datapath_deinit_duration = MagicMock(return_value=600000.0)
+        mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
+        mock_xcvr_api.get_supported_freq_config = MagicMock(return_value=(0xA0, 0, 0, 191300, 196100))
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value=gen_cmis_dpinit_pending_dict(True))
+        mock_xcvr_api.get_module_state = MagicMock(return_value='ModuleReady')
+        # Module accepts AppSel=0, so the decommission completes successfully
+        mock_xcvr_api.get_config_datapath_hostlane_status = MagicMock(return_value=gen_cmis_config_status_dict('ConfigSuccess'))
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value=gen_cmis_dp_state_dict('DataPathDeactivated'))
+        mock_xcvr_api.get_active_apsel_hostlane.return_value = gen_cmis_active_app_sel_dict(1)
+        mock_xcvr_api.get_application.return_value = 1
+
+        stop_event = threading.Event()
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {0: mock_sfp}, stop_event)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+        task.is_decommission_required = MagicMock(side_effect=[True] * 2 + [False] * 10)
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.get_port_admin_status = MagicMock(return_value='up')
+        task.get_configured_tx_power_from_db = MagicMock(return_value=-13)
+        task.get_configured_laser_freq_from_db = MagicMock(return_value=193100)
+        task.configure_tx_output_power = MagicMock(return_value=1)
+        task.configure_laser_frequency = MagicMock(return_value=1)
+        task.get_cmis_host_lanes_mask = MagicMock(return_value=1)
+        task.get_cmis_media_lanes_mask = MagicMock(return_value=1)
+        task.post_port_active_apsel_to_db = MagicMock()
+
+        physical_port_idx = 0
+
+        # Insert 1st subport event
+        port_change_event = PortChangeEvent('Ethernet0', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed': '100000', 'lanes': '1,2', 'subport': '1'})
+        task.on_port_update_event(port_change_event)
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_INSERTED
+
+        # 1st subport (as the lead) starting decommission state machine
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 2 + [True])
+        task.task_worker()
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_DEINIT
+        assert task.is_decomm_lead_lport('Ethernet0')
+
+        # Insert 2nd subport event
+        port_change_event = PortChangeEvent('Ethernet2', physical_port_idx, 0, PortChangeEvent.PORT_SET, {'speed': '100000', 'lanes': '3,4', 'subport': '2'})
+        task.on_port_update_event(port_change_event)
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 3 + [True])
+        task.task_worker()
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_AP_CONF
+        # 2nd subport should not start decommission state machine as 1st subport already started decommission for the entire physical port
+        assert common.get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_INSERTED
+        assert task.is_decomm_pending('Ethernet0')
+        assert not task.is_decomm_failed('Ethernet0')
+
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 3 + [True])
+        task.task_worker()
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_DP_INIT
+        # 2nd subport is waiting for decommission to complete
+        assert common.get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_INSERTED
+        assert task.is_decomm_lead_lport('Ethernet0')
+
+        # 'ConfigSuccess' in DP_INIT: decommission is done, lead subport restarts the normal CMIS state machine
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 3 + [True])
+        task.task_worker()
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_INSERTED
+        # 2nd subport is unblocked from decommission and continue on normal state machine
+        assert common.get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_DP_PRE_INIT_CHECK
+        assert not task.is_decomm_lead_lport('Ethernet0')
+        assert not task.is_decomm_failed('Ethernet0')
+        assert not task.is_decomm_pending('Ethernet0')
+
+        # Eventually both subports should reach ready state
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 30 + [True] * 2)
+        task.task_worker()
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value=gen_cmis_dp_state_dict('DataPathInitialized'))
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 10 + [True] * 2)
+        task.task_worker()
+        mock_xcvr_api.get_datapath_state = MagicMock(return_value=gen_cmis_dp_state_dict('DataPathActivated'))
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False] * 10 + [True] * 2)
+        task.task_worker()
+        assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_READY
+        assert common.get_cmis_state_from_state_db('Ethernet2', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet2'))) == CMIS_STATE_READY
+
     @pytest.mark.parametrize("lport, expected_dom_polling", [
         ('Ethernet0', 'disabled'),
         ('Ethernet4', 'disabled'),
