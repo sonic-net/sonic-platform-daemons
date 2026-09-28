@@ -2907,6 +2907,12 @@ class TestXcvrdScript(object):
                          'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
             assert expected in names
 
+        # Each task covers only its own kind of port
+        for name, ports in (('DomInfoUpdateTask', {1}), ('SfpStateUpdateTask', {1}),
+                            ('CpoDomInfoUpdateTask', {2}), ('CpoStateUpdateTask', {2})):
+            task = next(t for t in xcvrd.threads if t.name == name)
+            assert set(task.port_obj_dict) == ports, name
+
     def test_CmisManagerTask_on_port_update_event_without_index(self):
         port_mapping = PortMapping()
         for lport, pport in (('Ethernet0', 1), ('Ethernet8', 2)):
