@@ -28,3 +28,23 @@ Description: SONiC thermal control daemon, in Rust
  The binary embeds a CPython interpreter to make those calls.  A later
  phase replaces the bridge with a native Rust implementation of the same
  trait, which removes the interpreter without touching the daemon.
+
+Package: sonic-syseepromd-rs
+Architecture: any
+# sonic-platform-common is deliberately not here: it is a Python wheel the
+# image pip-installs, not a Debian package, so dpkg could never satisfy it --
+# and an unsatisfiable Depends makes `apt-get install -f` want to remove this
+# package, which the pmon Dockerfile forbids with --no-remove.
+Depends: ${shlibs:Depends}, python3
+Description: SONiC system EEPROM daemon, in Rust
+ Rust port of syseepromd.  Writes the same EEPROM_INFO entries as the
+ Python implementation.
+ .
+ It reaches the platform through the generated cross-language facade in
+ sonic-platform-common, which calls whichever vendor's Python
+ sonic_platform package the image installs -- so this one binary runs on
+ any platform that has one, and no vendor has to change anything to get it.
+ .
+ The binary embeds a CPython interpreter to make those calls.  A later
+ phase replaces the bridge with a native Rust implementation of the same
+ trait, which removes the interpreter without touching the daemon.
