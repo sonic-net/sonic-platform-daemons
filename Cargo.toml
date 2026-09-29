@@ -3,6 +3,7 @@
 # sonic-swss-common carries crates/ beside its C++.
 [workspace]
 members  = [
+    "crates/pcied",
     "crates/pmon-common",
     "crates/thermalctld",
 ]
