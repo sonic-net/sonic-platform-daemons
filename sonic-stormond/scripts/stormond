@@ -33,7 +33,8 @@ FSIO_RW_JSON_FILE = "/usr/share/stormond/fsio-rw-stats.json"
 
 STORMOND_PERIODIC_STATEDB_SYNC_SECS = 3600 #one hour
 STORMOND_SYNC_TO_DISK_SECS = 86400 #one day
-MAX_CONFIG_INTERVAL_SECS = 2147483647
+# Match the uint32 interval range in sonic-stormond-config.yang.
+MAX_CONFIG_INTERVAL_SECS = (1 << 32) - 1
 
 STORAGEUTIL_LOAD_ERROR = 127
 
@@ -125,11 +126,15 @@ class DaemonStorage(daemon_base.DaemonBase):
         if raw_value is None:
             return default
         value_text = str(raw_value)
-        if (value_text.isascii() and value_text.isdigit() and
-                len(value_text) <= len(str(MAX_CONFIG_INTERVAL_SECS))):
-            value = int(value_text)
-            if 0 < value <= MAX_CONFIG_INTERVAL_SECS:
-                return value
+        # YANG uint32 allows an optional plus and leading zeros. Check the
+        # significant digits before int() to avoid parsing unbounded input.
+        digits = value_text[1:] if value_text.startswith('+') else value_text
+        if digits.isascii() and digits.isdigit():
+            significant = digits.lstrip('0')
+            if significant and len(significant) <= len(str(MAX_CONFIG_INTERVAL_SECS)):
+                value = int(significant)
+                if value <= MAX_CONFIG_INTERVAL_SECS:
+                    return value
         self.log.log_warning("Invalid {} in CONFIG_DB; using default {} seconds".format(
             field_name, default))
         return default
