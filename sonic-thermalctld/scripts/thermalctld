@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Dict
 
 import sonic_platform
-from sonic_platform_base.liquid_cooling_base import LeakSeverity
+from sonic_platform_base.liquid_cooling_base import LeakSeverity, SystemLeakStatus
 from sonic_py_common import daemon_base, logger, device_info, multi_asic
 from sonic_py_common.task_base import ThreadTaskBase
 from swsscommon import swsscommon
@@ -592,6 +592,12 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
     LEAK_PROFILE_TABLE_NAME = 'LEAK_PROFILE'
     LIQUID_COOLING_INFO_TABLE_NAME = 'LIQUID_COOLING_INFO'
     SYSTEM_LEAK_STATUS_TABLE_NAME = 'SYSTEM_LEAK_STATUS'
+    LEAK_CONTROL_POLICY_TABLE_NAME = 'LEAK_CONTROL_POLICY'
+    # Field in LEAK_CONTROL_POLICY used to override the platform-provided MIN-N.
+    MAJOR_LEAK_MIN_SENSORS_FIELD = 'system_major_leak_num_min_sensors'
+    # A single Minor leak is MINOR_SYSTEM_LEAK, so the smallest MIN-N that can
+    # classify concurrent Minor leaks as MAJOR is 2.
+    MAJOR_LEAK_MIN_SENSORS_FLOOR = 2
 
     def __init__(self, chassis, liquid_cooling_update_interval):
         """
@@ -610,6 +616,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.leaking_sensors: Dict[str, datetime] = {}
         self.faulty_sensors: Dict[str, datetime] = {}
         self.critical_sensors: set = set()
+        # Minor sensors that have persisted beyond MAX-T and thus escalated the
+        # system to MAJOR; tracked so the escalation is logged once per episode.
+        self.escalated_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
@@ -617,6 +626,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         state_db = daemon_base.db_connect("STATE_DB")
         self.sensor_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
         self.system_table = swsscommon.Table(state_db, LiquidCoolingUpdater.SYSTEM_LEAK_STATUS_TABLE_NAME)
+
+        # CONFIG_DB handle for the optional user override of MIN-N.
+        config_db = daemon_base.db_connect("CONFIG_DB")
+        self.policy_table = swsscommon.Table(config_db, LiquidCoolingUpdater.LEAK_CONTROL_POLICY_TABLE_NAME)
 
         # Update the profiles in the state DB. This only needs to be done at startup.
         self.profile_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LEAK_PROFILE_TABLE_NAME)
@@ -653,8 +666,52 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         except Exception:
             pass
 
+    def _resolve_major_leak_min(self):
+        """Resolve MIN-N, the number of concurrent Minor leaks at or above which the
+        system is classified as MAJOR_SYSTEM_LEAK.
+
+        The platform-provided default (get_major_leak_num_min_sensors()) can be
+        overridden by system_major_leak_num_min_sensors in the CONFIG_DB
+        LEAK_CONTROL_POLICY table. A returned value of 0 means the MAJOR
+        classification is not applied.
+        """
+        min_n = self.liquid_cooling.get_major_leak_num_min_sensors()
+
+        # LEAK_CONTROL_POLICY is a single-row table; the CLI writes key "policy".
+        # Fall back to legacy key variants to stay consistent with bmcctld.
+        for key in ('policy', LiquidCoolingUpdater.LEAK_CONTROL_POLICY_TABLE_NAME, ''):
+            result = self.policy_table.get(key)
+            if result and result[0]:
+                fvs = dict(result[1])
+                override = fvs.get(LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD)
+                if override is not None:
+                    try:
+                        override_val = int(override)
+                    except (TypeError, ValueError):
+                        self.log_warning(
+                            'Invalid {} value {!r} in LEAK_CONTROL_POLICY; ignoring override'.format(
+                                LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD, override))
+                    else:
+                        if override_val >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR:
+                            min_n = override_val
+                        else:
+                            self.log_warning(
+                                '{} must be >= {}; ignoring override value {}'.format(
+                                    LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD,
+                                    LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR,
+                                    override_val))
+                break
+
+        # A MIN-N below the floor cannot classify a MAJOR aggregate.
+        return min_n if min_n >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR else 0
+
     def _refresh_leak_status(self):
+        # MIN-N and whether the platform supports the MAJOR classification.
+        major_leak_min = self._resolve_major_leak_min()
+        major_supported = major_leak_min > 0
         status = None
+        minor_count = 0
+        major_escalated = False
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
             sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
             sensor_is_ok = sensor.is_leak_sensor_ok()
@@ -678,19 +735,24 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
 
-                    # Upgrade minor leaks to critical if the time threshold has been exceeded.
-                    escalated_to_critical = False
+                    # Count concurrent minor leaks (for the MIN-N MAJOR rule) and
+                    # escalate a minor leak that persists beyond MAX-T to MAJOR.
                     if sensor_leak_severity == LeakSeverity.MINOR:
+                        minor_count += 1
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
                         # A value of 0 (or negative) means the platform does not support
-                        # time-based escalation from MINOR to CRITICAL; skip escalation.
-                        if 0 < max_minor_secs < inf:
+                        # time-based escalation from MINOR to MAJOR; skip escalation.
+                        if major_supported and 0 < max_minor_secs < inf:
                             max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
                             if max_minor <= now:
-                                sensor_leak_severity = LeakSeverity.CRITICAL
-                                escalated_to_critical = True
+                                major_escalated = True
+                                if sensor_name not in self.escalated_sensors:
+                                    self.event_logger.log_warning(
+                                        'Leak on sensor {} escalated from MINOR to MAJOR after {}s'.format(
+                                            sensor_name, max_minor_secs))
+                                    self.escalated_sensors.add(sensor_name)
 
                     # If the platform downgrades a CRITICAL sensor (and our time-based
                     # escalation didn't immediately re-bump it), prune it from
@@ -703,27 +765,23 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                             'Liquid cooling leakage sensor {} downgraded from CRITICAL to {}'.format(
                                 sensor_name, new_severity))
 
-                    # Log CRITICAL once per leak episode, regardless of how the sensor reached
-                    # CRITICAL severity: reported directly by the platform, or escalated by us
-                    # from MINOR after the max-minor duration was exceeded.
+                    # Log CRITICAL once per leak episode.
                     if sensor_leak_severity == LeakSeverity.CRITICAL and sensor_name not in self.critical_sensors:
-                        if escalated_to_critical:
-                            msg = 'Leak on sensor {} escalated from MINOR to CRITICAL after {}s'.format(
-                                sensor_name, max_minor_secs)
-                        else:
-                            msg = 'CRITICAL leak reported by sensor {}'.format(sensor_name)
-                        self.event_logger.log_error(msg)
+                        self.event_logger.log_error(
+                            'CRITICAL leak reported by sensor {}'.format(sensor_name))
                         self.critical_sensors.add(sensor_name)
 
-                    if status is not None:
-                        # Multiple leaks (any severity) are critical.
-                        status = LeakSeverity.CRITICAL
-                    else:
-                        # Else, severity is whatever this sensor's severity is.
-                        status = sensor_leak_severity
+                    # System severity follows precedence CRITICAL > MINOR here; the
+                    # MAJOR aggregate is applied after the loop from the minor count
+                    # and time-based escalation.
+                    if sensor_leak_severity == LeakSeverity.CRITICAL:
+                        status = SystemLeakStatus.CRITICAL
+                    elif sensor_leak_severity == LeakSeverity.MINOR and status != SystemLeakStatus.CRITICAL:
+                        status = SystemLeakStatus.MINOR
                 else:
                     if sensor_name in self.leaking_sensors:
                         del self.leaking_sensors[sensor_name]
+                        self.escalated_sensors.discard(sensor_name)
                         if sensor_name in self.critical_sensors:
                             self.critical_sensors.discard(sensor_name)
                             self.event_logger.log_notice(
@@ -756,19 +814,33 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(fvs_with_ts))
                 self.last_sensor_fvs[sensor_name] = fvs_tuple
 
-        if status == LeakSeverity.CRITICAL and self.last_leak_status != LeakSeverity.CRITICAL:
+        # Apply the MAJOR aggregate (precedence below CRITICAL): MIN-N or more
+        # concurrent minor leaks, or a single minor leak escalated beyond MAX-T.
+        if status != SystemLeakStatus.CRITICAL and major_supported \
+                and (major_escalated or minor_count >= major_leak_min):
+            status = SystemLeakStatus.MAJOR
+
+        if status == SystemLeakStatus.CRITICAL and self.last_leak_status != SystemLeakStatus.CRITICAL:
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
             self.event_logger.log_error(
                 'CRITICAL system leak detected (sensors: {})'.format(leaking_names))
-        elif self.last_leak_status == LeakSeverity.CRITICAL and status != LeakSeverity.CRITICAL:
+        elif status == SystemLeakStatus.MAJOR and self.last_leak_status != SystemLeakStatus.MAJOR:
+            leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
+            self.event_logger.log_warning(
+                'MAJOR system leak detected (sensors: {})'.format(leaking_names))
+        elif self.last_leak_status == SystemLeakStatus.CRITICAL and status != SystemLeakStatus.CRITICAL:
             self.event_logger.log_notice(
                 'CRITICAL system leak cleared (current status: {})'.format(
-                    status.value if status is not None else 'None'))
+                    status if status is not None else SystemLeakStatus.NONE))
+        elif self.last_leak_status == SystemLeakStatus.MAJOR and status != SystemLeakStatus.MAJOR:
+            self.event_logger.log_notice(
+                'MAJOR system leak cleared (current status: {})'.format(
+                    status if status is not None else SystemLeakStatus.NONE))
 
         # Only write SYSTEM_LEAK_STATUS on actual transitions to avoid
         # subscriber spam from per-cycle timestamp updates.
         if status != self.last_leak_status:
-            status_str = status.value if status is not None else 'None'
+            status_str = status if status is not None else SystemLeakStatus.NONE
             fvs = swsscommon.FieldValuePairs([
                 ('device_leak_status', status_str),
                 ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
