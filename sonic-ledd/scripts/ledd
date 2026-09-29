@@ -247,6 +247,7 @@ class DaemonLedd(daemon_base.DaemonBase):
 
         if state != swsscommon.Select.OBJECT:
             self.log_warning("sel.select() did not return swsscommon.Select.OBJECT - May be socket closed???")
+            # Pace restart attempts if a broken connection makes select fail immediately.
             time.sleep(SELECT_TIMEOUT / 1000)
             return -1  # Fail here so that the daemon can be restarted
 
