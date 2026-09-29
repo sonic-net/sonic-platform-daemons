@@ -4,6 +4,7 @@
 [workspace]
 members  = [
     "crates/pmon-common",
+    "crates/stormond",
     "crates/thermalctld",
 ]
 resolver = "2"
