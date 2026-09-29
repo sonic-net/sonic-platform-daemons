@@ -30,7 +30,10 @@ PCIE_STATUS_TABLE_NAME = "PCIE_DEVICES"
 PCIE_DETACH_INFO_TABLE = "PCIE_DETACH_INFO"
 
 PCIE_DETACH_BUS_INFO_FIELD = "bus_info"
+PCIE_DETACH_DEVICE_STATE_FIELD = "device_state"
+# Legacy: ModuleBase writes this for DPUs.
 PCIE_DETACH_DPU_STATE_FIELD = "dpu_state"
+PCIE_DETACH_STATE_DETACHING = "detaching"
 
 PCIED_MAIN_THREAD_SLEEP_SECS = 60
 
@@ -173,7 +176,7 @@ class DaemonPcied(daemon_base.DaemonBase):
             self.log_error("Exception while updating PCIe device status to STATE_DB: {}".format(str(e)))
 
     # Check if any PCI interface is in detaching mode by querying the state_db
-    def is_dpu_in_detaching_mode(self, pcie_dev):
+    def is_device_in_detaching_mode(self, pcie_dev):
         # Ensure detach_info is not None
         if self.detach_info is None:
             self.log_debug("detach_info is None")
@@ -185,13 +188,14 @@ class DaemonPcied(daemon_base.DaemonBase):
             return False
 
         for key in detach_info_keys:
-            dpu_info = self.detach_info.get(key)
-            if dpu_info:
+            detach_row = self.detach_info.get(key)
+            if detach_row:
                 # Convert tuple of field-value pairs to dictionary for easier access
-                dpu_dict = dict(dpu_info[1])
-                bus_info = dpu_dict.get(PCIE_DETACH_BUS_INFO_FIELD)
-                dpu_state = dpu_dict.get(PCIE_DETACH_DPU_STATE_FIELD)
-                if bus_info == pcie_dev and dpu_state == "detaching":
+                row_dict = dict(detach_row[1])
+                bus_info = row_dict.get(PCIE_DETACH_BUS_INFO_FIELD)
+                state = row_dict.get(PCIE_DETACH_DEVICE_STATE_FIELD) or row_dict.get(
+                    PCIE_DETACH_DPU_STATE_FIELD)
+                if bus_info == pcie_dev and state == PCIE_DETACH_STATE_DETACHING:
                     return True
 
         return False
@@ -209,7 +213,7 @@ class DaemonPcied(daemon_base.DaemonBase):
                 pcie_dev = "0000:{:02x}:{:02x}.{}".format(int(result["bus"], 16), int(result["dev"], 16), int(result["fn"], 16))
 
                 # Check if the device is in detaching mode
-                if device_info.is_smartswitch() and self.is_dpu_in_detaching_mode(pcie_dev):
+                if self.is_device_in_detaching_mode(pcie_dev):
                     self.log_debug("PCIe Device: {} is in detaching mode, skipping warning.".format(pcie_dev))
                     continue
 
