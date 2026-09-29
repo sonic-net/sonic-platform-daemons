@@ -2657,31 +2657,39 @@ class TestXcvrdScript(object):
         mock_select.return_value = (swsscommon.Select.OBJECT, mock_selectable)
         mock_sub_table.return_value = mock_selectable
         xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        with patch.object(swsscommon.Table.return_value, 'get', return_value=(False, [])):
-            xcvrd.wait_for_port_config_done('')
+        xcvrd.wait_for_port_config_done('')
         assert swsscommon.Select.select.call_count == 2
 
-    @pytest.mark.parametrize('marker', ['PortConfigDone', 'PortInitDone'])
-    def test_wait_for_port_config_done_existing_marker(self, marker):
-        table = swsscommon.Table.return_value
-        with patch.object(table, 'get', side_effect=lambda key: (key == marker, [])):
-            with patch('swsscommon.swsscommon.SubscriberStateTable'), \
-                    patch('swsscommon.swsscommon.Select') as select:
-                DaemonXcvrd(SYSLOG_IDENTIFIER).wait_for_port_config_done('')
-                select.return_value.select.assert_not_called()
+    def test_wait_for_port_config_done_select_errors_are_throttled(self):
+        with patch('swsscommon.swsscommon.Select') as select, \
+                patch('swsscommon.swsscommon.SubscriberStateTable') as subscriber:
+            subscriber.return_value.pop.return_value = ('PortConfigDone', None, None)
+            select.return_value.select.side_effect = [
+                (-1, None), (swsscommon.Select.OBJECT, None)]
 
-                cmis = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {}, threading.Event())
-                cmis.wait_for_port_config_done('')
-                select.return_value.select.assert_not_called()
+            xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
+            xcvrd.stop_event = MagicMock()
+            xcvrd.stop_event.is_set.return_value = False
+            xcvrd.wait_for_port_config_done('')
+            xcvrd.stop_event.wait.assert_called_once_with(SELECT_TIMEOUT_MSECS / 1000.0)
 
-    def test_invalid_port_indices_are_ignored(self):
+            select.return_value.select.side_effect = [
+                (-1, None), (swsscommon.Select.OBJECT, None)]
+            cmis = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {}, threading.Event())
+            cmis.task_stopping_event = MagicMock()
+            cmis.task_stopping_event.is_set.return_value = False
+            cmis.wait_for_port_config_done('')
+            cmis.task_stopping_event.wait.assert_called_once_with(SELECT_TIMEOUT_MSECS / 1000.0)
+
+    @pytest.mark.parametrize('invalid_index', ['invalid', '-1', '65536'])
+    def test_invalid_port_indices_are_ignored(self, invalid_index):
         logger = MagicMock()
         events = []
         with patch('swsscommon.swsscommon.Select') as select, \
                 patch('swsscommon.swsscommon.SubscriberStateTable') as subscriber:
             select.return_value.select.return_value = (swsscommon.Select.OBJECT, None)
             subscriber.return_value.pop.side_effect = [
-                ('Ethernet0', swsscommon.SET_COMMAND, [('index', 'invalid')]),
+                ('Ethernet0', swsscommon.SET_COMMAND, [('index', invalid_index)]),
                 ('Ethernet4', swsscommon.SET_COMMAND, [('index', '2')]),
                 (None, None, None),
             ]
@@ -2693,7 +2701,7 @@ class TestXcvrdScript(object):
         mapping = PortMapping()
         table = MagicMock()
         table.pop.side_effect = [
-            ('Ethernet0', swsscommon.SET_COMMAND, [('index', 'invalid')]),
+            ('Ethernet0', swsscommon.SET_COMMAND, [('index', invalid_index)]),
             ('Ethernet4', swsscommon.SET_COMMAND, [('index', '2')]),
             (None, None, None),
         ]
@@ -2702,10 +2710,17 @@ class TestXcvrdScript(object):
 
         with patch.object(swsscommon.Table.return_value, 'getKeys', return_value=['Ethernet0', 'Ethernet4']), \
                 patch.object(swsscommon.Table.return_value, 'get', side_effect=[
-                    (True, [('index', 'invalid')]), (True, [('index', '2')]),
+                    (True, [('index', invalid_index)]), (True, [('index', '2')]),
                 ]):
-            mapping = get_port_mapping(DEFAULT_NAMESPACE)
+            logger.log_warning.reset_mock()
+            mapping = get_port_mapping(DEFAULT_NAMESPACE, logger)
             assert mapping.logical_port_list == ['Ethernet4']
+            logger.log_warning.assert_called_once_with(
+                'Ignoring port Ethernet0 with invalid CONFIG_DB index')
+
+    @pytest.mark.parametrize('valid_index', ['0', '65535'])
+    def test_config_port_index_schema_boundaries(self, valid_index):
+        assert parse_config_port_index(valid_index) == int(valid_index)
 
     def test_port_select_error_is_throttled(self):
         logger = MagicMock()
@@ -2733,8 +2748,11 @@ class TestXcvrdScript(object):
                                           [{'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME}])
             assert not observer.handle_port_update_event()
             stop_event.wait.assert_called_with(SELECT_TIMEOUT_MSECS / 1000.0)
-            read_port_config_change({subscriber.return_value: 0}, PortMapping(), logger, MagicMock())
+            stop_event.wait.reset_mock()
+            read_port_config_change({subscriber.return_value: 0}, PortMapping(), logger,
+                                    MagicMock(), stop_event)
             logger.log_warning.assert_called()
+            stop_event.wait.assert_called_once_with(SELECT_TIMEOUT_MSECS / 1000.0)
 
     def test_DaemonXcvrd_initialize_port_init_control_fields_in_port_table(self):
         port_mapping = PortMapping()

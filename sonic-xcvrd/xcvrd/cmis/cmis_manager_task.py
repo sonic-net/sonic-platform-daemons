@@ -820,14 +820,10 @@ class CmisManagerTask(threading.Thread):
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
 
         sel = swsscommon.Select()
+        # SubscriberStateTable subscribes and preloads existing PORT keys,
+        # so both earlier and later completion markers are selectable.
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
         sel.addSelectable(port_tbl)
-
-        table = swsscommon.Table(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-        for marker in ('PortConfigDone', 'PortInitDone'):
-            found, _ = table.get(marker)
-            if found:
-                return
 
         # Make sure this daemon started after all port configured
         while not self.task_stopping_event.is_set():

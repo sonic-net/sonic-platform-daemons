@@ -4,11 +4,23 @@ from sonic_py_common import multi_asic
 from swsscommon import swsscommon
 
 SELECT_TIMEOUT_MSECS = 1000
+# CONFIG_DB PORT.index is uint16 in sonic-port.yang.
+MAX_CONFIG_PORT_INDEX = (1 << 16) - 1
 DEFAULT_PORT_TBL_MAP = [
     {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
     {'STATE_DB': 'TRANSCEIVER_INFO'},
     {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
 ]
+
+
+def parse_config_port_index(raw_index):
+    """Return a valid physical PORT index, or None for malformed CONFIG_DB data."""
+    try:
+        port_index = int(raw_index)
+    except (TypeError, ValueError):
+        return None
+    return port_index if 0 <= port_index <= MAX_CONFIG_PORT_INDEX else None
+
 
 class PortChangeEvent:
     PORT_ADD = 0
@@ -162,14 +174,16 @@ class PortChangeObserver:
                     is_config_set = (op == swsscommon.SET_COMMAND and
                                      port_tbl.db_name == 'CONFIG_DB' and
                                      port_tbl.table_name == swsscommon.CFG_PORT_TABLE_NAME)
-                    try:
-                        int(fvp['index'])
-                    except (KeyError, TypeError, ValueError):
-                        if is_config_set:
+                    if is_config_set:
+                        if parse_config_port_index(fvp.get('index')) is None:
                             self.logger.log_warning('Ignoring port configuration with invalid index')
                             continue
-                        # Other notifications do not require a physical index.
-                        fvp['index'] = '-1'
+                    else:
+                        try:
+                            int(fvp['index'])
+                        except (KeyError, TypeError, ValueError):
+                            # Other notifications can use the unknown-index sentinel.
+                            fvp['index'] = '-1'
                     fvp['port_name'] = port_name
                     fvp['asic_id'] = self.asic_context[port_tbl]
                     fvp['op'] = op
@@ -343,9 +357,8 @@ def read_port_config_change(asic_context, port_mapping, logger, port_change_even
                 if 'index' not in fvp:
                     continue
 
-                try:
-                    new_physical_index = int(fvp['index'])
-                except (TypeError, ValueError):
+                new_physical_index = parse_config_port_index(fvp['index'])
+                if new_physical_index is None:
                     logger.log_warning('Ignoring port configuration with invalid index')
                     continue
                 if not port_mapping.is_logical_port(key):
@@ -373,8 +386,10 @@ def read_port_config_change(asic_context, port_mapping, logger, port_change_even
             else:
                 logger.log_warning('Invalid DB operation: {}'.format(op))
 
-def get_port_mapping(namespaces):
-    """Get port mapping from CONFIG_DB
+def get_port_mapping(namespaces, logger=None):
+    """Get port mapping from CONFIG_DB.
+
+    Warn about invalid indices when a logger is provided.
     """
     port_mapping = PortMapping()
     for namespace in namespaces:
@@ -386,9 +401,10 @@ def get_port_mapping(namespaces):
             port_config_dict = dict(port_config)
             if not multi_asic.is_front_panel_port(key, port_config_dict.get(multi_asic.PORT_ROLE, None)):
                 continue
-            try:
-                port_index = int(port_config_dict['index'])
-            except (KeyError, TypeError, ValueError):
+            port_index = parse_config_port_index(port_config_dict.get('index'))
+            if port_index is None:
+                if logger is not None:
+                    logger.log_warning('Ignoring port {} with invalid CONFIG_DB index'.format(key))
                 continue
             port_change_event = PortChangeEvent(key, port_index, asic_id, PortChangeEvent.PORT_ADD)
             port_mapping.handle_port_change_event(port_change_event)
