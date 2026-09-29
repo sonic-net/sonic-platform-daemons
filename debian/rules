@@ -1,0 +1,55 @@
+#!/usr/bin/make -f
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+#export DH_VERBOSE = 1
+
+# Seven binaries out of one workspace build.  They are one source package
+# rather than seven because they share crates/pmon-common and the generated
+# facade: building them separately would compile both seven times, and the
+# seven debs are what keeps them independently installable and switchable.
+#
+# Phase 1: every daemon reaches the platform through the generated PyO3 bridge
+# onto whatever sonic_platform the image installs, so nothing here names a
+# vendor and there is no path to symlink.  In phase 2 a vendor crate replaces
+# platform-pyo3 in each crate's Cargo.toml; this file does not change.
+
+%:
+	dh $@
+
+# cargo and rustc are deliberately absent from Build-Depends: the slave image
+# installs Rust with rustup under /usr/.cargo and puts it on PATH, so there are
+# no Debian packages for dpkg-checkbuilddeps to find.  src/sonic-ctrmgrd-rs,
+# the other Rust package in this tree, does the same.
+
+# sonic-buildimage builds the daemons against its own sonic-platform-common and
+# sonic-swss-common submodules rather than the commits Cargo.lock pins: the
+# PyO3 bridge has to match the Python facade the same image installs, and
+# swss-common the libswsscommon it links.  It sets SONIC_CARGO_CONFIG to a
+# cargo --config file whose [patch] entries point the git dependencies at those
+# submodules.  Cargo records a patch in Cargo.lock, so --locked cannot hold with
+# one; the committed lock is kept aside and put back by clean.
+ifdef SONIC_CARGO_CONFIG
+CARGO_ARGS := --config $(SONIC_CARGO_CONFIG)
+else
+CARGO_ARGS := --locked
+endif
+
+override_dh_auto_build:
+ifdef SONIC_CARGO_CONFIG
+	[ -f debian/Cargo.lock.pinned ] || cp Cargo.lock debian/Cargo.lock.pinned
+endif
+	cargo build $(CARGO_ARGS) --release --workspace
+
+override_dh_auto_install:
+	# do nothing
+	:
+
+# Deliberately not `cargo clean`: cargo has to load every workspace member's
+# manifest before it will do anything, and removing the directory is what
+# `cargo clean` would have done anyway, without needing one.
+override_dh_auto_clean:
+	rm -rf target
+	if [ -f debian/Cargo.lock.pinned ]; then mv debian/Cargo.lock.pinned Cargo.lock; fi
+
+override_dh_auto_test:
+	cargo test $(CARGO_ARGS) --release --workspace
