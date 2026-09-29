@@ -3645,6 +3645,40 @@ class TestXcvrdScript(object):
 
         assert task.is_decommission_required(mock_xcvr_api, 'Ethernet0') is True
 
+    @pytest.mark.parametrize("module_type, appl_advt, expected", [
+        # 8-lane QSFP-DD/OSFP module: 400G-4 at lanes 1 and 5, 100G-1 on every lane
+        ('QSFP-DD', {1: {'host_lane_count': 8, 'host_lane_assignment_options': 0x01},
+                     2: {'host_lane_count': 4, 'host_lane_assignment_options': 0x11},
+                     3: {'host_lane_count': 1, 'host_lane_assignment_options': 0xff}}, 0xff),
+        # OSFP that implements only host lanes 1-4 (e.g. an OSFP-QSFPDD AOC)
+        ('OSFP-8X', {1: {'host_lane_count': 4, 'host_lane_assignment_options': 0x01},
+                     2: {'host_lane_count': 2, 'host_lane_assignment_options': 0x05},
+                     6: {'host_lane_count': 1, 'host_lane_assignment_options': 0x0f}}, 0x0f),
+        # QSFP+C stays within its 4 lanes
+        ('QSFP+C', {1: {'host_lane_count': 4, 'host_lane_assignment_options': 0x01}}, 0x0f),
+        # no advertisement: fall back to the module type
+        ('QSFP-DD', {}, 0xff),
+        ('QSFP-DD', None, 0xff),
+        ('QSFP+C', None, 0x0f),
+        # malformed entries are ignored
+        ('OSFP-8X', {1: {'host_lane_count': 'N/A', 'host_lane_assignment_options': 0x01}}, 0xff),
+    ])
+    def test_CmisManagerTask_get_cmis_max_host_lanes_mask(self, module_type, appl_advt, expected):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value=module_type)
+        mock_xcvr_api.get_application_advertisement = MagicMock(return_value=appl_advt)
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        assert task.get_cmis_max_host_lanes_mask(mock_xcvr_api) == expected
+
+    def test_CmisManagerTask_get_cmis_max_host_lanes_mask_advt_exception(self):
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_module_type_abbreviation = MagicMock(return_value='OSFP-8X')
+        mock_xcvr_api.get_application_advertisement = MagicMock(side_effect=Exception('eeprom read'))
+        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {1: MagicMock()}, threading.Event())
+        assert task.get_cmis_max_host_lanes_mask(mock_xcvr_api) == 0xff
+
     def test_CmisManagerTask_get_desired_app_map(self):
         """Test get_desired_app_map with mixed mode, skipped siblings, and edge cases"""
         mock_xcvr_api = MagicMock()
