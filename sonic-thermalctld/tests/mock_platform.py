@@ -21,6 +21,7 @@ class MockFan(fan_base.FanBase):
         self._replaceable = True
 
         self._speed = 20
+        self._speed_rpm = 2400
         self._speed_tolerance = 20
         self._target_speed = 20
         self._direction = self.FAN_DIRECTION_INTAKE
@@ -28,6 +29,9 @@ class MockFan(fan_base.FanBase):
 
     def get_speed(self):
         return self._speed
+
+    def get_speed_rpm(self):
+        return self._speed_rpm
 
     def get_speed_tolerance(self):
         return self._speed_tolerance

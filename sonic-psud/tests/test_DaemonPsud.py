@@ -637,6 +637,7 @@ class TestDaemonPsud(object):
              (psud.FAN_INFO_STATUS_FIELD, "True"),
              (psud.FAN_INFO_DIRECTION_FIELD, mock_fan.get_direction()),
              (psud.FAN_INFO_SPEED_FIELD, str(mock_fan.get_speed())),
+             (psud.FAN_INFO_SPEED_RPM_FIELD, str(mock_fan.get_speed_rpm())),
              (psud.FAN_INFO_TIMESTAMP_FIELD, fake_time.strftime('%Y%m%d %H:%M:%S'))
              ])
         daemon_psud._update_psu_fan_data(mock_psu1)
