@@ -1,0 +1,29 @@
+[package]
+name = "pmon-common"
+version = "1.0.0"
+edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
+description = "Shared STATE_DB and syslog plumbing for the Rust pmon daemons"
+license = "Apache-2.0"
+
+[dependencies]
+swss-common = { workspace = true }
+# `Threshold` and the row types the formatters render.
+platform-api = { workspace = true }
+chrono = "0.4"
+log    = "0.4"
+syslog = "6.0"
+# The signal handlers and the timer every daemon's loop waits on.
+tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
+
+[features]
+# Lets a test drive a daemon's loop with a fixed number of cycles instead of a
+# timer.  Off by default so a daemon cannot reach it: one that did would stop
+# after N passes on real hardware.
+testing = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-util"] }
+# `platform_env` is read off an absolute path in production; the tests point the
+# same parsers at a file they wrote.
+tempfile = "3"
