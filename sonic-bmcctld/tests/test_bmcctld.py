@@ -679,9 +679,25 @@ class TestPolicyReader:
             assert policy_reader.get_power_on_delay() == 60
 
     def test_get_graceful_shutdown_timeout_default(self, policy_reader):
-        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, graceful_shutdown_timeout defaults to 0."""
+        """A missing module row uses the graceful timeout default."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
-            assert policy_reader.get_graceful_shutdown_timeout() == bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS
+            assert policy_reader.get_graceful_shutdown_timeout() == 120
+
+    @pytest.mark.parametrize("fields", [
+        {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
+        {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: "invalid"},
+        {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: ""},
+        {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: None},
+    ], ids=["missing-field", "invalid", "empty", "null"])
+    def test_get_graceful_shutdown_timeout_fallback(self, policy_reader, fields):
+        with patch.object(policy_reader, "_get_chassis_module_entry", return_value=fields):
+            assert policy_reader.get_graceful_shutdown_timeout() == 120
+
+    @pytest.mark.parametrize("seconds", [0, 30, 120, 300])
+    def test_get_graceful_shutdown_timeout_preserves_explicit_value(self, policy_reader, seconds):
+        fields = {bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT: str(seconds)}
+        with patch.object(policy_reader, "_get_chassis_module_entry", return_value=fields):
+            assert policy_reader.get_graceful_shutdown_timeout() == seconds
 
     def test_get_graceful_shutdown_timeout_zero(self, policy_reader):
         tbl = Table(None, bmcctld.CHASSIS_MODULE_TABLE)
@@ -1459,6 +1475,61 @@ class FakeClock:
 
 
 class TestGracefulShutdownOperation:
+
+    @pytest.mark.parametrize("action", [
+        bmcctld.ACTION_GRACEFUL_SHUTDOWN, bmcctld.ACTION_GRACEFUL_RESTART,
+    ])
+    @pytest.mark.parametrize("config", ["fresh", "missing-field", "stored-zero"])
+    def test_default_and_stored_timeout_drive_graceful_leg(
+            self, action, config, graceful_shutdown, chassis):
+        controller = graceful_shutdown.controller
+        table = controller.chassis_module_config_table
+        if config == "stored-zero":
+            table.set(bmcctld.SWITCH_HOST_MODULE_KEY, [
+                (bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, "0")])
+        controller.initialize_chassis_module(bmcctld.ADMIN_UP)
+        if config == "missing-field":
+            table.hdel(bmcctld.SWITCH_HOST_MODULE_KEY,
+                       bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT)
+        graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        controller.power_off = MagicMock(return_value=bmcctld.PowerCallResult.CONFIRMED)
+        controller.power_on = MagicMock(return_value=bmcctld.PowerCallResult.CONFIRMED)
+        operation = _make_operation(action)
+        requester = MagicMock()
+        requester.poll_status.return_value = _report(
+            "active [bmc-req:{}]".format(TEST_REQUEST_ID), active=True)
+        factory = MagicMock(return_value=requester)
+        clock = FakeClock()
+        operation.cancel.wait = MagicMock(
+            side_effect=lambda delay: clock.advance(delay) or False)
+        execute = (graceful_shutdown.execute_restart
+                   if action == bmcctld.ACTION_GRACEFUL_RESTART
+                   else graceful_shutdown.execute)
+        with patch("bmcctld.time.monotonic", side_effect=clock):
+            outcome = execute(operation, factory)
+
+        if config == "stored-zero":
+            expected_reason = bmcctld.OP_REASON_TIMEOUT_ZERO
+            factory.assert_not_called()
+            expected_wait = 0
+        else:
+            expected_reason = bmcctld.OP_REASON_DEADLINE
+            factory.assert_called_once()
+            requester.send_halt.assert_called_once_with(
+                "BMC pre-shutdown request [bmc-req:{}]".format(TEST_REQUEST_ID),
+                timeout_secs=30)
+            assert requester.poll_status.call_count == 120
+            requester.close.assert_called_once()
+            expected_wait = 120
+        assert outcome == (bmcctld.OP_RESULT_SUCCESS_FORCED, expected_reason, True)
+        controller.power_off.assert_called_once_with(operation, operation.cancel)
+        if action == bmcctld.ACTION_GRACEFUL_RESTART:
+            expected_wait += 10
+            controller.power_on.assert_called_once_with(operation, operation.cancel)
+        else:
+            controller.power_on.assert_not_called()
+        assert clock.now == expected_wait
 
     def _setup(self, graceful_shutdown, chassis, timeout=10,
                power_result=None):
@@ -5336,16 +5407,17 @@ class TestChassisModuleInfo:
         cfg = dict(result[1])
         assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_DOWN
         assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == str(bmcctld.DEFAULT_POWER_ON_DELAY_SECS)
-        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == str(bmcctld.DEFAULT_SHUTDOWN_DELAY_SECS)
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == "120"
 
-    def test_initialize_chassis_module_preserves_operator_config(self, chassis, controller):
+    @pytest.mark.parametrize("seconds", ["0", "90", "300"])
+    def test_initialize_chassis_module_preserves_operator_config(self, chassis, controller, seconds):
         """Existing operator CONFIG_DB entry must not be clobbered by daemon startup."""
         controller.chassis_module_config_table.set(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             FieldValuePairs([
                 (bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD, bmcctld.ADMIN_UP),
                 (bmcctld.FIELD_POWER_ON_DELAY, "45"),
-                (bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, "90"),
+                (bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT, seconds),
             ]),
         )
         controller.initialize_chassis_module(bmcctld.ADMIN_DOWN)
@@ -5353,7 +5425,7 @@ class TestChassisModuleInfo:
         cfg = dict(result[1])
         assert cfg[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == bmcctld.ADMIN_UP
         assert cfg[bmcctld.FIELD_POWER_ON_DELAY] == "45"
-        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == "90"
+        assert cfg[bmcctld.FIELD_GRACEFUL_SHUTDOWN_TIMEOUT] == seconds
 
     def test_daemon_init_air_cooled_defaults_admin_up(self, chassis):
         """Air-cooled boxes default CONFIG_DB admin_status=up when no operator entry exists."""
