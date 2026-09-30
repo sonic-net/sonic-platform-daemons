@@ -1,0 +1,26 @@
+# Rust half of sonic-platform-daemons.  The Python daemons beside it are
+# unchanged; this workspace holds their Rust counterparts, the way
+# sonic-swss-common carries crates/ beside its C++.
+[workspace]
+members  = [
+    "crates/pcied",
+    "crates/pmon-common",
+    "crates/thermalctld",
+]
+resolver = "2"
+
+# The crates the daemons share with the rest of SONiC, taken from git the way
+# sonic-swss and sonic-dash-ha take swss-common; Cargo.lock pins the commits.
+# sonic-buildimage builds against its own submodules instead (debian/rules).
+[workspace.dependencies]
+platform-api      = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
+platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
+swss-common       = { git = "https://github.com/sonic-net/sonic-swss-common.git", branch = "master" }
+
+# Profiles only take effect at the workspace root; cargo ignores them in a
+# member manifest.  panic = "abort" is load-bearing: the panic hook that
+# suspends hw-management-tc exists because unwinding is skipped.
+[profile.release]
+lto            = true
+codegen-units  = 1
+panic          = "abort"
