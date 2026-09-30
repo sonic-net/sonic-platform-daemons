@@ -394,7 +394,7 @@ class SfpStateUpdateTask(threading.Thread):
                     common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
 
     def init(self):
-        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
+        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces, helper_logger)
 
         # Post all the current interface sfp/dom threshold info to STATE_DB
         self.retry_eeprom_set = self._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
@@ -935,6 +935,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
 
         sel = swsscommon.Select()
+        # SubscriberStateTable subscribes and preloads existing PORT keys,
+        # so both earlier and later completion markers are selectable.
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
         sel.addSelectable(port_tbl)
 
@@ -945,6 +947,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 continue
             if state != swsscommon.Select.OBJECT:
                 self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                self.stop_event.wait(port_event_helper.SELECT_TIMEOUT_MSECS / 1000.0)
                 continue
 
             (key, op, fvp) = port_tbl.pop()
@@ -1058,7 +1061,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.wait_for_port_config_done(namespace)
 
         self.log_notice("XCVRD INIT: After port config is done")
-        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
+        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces, helper_logger)
 
         self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
         self.sfp_obj_dict = common.get_pluggable_obj_dict(port_mapping_data)
@@ -1082,7 +1085,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             warm_fast_reboot_status[namespace] = common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)
 
         # Delete all the information from DB and then exit
-        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
+        port_mapping_data = port_event_helper.get_port_mapping(self.namespaces, helper_logger)
         logical_port_list = port_mapping_data.logical_port_list
         for logical_port_name in logical_port_list:
             # Get the asic to which this port belongs
