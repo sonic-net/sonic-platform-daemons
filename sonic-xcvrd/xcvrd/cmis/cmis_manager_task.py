@@ -831,7 +831,7 @@ class CmisManagerTask(threading.Thread):
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                helper_logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
                 self.task_stopping_event.wait(port_event_helper.SELECT_TIMEOUT_MSECS / 1000.0)
                 continue
 
