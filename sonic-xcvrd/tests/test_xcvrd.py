@@ -5015,13 +5015,14 @@ class TestXcvrdScript(object):
         assert not task.is_decomm_pending('Ethernet2')
 
     @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
     @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
     @patch('xcvrd.xcvrd._wrapper_get_sfp_type', MagicMock(return_value='QSFP_DD'))
     @patch('xcvrd.cmis.CmisManagerTask.wait_for_port_config_done', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.common.get_cmis_application_desired', MagicMock(return_value=1))
-    def test_CmisManagerTask_task_worker_decommission_success(self, mock_get_status_sw_tbl):
+    def test_CmisManagerTask_task_worker_decommission_success(self, mock_chassis, mock_get_status_sw_tbl):
         mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_TABLE)
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.set_datapath_deinit = MagicMock(return_value=True)
@@ -5053,8 +5054,9 @@ class TestXcvrdScript(object):
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
 
-        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {0: mock_sfp}, stop_event)
+        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), stop_event, platform_chassis=mock_chassis)
         task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
         task.is_decommission_required = MagicMock(side_effect=[True] * 2 + [False] * 10)
         task.get_host_tx_status = MagicMock(return_value='true')
