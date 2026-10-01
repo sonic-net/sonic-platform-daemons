@@ -2938,38 +2938,72 @@ class TestOperationRunnerConcurrency:
             bmcctld.OP_RESULT_OFF_LEAK_BLOCKED
         callback.assert_called_once_with(False, "CRITICAL_LEAK_PRESENT")
 
-    def test_p_identical_noncritical_request_joins(self, chassis):
+    @pytest.mark.parametrize("action,priority", [
+        (bmcctld.ACTION_POWER_OFF, 2),
+        (bmcctld.ACTION_POWER_OFF, 0),
+        (bmcctld.ACTION_GRACEFUL_SHUTDOWN, 3),
+        (bmcctld.ACTION_GRACEFUL_SHUTDOWN, 1),
+    ])
+    @pytest.mark.parametrize("power_fails", [False, True])
+    def test_p_identical_request_joins(self, chassis, action, priority,
+                                       power_fails):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=0)
+        daemon.graceful_shutdown._is_graceful_qualified = MagicMock(return_value=True)
+        daemon.operation_runner._event_log = MagicMock()
+        daemon.operation_runner._record_terminal = MagicMock(
+            wraps=daemon.operation_runner._record_terminal)
         started = threading.Event()
         release = threading.Event()
-        def blocked_power_off(_operation, _cancel):
+        set_admin_state = chassis.switch_host.set_admin_state
+
+        def blocked_power_off(up):
+            assert up is False
             started.set()
             assert release.wait(2)
-            return bmcctld.PowerCallResult.CONFIRMED
-        daemon.controller.power_off = MagicMock(side_effect=blocked_power_off)
+            if power_fails:
+                raise OSError("power-off failed")
+            set_admin_state(up)
+
+        chassis.switch_host.set_admin_state = MagicMock(side_effect=blocked_power_off)
         daemon.event_handler._set_cmd_request_id = MagicMock()
+        # Critical event producers do not attach callbacks; exercise the runner contract.
         first_callback = MagicMock()
         second_callback = MagicMock()
         daemon.operation_runner.enqueue(bmcctld.ActionItem(
-            bmcctld.ACTION_POWER_OFF, "first", 2,
+            action, "first", priority,
             on_complete=first_callback, rack_cmd_key="CMD_1"))
         daemon.operation_runner.process_next(timeout=0)
-        assert started.wait(1)
-        request_id = daemon.operation_runner.current.request_id
-        daemon.operation_runner.enqueue(bmcctld.ActionItem(
-            bmcctld.ACTION_POWER_OFF, "retry", 2,
-            on_complete=second_callback, rack_cmd_key="CMD_2"))
+        operation = daemon.operation_runner.current
+        request_id = operation.request_id
+        try:
+            assert started.wait(1)
+            daemon.operation_runner.enqueue(bmcctld.ActionItem(
+                action, "retry", priority,
+                on_complete=second_callback, rack_cmd_key="CMD_2"))
+            daemon.operation_runner.process_next(timeout=0)
+            assert daemon.operation_runner.current is operation
+            assert not operation.cancel.is_set()
+            assert operation.joined_callbacks == [(second_callback, "CMD_2")]
+            first_callback.assert_not_called()
+            second_callback.assert_not_called()
+            daemon.operation_runner._event_log.log_notice.assert_any_call(
+                "JOIN action={} request_id={}".format(action, request_id))
+        finally:
+            release.set()
+            operation.thread.join(2)
+        assert not operation.thread.is_alive()
         daemon.operation_runner.process_next(timeout=0)
-        assert len(daemon.operation_runner.current.joined_callbacks) == 1
-        release.set()
-        daemon.operation_runner.current.thread.join(2)
         daemon.operation_runner.process_next(timeout=0)
-        daemon.controller.power_off.assert_called_once()
-        first_callback.assert_called_once_with(
-            True, bmcctld.OP_RESULT_SUCCESS)
-        second_callback.assert_called_once_with(
-            True, bmcctld.OP_RESULT_SUCCESS)
+        chassis.switch_host.set_admin_state.assert_called_once_with(False)
+        expected_result = (bmcctld.OP_RESULT_POWER_OFF_FAILED if power_fails else
+                           bmcctld.OP_RESULT_SUCCESS if action == bmcctld.ACTION_POWER_OFF else
+                           bmcctld.OP_RESULT_SUCCESS_FORCED)
+        first_callback.assert_called_once_with(not power_fails, expected_result)
+        second_callback.assert_called_once_with(not power_fails, expected_result)
+        assert daemon.operation_runner.current is None
+        daemon.operation_runner._record_terminal.assert_called_once()
         assert daemon.event_handler._set_cmd_request_id.call_args_list == [
             call("CMD_1", request_id),
             call("CMD_2", request_id),
@@ -3000,24 +3034,93 @@ class TestOperationRunnerConcurrency:
         daemon.operation_runner.current.thread.join(2)
         daemon.operation_runner.process_next(timeout=0)
 
-    def test_p_critical_same_action_is_refused_not_joined(self, chassis):
+    @pytest.mark.parametrize("action,priority", [
+        (bmcctld.ACTION_POWER_OFF, 0),
+        (bmcctld.ACTION_GRACEFUL_SHUTDOWN, 1),
+    ])
+    @pytest.mark.parametrize("rack_first", [False, True])
+    def test_p_critical_event_sources_join_identical_action(
+            self, chassis, action, priority, rack_first):
         daemon = self._make_daemon(chassis)
-        operation = _make_operation(
-            bmcctld.ACTION_GRACEFUL_SHUTDOWN, priority=1)
+        daemon.policy_reader.get_leak_control_policy = MagicMock(return_value={
+            "system_leak_policy": "enabled",
+            "system_critical_leak_action": action,
+            "rack_mgr_leak_policy": "enabled",
+            "rack_mgr_critical_alert_action": action,
+        })
+        events = [
+            (daemon.event_handler._handle_system_leak,
+             bmcctld.SYSTEM_LEAK_STATUS_KEY,
+             {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL}),
+            (daemon.event_handler._handle_rack_mgr_alert, "Rack_level_leak",
+             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL}),
+        ]
+        if rack_first:
+            events.reverse()
+        handler, key, fields = events[0]
+        handler(key, fields)
+        first_item = _dequeue_item(daemon.action_queue)
+        assert first_item.priority == priority
+        assert first_item.on_complete is None
+        assert first_item.rack_cmd_key is None
+        operation = bmcctld.Operation(
+            first_item, TEST_REQUEST_ID,
+            bmcctld.OperationRunner.INITIAL_STAGES[action])
         operation.thread = MagicMock()
         operation.thread.is_alive.return_value = True
         daemon.operation_runner.current = operation
+        daemon.operation_runner._event_log = MagicMock()
+        daemon.operation_runner._spawn = MagicMock()
+        daemon.event_handler._set_cmd_request_id = MagicMock()
+        handler, key, fields = events[1]
+        handler(key, fields)
+
+        daemon.operation_runner.process_next(timeout=0)
+
+        assert daemon.operation_runner.current is operation
+        assert not operation.cancel.is_set()
+        assert operation.joined_callbacks == []
+        assert daemon.action_queue.empty()
+        daemon.operation_runner._spawn.assert_not_called()
+        daemon.event_handler._set_cmd_request_id.assert_not_called()
+        daemon.operation_runner._event_log.log_notice.assert_called_once_with(
+            "JOIN action={} request_id={}".format(action, TEST_REQUEST_ID))
+
+    @pytest.mark.parametrize("running_action,running_priority,new_action,new_priority", [
+        (bmcctld.ACTION_POWER_OFF, 0, bmcctld.ACTION_GRACEFUL_SHUTDOWN, 1),
+        (bmcctld.ACTION_GRACEFUL_RESTART, 4, bmcctld.ACTION_POWER_CYCLE, 4),
+        (bmcctld.ACTION_POWER_CYCLE, 4, bmcctld.ACTION_GRACEFUL_RESTART, 4),
+    ])
+    def test_p_conflicting_actions_remain_busy(
+            self, chassis, running_action, running_priority, new_action, new_priority):
+        daemon = self._make_daemon(chassis)
+        operation = _make_operation(running_action, priority=running_priority)
+        operation.thread = MagicMock()
+        operation.thread.is_alive.return_value = True
+        daemon.operation_runner.current = operation
+        daemon.operation_runner._event_log = MagicMock()
         callback = MagicMock()
         daemon.operation_runner.enqueue(bmcctld.ActionItem(
-            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "second-critical", 1,
-            on_complete=callback))
+            new_action, "conflict", new_priority, on_complete=callback))
 
         daemon.operation_runner.process_next(timeout=0)
 
         callback.assert_called_once_with(False, "BUSY")
+        assert daemon.operation_runner.current is operation
+        assert not operation.cancel.is_set()
         assert operation.joined_callbacks == []
+        assert daemon.action_queue.empty()
+        daemon.operation_runner._event_log.log_notice.assert_called_once_with(
+            "REFUSED_BUSY action={} running_request_id={}".format(
+                new_action, TEST_REQUEST_ID))
 
-    def test_p_higher_priority_cancels_records_then_requeues(self, chassis):
+    @pytest.mark.parametrize("running_priority,new_action,new_priority", [
+        (3, bmcctld.ACTION_POWER_OFF, 0),
+        (1, bmcctld.ACTION_POWER_OFF, 0),
+        (3, bmcctld.ACTION_GRACEFUL_SHUTDOWN, 1),
+    ])
+    def test_p_higher_priority_cancels_records_then_requeues(
+            self, chassis, running_priority, new_action, new_priority):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
         started = threading.Event()
@@ -3028,11 +3131,11 @@ class TestOperationRunnerConcurrency:
                     bmcctld.OP_REASON_PREEMPTED, False)
         daemon.graceful_shutdown.execute = MagicMock(side_effect=graceful_wait)
         daemon.operation_runner.enqueue(bmcctld.ActionItem(
-            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "ordinary", 3))
+            bmcctld.ACTION_GRACEFUL_SHUTDOWN, "running", running_priority))
         daemon.operation_runner.process_next(timeout=0)
         assert started.wait(1)
         daemon.operation_runner.enqueue(bmcctld.ActionItem(
-            bmcctld.ACTION_POWER_OFF, "critical", 0))
+            new_action, "critical", new_priority))
         daemon.operation_runner.process_next(timeout=0)
         state = dict(daemon.controller.host_state_table.get(
             bmcctld.HOST_STATE_KEY)[1])
