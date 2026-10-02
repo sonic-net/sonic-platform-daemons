@@ -63,6 +63,9 @@ class CmisManagerTask(threading.Thread):
         self.isPortInitDone = False
         self.isPortConfigDone = False
         self.skip_cmis_mgr = skip_cmis_mgr
+        # PowerFence manager for zone-based power budget management
+        # Will be set by DaemonXcvrd after initialization
+        self.powerfence_mgr = None
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
@@ -190,6 +193,12 @@ class CmisManagerTask(threading.Thread):
             # set SW_CMIS_STATE to REMOVED. Additionally, for DEL EVENTS from CONFIG_DB due to DPB,
             # remove the lport from port_dict.
             if lport in self.port_dict:
+                # PowerFence: Release power allocation when module is removed
+                if self.powerfence_mgr is not None:
+                    try:
+                        self.powerfence_mgr.on_remove(lport)
+                    except Exception as e:
+                        self.log_error("{}: PowerFence on_remove failed: {}".format(lport, str(e)))
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
 
             if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
@@ -882,6 +891,19 @@ class CmisManagerTask(threading.Thread):
         api = port_info.get('api')
         host_lane_count = port_info.get('host_lane_count')
         speed = port_info.get('speed')
+        
+        # PowerFence: Check zone power budget before proceeding with module initialization
+        if self.powerfence_mgr is not None and api is not None:
+            try:
+                module_power = api.get_max_module_power()
+                if module_power and float(module_power) > 0:
+                    media_type = api.get_module_media_type() if hasattr(api, 'get_module_media_type') else 'Unknown'
+                    if not self.powerfence_mgr.try_admit(lport, float(module_power), media_type, speed):
+                        self.log_notice("{}: PowerFence denied - needs {:.2f} W, zone headroom insufficient. "
+                                       "Keeping module in low-power mode.".format(lport, float(module_power)))
+                        return False
+            except Exception as e:
+                self.log_error("{}: PowerFence check failed: {}".format(lport, str(e)))
         subport = port_info.get('subport')
         appl = port_info.get('appl', 0)
         is_fast_reboot = self.is_fast_reboot_enabled_for_lport(lport)

@@ -30,6 +30,7 @@ try:
     from .sff_mgr import SffManagerTask
     from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
+    from .powerfence import PowerFenceManager, get_powerfence_manager
     from .cpo.cpo_manager_task import CpoManagerTask
     from .cpo.dom_mgr import CpoDomInfoUpdateTask
     from .xcvrd_utilities.xcvr_table_helper import *
@@ -1153,6 +1154,15 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             cmis_manager = CmisManagerTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, skip_cmis_mgr=self.skip_cmis_mgr)
             cmis_manager.start()
             self.threads.append(cmis_manager)
+            
+            # Initialize PowerFence and wire it to CmisManagerTask
+            powerfence_mgr = get_powerfence_manager()
+            if powerfence_mgr.load_config():
+                cmis_manager.powerfence_mgr = powerfence_mgr
+                self.log_notice("PowerFence: enabled and wired to CmisManagerTask")
+            else:
+                cmis_manager.powerfence_mgr = None
+                self.log_notice("PowerFence: disabled (no config found)")
 
         # Start the CPO manager
         cpo_manager = None
