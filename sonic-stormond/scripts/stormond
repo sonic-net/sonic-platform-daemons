@@ -43,6 +43,16 @@ exit_code = 0
 #
 
 
+def db_connect_local(db_name):
+    """Connect to a database served by the local Redis Unix socket."""
+    return swsscommon.DBConnector(
+        db_name,
+        daemon_base.REDIS_TIMEOUT_MSECS,
+        False,
+        daemon_base.EMPTY_NAMESPACE,
+    )
+
+
 class DaemonStorage(daemon_base.DaemonBase):
 
     def __init__(self, log_identifier):
@@ -65,7 +75,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         # methods that need to access CONFIG_DB.
         self.config_db = None
         try:
-            self.config_db = daemon_base.db_connect("CONFIG_DB")
+            self.config_db = db_connect_local("CONFIG_DB")
             self.log.log_notice("CONFIG_DB connection established successfully")
         except Exception as e:
             self.log.log_error("Failed to establish CONFIG_DB connection: {}".format(str(e)))
@@ -108,7 +118,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.statedb_json_sync_fields = self.dynamic_fields[3:7]
 
         # Connect to STATE_DB and create Storage device table
-        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.state_db = db_connect_local("STATE_DB")
         self.device_table = swsscommon.Table(self.state_db, STORAGE_DEVICE_TABLE)
         
         # Load the FSIO RW values from state_db and JSON file and reconcile latest information
