@@ -4,6 +4,11 @@
 
 STATE_DB = ''
 
+class DBConnector:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
 class ConfigDBConnector:
     """
     Mock ConfigDBConnector that avoids real Redis connections.

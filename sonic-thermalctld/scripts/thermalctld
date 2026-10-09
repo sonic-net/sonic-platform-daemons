@@ -312,7 +312,7 @@ class FanUpdater(logger.Logger):
         self.chassis = chassis
         self.task_stopping_event = task_stopping_event
         self.fan_status_dict = {}
-        state_db = daemon_base.db_connect("STATE_DB")
+        state_db = swsscommon.DBConnector("STATE_DB", 0, False)
         self.table = swsscommon.Table(state_db, FanUpdater.FAN_INFO_TABLE_NAME)
         self.drawer_table = swsscommon.Table(state_db, FanUpdater.FAN_DRAWER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
@@ -614,7 +614,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.last_leak_status = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
 
-        state_db = daemon_base.db_connect("STATE_DB")
+        state_db = swsscommon.DBConnector("STATE_DB", 0, False)
         self.sensor_table = swsscommon.Table(state_db, LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME)
         self.system_table = swsscommon.Table(state_db, LiquidCoolingUpdater.SYSTEM_LEAK_STATUS_TABLE_NAME)
 
@@ -921,7 +921,7 @@ class TemperatureUpdater(logger.Logger):
         self.chassis = chassis
         self.task_stopping_event = task_stopping_event
         self.temperature_status_dict = {}
-        state_db = daemon_base.db_connect("STATE_DB")
+        state_db = swsscommon.DBConnector("STATE_DB", 0, False)
         self.table = swsscommon.Table(state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None
