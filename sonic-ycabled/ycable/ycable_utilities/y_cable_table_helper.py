@@ -4,7 +4,7 @@
 """
 
 import threading
-from sonic_py_common import daemon_base, logger
+from sonic_py_common import logger
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
 
@@ -31,8 +31,8 @@ class YcableInfoUpdateTableHelper(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
             self.y_cable_tbl[asic_id] = swsscommon.Table(
@@ -82,17 +82,17 @@ class YcableStateUpdateTableHelper(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
             self.sub_status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.port_table_keys[asic_id] = self.port_tbl[asic_id].getKeys()
             self.loopback_tbl[asic_id] = swsscommon.Table(
                 self.config_db[asic_id], "LOOPBACK_INTERFACE")
             self.loopback_keys[asic_id] = self.loopback_tbl[asic_id].getKeys()
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
             self.hw_mux_cable_tbl[asic_id] = swsscommon.Table(
                 self.state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
             self.hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
@@ -174,9 +174,9 @@ class DaemonYcableTableHelper(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.y_cable_tbl[asic_id] = swsscommon.Table(
                 self.state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
@@ -261,9 +261,9 @@ class YcableTableUpdateTableHelper(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
             self.status_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 self.appl_db[asic_id], swsscommon.APP_HW_MUX_CABLE_TABLE_NAME)
             self.mux_cable_command_tbl[asic_id] = swsscommon.SubscriberStateTable(
@@ -357,9 +357,9 @@ class YcableCliUpdateTableHelper(object):
         for namespace in namespaces:
             # Open a handle to the Application database, in all namespaces
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
 
             self.xcvrd_log_tbl[asic_id] = swsscommon.SubscriberStateTable(
                 self.config_db[asic_id], "XCVRD_LOG")
@@ -498,9 +498,9 @@ class YcableAsyncNotificationTableHelper(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
-            self.config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
+            self.config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
             self.port_tbl[asic_id] = swsscommon.Table(self.config_db[asic_id], "MUX_CABLE")
             self.status_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
             self.y_cable_tbl[asic_id] = swsscommon.Table(
@@ -548,7 +548,7 @@ class YcableChannelStateTableHelper(object):
         namespaces = multi_asic.get_front_end_namespaces()
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
             self.fwd_state_response_tbl[asic_id] = swsscommon.Table(
                 self.appl_db[asic_id], "FORWARDING_STATE_RESPONSE")
         helper_logger.log_notice('created table instance from tid {}'.format(threading.currentThread().getName()))

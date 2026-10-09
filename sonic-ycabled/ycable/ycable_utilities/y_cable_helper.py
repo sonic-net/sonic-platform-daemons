@@ -20,7 +20,7 @@ from importlib import import_module
 import grpc
 from proto_out import linkmgr_grpc_driver_pb2_grpc
 from proto_out import linkmgr_grpc_driver_pb2
-from sonic_py_common import daemon_base, logger
+from sonic_py_common import logger
 from sonic_py_common import multi_asic
 from sonic_y_cable import y_cable_vendor_mapping
 from swsscommon import swsscommon
@@ -722,13 +722,13 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        config_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         loopback_tbl[asic_id] = swsscommon.Table(
             config_db[asic_id], "LOOPBACK_INTERFACE")
         loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
         hw_mux_cable_tbl[asic_id] = swsscommon.Table(
             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
         hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
@@ -1457,7 +1457,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(
                 namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
             yc_hw_mux_cable_table[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
             y_cable_table_size = len(yc_hw_mux_cable_table[asic_id].getKeys())

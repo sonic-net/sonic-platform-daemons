@@ -17,6 +17,7 @@ else:
 
 
 daemon_base.db_connect = MagicMock()
+swsscommon.DBConnector = MagicMock()
 swsscommon.Table = MagicMock()
 swsscommon.ProducerStateTable = MagicMock()
 swsscommon.SubscriberStateTable = MagicMock()
@@ -482,4 +483,3 @@ class TestYcableActiveActiveHelper(object):
         rc = check_presence_for_active_active_cable_type(y_cable_tbl)
 
         assert(rc == True)
-

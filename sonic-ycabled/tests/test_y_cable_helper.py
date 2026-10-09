@@ -16,6 +16,7 @@ else:
 
 
 daemon_base.db_connect = MagicMock()
+swsscommon.DBConnector = MagicMock()
 swsscommon.Table = MagicMock()
 
 sys.modules['sonic_y_cable'] = MagicMock()
