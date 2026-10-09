@@ -601,7 +601,7 @@ class DaemonPsud(daemon_base.DaemonBase):
 
         # Connect to STATE_DB and create psu/chassis info tables
         try:
-            state_db = daemon_base.db_connect("STATE_DB")
+            state_db = swsscommon.DBConnector("STATE_DB", 0, False)
             self.chassis_tbl = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
             self.psu_tbl = swsscommon.Table(state_db, PSU_INFO_TABLE)
             self.fan_tbl = swsscommon.Table(state_db, FAN_INFO_TABLE)

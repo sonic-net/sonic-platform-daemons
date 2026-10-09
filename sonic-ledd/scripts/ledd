@@ -135,7 +135,7 @@ class PortStateObserver:
             self.subscribeDbTable("APPL_DB", swsscommon.APP_PORT_TABLE_NAME, namespace)
 
     def connectDB(self, dbname, namespace):
-        db = daemon_base.db_connect(dbname, namespace=namespace)
+        db = swsscommon.DBConnector(dbname, 0, False, namespace)
         return db
 
     def getDatabaseTable(self, dbname, tblname, namespace):

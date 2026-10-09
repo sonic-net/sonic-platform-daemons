@@ -5,6 +5,11 @@
 STATE_DB = ''
 
 
+class DBConnector:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
 class Table:
     def __init__(self, db, table_name):
         self.table_name = table_name
