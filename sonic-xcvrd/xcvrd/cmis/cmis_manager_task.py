@@ -10,7 +10,7 @@ try:
     import time
     import datetime
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base
+    from sonic_py_common import syslogger
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
     from ..xcvrd_utilities import common
@@ -817,7 +817,7 @@ class CmisManagerTask(threading.Thread):
 
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+        appl_db = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
 
         sel = swsscommon.Select()
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)

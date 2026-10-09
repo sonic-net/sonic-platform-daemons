@@ -15,7 +15,7 @@ try:
     from types import MappingProxyType
     from typing import Any, Callable, Dict, FrozenSet, Mapping, Set
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base, device_info, multi_asic
+    from sonic_py_common import syslogger, device_info, multi_asic
     from . import sfp_status_helper
     from .port_event_helper import PortMapping
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
@@ -330,7 +330,7 @@ def _wrapper_get_presence(physical_port):
 
 def is_fast_reboot_enabled(namespace=''):
     """Check if fast reboot is enabled"""
-    state_db = daemon_base.db_connect("STATE_DB", namespace=namespace)
+    state_db = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
     fastboot_enabled = state_db.hget("FAST_RESTART_ENABLE_TABLE|system", "enable")
     if isinstance(fastboot_enabled, str):
         return fastboot_enabled.strip().lower() == "true"
@@ -345,7 +345,7 @@ def is_syncd_warm_restore_complete(namespace=''):
         namespace: The namespace (asic) to check. Empty string for single-ASIC or default namespace.
                    For multi-ASIC systems, pass the specific namespace (e.g., 'asic0', 'asic1').
     """
-    state_db = daemon_base.db_connect("STATE_DB", namespace=namespace)
+    state_db = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
     restore_count = state_db.hget("WARM_RESTART_TABLE|syncd", "restore_count")
     system_enabled = state_db.hget("WARM_RESTART_ENABLE_TABLE|system", "enable")
     try:

@@ -1,5 +1,4 @@
 from natsort import natsorted
-from sonic_py_common import daemon_base
 from sonic_py_common import multi_asic
 from swsscommon import swsscommon
 
@@ -83,7 +82,7 @@ class PortChangeObserver:
 
     def refresh_role_map(self):
         for ns in self.namespaces:
-            cfg_db = daemon_base.db_connect("CONFIG_DB", namespace=ns)
+            cfg_db = swsscommon.DBConnector("CONFIG_DB", 0, False, ns)
             port_table = swsscommon.Table(cfg_db, swsscommon.CFG_PORT_TABLE_NAME)
             for key in port_table.getKeys():
                 _, port_config = port_table.get(key)
@@ -101,7 +100,7 @@ class PortChangeObserver:
         asic_context = {}
         for d in self.port_tbl_map:
             for namespace in self.namespaces:
-                db = daemon_base.db_connect(list(d.keys())[0], namespace=namespace)
+                db = swsscommon.DBConnector(list(d.keys())[0], 0, False, namespace)
                 asic_id = multi_asic.get_asic_index_from_namespace(namespace)
                 port_tbl = swsscommon.SubscriberStateTable(db, list(d.values())[0])
                 port_tbl.db_name = list(d.keys())[0]
@@ -284,7 +283,7 @@ def subscribe_port_config_change(namespaces):
     sel = swsscommon.Select()
     asic_context = {}
     for namespace in namespaces:
-        config_db = daemon_base.db_connect("CONFIG_DB", namespace=namespace)
+        config_db = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
         port_tbl = swsscommon.SubscriberStateTable(config_db, swsscommon.CFG_PORT_TABLE_NAME)
         asic_context[port_tbl] = asic_id
@@ -349,7 +348,7 @@ def get_port_mapping(namespaces):
     port_mapping = PortMapping()
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db = daemon_base.db_connect("CONFIG_DB", namespace=namespace)
+        config_db = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
         port_table = swsscommon.Table(config_db, swsscommon.CFG_PORT_TABLE_NAME)
         for key in port_table.getKeys():
             _, port_config = port_table.get(key)

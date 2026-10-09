@@ -1,5 +1,5 @@
 try:
-    from sonic_py_common import daemon_base, logger
+    from sonic_py_common import logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 except ImportError as e:
@@ -78,7 +78,7 @@ class XcvrTableHelper:
         self.vdm_flag_clear_time_tbl = {f'vdm_{t}_flag_clear_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-            self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            self.state_db[asic_id] = swsscommon.DBConnector("STATE_DB", 0, False, namespace)
             self.int_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_INFO_TABLE)
             self.dom_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_SENSOR_TABLE)
             self.dom_flag_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_DOM_FLAG_TABLE)
@@ -96,9 +96,9 @@ class XcvrTableHelper:
             self.pm_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_PM_TABLE)
             self.firmware_info_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_FIRMWARE_INFO_TABLE)
             self.state_port_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], swsscommon.STATE_PORT_TABLE_NAME)
-            self.appl_db[asic_id] = daemon_base.db_connect("APPL_DB", namespace)
+            self.appl_db[asic_id] = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
             self.app_port_tbl[asic_id] = swsscommon.ProducerStateTable(self.appl_db[asic_id], swsscommon.APP_PORT_TABLE_NAME)
-            self.cfg_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+            self.cfg_db[asic_id] = swsscommon.DBConnector("CONFIG_DB", 0, False, namespace)
             self.cfg_port_tbl[asic_id] = swsscommon.Table(self.cfg_db[asic_id], swsscommon.CFG_PORT_TABLE_NAME)
             self.vdm_real_value_tbl[asic_id] = swsscommon.Table(self.state_db[asic_id], TRANSCEIVER_VDM_REAL_VALUE_TABLE)
             for t in VDM_THRESHOLD_TYPES:

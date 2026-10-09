@@ -932,7 +932,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
     # Wait for port config is done
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+        appl_db = swsscommon.DBConnector("APPL_DB", 0, False, namespace)
 
         sel = swsscommon.Select()
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)

@@ -36,6 +36,7 @@ from .mock_swsscommon import Table
 
 
 daemon_base.db_connect = MagicMock()
+swsscommon.DBConnector = MagicMock()
 swsscommon.Table = MagicMock()
 swsscommon.ProducerStateTable = MagicMock()
 swsscommon.SubscriberStateTable = MagicMock()
@@ -721,7 +722,7 @@ class TestXcvrdScript(object):
             restore_count if "WARM_RESTART_TABLE|syncd" in table else system_enabled
         )
 
-        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.swsscommon.DBConnector", return_value=mock_db):
             assert is_syncd_warm_restore_complete() == expected
 
     def test_is_syncd_warm_restore_complete_invalid_restore_count(self):
@@ -731,7 +732,7 @@ class TestXcvrdScript(object):
             "abc" if "WARM_RESTART_TABLE|syncd" in table else None
         )
 
-        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db):
+        with patch("xcvrd.xcvrd_utilities.common.swsscommon.DBConnector", return_value=mock_db):
             result = is_syncd_warm_restore_complete()
             assert result is False
 
@@ -752,11 +753,11 @@ class TestXcvrdScript(object):
             restore_count if "WARM_RESTART_TABLE|syncd" in table else None
         )
 
-        with patch("xcvrd.xcvrd_utilities.common.daemon_base.db_connect", return_value=mock_db) as mock_connect:
+        with patch("xcvrd.xcvrd_utilities.common.swsscommon.DBConnector", return_value=mock_db) as mock_connect:
             result = is_syncd_warm_restore_complete(namespace)
             assert result == expected
-            # Verify db_connect was called with the correct namespace
-            mock_connect.assert_called_with("STATE_DB", namespace=namespace)
+            # Verify DBConnector was called with the correct namespace
+            mock_connect.assert_called_with("STATE_DB", 0, False, namespace)
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
