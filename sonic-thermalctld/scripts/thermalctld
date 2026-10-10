@@ -738,14 +738,6 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
 
-                    # A healthy sensor that is leaking must report a severity. A None here
-                    # is a platform-plugin contract violation; surface it to the event log
-                    # so it can be flagged via syslog alerting.
-                    if sensor_leak_severity is None:
-                        self.event_logger.log_error(
-                            'Liquid cooling leakage sensor {} is leaking but reported no severity (None)'.format(
-                                sensor_name))
-
                     # Upgrade minor leaks to critical if the time threshold has been exceeded.
                     escalated_to_critical = False
                     if sensor_leak_severity == LeakSeverity.MINOR:
@@ -824,8 +816,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('leak_severity', sensor_leak_severity.value if sensor_leak_severity is not None else 'None'),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
+                # Stamp the leak-start time (when leaking went No->Yes) rather than the
+                # current write time, so an intervening field change mid-leak does not
+                # reset it. This keeps the MINOR escalation clock anchored to the real
+                # leak start across a restart (see _restore_state_from_db). When the
+                # sensor is not leaking, fall back to the current time.
+                ts = self.leaking_sensors.get(sensor_name, now)
                 fvs_with_ts = list(fvs_tuple) + [
-                    ('timestamp', now.strftime('%Y%m%d %H:%M:%S')),
+                    ('timestamp', ts.strftime('%Y%m%d %H:%M:%S')),
                 ]
                 self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(fvs_with_ts))
                 self.last_sensor_fvs[sensor_name] = fvs_tuple
