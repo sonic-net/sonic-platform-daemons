@@ -1055,7 +1055,8 @@ class BmcEventHandler(EventLogger):
 
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
-        severity = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
+        # Normalise to upper-case so a mixed-case severity (e.g. "Critical") still matches.
+        severity = str(fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)).upper()
         policy = self.policy_reader.get_leak_control_policy()
 
         if policy.get("rack_mgr_leak_policy") == "disabled":

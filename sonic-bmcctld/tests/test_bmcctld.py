@@ -947,6 +947,18 @@ class TestBmcEventHandlerRackMgrAlerts:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_OFF
 
+    def test_mixed_case_critical_rack_alert_dispatches(self, event_handler):
+        """A mixed-case 'Critical' severity is normalised and still dispatches the action."""
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_critical_alert_action=bmcctld.ACTION_POWER_OFF)
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_temperature",
+            {bmcctld.FIELD_SEVERITY: "Critical"},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_POWER_OFF
+
     def test_minor_rack_alert_syslog_only_by_default(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
             return_value=self._make_policy()
