@@ -982,6 +982,15 @@ class TestBmcEventHandlerRackMgrData:
         # Unrelated active alert must be untouched.
         assert "Inlet_liquid_temperature" in tbl.mock_dict
 
+    def test_missing_fields_telemetry_does_not_clear_alert(self, event_handler):
+        """Malformed telemetry (no severity and no leak field) must not clear an alert."""
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        _set_table_entry(tbl, "Inlet_liquid_temperature",
+                         {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_CRITICAL})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            event_handler._handle_rack_mgr_data("Inlet_liquid_temperature", {})
+        assert "Inlet_liquid_temperature" in tbl.mock_dict
+
 
 # --------------------------------------------------------------------------
 # Tests: BmcctldDaemon - action loop

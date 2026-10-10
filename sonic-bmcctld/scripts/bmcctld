@@ -1077,7 +1077,12 @@ class BmcEventHandler(EventLogger):
             return
 
         # severity field for temperature/flow/pressure; leak field for rack-level leak.
-        severity = str(fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)).upper()
+        # Do not default a missing/empty field to NORMAL: a malformed telemetry row
+        # must not silently clear an active alert.
+        raw = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK)
+        if not raw:
+            return
+        severity = str(raw).upper()
         if severity != ALERT_SEVERITY_NORMAL:
             # Non-NORMAL telemetry is informational only; alerts are raised via the
             # RACK_MANAGER_ALERT table, not here.
