@@ -2847,6 +2847,27 @@ class TestXcvrdScript(object):
                                                   {'host_tx_ready': 'true'}))
         assert task.port_dict['Ethernet2']['host_tx_ready'] == 'true'
 
+    def test_CmisManagerTask_transceiver_info_subscription_is_identity_filtered(self):
+        """The TRANSCEIVER_INFO subscription must be filtered to
+        module identity fields so xcvrd's own active_apsel writes dedup at
+        the observer instead of re-triggering provisioning."""
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.task_stopping_event.set()
+        with patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver') as mock_observer:
+            task.task_worker()
+            assert mock_observer.call_args.kwargs['port_tbl_map'] == CmisManagerTask.PORT_TBL_MAP
+
+        ti_entry = next(d for d in CmisManagerTask.PORT_TBL_MAP if 'STATE_DB' in d
+                        and d['STATE_DB'] == 'TRANSCEIVER_INFO')
+        fvp = {'active_apsel_hostlane1': '1', 'serial': 'S1', 'type': 'OSFP-8X',
+               'index': '1', 'port_name': 'Ethernet0', 'asic_id': 0, 'op': 'SET'}
+        PortChangeObserver.apply_filter_to_fvp(MagicMock(), ti_entry['FILTER'], fvp)
+        assert 'active_apsel_hostlane1' not in fvp
+        assert fvp['serial'] == 'S1'
+        assert fvp['type'] == 'OSFP-8X'
+
     def test_SffManagerTask_handle_port_change_event(self):
         stop_event = threading.Event()
         task = SffManagerTask(DEFAULT_NAMESPACE, stop_event, MagicMock(), helper_logger)
