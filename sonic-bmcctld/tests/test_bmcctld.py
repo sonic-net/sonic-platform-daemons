@@ -414,9 +414,11 @@ class TestPolicyReader:
             policy = policy_reader.get_leak_control_policy()
         assert policy["system_leak_policy"] == "enabled"
         assert policy["system_critical_leak_action"] == bmcctld.ACTION_POWER_OFF
+        assert policy["system_major_leak_action"] == bmcctld.ACTION_SYSLOG_ONLY
         assert policy["system_minor_leak_action"] == bmcctld.ACTION_SYSLOG_ONLY
         assert policy["rack_mgr_leak_policy"] == "enabled"
         assert policy["rack_mgr_critical_alert_action"] == bmcctld.ACTION_SYSLOG_ONLY
+        assert policy["rack_mgr_major_alert_action"] == bmcctld.ACTION_SYSLOG_ONLY
         assert policy["rack_mgr_minor_alert_action"] == bmcctld.ACTION_SYSLOG_ONLY
 
     def test_get_leak_control_policy_custom(self, policy_reader):
@@ -445,14 +447,14 @@ class TestCriticalEventChecker:
     def test_has_critical_system_leak(self, critical_event_checker):
         tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
         _set_table_entry(tbl, bmcctld.SYSTEM_LEAK_STATUS_KEY,
-                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL})
+                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_system_leak() is True
 
     def test_minor_system_leak_not_critical(self, critical_event_checker):
         tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
         _set_table_entry(tbl, bmcctld.SYSTEM_LEAK_STATUS_KEY,
-                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_MINOR})
+                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.MINOR})
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_system_leak() is False
 
@@ -711,9 +713,11 @@ class TestBmcEventHandlerSystemLeak:
         policy = {
             "system_leak_policy": "enabled",
             "system_critical_leak_action": bmcctld.ACTION_POWER_OFF,
+            "system_major_leak_action": bmcctld.ACTION_SYSLOG_ONLY,
             "system_minor_leak_action": bmcctld.ACTION_SYSLOG_ONLY,
             "rack_mgr_leak_policy": "enabled",
             "rack_mgr_critical_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
+            "rack_mgr_major_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
             "rack_mgr_minor_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
         }
         policy.update(kwargs)
@@ -725,7 +729,7 @@ class TestBmcEventHandlerSystemLeak:
         )
         event_handler._handle_system_leak(
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL},
         )
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_OFF
@@ -736,7 +740,7 @@ class TestBmcEventHandlerSystemLeak:
         )
         event_handler._handle_system_leak(
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL},
         )
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
@@ -747,7 +751,7 @@ class TestBmcEventHandlerSystemLeak:
         )
         event_handler._handle_system_leak(
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL},
         )
         assert event_handler.action_queue.empty()
 
@@ -757,7 +761,39 @@ class TestBmcEventHandlerSystemLeak:
         )
         event_handler._handle_system_leak(
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_MINOR},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.MINOR},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_major_system_leak_syslog_only_by_default(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy()
+        )
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.MAJOR},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_major_system_leak_graceful_shutdown_when_configured(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(system_major_leak_action=bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        )
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.MAJOR},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
+
+    def test_major_system_leak_policy_disabled_skips_action(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(system_leak_policy="disabled",
+                                           system_major_leak_action=bmcctld.ACTION_POWER_OFF)
+        )
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.MAJOR},
         )
         assert event_handler.action_queue.empty()
 
@@ -767,14 +803,14 @@ class TestBmcEventHandlerSystemLeak:
         )
         event_handler._handle_system_leak(
             bmcctld.SYSTEM_LEAK_STATUS_KEY,
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL},
         )
         assert event_handler.action_queue.empty()
 
     def test_wrong_key_is_ignored(self, event_handler):
         event_handler._handle_system_leak(
             "wrong-key",
-            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL},
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL},
         )
         assert event_handler.action_queue.empty()
 
@@ -796,9 +832,11 @@ class TestBmcEventHandlerRackMgrAlerts:
         policy = {
             "system_leak_policy": "enabled",
             "system_critical_leak_action": bmcctld.ACTION_POWER_OFF,
+            "system_major_leak_action": bmcctld.ACTION_SYSLOG_ONLY,
             "system_minor_leak_action": bmcctld.ACTION_SYSLOG_ONLY,
             "rack_mgr_leak_policy": "enabled",
             "rack_mgr_critical_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
+            "rack_mgr_major_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
             "rack_mgr_minor_alert_action": bmcctld.ACTION_SYSLOG_ONLY,
         }
         policy.update(kwargs)
@@ -834,6 +872,27 @@ class TestBmcEventHandlerRackMgrAlerts:
             {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_MINOR},
         )
         assert event_handler.action_queue.empty()
+
+    def test_major_rack_alert_syslog_only_by_default(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy()
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_flow_rate",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_MAJOR},
+        )
+        assert event_handler.action_queue.empty()
+
+    def test_major_rack_alert_uses_major_action_when_configured(self, event_handler):
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(rack_mgr_major_alert_action=bmcctld.ACTION_GRACEFUL_SHUTDOWN)
+        )
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_flow_rate",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_MAJOR},
+        )
+        item = event_handler.action_queue.get_nowait()
+        assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
 
     def test_rack_mgr_leak_policy_disabled_skips_action(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(

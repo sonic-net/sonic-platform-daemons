@@ -38,7 +38,7 @@ assert(os.path.samefile(swsscommon.__path__[0], os.path.join(mocked_libs_path, '
 from sonic_py_common import daemon_base, device_info
 from sonic_platform_base.liquid_cooling_base import LeakSeverity
 
-from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockThermal
+from .mock_platform import MockChassis, MockFan, MockFanDrawer, MockModule, MockPsu, MockThermal, MockLiquidCooling
 from .mock_swsscommon import Table
 
 daemon_base.db_connect = mock.MagicMock()
@@ -547,7 +547,7 @@ class TestLiquidCoolingUpdater(object):
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
 
         liquid_cooling_updater.log_error.assert_any_call(
             'Liquid cooling leakage sensor leakage1 reported leaking'
@@ -609,22 +609,24 @@ class TestLiquidCoolingUpdater(object):
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
 
         # Make the second sensor leak and poll again.
         mock_chassis.get_liquid_cooling().make_sensor_leak(1)
 
         liquid_cooling_updater._refresh_leak_status()
 
-        # Two self.log_error calls (one per sensor leak detection) plus one
-        # event_logger.log_error for the system CRITICAL transition.
+        # Two self.log_error calls (one per sensor leak detection). With MIN-N=2,
+        # two concurrent minor leaks aggregate to MAJOR (not CRITICAL), so the
+        # system transition is logged via event_logger.log_warning.
         assert liquid_cooling_updater.log_error.call_count == 2
-        assert liquid_cooling_updater.event_logger.log_error.call_count == 1
+        assert liquid_cooling_updater.event_logger.log_error.call_count == 0
+        assert liquid_cooling_updater.event_logger.log_warning.call_count == 1
         assert len(liquid_cooling_updater.leaking_sensors) == 2
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert "leakage2" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
 
         calls_sys = liquid_cooling_updater.system_table.set.call_args_list
         for index, call in enumerate(calls_sys):
@@ -633,7 +635,7 @@ class TestLiquidCoolingUpdater(object):
             if index == 0:
                 assert fvp.fv_dict['device_leak_status'] == 'MINOR'
             elif index == 1:
-                assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
+                assert fvp.fv_dict['device_leak_status'] == 'MAJOR'
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_minor_no_escalation_when_duration_zero(self, mock_try_get):
@@ -667,7 +669,7 @@ class TestLiquidCoolingUpdater(object):
         time.sleep(1.1)
         liquid_cooling_updater._refresh_leak_status()
 
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
         assert "leakage1" not in liquid_cooling_updater.critical_sensors
         # No "escalated from MINOR to CRITICAL" error should have been logged.
         for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
@@ -675,7 +677,8 @@ class TestLiquidCoolingUpdater(object):
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_with_long_leak(self, mock_try_get):
-        """Test _refresh_leak_status when one sensor leaks for an extended period"""
+        """A single minor leak that persists beyond MAX-T escalates the system to
+        MAJOR (not CRITICAL)."""
         mock_chassis = MockChassis()
         mock_chassis.get_liquid_cooling().make_sensor_leak(0)
 
@@ -687,6 +690,7 @@ class TestLiquidCoolingUpdater(object):
 
         liquid_cooling_updater.log_error = mock.MagicMock()
         liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
         liquid_cooling_updater.sensor_table = mock.MagicMock()
         liquid_cooling_updater.system_table = mock.MagicMock()
         liquid_cooling_updater.leaking_sensors = {}
@@ -699,7 +703,7 @@ class TestLiquidCoolingUpdater(object):
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.MINOR
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
 
         time.sleep(2)
 
@@ -707,8 +711,9 @@ class TestLiquidCoolingUpdater(object):
 
         assert len(liquid_cooling_updater.leaking_sensors) == 1
         assert "leakage1" in liquid_cooling_updater.leaking_sensors
+        assert "leakage1" in liquid_cooling_updater.escalated_sensors
         assert len(liquid_cooling_updater.faulty_sensors) == 0
-        assert liquid_cooling_updater.last_leak_status == LeakSeverity.CRITICAL
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
 
         calls_sys = liquid_cooling_updater.system_table.set.call_args_list
         for index, call in enumerate(calls_sys):
@@ -717,7 +722,70 @@ class TestLiquidCoolingUpdater(object):
             if index == 0:
                 assert fvp.fv_dict['device_leak_status'] == 'MINOR'
             elif index == 1:
-                assert fvp.fv_dict['device_leak_status'] == 'CRITICAL'
+                assert fvp.fv_dict['device_leak_status'] == 'MAJOR'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_no_major_when_platform_unsupported(self, mock_try_get):
+        """When get_major_leak_num_min_sensors() returns 0 the platform does not
+        support the MAJOR classification: concurrent minor leaks stay MINOR and a
+        long-standing minor leak is not escalated."""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        lc = mock_chassis.get_liquid_cooling()
+        lc.get_major_leak_num_min_sensors = mock.MagicMock(return_value=0)
+        lc.leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        lc.leakage_sensors[1].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+        liquid_cooling_updater._refresh_leak_status()
+        # Two concurrent minors, but MAJOR unsupported -> MINOR.
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+
+        time.sleep(2)
+        liquid_cooling_updater._refresh_leak_status()
+        # Even after MAX-T, no escalation to MAJOR.
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+        assert len(liquid_cooling_updater.escalated_sensors) == 0
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_config_override(self, mock_try_get):
+        """system_major_leak_num_min_sensors in LEAK_CONTROL_POLICY overrides the
+        platform MIN-N. With an override of 3, two concurrent minor leaks remain
+        MINOR (they would be MAJOR under the platform default of 2)."""
+        mock_chassis = MockChassis()
+        liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+
+        lc = mock_chassis.get_liquid_cooling()
+        lc.leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        lc.leakage_sensors[1].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+
+        liquid_cooling_updater.log_error = mock.MagicMock()
+        liquid_cooling_updater.log_notice = mock.MagicMock()
+        liquid_cooling_updater.event_logger = mock.MagicMock()
+        liquid_cooling_updater.sensor_table = mock.MagicMock()
+        liquid_cooling_updater.system_table = mock.MagicMock()
+        liquid_cooling_updater.leaking_sensors = {}
+        # Real swsscommon Table.get returns (found, field-value-pairs).
+        liquid_cooling_updater.policy_table.get = mock.MagicMock(
+            return_value=(True, (('system_major_leak_num_min_sensors', '3'),)))
+
+        mock_try_get.side_effect = lambda func, default: func()
+
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+        liquid_cooling_updater._refresh_leak_status()
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_platform_severity_bump(self, mock_try_get):
@@ -1081,6 +1149,347 @@ class TestLiquidCoolingUpdater(object):
 
         assert leak_statuses["leakage1"] == "No"
         assert leak_statuses["leakage2"] == "No"
+
+    # ------------------------------------------------------------------
+    # Helpers shared by the MAJOR aggregate / precedence tests below.
+    # ------------------------------------------------------------------
+    def _make_updater(self, mock_chassis, mock_try_get):
+        """Build a LiquidCoolingUpdater with all DB/log sinks mocked."""
+        updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        updater.log_error = mock.MagicMock()
+        updater.log_notice = mock.MagicMock()
+        updater.log_warning = mock.MagicMock()
+        updater.event_logger = mock.MagicMock()
+        updater.sensor_table = mock.MagicMock()
+        updater.system_table = mock.MagicMock()
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.escalated_sensors = set()
+        updater.last_sensor_fvs = {}
+        mock_try_get.side_effect = lambda func, default: func()
+        return updater
+
+    @staticmethod
+    def _set_sensor(sensor, severity, max_minor=86400):
+        """Pin a sensor's severity and MAX-T; long MAX-T disables escalation."""
+        sensor.get_leak_severity = mock.MagicMock(return_value=severity)
+        profile = mock.MagicMock()
+        profile.get_leak_max_minor_duration_sec = mock.MagicMock(return_value=max_minor)
+        sensor.get_leak_profile = mock.MagicMock(return_value=profile)
+
+    @staticmethod
+    def _event_logged(event_logger_method, needle):
+        """True if any call to a mocked event_logger method contains needle."""
+        return any(needle in call[0][0] for call in event_logger_method.call_args_list)
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_critical_precedence_over_major(self, mock_try_get):
+        """CRITICAL wins over the MAJOR aggregate: a CRITICAL sensor alongside a
+        minor leak that has escalated past MAX-T stays CRITICAL, and no MAJOR
+        system-leak event is emitted."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        # Minor leak with a short MAX-T so it escalates on the second poll.
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR, max_minor=1)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+
+        # The minor leak has now escalated (MAJOR condition true), but CRITICAL
+        # takes precedence and no MAJOR system event must be logged.
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
+        assert not self._event_logged(updater.event_logger.log_warning,
+                                      'MAJOR system leak detected')
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_to_critical_transition(self, mock_try_get):
+        """Two minor leaks aggregate to MAJOR; when one sensor then goes CRITICAL
+        the system transitions MAJOR -> CRITICAL and logs the CRITICAL event."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        # One sensor escalates to CRITICAL on the next poll.
+        lc.leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+        updater._refresh_leak_status()
+
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
+        assert self._event_logged(updater.event_logger.log_error,
+                                  'CRITICAL system leak detected')
+
+        statuses = [dict(c[0][1].fv_dict)['device_leak_status']
+                    for c in updater.system_table.set.call_args_list]
+        assert statuses == ['MAJOR', 'CRITICAL']
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_critical_to_major_downgrade(self, mock_try_get):
+        """A CRITICAL sensor is downgraded to MINOR while a second minor leak
+        remains; the system falls CRITICAL -> MAJOR and logs the MAJOR event."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
+
+        # Platform downgrades the critical sensor to MINOR -> two minors -> MAJOR.
+        lc.leakage_sensors[0].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.MINOR)
+        updater._refresh_leak_status()
+
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        assert self._event_logged(updater.event_logger.log_warning,
+                                  'MAJOR system leak detected')
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_clears_to_minor(self, mock_try_get):
+        """When one of two minor leaks recovers, the count drops below MIN-N and
+        the system falls MAJOR -> MINOR, emitting the MAJOR-cleared notice."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        lc.make_sensor_no_leak(1)
+        updater._refresh_leak_status()
+
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+        assert self._event_logged(updater.event_logger.log_notice,
+                                  'MAJOR system leak cleared')
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_clears_to_none(self, mock_try_get):
+        """All leaks recover: MAJOR -> None, and SYSTEM_LEAK_STATUS is written as
+        'None' on the clearing transition."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        lc.make_sensor_no_leak(0)
+        lc.make_sensor_no_leak(1)
+        updater._refresh_leak_status()
+
+        assert updater.last_leak_status is None
+        assert self._event_logged(updater.event_logger.log_notice,
+                                  'MAJOR system leak cleared')
+        statuses = [dict(c[0][1].fv_dict)['device_leak_status']
+                    for c in updater.system_table.set.call_args_list]
+        assert statuses == ['MAJOR', 'None']
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_threshold_boundary(self, mock_try_get):
+        """With MIN-N=3, two concurrent minor leaks stay MINOR (just below) while
+        a third pushes the aggregate to MAJOR (exactly at the threshold)."""
+        mock_chassis = MockChassis()
+        mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=3)
+        lc = mock_chassis.get_liquid_cooling()
+        lc.get_major_leak_num_min_sensors = mock.MagicMock(return_value=3)
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        for sensor in lc.leakage_sensors:
+            self._set_sensor(sensor, LeakSeverity.MINOR)
+
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+        updater._refresh_leak_status()
+        # Two minors, MIN-N=3 -> still MINOR (just below threshold).
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+
+        lc.make_sensor_leak(2)
+        updater._refresh_leak_status()
+        # Third minor reaches MIN-N -> MAJOR (exactly at threshold).
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_faulty_sensor_not_counted_toward_major(self, mock_try_get):
+        """A faulty sensor must not contribute to the MIN-N minor count: one real
+        minor leak plus one faulty sensor stays MINOR (MIN-N=2), not MAJOR."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        # Second sensor is faulty (and would-be leaking) — must be ignored.
+        lc.leakage_sensors[1].is_leak_sensor_ok = mock.MagicMock(return_value=False)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+        assert 'leakage2' in updater.faulty_sensors
+        assert not self._event_logged(updater.event_logger.log_warning,
+                                      'MAJOR system leak detected')
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_escalation_logged_once(self, mock_try_get):
+        """A single minor leak past MAX-T escalates to MAJOR and logs the
+        escalation exactly once; subsequent polls do not re-log or rewrite."""
+        mock_chassis = MockChassis()
+        mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=1)
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR, max_minor=1)
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        writes_after_escalation = updater.system_table.set.call_count
+
+        # Third poll: unchanged MAJOR — no new escalation warning, no DB rewrite.
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        escalation_logs = [c for c in updater.event_logger.log_warning.call_args_list
+                           if 'escalated from MINOR to MAJOR' in c[0][0]]
+        assert len(escalation_logs) == 1
+        major_detected = [c for c in updater.event_logger.log_warning.call_args_list
+                          if 'MAJOR system leak detected' in c[0][0]]
+        assert len(major_detected) == 1
+        assert updater.system_table.set.call_count == writes_after_escalation
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_both_triggers(self, mock_try_get):
+        """MIN-N count and time-based escalation can both be true at once; the
+        system stays MAJOR and the MAJOR event is logged only once."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR, max_minor=1)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR, max_minor=1)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        # Two minors already meet MIN-N -> MAJOR by count.
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+        # Now both also escalated by time; still MAJOR, still one detection log.
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        major_detected = [c for c in updater.event_logger.log_warning.call_args_list
+                          if 'MAJOR system leak detected' in c[0][0]]
+        assert len(major_detected) == 1
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_no_escalation_when_unsupported_single_sensor(self, mock_try_get):
+        """With MAJOR unsupported (MIN-N=0), a single long-standing minor leak is
+        never escalated to MAJOR even after MAX-T elapses."""
+        mock_chassis = MockChassis()
+        mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=1)
+        lc = mock_chassis.get_liquid_cooling()
+        lc.get_major_leak_num_min_sensors = mock.MagicMock(return_value=0)
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR, max_minor=1)
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
+        assert len(updater.escalated_sensors) == 0
+
+    @mock.patch('thermalctld.try_get')
+    def test_resolve_major_leak_min_override_below_floor_ignored(self, mock_try_get):
+        """An override below MAJOR_LEAK_MIN_SENSORS_FLOOR is rejected with a
+        warning and the platform default MIN-N is used instead."""
+        mock_chassis = MockChassis()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        updater.policy_table.get = mock.MagicMock(
+            return_value=(True, (('system_major_leak_num_min_sensors', '1'),)))
+
+        assert updater._resolve_major_leak_min() == 2  # falls back to platform default
+        assert any('must be >=' in c[0][0] for c in updater.log_warning.call_args_list)
+
+    @mock.patch('thermalctld.try_get')
+    def test_resolve_major_leak_min_invalid_override_ignored(self, mock_try_get):
+        """A non-integer override is rejected with a warning and the platform
+        default MIN-N is used."""
+        mock_chassis = MockChassis()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        updater.policy_table.get = mock.MagicMock(
+            return_value=(True, (('system_major_leak_num_min_sensors', 'abc'),)))
+
+        assert updater._resolve_major_leak_min() == 2
+        assert any('Invalid' in c[0][0] for c in updater.log_warning.call_args_list)
+
+    @mock.patch('thermalctld.try_get')
+    def test_resolve_major_leak_min_platform_default_below_floor(self, mock_try_get):
+        """A platform default below the floor (and no override) clamps to 0, i.e.
+        the MAJOR classification is not applied."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        lc.get_major_leak_num_min_sensors = mock.MagicMock(return_value=1)
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        updater.policy_table.get = mock.MagicMock(return_value=(False, tuple()))
+
+        assert updater._resolve_major_leak_min() == 0
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_major_idempotent_no_rewrite(self, mock_try_get):
+        """Staying MAJOR across polls writes SYSTEM_LEAK_STATUS only on the
+        transition, not on every unchanged cycle."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        writes = updater.system_table.set.call_count
+
+        updater._refresh_leak_status()
+        # Unchanged MAJOR -> no additional SYSTEM_LEAK_STATUS write.
+        assert updater.system_table.set.call_count == writes
 
     def test_run(self):
         """Test run method normal execution"""
