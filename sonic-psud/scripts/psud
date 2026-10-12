@@ -76,6 +76,7 @@ FAN_INFO_PRESENCE_FIELD = 'presence'
 FAN_INFO_STATUS_FIELD = 'status'
 FAN_INFO_DIRECTION_FIELD = 'direction'
 FAN_INFO_SPEED_FIELD = 'speed'
+FAN_INFO_SPEED_RPM_FIELD = 'speed_rpm'
 FAN_INFO_LED_STATUS_FIELD = 'led_status'
 FAN_INFO_TIMESTAMP_FIELD = 'timestamp'
 
@@ -948,12 +949,14 @@ class DaemonPsud(daemon_base.DaemonBase):
             fan_name = try_get(fan.get_name, '{} FAN {}'.format(psu_name, index + 1))
             direction = try_get(fan.get_direction, NOT_AVAILABLE) if presence else NOT_AVAILABLE
             speed = try_get(fan.get_speed, NOT_AVAILABLE) if presence else NOT_AVAILABLE
+            speed_rpm = try_get(fan.get_speed_rpm, NOT_AVAILABLE) if presence else NOT_AVAILABLE
             status = "True" if presence else "False"
             fvs = swsscommon.FieldValuePairs(
                 [(FAN_INFO_PRESENCE_FIELD, str(presence)),
                  (FAN_INFO_STATUS_FIELD, status),
                  (FAN_INFO_DIRECTION_FIELD, direction),
                  (FAN_INFO_SPEED_FIELD, str(speed)),
+                 (FAN_INFO_SPEED_RPM_FIELD, str(speed_rpm)),
                  (FAN_INFO_TIMESTAMP_FIELD, datetime.now().strftime('%Y%m%d %H:%M:%S'))
                  ])
             try:

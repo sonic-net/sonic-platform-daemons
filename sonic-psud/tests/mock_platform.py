@@ -109,6 +109,7 @@ class MockFan(fan_base.FanBase):
 
         self._direction = direction
         self._speed = speed
+        self._speed_rpm = int(speed * 200)
         self._status_led_color = self.STATUS_LED_COLOR_OFF
 
     def get_direction(self):
@@ -116,6 +117,9 @@ class MockFan(fan_base.FanBase):
 
     def get_speed(self):
         return self._speed
+
+    def get_speed_rpm(self):
+        return self._speed_rpm
 
     def get_status_led(self):
         return self._status_led_color
