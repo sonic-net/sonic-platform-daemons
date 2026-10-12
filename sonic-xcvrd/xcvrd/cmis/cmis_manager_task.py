@@ -238,12 +238,40 @@ class CmisManagerTask(threading.Thread):
 
     def get_cmis_max_host_lanes_mask(self, api):
         """
-        Get maximum host lanes mask based on module type
+        Get the mask of the host lanes the module implements
+
+        The mask is the union, over all advertised applications, of the host
+        lanes each application can occupy (host_lane_count lanes starting at
+        every lane allowed by host_lane_assignment_options), limited to the
+        module-type maximum (QSFP+C has 4 lanes, all others have 8).
+        A module may implement fewer host lanes than its form factor, e.g. an
+        OSFP whose applications all fit in host lanes 1-4. Its unused lanes
+        report DataPath state 'Unknown', so decommissioning them never
+        completes. The module-type maximum is used when the advertisement is
+        not available.
         """
         module_type = api.get_module_type_abbreviation()
 
         # QSFP+C has 4 lanes, all others have 8
-        return 0x0f if module_type == 'QSFP+C' else 0xff
+        type_mask = 0x0f if module_type == 'QSFP+C' else 0xff
+
+        try:
+            appl_advt = api.get_application_advertisement()
+        except Exception:
+            appl_advt = None
+
+        adv_mask = 0
+        for appl in (appl_advt or {}).values():
+            lane_count = appl.get('host_lane_count', 0)
+            options = appl.get('host_lane_assignment_options', 0)
+            if not isinstance(lane_count, int) or not isinstance(options, int) or lane_count <= 0:
+                continue
+            for start in range(self.CMIS_MAX_HOST_LANES):
+                if options & (1 << start):
+                    adv_mask |= ((1 << lane_count) - 1) << start
+
+        adv_mask &= type_mask
+        return adv_mask if adv_mask else type_mask
 
     def get_cmis_host_lanes_mask(self, api, appl, host_lane_count, subport):
         """
