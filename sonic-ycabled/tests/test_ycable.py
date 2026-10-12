@@ -440,6 +440,29 @@ class TestYcableAsyncScript(object):
 
 class TestYcableActiveActiveHelper(object):
 
+    def test_get_soc_ip_for_grpc_prefers_ipv4(self):
+        soc_ip, soc_ip_field = get_soc_ip_for_grpc({
+            'soc_ipv4': '192.168.0.1/32',
+            'soc_ipv6': 'fc02:1000::1/128'
+        })
+
+        assert(soc_ip == '192.168.0.1')
+        assert(soc_ip_field == 'soc_ipv4')
+
+    def test_get_soc_ip_for_grpc_falls_back_to_ipv6(self):
+        soc_ip, soc_ip_field = get_soc_ip_for_grpc({
+            'soc_ipv6': 'fc02:1000::1/128'
+        })
+
+        assert(soc_ip == 'fc02:1000::1')
+        assert(soc_ip_field == 'soc_ipv6')
+
+    def test_format_grpc_target_for_ipv6(self):
+        assert(format_grpc_target('fc02:1000::1', GRPC_PORT) == '[fc02:1000::1]:50075')
+
+    def test_format_grpc_target_for_ipv4(self):
+        assert(format_grpc_target('192.168.0.1', GRPC_PORT) == '192.168.0.1:50075')
+
     @patch("ycable.ycable.platform_sfputil")
     def test_check_presence_for_active_active_cable_type(self, sfputil):
 
