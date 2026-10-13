@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-#
-# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# Apache-2.0
-#
 """Hold the Rust crates' references to the Python daemons to what exists.
 
 The Rust daemons cite the Python they reproduce as `file:Symbol`, for example

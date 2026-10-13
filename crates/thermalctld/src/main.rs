@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! thermalctld, in Rust, reading hardware via a native platform crate.
 //!
 //! On Mellanox/NVIDIA: reads thermal and fan state directly from
@@ -31,7 +25,7 @@ use clap::Parser;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{signal, Signal, SignalKind};
 use tokio::sync::watch;
 
 use platform_api::{ChassisInfoCols, PlatformApi, PlatformError};
@@ -182,7 +176,8 @@ async fn main() {
         }
     };
 
-    // Signal handling: SIGTERM and SIGINT both trigger a graceful shutdown.
+    // Signal handling: SIGTERM and SIGINT both trigger a graceful shutdown,
+    // and SIGHUP is absorbed (see `StopSignals`).
     //
     // The signal is remembered, not just the fact of it, because it decides the
     // exit code.  Python sets `exit_code = 128 + sig` in
@@ -201,19 +196,11 @@ async fn main() {
     // STATE_DB goes away.
     let shutdown_tx = Arc::new(shutdown_tx);
     let signal_tx = Arc::clone(&shutdown_tx);
+    // Installed here rather than inside the task, so all three are in place
+    // before anything below can take long enough for a signal to arrive.
+    let mut signals = StopSignals::install().expect("failed to install signal handlers");
     tokio::spawn(async move {
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-        let kind = tokio::select! {
-            _ = sigterm.recv() => {
-                log::info!("caught SIGTERM, shutting down");
-                SignalKind::terminate()
-            }
-            _ = sigint.recv() => {
-                log::info!("caught SIGINT, shutting down");
-                SignalKind::interrupt()
-            }
-        };
+        let kind = signals.wait().await;
         signal_code.store(pmon_common::cycles::exit_code_for(kind), Ordering::SeqCst);
         let _ = signal_tx.send(true);
     });
@@ -269,6 +256,51 @@ async fn main() {
     // not need to know that is what it holds.
     platform.finalize();
     std::process::exit(code);
+}
+
+/// The signals the daemon listens for, installed together.
+///
+/// SIGTERM and SIGINT stop it.  SIGHUP is listened for only so that it can be
+/// ignored: with no handler its default action ends the process on the spot,
+/// skipping everything `run` does on the way out -- `tm_deinitialize()`, which
+/// on Mellanox hands the fans back to hw-management-tc, and the STATE_DB
+/// cleanup -- and a SIGHUP is what a log rotation sends.  Python registers it
+/// and lets it through in `thermalctld:ThermalControlDaemon.signal_handler`,
+/// and `pmon_common::cycles` does the same for the other daemons; the log
+/// line is theirs.
+struct StopSignals {
+    sigterm: Signal,
+    sigint: Signal,
+    sighup: Signal,
+}
+
+impl StopSignals {
+    fn install() -> std::io::Result<Self> {
+        Ok(Self {
+            sigterm: signal(SignalKind::terminate())?,
+            sigint: signal(SignalKind::interrupt())?,
+            sighup: signal(SignalKind::hangup())?,
+        })
+    }
+
+    /// Wait for a signal that stops the daemon, and say which one it was.
+    async fn wait(&mut self) -> SignalKind {
+        loop {
+            tokio::select! {
+                _ = self.sigterm.recv() => {
+                    log::info!("caught SIGTERM, shutting down");
+                    return SignalKind::terminate();
+                }
+                _ = self.sigint.recv() => {
+                    log::info!("caught SIGINT, shutting down");
+                    return SignalKind::interrupt();
+                }
+                _ = self.sighup.recv() => {
+                    log::info!("Caught signal 'SIGHUP' - ignoring...");
+                }
+            }
+        }
+    }
 }
 
 /// The daemon between "the platform is up and the tables are open" and "the
@@ -390,7 +422,11 @@ async fn run(
     }
 
     // Rows this daemon owns go with it.  Mirrors the two Python destructors;
-    // see `StateDb::clear`.
+    // see `StateDb::clear`.  The copies on the BMC go too: the same
+    // `thermalctld:TemperatureUpdater.__del__` deletes each row from the
+    // BMC's TEMPERATURE_INFO as well, and a row left there reads on the BMC
+    // as a live temperature from a daemon that is no longer running.
+    monitor.clear_bmc_mirror();
     db.clear();
 
     db_lost
@@ -735,8 +771,8 @@ mod tests {
         fn get_fans(&mut self, _cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
         }
         fn get_leak_profiles(&mut self) -> Result<Vec<LeakProfile>, PlatformError> {
             Ok(self.profiles.clone())
@@ -1054,6 +1090,37 @@ mod tests {
             m.temperature.get("ASIC").unwrap().is_none(),
             "the rows this daemon owns go with it -- 60 were left behind on an SN5640 before"
         );
+    }
+
+    /// The rows mirrored to the BMC go on the way out as well as the local
+    /// ones.  `thermalctld:TemperatureUpdater.__del__` deletes each row from
+    /// the BMC's TEMPERATURE_INFO beside the local one; leaving them would
+    /// have the BMC reading temperatures from a daemon that is not running.
+    #[tokio::test]
+    async fn a_shutdown_takes_the_mirrored_rows_off_the_bmc_too() {
+        use crate::bmc::BmcMirror;
+        use crate::temp_updater::TemperatureUpdater;
+        use pmon_common::db::MockTable;
+
+        let mut p = Tm::default();
+        let m = MockDb::new(false);
+        let remote = MockTable::new();
+        let r = remote.clone();
+        let mut mirror = BmcMirror::with_opener(
+            "10.0.0.1",
+            Box::new(move |_addr: &str| Ok(Box::new(r.clone()) as Box<dyn TableLike>)),
+        );
+        mirror.set("ASIC", &[("temperature", "42".to_string())]);
+        assert!(!remote.is_empty());
+
+        let mut monitor = Monitor::with_env(
+            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false)
+            .with_temperature_updater(TemperatureUpdater::with_mirror(Some(mirror)));
+
+        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &tm_up,
+            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+
+        assert!(remote.is_empty(), "the BMC's copy goes with the daemon");
     }
 
     /// A platform with no thermal manager is not an error.  Most platforms
@@ -1451,6 +1518,45 @@ mod tests {
         // it did not stop.
         let (_tx, rx) = watch::channel(false);
         assert!(!sleep_or_shutdown(Duration::from_millis(1), &rx));
+    }
+
+    /// Send `sig` to this test process, through the shell's `kill`: the crate
+    /// has no libc of its own to do it with.
+    fn raise(sig: &str) {
+        let status = std::process::Command::new("sh")
+            .args(["-c", &format!("kill -{sig} {}", std::process::id())])
+            .status()
+            .expect("sh runs");
+        assert!(status.success(), "kill -{sig} failed");
+    }
+
+    /// A SIGHUP is logged and ignored, as Python's
+    /// `thermalctld:ThermalControlDaemon.signal_handler` ignores it, and a
+    /// SIGTERM after it still stops the daemon.
+    ///
+    /// With no handler for it the SIGHUP's default action ends the process
+    /// outright -- this test binary included, which is how the test fails --
+    /// and on a switch that skips `tm_deinitialize()` and the STATE_DB
+    /// cleanup, leaving hw-management-tc suspended and every row behind.
+    #[tokio::test]
+    async fn a_sighup_does_not_stop_the_daemon() {
+        let log = pmon_common::logging::capture();
+        let mut signals = StopSignals::install().expect("handlers install");
+        let wait = signals.wait();
+        tokio::pin!(wait);
+
+        raise("HUP");
+        tokio::select! {
+            kind = &mut wait => panic!("a SIGHUP stopped the daemon ({kind:?})"),
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
+        assert!(log.contains("Caught signal 'SIGHUP' - ignoring..."), "and it says so");
+
+        raise("TERM");
+        let kind = tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .expect("a SIGTERM still stops it");
+        assert_eq!(kind, SignalKind::terminate());
     }
 
     /// Bug 16: the leak thread must take its rows with it.

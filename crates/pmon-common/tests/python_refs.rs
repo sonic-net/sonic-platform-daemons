@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Every crate's comments cite the Python daemon they reproduce as
 //! `file:Symbol`.  This fails the build when one of those symbols no longer
 //! exists, or when a comment cites Python by line number.
