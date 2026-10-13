@@ -155,7 +155,9 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
                 "ELS Status flags")
 
-            # TODO: Add support for collecting and publishing VDM data.
+            # The OE and the ELSFP share one VDM block (joint mode), banked like the
+            # OE lanes, so it is read through this port's bank-bound OE API.
+            self.publish_vdm_data(physical_port, logical_port_name, asic_index)
 
     def on_port_update_event(self, port_change_event):
         """Called when a port change event is received
@@ -229,6 +231,12 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 {**oe_module_flags['status_flags'], **banked_status_flags},
                 self.xcvr_table_helper.get_status_flag_tables(asic_index),
                 "Status flags")
+
+            if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                try:
+                    self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
+                except (KeyError, TypeError) as e:
+                    self.log_warning("Got exception {} while processing VDM flags of OE {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
 
     def _publish_elsfp_flags_for_device(self, device_id):
         """Read the ELSFP's latched flags and publish them for every port it drives.
