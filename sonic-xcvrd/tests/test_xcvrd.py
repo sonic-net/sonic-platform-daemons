@@ -4067,6 +4067,44 @@ class TestXcvrdScript(object):
                 result = helper.get_gearbox_line_lanes_dict()
                 assert result == expected_dict
 
+    def test_XcvrTableHelper_get_gearbox_line_lanes_dict_failure(self):
+        # A read failure must return None (not an empty dict) so callers can retry
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', MagicMock()):
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        helper.appl_db = {0: MagicMock()}
+
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', side_effect=Exception("boom")):
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                assert helper.get_gearbox_line_lanes_dict() is None
+
+    @pytest.mark.parametrize("found, expected", [
+        # GearboxConfigDone present for all ASICs
+        (True, True),
+        # GearboxConfigDone not yet published
+        (False, False),
+    ])
+    def test_XcvrTableHelper_is_gearbox_config_done(self, found, expected):
+        mock_gearbox_table = MagicMock()
+        mock_gearbox_table.get.return_value = (found, [])
+
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', return_value=mock_gearbox_table):
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+                helper.appl_db = {0: MagicMock()}
+
+                assert helper.is_gearbox_config_done() == expected
+
+    def test_XcvrTableHelper_is_gearbox_config_done_failure(self):
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', MagicMock()):
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        helper.appl_db = {0: MagicMock()}
+
+        with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.swsscommon.Table', side_effect=Exception("boom")):
+            with patch('xcvrd.xcvrd_utilities.xcvr_table_helper.helper_logger'):
+                assert helper.is_gearbox_config_done() is False
+
     @pytest.mark.parametrize("gearbox_lanes_dict, lport, port_config_lanes, expected_count", [
         # Test case 1: Gearbox data available, should use gearbox count
         ({"Ethernet0": 2}, "Ethernet0", "25,26,27,28", 2),
