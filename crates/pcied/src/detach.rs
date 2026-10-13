@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Which DPUs are on their way off the bus.
 //!
 //! Ports `pcied:DaemonPcied.is_dpu_in_detaching_mode`.  A SmartSwitch detaches
@@ -25,19 +19,19 @@ const DETACHING: &str = "detaching";
 pub struct Detaching(BTreeSet<String>);
 
 impl Detaching {
-    /// Read the table once per cycle rather than once per absent device.
+    /// The devices detaching now, read once per pass rather than once per
+    /// absent device.
     ///
-    /// Python queries it inside the loop
+    /// Python queries the table inside the loop
     /// (`pcied:DaemonPcied.check_pcie_devices`), so a chassis with several
-    /// missing devices scans the table once each; here the answer is the same
-    /// for every device in a pass, and a pass is a minute apart.
-    /// Returns the error rather than an empty set.
+    /// missing devices scans it once each; the answer is the same for every
+    /// device in a pass, and a pass is a minute apart.
     ///
-    /// Python reads this table unwrapped
-    /// (`pcied:DaemonPcied.is_dpu_in_detaching_mode`), so a redis it cannot
-    /// reach ends the daemon.  Treating an unreadable table as "nothing is
-    /// detaching" would have this daemon report a DPU's PCIe device missing
-    /// while it is being detached on purpose.
+    /// An unreadable table is an error, never an empty set.  Python reads it
+    /// unwrapped (`pcied:DaemonPcied.is_dpu_in_detaching_mode`), so a redis it
+    /// cannot reach ends the daemon; read as "nothing is detaching" it would
+    /// have this daemon report a DPU's PCIe device missing while it is being
+    /// detached on purpose.
     pub fn read(is_smartswitch: bool, table: &dyn TableLike) -> Result<Self, String> {
         // Nothing but a SmartSwitch has DPUs, and Python gates on exactly this
         // before it looks (`pcied:DaemonPcied.check_pcie_devices`).
