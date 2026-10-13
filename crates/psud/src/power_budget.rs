@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! What the chassis can supply against what it draws, and the master PSU LED.
 //!
 //! Ports `psud:PsuChassisInfo`.  Only a modular chassis runs this: on a fixed

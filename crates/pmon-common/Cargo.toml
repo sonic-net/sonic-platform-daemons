@@ -25,5 +25,9 @@ testing = []
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-util"] }
 # `platform_env` is read off an absolute path in production; the tests point the
-# same parsers at a file they wrote.
-tempfile = "3"
+# same parsers at a file they wrote.  Held below 3.15: from 3.15 tempfile pulls
+# getrandom 0.4, which is edition 2024, and the cargo-auditable the sonic-slave
+# image wraps rustc in (0.6.4) cannot parse that edition out of
+# `cargo metadata`.  The committed lock holds the version; this says why, so a
+# later `cargo update` does not put the build back.
+tempfile = ">=3, <3.15"

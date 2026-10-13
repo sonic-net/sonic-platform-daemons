@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! PSU_INFO, and the FAN_INFO rows that belong to a PSU rather than a drawer.
 //!
 //! Ports `psud:DaemonPsud._update_single_power_entity_data` and the four
@@ -41,7 +35,6 @@ pub struct Tables<'a> {
     pub entity: &'a dyn TableLike,
 }
 
-#[derive(Default)]
 pub struct Updater {
     status: BTreeMap<String, PsuStatus>,
     /// True until a full pass has run.  Python spells this on the daemon and
@@ -52,9 +45,18 @@ pub struct Updater {
     published: BTreeSet<String>,
 }
 
+/// Hand-written because a derived `Default` would start with `first_run:
+/// false`, which is the one value of it nothing should ever begin from (as in
+/// `PowerBudget`).
+impl Default for Updater {
+    fn default() -> Self {
+        Self { status: BTreeMap::new(), first_run: true, published: BTreeSet::new() }
+    }
+}
+
 impl Updater {
     pub fn new() -> Self {
-        Self { first_run: true, ..Default::default() }
+        Self::default()
     }
 
     /// One pass over every PSU and PDB.
@@ -142,8 +144,6 @@ impl Updater {
                 status.check_power_threshold = false;
                 log::error!("{name} is not present.");
             }
-        } else if first_run && !present {
-            log::error!("{name} is not present.");
         }
 
         // A PSU that just came or went takes its fans with it, and the fan rows
@@ -311,6 +311,9 @@ impl Updater {
             ("max_power", fmt::opt_float(reading(row.maximum_supplied_power))),
             ("presence", fmt::lower_bool(present)),
             ("status", fmt::lower_bool(power_good)),
+            // The epoch float, unlike FAN_INFO's below: Python writes
+            // `str(datetime.now().timestamp())` here
+            // (`psud:DaemonPsud._update_single_power_entity_data`).
             ("timestamp", fmt::epoch_timestamp()),
         ];
         if let Err(e) = tables.psu.set(name, &fvs) {
@@ -334,15 +337,12 @@ impl Updater {
             if !self.status.contains_key(&row.name) {
                 continue;
             }
-            let fvs = [("led_status", fmt::opt_str(&row.status_led.map(|c| c.as_str().to_string())))];
+            let fvs = [("led_status", fmt::opt_str(&row.status_led))];
             if let Err(e) = tables.psu.set(&row.name, &fvs) {
                 log::error!("Failed to update {} LED status to DB: {e}", row.name);
             }
             for fan in psu_fans(&row.name, fans) {
-                let fvs = [(
-                    "led_status",
-                    fmt::opt_str(&fan.status_led.map(|c| c.as_str().to_string())),
-                )];
+                let fvs = [("led_status", fmt::opt_str(&fan.status_led))];
                 if let Err(e) = tables.fan.set(&fan.name, &fvs) {
                     log::error!("Failed to update fan {} LED status to DB: {e}", fan.name);
                 }
@@ -380,12 +380,15 @@ fn publish_psu_fans(psu: &str, present: bool, fans: &[FanInfo], table: &dyn Tabl
             (
                 "direction",
                 if present {
-                    fan.direction.map_or_else(|| fmt::NOT_AVAILABLE.to_string(), |d| d.as_str().to_string())
+                    fmt::opt_str(&fan.direction)
                 } else {
                     fmt::NOT_AVAILABLE.to_string()
                 },
             ),
             ("speed", if present { fmt::opt_u32(fan.speed_pct) } else { fmt::NOT_AVAILABLE.to_string() }),
+            // `%Y%m%d %H:%M:%S`, unlike PSU_INFO's epoch float: Python writes
+            // `datetime.now().strftime(...)` here
+            // (`psud:DaemonPsud._update_psu_fan_data`).
             ("timestamp", fmt::timestamp()),
         ];
         if let Err(e) = table.set(&fan.name, &fvs) {
@@ -411,7 +414,7 @@ mod tests {
             serial: Some("SN1".to_string()),
             revision: Some("A1".to_string()),
             power_good: true,
-            status_led: Some(LedColor::Green),
+            status_led: Some("green".to_string()),
             voltage: Some(12.0),
             current: Some(5.0),
             power: Some(60.0),
@@ -442,10 +445,10 @@ mod tests {
             serial: None,
             speed_pct: Some(60),
             target_speed_pct: Some(60),
-            direction: Some(platform_api::FanDirection::Intake),
+            direction: Some("intake".to_string()),
             is_under_speed: Some(false),
             is_over_speed: Some(false),
-            status_led: Some(LedColor::Green),
+            status_led: Some("green".to_string()),
         }
     }
 
@@ -528,6 +531,15 @@ mod tests {
         assert!(leds.iter().all(|l| l.color == LedColor::Green));
     }
 
+    /// `Default` is a first pass too, not only `new`: a derived one would
+    /// start with `first_run: false` and never light a healthy PSU's LED.
+    #[test]
+    fn a_default_updater_starts_on_its_first_pass() {
+        let db = Db::new();
+        let leds = Updater::default().refresh(&[psu("PSU 1")], &[], &db.tables());
+        assert_eq!(leds, vec![LedWrite { psu: "PSU 1".to_string(), color: LedColor::Green }]);
+    }
+
     /// After that, only a change writes.  The LED is an i2c write; doing it
     /// every three seconds for every PSU forever is traffic on the bus that a
     /// PSU firmware upgrade has to share.
@@ -571,6 +583,19 @@ mod tests {
         assert_eq!(db.fan.field("PSU 1 FAN 1", "presence").as_deref(), Some("False"));
         assert_eq!(db.fan.field("PSU 1 FAN 1", "direction").as_deref(), Some("N/A"));
         assert_eq!(db.fan.field("PSU 1 FAN 1", "speed").as_deref(), Some("N/A"));
+    }
+
+    /// A PSU fan's direction is published as the platform spelled it, as
+    /// Python's `try_get(fan.get_direction, NOT_AVAILABLE)` does: PDDF's
+    /// valmaps answer "EXHAUST" where the base class spells "exhaust".
+    #[test]
+    fn a_vendor_fan_direction_is_published_as_the_platform_spelled_it() {
+        let db = Db::new();
+        let mut u = Updater::new();
+        let mut f = fan("PSU 1 FAN 1", "PSU 1");
+        f.direction = Some("EXHAUST".to_string());
+        u.refresh(&[psu("PSU 1")], &[f], &db.tables());
+        assert_eq!(db.fan.field("PSU 1 FAN 1", "direction").as_deref(), Some("EXHAUST"));
     }
 
     /// Another PSU's fans are not this one's.  Matching on the name prefix
@@ -650,9 +675,9 @@ mod tests {
         u.refresh(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
 
         let mut after = psu("PSU 1");
-        after.status_led = Some(LedColor::Red);
+        after.status_led = Some("red".to_string());
         let mut hot_fan = fan("PSU 1 FAN 1", "PSU 1");
-        hot_fan.status_led = Some(LedColor::Amber);
+        hot_fan.status_led = Some("amber".to_string());
         u.update_led_color(&[after], &[hot_fan], &db.tables());
         assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("red"));
         assert_eq!(db.fan.field("PSU 1 FAN 1", "led_status").as_deref(), Some("amber"));
@@ -709,6 +734,23 @@ mod tests {
         dark.status_led = None;
         u.update_led_color(&[dark], &[], &db.tables());
         assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("N/A"));
+    }
+
+    /// A colour of the vendor's own is published as it is, as Python's
+    /// `str(try_get(...))` does: mlnx's PSU LED reads "orange", and
+    /// "green_blink" while it blinks.
+    #[test]
+    fn a_vendor_led_colour_is_published_as_the_platform_spelled_it() {
+        let db = Db::new();
+        let mut u = Updater::new();
+        u.refresh(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
+        let mut lit = psu("PSU 1");
+        lit.status_led = Some("orange".to_string());
+        let mut blinking = fan("PSU 1 FAN 1", "PSU 1");
+        blinking.status_led = Some("green_blink".to_string());
+        u.update_led_color(&[lit], &[blinking], &db.tables());
+        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("orange"));
+        assert_eq!(db.fan.field("PSU 1 FAN 1", "led_status").as_deref(), Some("green_blink"));
     }
 
     /// A PSU that was never published is not one this daemon publishes a

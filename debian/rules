@@ -3,10 +3,11 @@
 # output every command that modifies files on the build system.
 #export DH_VERBOSE = 1
 
-# Seven binaries out of one workspace build.  They are one source package
-# rather than seven because they share crates/pmon-common and the generated
-# facade: building them separately would compile both seven times, and the
-# seven debs are what keeps them independently installable and switchable.
+# One binary package per daemon, from one workspace build.  They are one
+# source package rather than one each because they share crates/pmon-common
+# and the generated facade: building them separately would compile both once
+# per daemon, and a deb per daemon is what keeps them independently
+# installable and switchable.
 #
 # Phase 1: every daemon reaches the platform through the generated PyO3 bridge
 # onto whatever sonic_platform the image installs, so nothing here names a

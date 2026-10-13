@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Which of the two Switch-BMC roles this copy of the daemon plays.
 //!
 //! Ports `device_info.py:is_switch_host` / `device_info.py:is_switch_bmc`,

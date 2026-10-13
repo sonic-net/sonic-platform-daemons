@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! A STATE_DB table, behind a trait so the write path can be tested.
 //!
 //! The Python daemons test the same way: `tests/mock_swsscommon.py` shadows the
@@ -17,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use swss_common::{DbConnector, SonicV2Connector, Table};
+use swss_common::{CxxString, DbConnector, SonicV2Connector, Table};
 
 pub const STATE_DB: &str = "STATE_DB";
 const CONNECT_TIMEOUT_MS: u32 = 0;
@@ -60,16 +54,26 @@ impl TableLike for Table {
         let Some(fvs) = Table::get(self, key).map_err(|e| format!("{e:?}"))? else {
             return Ok(None);
         };
-        Ok(Some(
-            fvs.into_iter()
-                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k, s.to_string())))
-                .collect(),
-        ))
+        Ok(Some(decode_row(fvs)))
     }
 
     fn get_keys(&self) -> Result<Vec<String>, String> {
         Table::get_keys(self).map_err(|e| format!("{e:?}"))
     }
+}
+
+/// A row as redis returned it, with its values as text.
+///
+/// A value that is not UTF-8 keeps its field, with the bytes that do not
+/// decode replaced.  Dropping the field instead made a row with one mangled
+/// value read as a row without that field at all -- the same answer as one
+/// that was never written, which is the kind of folding `TableLike::get`
+/// exists to prevent.  Python keeps such a value too: its swsscommon binding
+/// decodes with `surrogateescape` rather than dropping what will not decode.
+fn decode_row(fvs: impl IntoIterator<Item = (String, CxxString)>) -> Vec<(String, String)> {
+    fvs.into_iter()
+        .map(|(k, v)| (k, v.to_string_lossy().into_owned()))
+        .collect()
 }
 
 /// A whole database's key space, which a `Table` cannot express.
@@ -82,7 +86,11 @@ impl TableLike for Table {
 /// the two it must keep.
 pub trait Keyspace: Send {
     /// Keys matching a redis glob.
-    fn keys(&self, pattern: &str) -> Vec<String>;
+    ///
+    /// A failed scan is an error, not an empty answer, for the reason
+    /// `TableLike::get` gives: the caller is about to decide what to delete
+    /// from it, and "redis did not answer" must not read as "nothing there".
+    fn keys(&self, pattern: &str) -> Result<Vec<String>, String>;
     fn del(&self, key: &str) -> Result<(), String>;
 }
 
@@ -101,8 +109,8 @@ impl Db {
 }
 
 impl Keyspace for Db {
-    fn keys(&self, pattern: &str) -> Vec<String> {
-        self.conn.keys(&self.name, Some(pattern), false).unwrap_or_default()
+    fn keys(&self, pattern: &str) -> Result<Vec<String>, String> {
+        self.conn.keys(&self.name, Some(pattern), false).map_err(|e| format!("{e:?}"))
     }
 
     fn del(&self, key: &str) -> Result<(), String> {
@@ -114,11 +122,22 @@ impl Keyspace for Db {
 #[derive(Clone, Default)]
 pub struct MockKeyspace {
     keys: Arc<Mutex<Vec<String>>>,
+    /// What a scan fails with, once `fail_reads` has armed it.
+    read_fault: Arc<Mutex<Option<String>>>,
 }
 
 impl MockKeyspace {
     pub fn new(keys: &[&str]) -> Self {
-        Self { keys: Arc::new(Mutex::new(keys.iter().map(|k| k.to_string()).collect())) }
+        Self {
+            keys: Arc::new(Mutex::new(keys.iter().map(|k| k.to_string()).collect())),
+            ..Self::default()
+        }
+    }
+
+    /// Make every subsequent scan fail.  Deletes still go through, so a
+    /// caller that deleted anyway would show in `remaining`.
+    pub fn fail_reads(&self, why: &str) {
+        *self.read_fault.lock().unwrap() = Some(why.to_string());
     }
 
     pub fn remaining(&self) -> Vec<String> {
@@ -128,15 +147,19 @@ impl MockKeyspace {
 
 impl Keyspace for MockKeyspace {
     /// Only `*` wildcards, which is all any caller here uses.
-    fn keys(&self, pattern: &str) -> Vec<String> {
+    fn keys(&self, pattern: &str) -> Result<Vec<String>, String> {
+        if let Some(why) = self.read_fault.lock().unwrap().clone() {
+            return Err(why);
+        }
         let parts: Vec<&str> = pattern.split('*').collect();
-        self.keys
+        Ok(self
+            .keys
             .lock()
             .unwrap()
             .iter()
             .filter(|k| matches_glob(k, &parts))
             .cloned()
-            .collect()
+            .collect())
     }
 
     fn del(&self, key: &str) -> Result<(), String> {
@@ -185,7 +208,7 @@ pub type Opener<'a> = &'a dyn Fn(&str, &str) -> Result<Box<dyn TableLike>, Strin
 /// supervisord gave up, while the Python daemon on the same DPU had been
 /// publishing `DPU_STATE` to that database all along.
 ///
-/// This is the only place any of the seven daemons opens a table, so the wrong
+/// This is the only place any of the daemons opens a table, so the wrong
 /// transport here is the wrong transport everywhere.
 pub fn open(db: &str, table: &str) -> Result<Box<dyn TableLike>, String> {
     DbConnector::new_named(db, true, CONNECT_TIMEOUT_MS)
@@ -545,6 +568,20 @@ mod tests {
         assert!(err.contains("STATE_DB"), "the message names the database: {err}");
     }
 
+    /// A value that is not UTF-8 keeps its field.  Filtering it out made the
+    /// row read as one that never had the field, which is a different fact.
+    #[test]
+    fn a_value_that_is_not_utf8_keeps_its_field() {
+        let row = decode_row([
+            ("model".to_string(), CxxString::new(b"MSN\xff4700")),
+            ("serial".to_string(), CxxString::new("MT1234")),
+        ]);
+        assert_eq!(row.len(), 2, "both fields survive");
+        assert_eq!(row[0].0, "model");
+        assert_eq!(row[0].1, "MSN\u{fffd}4700", "the bad byte is replaced, not the field dropped");
+        assert_eq!(row[1], ("serial".to_string(), "MT1234".to_string()));
+    }
+
     /// The sweep sees full keys, which is the whole reason this is not a
     /// `Table`: told only `DPU0` it could not tell DPU_STATE apart from
     /// anything else and would delete the row it must keep.
@@ -554,10 +591,20 @@ mod tests {
             "DPU_STATE|DPU0", "REBOOT_CAUSE|DPU0|x", "TRANSCEIVER_INFO|DPU0|Ethernet0",
             "DPU_STATE|DPU1",
         ]);
-        assert_eq!(k.keys("*DPU0*").len(), 3);
-        assert_eq!(k.keys("DPU_STATE*").len(), 2);
-        assert_eq!(k.keys("*Ethernet0").len(), 1);
-        assert!(k.keys("*NOSUCH*").is_empty());
+        assert_eq!(k.keys("*DPU0*").unwrap().len(), 3);
+        assert_eq!(k.keys("DPU_STATE*").unwrap().len(), 2);
+        assert_eq!(k.keys("*Ethernet0").unwrap().len(), 1);
+        assert!(k.keys("*NOSUCH*").unwrap().is_empty());
+    }
+
+    /// A scan that failed is an error, not an empty key space -- the same
+    /// distinction `a_failed_read_is_not_an_absent_row` draws for a table.
+    #[test]
+    fn a_failed_scan_is_not_an_empty_keyspace() {
+        let k = MockKeyspace::new(&["DPU_STATE|DPU0"]);
+        k.fail_reads("redis is gone");
+        assert_eq!(k.keys("*DPU0*"), Err("redis is gone".to_string()));
+        assert_eq!(k.remaining().len(), 1, "a failed scan deletes nothing by itself");
     }
 
     #[test]

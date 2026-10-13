@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of ThermalMonitor's polling loop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,6 +79,22 @@ impl Monitor {
             policy_gate: PollingGate::new(),
             bmc_watch: is_switch_bmc.then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
         }
+    }
+
+    /// The same monitor with its temperature updater supplied, so a test can
+    /// hand it one whose BMC mirror it can read back.
+    #[cfg(test)]
+    pub fn with_temperature_updater(mut self, updater: TemperatureUpdater) -> Self {
+        self.temperature_updater = updater;
+        self
+    }
+
+    /// Take the rows the temperature updater mirrored to the BMC back off it.
+    ///
+    /// For `main::run`'s shutdown, beside `StateDb::clear`: the mirror lives
+    /// in the updater, and the updater lives here.
+    pub fn clear_bmc_mirror(&mut self) {
+        self.temperature_updater.clear_mirror();
     }
 
     /// Run the thermal monitoring loop.
@@ -318,8 +328,8 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
         }
 
         fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
@@ -579,7 +589,7 @@ mod tests {
             fn get_fans(&mut self, cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
                 self.inner.get_fans(cols)
             }
-            fn set_fan_led(&mut self, a: &str, c: platform_api::LedColor) -> Result<(), PlatformError> {
+            fn set_fan_led(&mut self, a: &str, c: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
                 self.inner.set_fan_led(a, c)
             }
             fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {

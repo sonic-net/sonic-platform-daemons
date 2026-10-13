@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! psud, in Rust.  Ports `sonic-psud/scripts/psud`.
 //!
 //! PSU_INFO every three seconds, the PSU half of FAN_INFO, the PSU tray LEDs,
@@ -69,18 +63,89 @@ const UPDATE_PERIOD: Duration = Duration::from_secs(3);
 const PSUUTIL_LOAD_ERROR: i32 = 1;
 const PSU_DB_CONNECT_ERROR: i32 = 2;
 
-/// How many of each kind the chassis has, published once at start-up.
+/// How many PSUs and PDBs the chassis has.
+fn counts(psus: &[platform_api::PsuInfo]) -> (usize, usize) {
+    let count = |k: PowerEntityKind| psus.iter().filter(|p| p.kind == k).count();
+    (count(PowerEntityKind::Psu), count(PowerEntityKind::Pdb))
+}
+
+/// Write the counts; whether they were written.
 ///
 /// A count and not a list: `show platform psustatus` iterates `PSU 1..n`, so a
 /// wrong number here hides a PSU that is otherwise being published correctly.
-fn publish_counts(psus: &[platform_api::PsuInfo], table: &dyn TableLike) {
-    let count = |k: PowerEntityKind| psus.iter().filter(|p| p.kind == k).count();
-    let fvs = [
-        ("psu_num", count(PowerEntityKind::Psu).to_string()),
-        ("pdb_num", count(PowerEntityKind::Pdb).to_string()),
-    ];
-    if let Err(e) = table.set(CHASSIS_INFO_KEY, &fvs) {
-        log::error!("Failed to set PSU/PDB number to DB: {e}");
+fn publish_counts(psus: &[platform_api::PsuInfo], table: &dyn TableLike) -> bool {
+    let (psu_num, pdb_num) = counts(psus);
+    let fvs = [("psu_num", psu_num.to_string()), ("pdb_num", pdb_num.to_string())];
+    match table.set(CHASSIS_INFO_KEY, &fvs) {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("Failed to set PSU/PDB number to DB: {e}");
+            false
+        }
+    }
+}
+
+/// The counts as last written, so they are published from the first read
+/// that succeeds and again only if they change.
+///
+/// Python publishes them once, from `psud:DaemonPsud.__init__`, and can afford
+/// to: `ChassisBase.get_num_psus` is `len(self._psu_list)`, which reads no
+/// hardware and cannot fail.  The facade has no count -- it is
+/// `len(get_psus())` -- and `get_psus()` reads every PSU, so here the count
+/// inherits that read's failures.  Published from a failed read, it would be
+/// `0`: numeric, so the FRU MIB and `show platform psustatus` iterate `1..0`
+/// and every PSU vanishes while `PSU_INFO` fills in normally, and nothing would
+/// ever correct it.
+#[derive(Default)]
+struct Counts(Option<(usize, usize)>);
+
+impl Counts {
+    fn refresh(&mut self, psus: &[platform_api::PsuInfo], table: &dyn TableLike) {
+        let now = counts(psus);
+        if self.0 != Some(now) && publish_counts(psus, table) {
+            self.0 = Some(now);
+        }
+    }
+}
+
+/// The power budget, on the passes the chassis says it is modular.
+///
+/// Asked every pass, as `psud:DaemonPsud.run` asks `is_modular_chassis()`
+/// every pass, rather than decided once at start-up: a failed read latched as
+/// "fixed" would leave a modular chassis without a budget or a master PSU LED
+/// for the life of the daemon.  Once built the budget is kept, as Python keeps
+/// `psu_chassis_info`, because it carries the master LED's last colour.
+///
+/// A read that fails skips the budget for that pass.  In Python the exception
+/// escapes `run()` and supervisord restarts the daemon; skipping one pass is
+/// the same outcome without the restart.
+#[derive(Default)]
+struct Budget {
+    budget: Option<PowerBudget>,
+    read: Latch,
+}
+
+impl Budget {
+    fn current(&mut self, platform: &mut dyn PlatformApi) -> Option<&mut PowerBudget> {
+        match platform.get_chassis_info(CHASSIS_COLS) {
+            Ok(c) => {
+                pmon_common::recovered!(self.read, "Chassis read recovered");
+                if !c.is_modular_chassis {
+                    return None;
+                }
+            }
+            // `ChassisBase.is_modular_chassis` answers False; a platform that
+            // declines to answer is saying the same.
+            Err(PlatformError::NotSupported(_)) => return None,
+            Err(e) => {
+                pmon_common::fail_once_warn!(
+                    self.read,
+                    "Failed to read whether the chassis is modular - {e}"
+                );
+                return None;
+            }
+        }
+        Some(self.budget.get_or_insert_with(PowerBudget::default))
     }
 }
 
@@ -109,6 +174,16 @@ fn open_all(open: db::Opener<'_>) -> Result<Handles, String> {
     })
 }
 
+/// The one `ChassisInfo` column psud reads: whether to run a power budget.
+const CHASSIS_COLS: ChassisInfoCols = ChassisInfoCols::IS_MODULAR_CHASSIS;
+
+/// What the power budget needs off a fan drawer and a module: how much each
+/// draws, and whether it is there to draw it.  `name` is always read.
+const DRAWER_COLS: FanDrawerInfoCols =
+    FanDrawerInfoCols::PRESENCE.with(FanDrawerInfoCols::MAXIMUM_CONSUMED_POWER);
+const MODULE_COLS: ModuleInfoCols =
+    ModuleInfoCols::PRESENCE.with(ModuleInfoCols::MAXIMUM_CONSUMED_POWER);
+
 /// The `FanInfo` columns psud publishes.
 ///
 /// It writes a PSU fan's name, direction, speed and LED, and nothing else --
@@ -123,30 +198,33 @@ fn open_all(open: db::Opener<'_>) -> Result<Handles, String> {
 /// If this list and the fields the updater reads ever disagree, the missing
 /// ones arrive as None and nothing says so; `psud_asks_for_every_column_it_reads`
 /// is what keeps them together.
-/// The one `ChassisInfo` column psud reads: whether to run a power budget.
-const CHASSIS_COLS: ChassisInfoCols = ChassisInfoCols::IS_MODULAR_CHASSIS;
-
-/// What the power budget needs off a fan drawer and a module: how much each
-/// draws, and whether it is there to draw it.  `name` is always read.
-const DRAWER_COLS: FanDrawerInfoCols =
-    FanDrawerInfoCols::PRESENCE.with(FanDrawerInfoCols::MAXIMUM_CONSUMED_POWER);
-const MODULE_COLS: ModuleInfoCols =
-    ModuleInfoCols::PRESENCE.with(ModuleInfoCols::MAXIMUM_CONSUMED_POWER);
-
 const FAN_COLS: FanInfoCols = FanInfoCols::DIRECTION
     .with(FanInfoCols::SPEED_PCT)
     .with(FanInfoCols::STATUS_LED);
 
+/// What the LED read-back asks of a fan: its colour, and nothing else.
+const FAN_LED_COLS: FanInfoCols = FanInfoCols::STATUS_LED;
+
 /// One pass: publish, apply the LED colours, read them back, and -- on a
 /// modular chassis -- account for the power budget.
 ///
-/// The read-back is not redundant: `get_status_led` answers what is on the
-/// device, so calling it after the write is what makes the published colour
-/// the current one rather than the one from before the pass.
+/// The read-back is not redundant when something was written:
+/// `get_status_led` answers what is on the device, so calling it after the
+/// write is what makes the published colour the current one rather than the
+/// one from before the pass.  The fans are re-read too, not only the PSUs: on
+/// Mellanox a PSU fan has no LED of its own and answers with its PSU's, so a
+/// PSU write changes the fan's colour as well.
+///
+/// When nothing was written the pass's own read already is the device's
+/// colour, and reading again would double the per-cycle hardware traffic for
+/// nothing -- Python asks only `get_status_led` of each PSU and PSU fan per
+/// cycle (`psud:DaemonPsud._update_led_color`), not the whole row.  The fan
+/// re-read is narrowed to that one column for the same reason.
 fn one_pass(
     platform: &mut dyn PlatformApi,
     updater: &mut Updater,
-    budget: Option<&mut PowerBudget>,
+    counts: &mut Counts,
+    budget: &mut Budget,
     tables: &Tables<'_>,
     chassis_tbl: &dyn TableLike,
     read: &mut Latch,
@@ -176,10 +254,14 @@ fn one_pass(
             return;
         }
     };
+    counts.refresh(&psus, chassis_tbl);
 
-    for led in updater.refresh(&psus, &fans, tables) {
+    let leds = updater.refresh(&psus, &fans, tables);
+    let wrote_led = !leds.is_empty();
+    for led in leds {
         match platform.set_psu_led(&led.psu, led.color) {
-            Ok(()) => {}
+            // The answer is not read: `_set_psu_led` does not read it either.
+            Ok(_) => {}
             // `psud:DaemonPsud._set_psu_led`, word for word.  The error is not
             // appended: the base class raises `NotImplementedError` with no
             // message, so all it added was a dangling "not supported: ".
@@ -190,11 +272,15 @@ fn one_pass(
         }
     }
 
-    let fresh_psus = platform.get_psus().unwrap_or_default();
-    let fresh_fans = platform.get_fans(FAN_COLS).unwrap_or_default();
-    updater.update_led_color(&fresh_psus, &fresh_fans, tables);
+    if wrote_led {
+        let fresh_psus = platform.get_psus().unwrap_or_default();
+        let fresh_fans = platform.get_fans(FAN_LED_COLS).unwrap_or_default();
+        updater.update_led_color(&fresh_psus, &fresh_fans, tables);
+    } else {
+        updater.update_led_color(&psus, &fans, tables);
+    }
 
-    if let Some(budget) = budget {
+    if let Some(budget) = budget.current(platform) {
         let drawers = platform.get_fan_drawers(DRAWER_COLS).unwrap_or_default();
         let modules = platform.get_modules(MODULE_COLS).unwrap_or_default();
         budget.run(&psus, &drawers, &modules, chassis_tbl);
@@ -221,19 +307,27 @@ async fn run(
     platform: &mut dyn PlatformApi,
     tables: &Tables<'_>,
     chassis_tbl: &dyn TableLike,
-    mut budget: Option<PowerBudget>,
     cycles: &mut Cycles,
 ) -> i32 {
     let mut updater = Updater::new();
+    let mut budget = Budget::default();
     // Reported once rather than every three seconds.
     let mut read = Latch::new();
+
+    // Before the first cycle, as Python publishes them from `__init__`: the
+    // FRU MIB reads them as soon as the daemon is up.  A failed read publishes
+    // nothing and the first pass that reads the PSUs tries again.
+    let mut counts = Counts::default();
+    if let Ok(psus) = platform.get_psus() {
+        counts.refresh(&psus, chassis_tbl);
+    }
 
     let code = loop {
         match cycles.next(UPDATE_PERIOD).await {
             Tick::Exit(code) => break code,
             Tick::Cycle => {}
         }
-        one_pass(platform, &mut updater, budget.as_mut(), tables, chassis_tbl, &mut read);
+        one_pass(platform, &mut updater, &mut counts, &mut budget, tables, chassis_tbl, &mut read);
     };
 
     // These rows are this daemon's, and a stale one is worse than none: nothing
@@ -278,9 +372,9 @@ async fn main() {
 ///
 /// Separated from `main` because `main` is the part a test cannot drive -- it
 /// embeds an interpreter, opens a redis and calls `process::exit` -- and this
-/// is where the decisions are: which tables get opened, whether this chassis
-/// keeps a power budget, and which exit code a failure to open gets.  The last
-/// of those is what supervisord reads to decide whether to restart.
+/// is where the decisions are: which tables get opened, and which exit code a
+/// failure to open gets.  The second is what supervisord reads to decide
+/// whether to restart.
 async fn start(platform: &mut dyn PlatformApi, open: db::Opener<'_>, cycles: &mut Cycles) -> i32 {
     let handles = match open_all(open) {
         Ok(h) => h,
@@ -298,18 +392,7 @@ async fn start(platform: &mut dyn PlatformApi, open: db::Opener<'_>, cycles: &mu
         entity: entity_tbl.as_ref(),
     };
 
-    publish_counts(&platform.get_psus().unwrap_or_default(), chassis_tbl.as_ref());
-
-    // Only a modular chassis runs the budget; a fixed one has no line cards to
-    // account for and Python never builds the object (`is_modular_chassis()` in
-    // `psud:DaemonPsud.run`).
-    let is_modular = platform
-        .get_chassis_info(CHASSIS_COLS)
-        .map(|c| c.is_modular_chassis)
-        .unwrap_or(false);
-    let budget = is_modular.then(PowerBudget::default);
-
-    run(platform, &tables, chassis_tbl.as_ref(), budget, cycles).await
+    run(platform, &tables, chassis_tbl.as_ref(), cycles).await
 }
 
 #[cfg(test)]
@@ -353,7 +436,10 @@ mod tests {
         use platform_api::FanInfoCol;
 
         // The four `updater.rs` touches: name (always read, not declinable),
-        // direction, speed and LED.
+        // direction, speed and LED.  `kind` and `parent_name`, which it
+        // filters on, are always populated too: they are `Parent()` fields in
+        // the facade, filled from where the fan was found, and have no column
+        // bit to forget.
         for col in [FanInfoCol::Direction, FanInfoCol::SpeedPct, FanInfoCol::StatusLed] {
             assert!(FAN_COLS.contains(col), "psud reads {} but does not ask for it",
                     col.as_str());
@@ -391,6 +477,11 @@ mod tests {
     struct FakePlatform {
         psus: Vec<platform_api::PsuInfo>,
         fail: bool,
+        /// Fail this many `get_psus` calls, then answer.
+        fail_first: usize,
+        modular: bool,
+        /// Fail this many `get_chassis_info` calls, then answer.
+        chassis_fail_first: usize,
         leds: Vec<(String, LedColor)>,
         led_error: Option<PlatformError>,
         master_leds: Vec<LedColor>,
@@ -401,10 +492,17 @@ mod tests {
     impl PlatformApi for FakePlatform {
         fn get_psus(&mut self) -> Result<Vec<platform_api::PsuInfo>, PlatformError> {
             self.reads += 1;
-            if self.fail {
+            if self.fail || self.reads <= self.fail_first {
                 return Err(PlatformError::Backend("i2c timeout".into()));
             }
             Ok(self.psus.clone())
+        }
+        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<platform_api::ChassisInfo, PlatformError> {
+            if self.chassis_fail_first > 0 {
+                self.chassis_fail_first -= 1;
+                return Err(PlatformError::Backend("i2c timeout".into()));
+            }
+            Ok(platform_api::ChassisInfo { is_modular_chassis: self.modular, ..Default::default() })
         }
         fn get_fans(&mut self, cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
             self.fan_cols.push(cols);
@@ -413,13 +511,21 @@ mod tests {
             }
             Ok(Vec::new())
         }
-        fn set_psu_led(&mut self, psu: &str, color: LedColor) -> Result<(), PlatformError> {
+        fn set_psu_led(&mut self, psu: &str, color: LedColor) -> Result<Option<bool>, PlatformError> {
             self.leds.push((psu.to_string(), color));
-            self.led_error.clone().map_or(Ok(()), Err)
+            if let Some(e) = self.led_error.clone() {
+                return Err(e);
+            }
+            // As the hardware does: the next `get_status_led` answers the new
+            // colour, which is what the read-back exists to publish.
+            for p in self.psus.iter_mut().filter(|p| p.name == psu) {
+                p.status_led = Some(color.to_string());
+            }
+            Ok(Some(true))
         }
-        fn set_psu_master_led(&mut self, _psu: &str, color: LedColor) -> Result<(), PlatformError> {
+        fn set_psu_master_led(&mut self, _psu: &str, color: LedColor) -> Result<Option<bool>, PlatformError> {
             self.master_leds.push(color);
-            Ok(())
+            Ok(Some(true))
         }
     }
 
@@ -430,7 +536,7 @@ mod tests {
             voltage: Some(12.0),
             temperature: Some(40.0),
             maximum_supplied_power: Some(1000.0),
-            status_led: Some(LedColor::Green),
+            status_led: Some("green".to_string()),
             ..row(name, PowerEntityKind::Psu)
         }
     }
@@ -466,7 +572,7 @@ mod tests {
         db.chassis.set(CHASSIS_INFO_KEY, &[("psu_num", "1".to_string())]).unwrap();
 
         let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
-        let code = run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
+        let code = run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
 
         assert_eq!(code, 143);
         assert_eq!(p.leds, vec![("PSU 1".to_string(), LedColor::Green)],
@@ -483,7 +589,7 @@ mod tests {
         let db = Db::new();
         let mut p = FakePlatform { fail: true, ..Default::default() };
         let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(p.leds.is_empty());
         assert!(db.psu.is_empty());
     }
@@ -496,27 +602,191 @@ mod tests {
         let db = Db::new();
         let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(p.master_leds.is_empty(), "no budget, no master LED");
 
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], modular: true, ..Default::default() };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, Some(PowerBudget::default()), &mut cycles).await;
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert_eq!(p.master_leds.len(), 1, "the first pass always writes it");
     }
 
-    /// The colour published is the one read back after the write, which is why
-    /// the pass reads the PSUs twice.  Publishing the pre-write colour would
-    /// have `show platform psustatus` say green about a PSU already red.
+    /// A failed read at start-up publishes no count, and the first read that
+    /// succeeds publishes the right one.  Published from the failed read the
+    /// count would be `0`, and nothing would ever correct it: Python's count
+    /// comes from a list length and never fails, so it never had to.
+    ///
+    /// Counted in writes because the teardown deletes the key: a zero
+    /// published first would show up as a second write when the real count
+    /// replaced it.
     #[tokio::test]
-    async fn the_led_colour_is_read_back_after_it_is_written() {
+    async fn a_failed_read_publishes_no_count_and_a_later_one_does() {
+        tokio::time::pause();
+        let db = Db::new();
+        // The read before the first cycle and the first pass's read both fail.
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1"), healthy("PSU 2")],
+            fail_first: 2,
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        let n = db.chassis.writes().iter()
+            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num").count();
+        assert_eq!(n, 1, "written once, by the pass whose read succeeded");
+    }
+
+    /// What gets written is the count of what was read, kept so it is not
+    /// written again.
+    #[test]
+    fn the_counts_are_written_from_the_rows_and_remembered() {
+        let t = MockTable::new();
+        let mut c = Counts::default();
+        let psus = [row("PSU 1", PowerEntityKind::Psu), row("PSU 2", PowerEntityKind::Psu)];
+        c.refresh(&psus, &t);
+        assert_eq!(t.field(CHASSIS_INFO_KEY, "psu_num").as_deref(), Some("2"));
+        assert_eq!(c.0, Some((2, 0)));
+    }
+
+    /// A write that fails is not remembered as done, so the next pass retries.
+    #[test]
+    fn a_count_that_could_not_be_written_is_written_again() {
+        let t = MockTable::new();
+        t.fail_writes("redis gone");
+        let mut c = Counts::default();
+        c.refresh(&[row("PSU 1", PowerEntityKind::Psu)], &t);
+        assert_eq!(c.0, None);
+        t.allow_writes();
+        c.refresh(&[row("PSU 1", PowerEntityKind::Psu)], &t);
+        assert_eq!(t.field(CHASSIS_INFO_KEY, "psu_num").as_deref(), Some("1"));
+    }
+
+    /// A platform that does not answer is a fixed chassis, and says nothing
+    /// about it: `ChassisBase.is_modular_chassis` answers False by default.
+    #[test]
+    fn a_platform_that_does_not_say_is_not_modular_and_is_not_warned_about() {
+        struct Silent;
+        impl PlatformApi for Silent {}
+        let log = pmon_common::logging::capture();
+        assert!(Budget::default().current(&mut Silent).is_none());
+        assert!(!log.logged(log::Level::Warn, "modular"));
+    }
+
+    /// The count is written again only when it changes.
+    #[tokio::test]
+    async fn an_unchanged_count_is_not_rewritten() {
+        tokio::time::pause();
+        let db = Db::new();
+        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        let n = db.chassis.writes().iter()
+            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num").count();
+        assert_eq!(n, 1);
+    }
+
+    /// A chassis read that fails skips the budget for that pass and no more.
+    /// Latched as "not modular" it would leave a modular chassis without a
+    /// budget or a master LED for the life of the daemon.
+    #[tokio::test]
+    async fn a_failed_chassis_read_does_not_disable_the_budget_for_good() {
+        tokio::time::pause();
+        let log = pmon_common::logging::capture();
+        let db = Db::new();
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            modular: true,
+            chassis_fail_first: 1,
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        assert_eq!(p.master_leds.len(), 1, "the second pass runs the budget");
+        assert!(log.logged(log::Level::Warn, "Failed to read whether the chassis is modular"));
+    }
+
+    /// The colour published is the one read back after the write, which is why
+    /// a pass that wrote an LED reads the PSUs twice.  Publishing the
+    /// pre-write colour would have `show platform psustatus` say red about a
+    /// PSU whose LED is already green.
+    ///
+    /// Driven through `one_pass` rather than `run` because `run`'s teardown
+    /// takes the row away before it can be read.
+    #[test]
+    fn a_pass_that_wrote_an_led_publishes_the_colour_read_back_after_it() {
+        let db = Db::new();
+        // Healthy, but showing red from before the daemon started: the first
+        // pass writes green over it.
+        let mut stale = healthy("PSU 1");
+        stale.status_led = Some("red".to_string());
+        let mut p = FakePlatform { psus: vec![stale], ..Default::default() };
+        one_pass(&mut p, &mut Updater::new(), &mut Counts::default(), &mut Budget::default(),
+                 &db.tables(), &db.chassis, &mut Latch::new());
+        assert_eq!(p.leds, vec![("PSU 1".to_string(), LedColor::Green)]);
+        assert_eq!(p.reads, 2, "once for the pass, once to read the colour back");
+        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("green"));
+    }
+
+    /// The same through the loop, counted: the start-up count read, the
+    /// pass's read, and the read-back the first pass's LED writes call for.
+    #[tokio::test]
+    async fn the_first_cycle_reads_the_psus_three_times() {
         tokio::time::pause();
         let db = Db::new();
         let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
-        assert_eq!(p.reads, 2, "once for the pass, once to read the colour back");
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        assert_eq!(p.reads, 3, "once for the count, once for the pass, once to read the colour back");
+    }
+
+    /// The re-read asks a fan for its colour and nothing else.  The fans are
+    /// re-read at all because on Mellanox a PSU fan answers with its PSU's
+    /// LED; the rest of the row is what the pass already has.
+    #[tokio::test]
+    async fn the_fan_read_back_asks_only_for_the_led() {
+        tokio::time::pause();
+        let db = Db::new();
+        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        assert_eq!(p.fan_cols, vec![FAN_COLS, FanInfoCols::STATUS_LED]);
+    }
+
+    /// A pass that wrote no LED publishes the colour its own read saw, without
+    /// reading every PSU and fan a second time: nothing has changed on the
+    /// device since, and Python asks only `get_status_led` per cycle.
+    #[tokio::test]
+    async fn a_pass_that_wrote_no_led_does_not_read_the_platform_again() {
+        tokio::time::pause();
+        let db = Db::new();
+        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        // The first pass writes every LED; the second, steady, writes none.
+        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
+        assert_eq!(p.leds.len(), 1, "only the first pass wrote");
+        assert_eq!(p.reads, 4, "the count, two passes, and one read-back");
+        assert_eq!(p.fan_cols, vec![FAN_COLS, FanInfoCols::STATUS_LED, FAN_COLS]);
+        let led_writes = db.psu.writes().iter()
+            .filter(|(k, f)| k == "PSU 1" && f == "led_status").count();
+        assert_eq!(led_writes, 2, "the steady pass still publishes the colour");
+    }
+
+    /// And what the steady pass publishes is the colour that pass read, not a
+    /// remembered one: an LED something else changed shows up within a cycle.
+    #[test]
+    fn a_pass_that_wrote_no_led_publishes_the_colour_its_own_read_saw() {
+        let db = Db::new();
+        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut updater = Updater::new();
+        let (mut counts, mut budget, mut read) = (Counts::default(), Budget::default(), Latch::new());
+        one_pass(&mut p, &mut updater, &mut counts, &mut budget, &db.tables(), &db.chassis, &mut read);
+        // Someone else turns it amber; the PSU itself is unchanged.
+        p.psus[0].status_led = Some("amber".to_string());
+        let before = p.reads;
+        one_pass(&mut p, &mut updater, &mut counts, &mut budget, &db.tables(), &db.chassis, &mut read);
+        assert_eq!(p.reads - before, 1, "no read-back without a write");
+        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("amber"));
     }
 
     /// A platform without a PSU LED gets Python's line and nothing after it.
@@ -533,7 +803,7 @@ mod tests {
             ..Default::default()
         };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(log.logged(log::Level::Warn, "set_status_led() not implemented"));
         assert!(!log.contains("not implemented:"), "nothing after Python's wording");
     }
@@ -551,7 +821,7 @@ mod tests {
             ..Default::default()
         };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &db.tables(), &db.chassis, None, &mut cycles).await;
+        run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(log.logged(log::Level::Warn, "Failed to update PSU data - platform error: i2c timeout"));
         assert!(!log.contains("not implemented"));
     }
