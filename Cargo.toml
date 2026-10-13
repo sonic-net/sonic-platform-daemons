@@ -1,0 +1,31 @@
+# Rust half of sonic-platform-daemons.  The Python daemons beside it are
+# unchanged; this workspace holds their Rust counterparts, the way
+# sonic-swss-common carries crates/ beside its C++.
+[workspace]
+members  = [
+    "crates/pmon-common",
+    "crates/syseepromd",
+    "crates/thermalctld",
+]
+resolver = "2"
+
+# The crates the daemons share with the rest of SONiC, taken from git the way
+# sonic-swss and sonic-dash-ha take swss-common; Cargo.lock pins the commits.
+# sonic-buildimage builds against its own submodules instead (debian/rules).
+[workspace.dependencies]
+platform-api      = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
+platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
+swss-common       = { git = "https://github.com/sonic-net/sonic-swss-common.git", branch = "master" }
+
+# Profiles only take effect at the workspace root; cargo ignores them in a
+# member manifest.  panic = "abort" is load-bearing: a panic on any thread --
+# the leak updater's or the thermal manager's included -- takes the whole
+# process down, and supervisord restarts it.  Unwinding would end only that
+# thread, whose join() result nobody acts on, and leave the daemon up with
+# that half of it silently gone.  Nothing runs on the way out: there is no
+# panic hook, so neither tm_deinitialize() nor the STATE_DB cleanup happens,
+# and the restarted daemon is what puts both right.
+[profile.release]
+lto            = true
+codegen-units  = 1
+panic          = "abort"
