@@ -1,0 +1,40 @@
+[package]
+name = "sonic-chassisd-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
+description = "SONiC chassis and DPU management daemon in Rust"
+license = "Apache-2.0"
+
+[[bin]]
+name = "chassisd-rs"
+path = "src/main.rs"
+
+[dependencies]
+platform-api  = { workspace = true }
+# Every implementation of that trait, behind one type.  This daemon names
+# none of them: which one it opens is the `--platform-api` switch, and a new
+# implementation arriving changes nothing here.
+platform-provider = { workspace = true }
+pmon-common   = { path = "../pmon-common" }
+# The CONFIG_DB watcher subscribes rather than polls, so `config chassis
+# modules shutdown` takes effect now and not on the next ten-second cycle.
+swss-common   = { workspace = true }
+# `spawn_blocking` for that watcher, which blocks in select().
+tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
+# Held below 4.6 for the same reason thermalctld holds it: from 4.6 the clap
+# family is edition 2024, which the cargo-auditable the slave image wraps
+# rustc in cannot parse out of `cargo metadata`.
+clap  = { version = ">=4.0, <4.6", features = ["derive"] }
+log   = "0.4"
+# platform.json carries the DPU recovery thresholds.
+serde_json = "1"
+chrono = "0.4"
+
+[dev-dependencies]
+# The reboot-cause history is real files under /host; the tests point the same
+# code at a directory they own.
+tempfile = "3"
+# `Cycles::Fixed` is the seam that lets a test drive the loop.
+pmon-common = { path = "../pmon-common", features = ["testing"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-util"] }
