@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! STATE_DB tables written by thermalctld.
 //!
 //! The tables sit behind [`TableLike`] rather than being `swss_common::Table`
@@ -13,6 +7,7 @@
 //! expressed as a trait.
 
 pub use pmon_common::db::{open as open_named, TableLike};
+use pmon_common::db::STATE_DB;
 
 pub const TEMPERATURE_INFO: &str = "TEMPERATURE_INFO";
 pub const FAN_INFO: &str = "FAN_INFO";
@@ -22,7 +17,6 @@ pub const PHYSICAL_ENTITY_INFO: &str = "PHYSICAL_ENTITY_INFO";
 /// Key under which chassis-level devices are parented.
 pub const CHASSIS_INFO_KEY: &str = "chassis 1";
 
-const STATE_DB: &str = "STATE_DB";
 const CHASSIS_STATE_DB: &str = "CHASSIS_STATE_DB";
 const LIQUID_COOLING_INFO: &str = "LIQUID_COOLING_INFO";
 const SYSTEM_LEAK_STATUS: &str = "SYSTEM_LEAK_STATUS";
@@ -120,11 +114,15 @@ impl StateDb {
     /// from live data to `show platform temperature`, to the entity MIB, and to
     /// system-health.
     ///
-    /// Every key in each table is removed, not just the ones this run
-    /// published -- that is what the Python destructors do, and a row written
-    /// by an earlier run of the same daemon is exactly as stale.
-    /// `PHYSICAL_ENTITY_INFO` is keyed the same way, so its matching rows go
-    /// with them.
+    /// Every key in `FAN_INFO`, `FAN_DRAWER_INFO` and `TEMPERATURE_INFO` is
+    /// removed, not just the ones this run published -- that is what the
+    /// Python destructors do, and a row written by an earlier run of the same
+    /// daemon is exactly as stale.  `PHYSICAL_ENTITY_INFO` and, where there is
+    /// one, the slot-suffixed chassis table are not enumerated: each is swept
+    /// only by the keys found in those three, so a row there with no local
+    /// counterpart stays.  That too is Python, whose destructors walk the
+    /// local tables' keys and delete the matching rows elsewhere.  The BMC
+    /// mirror is not here at all; it is `BmcMirror::clear`.
     ///
     /// Best-effort throughout: this runs while the switch is shutting down and
     /// a database that has already gone away must not stop the daemon exiting.

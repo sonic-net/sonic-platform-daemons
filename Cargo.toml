@@ -17,8 +17,13 @@ platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common.
 swss-common       = { git = "https://github.com/sonic-net/sonic-swss-common.git", branch = "master" }
 
 # Profiles only take effect at the workspace root; cargo ignores them in a
-# member manifest.  panic = "abort" is load-bearing: the panic hook that
-# suspends hw-management-tc exists because unwinding is skipped.
+# member manifest.  panic = "abort" is load-bearing: a panic on any thread --
+# the leak updater's or the thermal manager's included -- takes the whole
+# process down, and supervisord restarts it.  Unwinding would end only that
+# thread, whose join() result nobody acts on, and leave the daemon up with
+# that half of it silently gone.  Nothing runs on the way out: there is no
+# panic hook, so neither tm_deinitialize() nor the STATE_DB cleanup happens,
+# and the restarted daemon is what puts both right.
 [profile.release]
 lto            = true
 codegen-units  = 1

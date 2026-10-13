@@ -1,10 +1,9 @@
 sonic (1.0.0) stable; urgency=medium
 
-  * Initial release of the Rust pmon daemons: thermalctld, psud, sensormond,
-    syseepromd, pcied, stormond and chassisd
+  * Initial release of the Rust pmon daemons
   * Each reaches the platform through the generated facade in
     sonic-platform-common rather than through a vendor-specific crate
-  * Seven binaries from one source package, each switchable back to its
-    Python counterpart from pmon_daemon_control.json
+  * One binary package per daemon, from one workspace build, each switchable
+    back to its Python counterpart from pmon_daemon_control.json
 
  -- SONiC Team <sonic-dev@lists.sonicfoundation.dev>  Wed, 17 Sep 2026 00:00:00 -0800

@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of FanStatus / FanUpdater.
 //!
 //! Reads fan and drawer state directly from the `PlatformApi` trait object
@@ -153,7 +147,7 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
         (
             "direction",
             if fan.presence {
-                fmt::direction(fan.direction)
+                fmt::opt_str(&fan.direction)
             } else {
                 na()
             },
@@ -507,7 +501,7 @@ impl FanUpdater {
             if stop() {
                 return Ok(());
             }
-            let fvs = [("led_status", fmt::led(&fan.status_led))];
+            let fvs = [("led_status", fmt::opt_str(&fan.status_led))];
             db.fan.set(&fan.name, &fvs).map_err(|e| {
                 format!("Failed to get status LED state for fan {} - {e}", fan.name)
             })?;
@@ -522,7 +516,7 @@ impl FanUpdater {
             if drawer.name == fmt::NOT_AVAILABLE {
                 continue;
             }
-            let fvs = [("led_status", fmt::led(&drawer.status_led))];
+            let fvs = [("led_status", fmt::opt_str(&drawer.status_led))];
             db.fan_drawer.set(&drawer.name, &fvs).map_err(|e| {
                 format!("Failed to get status LED state for fan drawer {} - {e}", drawer.name)
             })?;
@@ -542,7 +536,7 @@ fn log_status_change(normal: bool, normal_log: &str, abnormal_log: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_api::{ChassisInfoCols, FanDirection, FanDrawerInfoCols, FanInfoCols, PlatformError};
+    use platform_api::{ChassisInfoCols, FanDrawerInfoCols, FanInfoCols, PlatformError};
 
 
     /// A PDB fan belongs to psud.  If this daemon published it too, two writers
@@ -614,7 +608,7 @@ mod tests {
             position_in_parent: Some(1),
             presence: true,
             status: true,
-            direction: Some(FanDirection::Intake),
+            direction: Some("intake".to_string()),
             speed_pct: Some(50),
             target_speed_pct: Some(50),
             is_under_speed: Some(false),
@@ -719,7 +713,7 @@ mod tests {
     fn booleans_are_written_the_way_python_spells_them() {
         let mut f = fan("fan1");
         f.is_replaceable = false;
-        f.direction = Some(FanDirection::Exhaust);
+        f.direction = Some("exhaust".to_string());
         let row = fan_row(&f, &FanStatus::default(), "d".to_string());
         assert_eq!(val(&row, "is_replaceable"), "False");
         assert_eq!(val(&row, "direction"), "exhaust", "lower case, unlike the booleans");
@@ -860,12 +854,12 @@ mod tests {
             }
             Ok(self.fans.clone())
         }
-        fn set_fan_led(&mut self, fan: &str, color: platform_api::LedColor) -> Result<(), PlatformError> {
+        fn set_fan_led(&mut self, fan: &str, color: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
             self.led_calls.borrow_mut().push((fan.to_string(), color.to_string()));
             if self.led_fails {
                 return Err(PlatformError::NotSupported("no LED on this drawer".into()));
             }
-            Ok(())
+            Ok(Some(true))
         }
     }
 
@@ -918,15 +912,52 @@ mod tests {
         let mut u = FanUpdater::new();
 
         let mut d = drawer("drawer1");
-        d.status_led = Some(platform_api::LedColor::Green);
+        d.status_led = Some("green".to_string());
         let mut f = fan("fan1");
-        f.status_led = Some(platform_api::LedColor::Green);
+        f.status_led = Some("green".to_string());
 
         let mut p = platform(vec![d], vec![f]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("green"));
         assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green"));
+    }
+
+    /// A colour outside the four `LedColor` names is published as the
+    /// platform spelled it, as Python's `str(try_get(...))` does: mlnx's LEDs
+    /// read "orange", and "green_blink" while blinking.
+    #[test]
+    fn a_vendor_led_colour_is_published_as_the_platform_spelled_it() {
+        let m = MockDb::new(false);
+        let mut u = FanUpdater::new();
+
+        let mut d = drawer("drawer1");
+        d.status_led = Some("green_blink".to_string());
+        let mut f = fan("fan1");
+        f.status_led = Some("orange".to_string());
+
+        let mut p = platform(vec![d], vec![f]);
+        u.update(&mut p, &m.db, &never_stop).unwrap();
+
+        assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("orange"));
+        assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green_blink"));
+    }
+
+    /// A fan direction is published as the platform spelled it, as Python's
+    /// `str(try_get(...))` does: PDDF's valmaps answer "INTAKE" and
+    /// "UNKNOWN", where the base class spells "intake".
+    #[test]
+    fn a_vendor_fan_direction_is_published_as_the_platform_spelled_it() {
+        for answer in ["INTAKE", "UNKNOWN", "N/A"] {
+            let mut f = fan("fan1");
+            f.direction = Some(answer.to_string());
+            let row = fan_row(&f, &FanStatus::default(), "drawer1".into());
+            assert_eq!(val(&row, "direction"), answer);
+        }
+        let mut f = fan("fan1");
+        f.direction = None;
+        let row = fan_row(&f, &FanStatus::default(), "drawer1".into());
+        assert_eq!(val(&row, "direction"), "N/A", "no answer is try_get's N/A");
     }
 
     /// A platform with no software-readable LED reports nothing, which is
@@ -980,7 +1011,7 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = FanUpdater::new();
         let mut virtual_drawer = drawer("N/A");
-        virtual_drawer.status_led = Some(platform_api::LedColor::Green);
+        virtual_drawer.status_led = Some("green".to_string());
         let mut p = platform(vec![virtual_drawer], vec![fan("fan1")]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
@@ -1235,7 +1266,7 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = FanUpdater::new();
         let mut f = fan("fan1");
-        f.status_led = Some(platform_api::LedColor::Green);
+        f.status_led = Some("green".to_string());
         let mut p = platform(vec![drawer("drawer1")], vec![f]);
 
         u.update(&mut p, &m.db, &|| true).unwrap();
