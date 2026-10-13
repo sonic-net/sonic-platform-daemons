@@ -1,15 +1,9 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! What ends a daemon's cycle: the next tick, or a signal.
 //!
 //! Every daemon here is the same shape -- wait, do a pass, repeat until told to
 //! stop -- and each of them spelled the same `tokio::select!` over a sleep and
-//! three signal handlers.  Seven copies of it is seven chances to get the exit
-//! code wrong, and supervisord reads the exit code.
+//! three signal handlers.  A copy per daemon is a chance per daemon to get the
+//! exit code wrong, and supervisord reads the exit code.
 //!
 //! It is also the seam that makes a daemon's loop testable at all: with the
 //! ticks coming from here, a test can hand a loop three of them and an exit and
@@ -91,9 +85,19 @@ impl Cycles {
 impl Signals {
     async fn next(&mut self, period: Duration) -> Tick {
         use tokio::signal::unix::SignalKind;
+        // One deadline for the whole wait, made before the loop rather than in
+        // it.  A sleep built inside the `select!` starts the full period again
+        // every time a SIGHUP is absorbed, so a log rotation landing late in
+        // the wait stretched that cycle to nearly twice its length -- and a
+        // SIGHUP every few seconds would have stopped the daemon polling at
+        // all.  Python waits on `threading.Event.wait(timeout)`, which a
+        // signal handler that returns does not restart: the wait resumes with
+        // whatever time was left.
+        let deadline = tokio::time::sleep(period);
+        tokio::pin!(deadline);
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(period) => return Tick::Cycle,
+                _ = &mut deadline => return Tick::Cycle,
                 _ = self.sigterm.recv() => {
                     log::info!("Caught signal 'SIGTERM' - exiting...");
                     return Tick::Exit(exit_code_for(SignalKind::terminate()));
@@ -102,8 +106,9 @@ impl Signals {
                     log::info!("Caught signal 'SIGINT' - exiting...");
                     return Tick::Exit(exit_code_for(SignalKind::interrupt()));
                 }
-                // Absorbed, and the wait restarts: returning Cycle here would
-                // let a log rotation shorten the poll period.
+                // Absorbed, and the same wait carries on: returning Cycle here
+                // would let a log rotation shorten the poll period, and
+                // starting a fresh one would let it lengthen it.
                 _ = self.sighup.recv() => {
                     log::info!("Caught signal 'SIGHUP' - ignoring...");
                 }
@@ -144,5 +149,65 @@ mod tests {
         // lands on or just past the period rather than exactly on it.
         assert!(start.elapsed() >= Duration::from_secs(60));
         assert!(start.elapsed() < Duration::from_secs(61));
+    }
+
+    /// Send `sig` to this test process.
+    ///
+    /// Through the shell's `kill` rather than libc, which this crate does not
+    /// depend on.  The handler is tokio's and is installed before any caller
+    /// sends, so the signal's default action -- ending the test binary -- never
+    /// applies.
+    fn raise(sig: &str) {
+        let status = std::process::Command::new("sh")
+            .args(["-c", &format!("kill -{sig} {}", std::process::id())])
+            .status()
+            .expect("sh runs");
+        assert!(status.success(), "kill -{sig} failed");
+        // The handler runs asynchronously to `kill` returning; give it the
+        // moment it needs to note the signal before the runtime next parks.
+        // Real time, and short: the clock the assertions read is paused.
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    /// An absorbed SIGHUP does not start the period again.
+    ///
+    /// The wait is 60 s; the SIGHUP lands 40 s in.  Python's
+    /// `threading.Event.wait(timeout)` resumes with the 20 s that were left,
+    /// and so must this -- a fresh sleep per loop pass would make this cycle
+    /// 100 s long, and a SIGHUP every few seconds would mean no cycle at all.
+    #[tokio::test]
+    async fn a_sighup_mid_wait_does_not_restart_the_period() {
+        tokio::time::pause();
+        let log = crate::logging::capture();
+        let mut c = Cycles::signals().expect("handlers install");
+        let start = tokio::time::Instant::now();
+
+        let wait = c.next(Duration::from_secs(60));
+        tokio::pin!(wait);
+        tokio::select! {
+            t = &mut wait => panic!("the wait ended early, with {t:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(40)) => {}
+        }
+        raise("HUP");
+        // A second, nearer timer, so the paused clock's next jump stops short
+        // of the 60 s deadline: the SIGHUP is then taken while the wait is
+        // still in progress, rather than in the same poll as the deadline,
+        // where `select!`'s random branch order could pick either.
+        tokio::select! {
+            t = &mut wait => panic!("the wait ended early, with {t:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+        assert!(
+            log.contains("Caught signal 'SIGHUP' - ignoring..."),
+            "the SIGHUP has to have been seen for this test to say anything"
+        );
+
+        assert_eq!(wait.await, Tick::Cycle, "a SIGHUP is not a reason to stop");
+        assert!(start.elapsed() >= Duration::from_secs(60));
+        assert!(
+            start.elapsed() < Duration::from_secs(61),
+            "the period ran from the start of the wait, not from the SIGHUP: {:?}",
+            start.elapsed()
+        );
     }
 }

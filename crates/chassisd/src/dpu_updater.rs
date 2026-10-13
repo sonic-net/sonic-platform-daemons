@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The SmartSwitch half: the NPU's view of its DPUs.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater`.  A DPU is a module like a line
@@ -434,12 +428,28 @@ impl DpuUpdater {
     /// two exceptions are recognised by their table name -- told only the
     /// unqualified keys a `Table` hands back, this would delete exactly the two
     /// rows it must keep.
+    ///
+    /// A scan that fails skips that DPU's sweep for this pass: logged, nothing
+    /// deleted, and the next pass tries again.  Python's
+    /// `chassisd:SmartSwitchModuleUpdater.module_down_chassis_db_cleanup` has
+    /// no `try` around its `keys()`, so there a failed scan is an uncaught
+    /// exception and a restart.  Skipping is the departure, and the safe
+    /// one: the sweep is housekeeping, so losing one pass of it costs nothing,
+    /// while a failed scan that read as an empty key space would hide that
+    /// the database had gone away.
     pub fn cleanup_shut_down(&self, modules: &[ModuleInfo], tables: &Tables<'_>, rows: &dyn Keyspace) {
         for m in modules {
             if self.admin_up(&m.name, tables) {
                 continue;
             }
-            for key in rows.keys(&format!("*{}*", m.name)) {
+            let keys = match rows.keys(&format!("*{}*", m.name)) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    log::warn!("Failed to scan CHASSIS_STATE_DB for {}, skipping its cleanup: {e}", m.name);
+                    continue;
+                }
+            };
+            for key in keys {
                 if !key.contains(DPU_STATE_TABLE) && !key.contains("REBOOT_CAUSE") {
                     let _ = rows.del(&key);
                 }
@@ -751,6 +761,26 @@ mod tests {
             "REBOOT_CAUSE|DPU0|x".to_string(),
             "DPU_STATE|DPU1".to_string(),
         ]);
+    }
+
+    /// A scan that fails costs that pass's sweep and nothing else: it is
+    /// logged, and nothing is deleted on the strength of it.
+    #[test]
+    fn a_failed_scan_skips_the_sweep_and_deletes_nothing() {
+        let log = pmon_common::logging::capture();
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        let rows = pmon_common::db::MockKeyspace::new(&[
+            "DPU_STATE|DPU0", "TRANSCEIVER_INFO|DPU0|Ethernet0",
+        ]);
+        rows.fail_reads("redis is gone");
+        let m = [dpu("DPU0", ModuleStatus::Offline)];
+        updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
+        assert_eq!(rows.remaining().len(), 2, "nothing was deleted");
+        assert!(
+            log.logged(log::Level::Warn, "Failed to scan CHASSIS_STATE_DB for DPU0"),
+            "and the skipped sweep is said"
+        );
     }
 
     /// A DPU an operator has started is left entirely alone: the sweep is

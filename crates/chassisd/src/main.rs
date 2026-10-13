@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! chassisd, in Rust.  Ports `sonic-chassisd/scripts/chassisd`.
 //!
 //! Two machines share this daemon and very little else.  On a **modular
@@ -32,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use platform_api::{ChassisInfoCols, ModuleInfo, ModuleInfoCols, ModuleStatus, PlatformApi};
+use platform_api::{ChassisInfoCols, ModuleInfo, ModuleInfoCols, ModuleStatus, PlatformApi, PlatformError};
 use clap::Parser;
 use platform_provider::PlatformImpl;
 use pmon_common::cycles::{Cycles, Tick};
@@ -373,8 +367,9 @@ async fn run_modular<P: PlatformApi>(
 
     // The midplane has to be up before anything is asked about reachability;
     // failing it is reported and not fatal, because the module table is still
-    // worth publishing on a chassis whose midplane did not come up.
-    let midplane_initialized = platform.init_midplane_switch().is_ok();
+    // worth publishing on a chassis whose midplane did not come up.  A False
+    // is a failure too: `try_get(init_midplane_switch, default=False)`.
+    let midplane_initialized = answered(platform.init_midplane_switch(), false).unwrap_or(false);
     if !midplane_initialized {
         log::error!("Chassisd midplane intialization failed");
     }
@@ -912,27 +907,48 @@ const TRANSITION_TYPE_RECOVERY: &str = "recovery";
 /// the last write happened to set.
 ///
 /// False when the lock could not be taken, which means another operation owns
-/// this DPU and *nothing* was done to it.
+/// this DPU and *nothing* was done to it.  The base class says so with a
+/// False, not an error (`module_base.py:648`): another operation took the
+/// lock and has not timed out.
 fn power_cycle_sequence(platform: &mut dyn PlatformApi, module: &str) -> bool {
-    if platform.set_module_state_transition(module, TRANSITION_TYPE_RECOVERY).is_err() {
+    let lock = platform.set_module_state_transition(module, TRANSITION_TYPE_RECOVERY);
+    if !answered(lock, false).unwrap_or(false) {
         return false;
     }
-    if let Err(e) = platform.module_pre_shutdown(module) {
-        log::warn!("{module}: module_pre_shutdown() failed: {e}");
-    }
+    log_a_failed_hook(module, "module_pre_shutdown", platform.module_pre_shutdown(module));
     if let Err(e) = platform.set_module_admin_state(module, false) {
         log::error!("{module}: Power-cycle failed: {e}");
     }
     if let Err(e) = platform.set_module_admin_state(module, true) {
         log::error!("{module}: Power-cycle failed: {e}");
     }
-    if let Err(e) = platform.module_post_startup(module) {
-        log::warn!("{module}: module_post_startup() failed: {e}");
-    }
+    log_a_failed_hook(module, "module_post_startup", platform.module_post_startup(module));
     // Released whatever happened above: a lock left held blocks every later
     // operation on this DPU, including the operator's.
     let _ = platform.clear_module_state_transition(module);
     true
+}
+
+/// A bool answer, read the way Python's `try_get(f, default=...)` reads it:
+/// a method the platform does not implement, or one that answered nothing,
+/// gives the default.  Any other error is not an answer at all.
+fn answered(answer: Result<Option<bool>, PlatformError>, default: bool) -> Result<bool, PlatformError> {
+    match answer {
+        Ok(Some(b)) => Ok(b),
+        Ok(None) | Err(PlatformError::NotSupported(_)) => Ok(default),
+        Err(e) => Err(e),
+    }
+}
+
+/// `module_pre_shutdown` / `module_post_startup`, read as chassisd reads them
+/// (`try_get(hook, default=True)`): a False is a hook that failed, and so is
+/// an error; a hook the platform does not implement had nothing to do.
+fn log_a_failed_hook(module: &str, hook: &str, answer: Result<Option<bool>, PlatformError>) {
+    match answered(answer, true) {
+        Ok(true) => {}
+        Ok(false) => log::warn!("{module}: {hook}() failed"),
+        Err(e) => log::warn!("{module}: {hook}() failed: {e}"),
+    }
 }
 
 impl<P: PlatformApi> dpu_recovery::PowerCycler for PlatformCycler<'_, P> {
@@ -1094,7 +1110,7 @@ async fn run_smartswitch<P: PlatformApi>(
         device_metadata: metadata_tbl.as_deref(),
     };
 
-    let midplane_initialized = platform.init_midplane_switch().is_ok();
+    let midplane_initialized = answered(platform.init_midplane_switch(), false).unwrap_or(false);
     if !midplane_initialized {
         log::error!("Chassisd midplane intialization failed");
     }
@@ -1572,42 +1588,43 @@ mod tests {
     #[derive(Default)]
     struct RecordingPlatform {
         calls: Vec<String>,
-        refuse_lock: bool,
+        /// What the transition lock answers when it is held; taken if None.
+        refuse_lock: Option<Result<Option<bool>, PlatformError>>,
     }
 
     impl PlatformApi for RecordingPlatform {
-        fn set_module_state_transition(&mut self, m: &str, t: &str) -> Result<(), PlatformError> {
-            if self.refuse_lock {
-                return Err(PlatformError::Backend("busy".into()));
+        fn set_module_state_transition(&mut self, m: &str, t: &str) -> Result<Option<bool>, PlatformError> {
+            if let Some(refusal) = self.refuse_lock.clone() {
+                return refusal;
             }
             self.calls.push(format!("lock({m},{t})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn clear_module_state_transition(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn clear_module_state_transition(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("unlock({m})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn module_pre_shutdown(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn module_pre_shutdown(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("pre_shutdown({m})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn module_post_startup(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn module_post_startup(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("post_startup({m})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn set_module_admin_state(&mut self, m: &str, up: bool) -> Result<(), PlatformError> {
+        fn set_module_admin_state(&mut self, m: &str, up: bool) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("admin({m},{up})"));
-            Ok(())
+            Ok(Some(true))
         }
         fn set_module_admin_state_gracefully(&mut self, m: &str, up: bool)
-            -> Result<(), PlatformError>
+            -> Result<Option<bool>, PlatformError>
         {
             self.calls.push(format!("graceful({m},{up})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn clear_module_gnoi_halt(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn clear_module_gnoi_halt(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("clear_halt({m})"));
-            Ok(())
+            Ok(Some(true))
         }
     }
 
@@ -1630,11 +1647,23 @@ mod tests {
     /// Another operation owns the DPU.  Nothing is done to it -- not even the
     /// pre-shutdown, which would tell a DPU somebody else is shutting down
     /// that it is about to be power cycled.
+    ///
+    /// The base class says the lock is held with a False, not an error
+    /// (`module_base.py:648`), and that is the answer this used to read as
+    /// taken.  A lock the platform does not implement, or one that answers
+    /// nothing, is not taken either: `try_get(..., default=False)`.
     #[test]
     fn a_busy_lock_means_the_dpu_is_not_touched_at_all() {
-        let mut p = RecordingPlatform { refuse_lock: true, ..Default::default() };
-        assert!(!power_cycle_sequence(&mut p, "DPU0"));
-        assert!(p.calls.is_empty());
+        for refusal in [
+            Ok(Some(false)),
+            Ok(None),
+            Err(PlatformError::NotSupported("set_module_state_transition".into())),
+            Err(PlatformError::Backend("busy".into())),
+        ] {
+            let mut p = RecordingPlatform { refuse_lock: Some(refusal.clone()), ..Default::default() };
+            assert!(!power_cycle_sequence(&mut p, "DPU0"), "{refusal:?}");
+            assert!(p.calls.is_empty(), "{refusal:?}");
+        }
     }
 
     /// Record what the watcher hands off instead of starting a thread, and
@@ -2186,12 +2215,11 @@ mod tests {
         fn get_modules(&mut self, _cols: ModuleInfoCols) -> Result<Vec<ModuleInfo>, PlatformError> {
             Ok(self.modules.clone())
         }
-        fn init_midplane_switch(&mut self) -> Result<(), PlatformError> {
-            if self.midplane_ok {
-                Ok(())
-            } else {
-                Err(PlatformError::Backend("midplane".into()))
-            }
+        /// A midplane that did not come up answers False, the way the base
+        /// class documents it -- not an error, which is what the port used
+        /// to wait for, so a False read as initialised.
+        fn init_midplane_switch(&mut self) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(self.midplane_ok))
         }
     }
 
@@ -2419,32 +2447,34 @@ mod tests {
     #[derive(Default)]
     struct Refusing {
         refuse: &'static str,
+        /// How the refused call answers; an error if None.
+        refusal: Option<Result<Option<bool>, PlatformError>>,
         calls: Vec<String>,
     }
 
     impl PlatformApi for Refusing {
-        fn set_module_state_transition(&mut self, m: &str, _t: &str) -> Result<(), PlatformError> {
+        fn set_module_state_transition(&mut self, m: &str, _t: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("lock({m})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn clear_module_state_transition(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn clear_module_state_transition(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("unlock({m})"));
-            Ok(())
+            Ok(Some(true))
         }
-        fn module_pre_shutdown(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn module_pre_shutdown(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("pre({m})"));
             self.answer("module_pre_shutdown")
         }
-        fn module_post_startup(&mut self, m: &str) -> Result<(), PlatformError> {
+        fn module_post_startup(&mut self, m: &str) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("post({m})"));
             self.answer("module_post_startup")
         }
-        fn set_module_admin_state(&mut self, m: &str, up: bool) -> Result<(), PlatformError> {
+        fn set_module_admin_state(&mut self, m: &str, up: bool) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("admin({m},{up})"));
             self.answer("set_module_admin_state")
         }
         fn set_module_admin_state_gracefully(&mut self, m: &str, up: bool)
-            -> Result<(), PlatformError>
+            -> Result<Option<bool>, PlatformError>
         {
             self.calls.push(format!("graceful({m},{up})"));
             self.answer("set_module_admin_state_gracefully")
@@ -2452,11 +2482,37 @@ mod tests {
     }
 
     impl Refusing {
-        fn answer(&self, what: &str) -> Result<(), PlatformError> {
+        fn answer(&self, what: &str) -> Result<Option<bool>, PlatformError> {
             if self.refuse == what {
-                return Err(PlatformError::Backend("refused".into()));
+                return self.refusal.clone().unwrap_or(Err(PlatformError::Backend("refused".into())));
             }
-            Ok(())
+            Ok(Some(true))
+        }
+    }
+
+    /// A hook that answers False has failed, as Python's
+    /// `if not try_get(hook, default=True)` reads it, and is logged; one the
+    /// platform does not implement, or that answers nothing, had nothing to
+    /// do and is not.  Either way the cycle goes on and releases the lock.
+    #[test]
+    fn a_hook_that_answers_false_is_logged_and_an_unimplemented_one_is_not() {
+        for hook in ["module_pre_shutdown", "module_post_startup"] {
+            for (refusal, logged) in [
+                (Ok(Some(false)), true),
+                (Err(PlatformError::Backend("refused".into())), true),
+                (Ok(None), false),
+                (Err(PlatformError::NotSupported(hook.into())), false),
+            ] {
+                let log = pmon_common::logging::capture();
+                let mut p = Refusing { refuse: hook, refusal: Some(refusal.clone()), ..Default::default() };
+                assert!(power_cycle_sequence(&mut p, "DPU0"));
+                assert_eq!(
+                    log.logged(log::Level::Warn, &format!("DPU0: {hook}() failed")),
+                    logged,
+                    "{hook} answering {refusal:?}"
+                );
+                assert_eq!(p.calls.last().map(String::as_str), Some("unlock(DPU0)"));
+            }
         }
     }
 

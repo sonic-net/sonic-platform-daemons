@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The copy of this daemon that runs *on* a DPU.
 //!
 //! Ports `chassisd:DpuStateUpdater` and `chassisd:DpuChassisdDaemon`.  A DPU

@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The DPU recovery state machine.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater._process_single_dpu_recovery` and

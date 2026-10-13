@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Removing a long-gone line card's rows from the chassis app DB.
 //!
 //! Ports `chassisd:ModuleUpdater._cleanup_chassis_app_db` and

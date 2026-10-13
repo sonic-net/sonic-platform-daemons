@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Syslog with a NOTICE level.
 //!
 //! Python's `sonic_py_common.logger` has eight severities and uses
@@ -70,9 +64,11 @@ impl log::Log for SyslogLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        // A poisoned lock means another thread panicked mid-write; the panic
-        // hook still has to suspend hw-management-tc, so take the lock anyway
-        // rather than lose the messages that explain what happened.
+        // A poisoned lock means another thread panicked mid-write.  A release
+        // build aborts on panic (the workspace `[profile.release]`), so only a
+        // build that unwinds -- a test or debug one -- gets here, and there
+        // the lines that follow are the ones that explain what happened: take
+        // the lock anyway rather than lose them.
         let mut w = match self.inner.lock() {
             Ok(w) => w,
             Err(poisoned) => poisoned.into_inner(),

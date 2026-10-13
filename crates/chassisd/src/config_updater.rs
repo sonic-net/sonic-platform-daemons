@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! `config chassis modules shutdown` / `startup`, applied to the hardware.
 //!
 //! Ports `chassisd:ModuleConfigUpdater` and

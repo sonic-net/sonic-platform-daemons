@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of TemperatureStatus / TemperatureUpdater.
 //!
 //! Reads thermal data directly from `PlatformApi` (Mellanox: sysfs) instead
@@ -128,6 +122,14 @@ impl TemperatureUpdater {
             known: HashSet::new(),
             gate: PollingGate::new(),
             mirror,
+        }
+    }
+
+    /// Take this host's rows back off the BMC, on the way out.  Nothing to do
+    /// off the switch host, where there is no mirror.  See `BmcMirror::clear`.
+    pub fn clear_mirror(&mut self) {
+        if let Some(m) = self.mirror.as_mut() {
+            m.clear();
         }
     }
 
@@ -555,8 +557,8 @@ mod tests {
             -> Result<Vec<platform_api::FanInfo>, platform_api::PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), platform_api::PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<Option<bool>, platform_api::PlatformError> {
+            Ok(Some(true))
         }
     }
 

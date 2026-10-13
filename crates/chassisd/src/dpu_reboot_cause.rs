@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Why each DPU last went down, kept on disk and republished.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater.dpu_boot_id_update`,
