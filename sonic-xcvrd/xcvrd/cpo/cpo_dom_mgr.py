@@ -122,7 +122,9 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing ELSFP DOM data for port {}, ignored".format(repr(e), logical_port_name))
 
-            # TODO: Add support for collecting and publishing VDM data.
+            # The OE and the ELSFP share one VDM block (joint mode), banked like the
+            # OE lanes, so it is read through this port's bank-bound OE API.
+            self.publish_vdm_data(physical_port, logical_port_name, asic_index)
 
         self.pass_processed_pports = frozenset()
 
@@ -309,6 +311,12 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                                     oe_bank_flags[bank_key]['status_flags'])
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing OE flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
+
+            if self.vdm_utils.is_transceiver_vdm_supported(physical_port):
+                try:
+                    self.vdm_db_utils.post_port_vdm_flags_to_db(logical_port_name)
+                except (KeyError, TypeError) as e:
+                    self.log_warning("Got exception {} while processing VDM flags of OE {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
 
     def _publish_elsfp_flags_for_device(self, device_id):
         """Read the ELSFP's latched flags and publish them for every port it drives.
