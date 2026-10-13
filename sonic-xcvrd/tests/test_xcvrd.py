@@ -3510,6 +3510,140 @@ class TestXcvrdScript(object):
         mock_xcvr_api.set_datapath_deinit.assert_called_once_with(0xff)
         mock_xcvr_api.tx_disable_channel.assert_called_once_with(0xff, True)
 
+    def _build_dp_init_task(self, mock_get_status_sw_tbl, mock_xcvr_api):
+        """Helper: build a CmisManagerTask with Ethernet0 seeded into CMIS_STATE_DP_INIT."""
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: mock_sfp}, stop_event)
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_status_sw_tbl.return_value = mock_get_status_sw_tbl
+
+        port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                            {'speed': '400000', 'lanes': '1,2,3,4,5,6,7,8'})
+        task.on_port_update_event(port_change_event)
+
+        task.update_port_transceiver_status_table_sw_cmis_state('Ethernet0', CMIS_STATE_DP_INIT)
+        task.port_dict['Ethernet0']['host_tx_ready'] = 'true'
+        task.port_dict['Ethernet0']['admin_status'] = 'up'
+        task.port_dict['Ethernet0']['appl'] = 1
+        task.port_dict['Ethernet0']['host_lanes_mask'] = 0xff
+        task.port_dict['Ethernet0']['media_lanes_mask'] = 0xff
+        task.port_dict['Ethernet0']['tx_power'] = 0
+        task.port_dict['Ethernet0']['laser_freq'] = 0
+        task._gearbox_lanes_dict = {}
+        return task
+
+    @staticmethod
+    def _dp_init_ok_api():
+        """Helper: mock XcvrApi with everything DP_INIT needs to advance to DP_TXON."""
+        api = MagicMock()
+        api.get_presence = MagicMock(return_value=True)
+        api.is_flat_memory = MagicMock(return_value=False)
+        api.is_coherent_module = MagicMock(return_value=True)
+        api.get_module_type_abbreviation = MagicMock(return_value='QSFP-DD')
+        api.get_module_state = MagicMock(return_value='ModuleReady')
+        api.get_tx_config_power = MagicMock(return_value=0)
+        api.get_laser_config_freq = MagicMock(return_value=0)
+        api.set_datapath_init = MagicMock(return_value=True)
+        api.get_datapath_init_duration = MagicMock(return_value=60000.0)
+        api.get_config_datapath_hostlane_status = MagicMock(return_value={
+            'ConfigStatusLane{}'.format(i + 1): 'ConfigSuccess' for i in range(8)
+        })
+        return api
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    def test_CmisManagerTask_dp_init_not_pending_but_config_success_proceeds(self, mock_get_status_sw_tbl):
+        """Coherent 400ZR modules may not re-assert DPInitPending when ApSel is unchanged;
+        DP_INIT must still advance to DP_TXON when ConfigStatus is ConfigSuccess on all lanes."""
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+        mock_xcvr_api = self._dp_init_ok_api()
+        mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
+            'DPInitPending{}'.format(i + 1): False for i in range(8)
+        })
+
+        task = self._build_dp_init_task(mock_get_status_sw_tbl, mock_xcvr_api)
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        mock_xcvr_api.set_datapath_init.assert_called_once_with(0xff)
+        assert task.force_cmis_reinit.call_count == 0
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_DP_TXON
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    def test_CmisManagerTask_dp_init_pending_asserted_still_proceeds(self, mock_get_status_sw_tbl):
+        """Regression: modules that do re-assert DPInitPending must still advance to DP_TXON."""
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+        mock_xcvr_api = self._dp_init_ok_api()
+        mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
+            'DPInitPending{}'.format(i + 1): True for i in range(8)
+        })
+
+        task = self._build_dp_init_task(mock_get_status_sw_tbl, mock_xcvr_api)
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        mock_xcvr_api.set_datapath_init.assert_called_once_with(0xff)
+        assert task.force_cmis_reinit.call_count == 0
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_DP_TXON
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    def test_CmisManagerTask_dp_init_pre_cmis_5_skips_dp_init_pending_check(self, mock_get_status_sw_tbl):
+        """Regression: pre-CMIS-5 modules bypass the DPInitPending check entirely."""
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+        mock_xcvr_api = self._dp_init_ok_api()
+        mock_xcvr_api.get_cmis_rev = MagicMock(return_value='4.0')
+        # majorRev < 5 means get_dpinit_pending is not consulted; return False to prove it.
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
+            'DPInitPending{}'.format(i + 1): False for i in range(8)
+        })
+
+        task = self._build_dp_init_task(mock_get_status_sw_tbl, mock_xcvr_api)
+        task.force_cmis_reinit = MagicMock()
+
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        mock_xcvr_api.set_datapath_init.assert_called_once_with(0xff)
+        assert task.force_cmis_reinit.call_count == 0
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_DP_TXON
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper.get_status_sw_tbl')
+    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False))
+    def test_CmisManagerTask_dp_init_not_pending_logs_and_proceeds(self, mock_get_status_sw_tbl):
+        """When DPInitPending is not asserted on a CMIS 5.x module (ConfigSuccess is already
+        guaranteed by the DP_INIT guard), the check is informational only: log a notice and
+        still advance to DP_TXON without forcing a reinit."""
+        mock_get_status_sw_tbl = Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE)
+        mock_xcvr_api = self._dp_init_ok_api()
+        mock_xcvr_api.get_cmis_rev = MagicMock(return_value='5.0')
+        mock_xcvr_api.get_dpinit_pending = MagicMock(return_value={
+            'DPInitPending{}'.format(i + 1): False for i in range(8)
+        })
+
+        task = self._build_dp_init_task(mock_get_status_sw_tbl, mock_xcvr_api)
+        task.check_datapath_init_pending = MagicMock(return_value=False)
+        task.force_cmis_reinit = MagicMock()
+        task.log_notice = MagicMock()
+
+        task.process_single_lport('Ethernet0', task.port_dict['Ethernet0'])
+
+        mock_xcvr_api.set_datapath_init.assert_called_once_with(0xff)
+        assert task.force_cmis_reinit.call_count == 0
+        assert common.get_cmis_state_from_state_db('Ethernet0', mock_get_status_sw_tbl) == CMIS_STATE_DP_TXON
+        assert any('datapath init not pending' in str(call)
+                   for call in task.log_notice.call_args_list)
+
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=(False)))
     @patch('xcvrd.cmis.cmis_manager_task.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
