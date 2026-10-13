@@ -1,16 +1,11 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! STATE_DB field formatters matching Python's `str()` semantics.
 //!
 //! Every TEMPERATURE_INFO and FAN_INFO field that thermalctld writes goes
-//! through `str(value)` in Python; this module replicates the exact output so
+//! through `str(value)` in Python; this module reproduces that output so
 //! that `show platform temperature`, `show platform fan`, and any downstream
 //! telemetry consumers see identical strings from both the Python and Rust
-//! daemons.
+//! daemons -- for every value a sensor reports.  [`float`] says where the
+//! match ends.
 //!
 //! Two Python quirks we must reproduce:
 //!  * `str(45.0)` → `"45.0"` (always has a decimal point for floats)
@@ -56,6 +51,15 @@ pub fn opt_float(v: Option<f64>) -> String {
 /// The key invariant: integral floats always carry a decimal point.
 ///  * `str(45.0)` = `"45.0"` (not `"45"`)
 ///  * `str(36.5)` = `"36.5"`
+///
+/// Identical to Python for zero, NaN, the infinities and every
+/// `1e-4 <= |v| < 1e16` -- both print the shortest digits that read back as
+/// the same float, and that range covers any temperature, speed, voltage or
+/// threshold a platform reports.  Outside it Python switches to exponent form
+/// (`str(1e16)` is `"1e+16"`, `str(5e-05)` is `"5e-05"`) and this does not:
+/// Rust's `Display` never emits an exponent, so those come out as
+/// `"10000000000000000"` and `"0.00005"`.  Not reproduced, because nothing
+/// published goes there.
 pub fn float(v: f64) -> String {
     // Python spells these in lower case and Rust's Display does not, and the
     // contract here is exact `str()` parity: a provider that hands back a NaN

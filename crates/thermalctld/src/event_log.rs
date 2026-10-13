@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The BMC event log.  Ports `thermalctld:EventLogger`.
 //!
 //! Every call goes to syslog.  On a Switch-BMC it is *also* appended to

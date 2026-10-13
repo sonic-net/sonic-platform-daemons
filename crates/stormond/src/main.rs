@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! stormond, in Rust.  Ports `sonic-stormond/scripts/stormond`.
 //!
 //! STORAGE_INFO once an hour: each disk's model, firmware, health, temperature,
@@ -12,6 +6,7 @@
 
 mod fsio;
 
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -141,6 +136,23 @@ impl Intervals {
         );
         self
     }
+}
+
+/// The disks whose lifetime counters this daemon carries: the ones it can read.
+///
+/// A disk no utility class handles gets no row (`publish_static`,
+/// `publish_dynamic`), so it can have no counters either -- and leaving it in
+/// the list both baselines are checked against would sink them both.  The
+/// STATE_DB one requires a row per disk, and the file would carry nulls for
+/// it, which the loader rejects.  Every restart would then start the totals
+/// over from the since-boot reading.
+///
+/// Python has exactly that defect: `StorageDevices.devices` keeps a `None` for
+/// such a disk, and `stormond:DaemonStorage._load_fsio_rw_statedb` and
+/// `sync_fsio_rw_json` iterate every key while the publishers skip the `None`
+/// ones.  Not reproduced: the counters are the reason this daemon exists.
+fn tracked_disks(devices: &[StorageDeviceInfo]) -> Vec<String> {
+    devices.iter().filter(|d| d.available).map(|d| d.name.clone()).collect()
 }
 
 fn formatted_time() -> String {
@@ -284,6 +296,32 @@ fn sync_due(since_sync: Duration, poll: Duration, sync: Duration) -> bool {
     since_sync + poll >= sync
 }
 
+/// Write `bytes` to `path` and wait for them to reach the disk.
+///
+/// `fs::write` returns once the page cache has the data.  A rename over the
+/// old file is then atomic for every reader but not for a power cut: ext4 can
+/// commit the rename before the data, and the file comes back empty -- which
+/// the loader rejects, costing the baseline the write was there to keep.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Make the rename into `path` durable, as far as can be done.
+///
+/// The rename is an entry in the parent directory, and only an fsync of the
+/// directory commits it.  Best-effort: by now the file is in place for every
+/// reader, so a directory that will not sync costs durability across a power
+/// cut and nothing else -- reporting the write as failed would be untrue, and
+/// the caller would neither record the sync time nor restart its interval.
+fn sync_parent_dir(path: &Path) {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+        log::warn!("Unable to sync {} after writing {}: {e}", dir.display(), path.display());
+    }
+}
+
 /// Write the JSON file and record when, in both places that need to know.
 ///
 /// Returns the time it recorded, so the caller can restart its interval from
@@ -305,13 +343,23 @@ fn sync_to_disk_at(
     pmon_common::notice!(
         "Syncing total and latest procfs reads and writes from STATE_DB to JSON file");
     let when = formatted_time();
-    let doc = fsio::sync_document(disks, table, &when);
+    // A table that cannot be read writes no file: the baseline already on disk
+    // is worth more than one built from nothing.  Python's `sync_fsio_rw_json`
+    // reads and dumps inside one `try`, so a failed `hget` skips the dump.
+    let doc = match fsio::sync_document(disks, table, &when) {
+        Ok(doc) => doc,
+        Err(e) => {
+            log::error!("Unable to sync state_db to disk: {e}");
+            return Ok(None);
+        }
+    };
 
-    // Written whole and then moved into place: a daemon killed mid-write would
-    // otherwise leave a half-file, which the loader rejects -- costing the
-    // baseline the file exists to preserve.
+    // Written whole, synced, and then moved into place: a daemon killed
+    // mid-write would otherwise leave a half-file, and a power cut an empty
+    // one, either of which the loader rejects -- costing the baseline the file
+    // exists to preserve.
     let tmp = path.with_extension("json.tmp");
-    let written = std::fs::write(&tmp, doc).and_then(|()| std::fs::rename(&tmp, path));
+    let written = write_synced(&tmp, doc.as_bytes()).and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = written {
         // A file that will not write is what Python's `sync_fsio_rw_json`
         // returning False means: warned about, not fatal.  The counters stay
@@ -320,6 +368,7 @@ fn sync_to_disk_at(
         let _ = std::fs::remove_file(&tmp);
         return Ok(None);
     }
+    sync_parent_dir(path);
 
     // The table write is the one Python does not guard:
     // `stormond:DaemonStorage.write_sync_time_statedb` calls `hset` bare, so a
@@ -336,6 +385,13 @@ fn sync_to_disk_at(
 /// Separated from `main` so it can be driven by a test: `main` is the part that
 /// cannot be -- it embeds an interpreter and opens a redis -- and this is the
 /// part worth being sure of.
+///
+/// `first` is a reading `start` already took, used by the first cycle in
+/// place of its own.  Every `get_storage_devices` runs smartctl once per disk,
+/// and the start-up reading is moments old when the first cycle comes round;
+/// taking it again would double the slowest thing this daemon does for no
+/// newer answer.
+#[allow(clippy::too_many_arguments)]
 async fn run(
     platform: &mut dyn PlatformApi,
     table: &dyn TableLike,
@@ -343,6 +399,7 @@ async fn run(
     reconciler: &Reconciler,
     disks: &[String],
     json_path: &Path,
+    mut first: Option<Vec<StorageDeviceInfo>>,
     cycles: &mut Cycles,
 ) -> i32 {
     let mut intervals = Intervals::default();
@@ -360,7 +417,11 @@ async fn run(
             }
         };
 
-        match platform.get_storage_devices() {
+        let devices = match first.take() {
+            Some(devices) => Ok(devices),
+            None => platform.get_storage_devices(),
+        };
+        match devices {
             Ok(devices) => {
                 pmon_common::recovered!(read, "storage read recovered");
                 publish_dynamic(&devices, reconciler, table);
@@ -460,17 +521,21 @@ async fn start(
     // `stormond:DaemonStorage.config_db` calls out as a resource leak it had.
     let config = open(CONFIG_DB, STORMOND_CONFIG_TABLE).ok();
 
-    // Fatal, not defaulted.  `stormond:DaemonStorage.__init__` constructs
-    // StorageDevices() outside any try/except, so a platform that cannot
-    // enumerate its disks takes the Python daemon down before it ever syncs.
-    // Swallowing the error here let the daemon run with an empty disk list and
-    // then overwrite fsio-rw-stats.json with a document containing no devices
-    // -- destroying the lifetime-counter baseline the file exists to preserve.
-    // Observed on hardware when the facade was missing get_storage_devices().
+    // Fatal, not defaulted -- but only for what can actually arrive here.  A
+    // platform whose `StorageDevices()` raises does not: the PyO3 escape hatch
+    // catches that and answers an empty list
+    // (`_storage_devices` in platform_api/_escape_hatch.py), so it comes
+    // through as a successful enumeration of no disks, which
+    // `sync_to_disk_at` refuses to write over the baseline.  What does reach
+    // this arm is an implementation that does not offer the call at all --
+    // `NotSupported`, as on hardware whose facade predated
+    // `get_storage_devices` -- or a backend error from the bridge itself.
+    // Those end the daemon, as an unloadable `StorageDevices` ends Python's in
+    // `stormond:DaemonStorage.__init__`: run on with no disk list, the daemon
+    // has nothing to publish and a baseline it can only put at risk.
     //
-    // An empty-but-successful enumeration is a different thing and stays
-    // allowed: a platform with no disks has nothing to publish and no baseline
-    // to lose.
+    // An empty-but-successful enumeration stays allowed: a platform with no
+    // disks has nothing to publish and no baseline to lose.
     let devices = match platform.get_storage_devices() {
         Ok(devices) => devices,
         Err(e) => {
@@ -478,7 +543,7 @@ async fn start(
             return STORAGEUTIL_LOAD_ERROR;
         }
     };
-    let disks: Vec<String> = devices.iter().map(|d| d.name.clone()).collect();
+    let disks = tracked_disks(&devices);
 
     // Both baselines are read before anything is published: the STATE_DB one is
     // about to be overwritten by this cycle's own numbers.
@@ -495,6 +560,7 @@ async fn start(
         &reconciler,
         &disks,
         json_path,
+        Some(devices),
         cycles,
     )
     .await
@@ -541,6 +607,50 @@ mod tests {
         publish_static(&[d.clone()], &t);
         publish_dynamic(&[d], &Reconciler::default(), &t);
         assert!(t.is_empty());
+    }
+
+    /// A disk no utility class handles is not one whose counters are carried:
+    /// it has no row to carry them in.
+    #[test]
+    fn only_a_readable_disk_is_tracked() {
+        let mut sdb = disk("sdb");
+        sdb.available = false;
+        assert_eq!(tracked_disks(&[disk("sda"), sdb]), vec!["sda".to_string()]);
+    }
+
+    /// An unreadable disk beside a readable one leaves both baselines usable.
+    /// Tracked, it would fail the STATE_DB row count and put nulls in the file,
+    /// and every restart would start the totals over.
+    #[test]
+    fn an_unreadable_disk_does_not_cost_the_baselines() {
+        let mut sdb = disk("sdb");
+        sdb.available = false;
+        let devices = [disk("sda"), sdb];
+        let disks = tracked_disks(&devices);
+
+        // What a previous run left behind: its rows and the sync time.
+        let t = MockTable::new();
+        publish_static(&devices, &t);
+        publish_dynamic(&devices, &Reconciler::default(), &t);
+        t.set(fsio::FSSTATS_SYNC_KEY, &[("successful_sync_time", "x".to_string())]).unwrap();
+        assert_eq!(Reconciler::load(&disks, None, &t).baseline(), fsio::Baseline::StateDb);
+
+        // And the file it synced, read with STATE_DB gone.
+        let doc = fsio::sync_document(&disks, &t, "now").unwrap();
+        let r = Reconciler::load(&disks, Some(&doc), &MockTable::new());
+        assert_eq!(r.baseline(), fsio::Baseline::Json);
+    }
+
+    /// A table that cannot be read leaves the file as it was.
+    #[test]
+    fn a_table_that_cannot_be_read_does_not_overwrite_the_file() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("fsio-rw-stats.json");
+        std::fs::write(&path, "previous").unwrap();
+        let t = MockTable::new();
+        t.fail_reads("redis gone");
+        assert!(sync_to_disk_at(&path, &["sda".to_string()], &t).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous");
     }
 
     #[test]
@@ -679,6 +789,35 @@ mod tests {
         assert_eq!(r.totals("sda", 1, 1), (8, 9), "the file reads back as a baseline");
     }
 
+    /// The directory sync after the rename is best-effort: one that fails is
+    /// warned about, and the write it follows has still happened.
+    #[test]
+    fn a_directory_that_will_not_sync_is_only_warned_about() {
+        let log = pmon_common::logging::capture();
+        sync_parent_dir(Path::new("/nonexistent/dir/f.json"));
+        assert!(log.logged(log::Level::Warn, "Unable to sync /nonexistent/dir"));
+    }
+
+    /// A bare file name syncs the current directory, not the empty path --
+    /// which `File::open` refuses, and would warn on every sync.
+    #[test]
+    fn a_bare_file_name_syncs_the_current_directory() {
+        let log = pmon_common::logging::capture();
+        sync_parent_dir(Path::new("fsio-rw-stats.json"));
+        assert!(!log.contains("Unable to sync"));
+    }
+
+    /// The synced write leaves exactly the bytes asked for, replacing what
+    /// was there rather than appending to it.
+    #[test]
+    fn a_synced_write_replaces_the_file_with_the_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("f.json");
+        std::fs::write(&path, "an older and longer document").unwrap();
+        write_synced(&path, b"{}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
+    }
+
     /// A path that cannot be written is reported and not fatal: the daemon
     /// keeps publishing to STATE_DB, which is the baseline that survives a
     /// crash even when the one that survives a reboot cannot be written.
@@ -763,7 +902,7 @@ mod tests {
         let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
 
         let code = run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-                       &path, &mut cycles).await;
+                       &path, None, &mut cycles).await;
         assert_eq!(code, 143);
         assert_eq!(p.calls, 3, "published before each wait, including the last");
         assert_eq!(t.field("sda", "total_fsio_reads").as_deref(), Some("4242"));
@@ -780,7 +919,7 @@ mod tests {
         let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
         run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), &mut cycles).await;
+            &d.path().join("f.json"), None, &mut cycles).await;
         assert!(!t.is_empty(), "STATE_DB is the crash baseline");
     }
 
@@ -796,28 +935,51 @@ mod tests {
         let mut p = FakePlatform { devices: vec![], fail: true, calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
         run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), &mut cycles).await;
+            &d.path().join("f.json"), None, &mut cycles).await;
         assert_eq!(t.field("sda", "total_fsio_reads"), before);
+    }
+
+    /// A platform that retunes CONFIG_DB every time it is read, so each cycle
+    /// finds a different polling interval waiting for it.
+    struct Retuning {
+        config: MockTable,
+        calls: u64,
+    }
+
+    impl PlatformApi for Retuning {
+        fn get_storage_devices(&mut self) -> Result<Vec<StorageDeviceInfo>, platform_api::PlatformError> {
+            self.calls += 1;
+            // Read after this cycle's reload, so it is the next cycle's value.
+            let next = (60 * (self.calls + 1)).to_string();
+            self.config.set(INTERVALS_KEY, &[("daemon_polling_interval", next)]).unwrap();
+            Ok(vec![disk("sda")])
+        }
     }
 
     /// CONFIG_DB is re-read every cycle, so a change takes effect without a
     /// restart -- which is the point of the intervals being there at all.
+    ///
+    /// The row changes between cycles and each cycle announces the value it
+    /// found, so a reload that ran once, or ran but kept the first answer,
+    /// shows up as a missing or repeated line.
     #[tokio::test]
     async fn the_intervals_are_re_read_every_cycle() {
+        let log = pmon_common::logging::capture();
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
         let config = MockTable::new();
         config.set(INTERVALS_KEY, &[("daemon_polling_interval", "60".to_string())]).unwrap();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        let mut p = Retuning { config: config.clone(), calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
 
-        let start = tokio::time::Instant::now();
         run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), &mut cycles).await;
-        // Fixed ticks do not sleep, so what this asserts is that the loop asked
-        // CONFIG_DB and not that it waited: the row was read once per cycle.
-        assert!(config.scans() == 0 || start.elapsed() < Duration::from_secs(1));
+            &d.path().join("f.json"), None, &mut cycles).await;
+        assert_eq!(p.calls, 3, "three passes");
+        for secs in [60, 120, 180] {
+            assert!(log.logged(log::Level::Info, &format!("Polling Interval set to {secs} seconds")),
+                "the pass that found {secs} announced it");
+        }
     }
 
     /// CONFIG_DB set to sync every poll, so every cycle of a test is a sync.
@@ -844,7 +1006,7 @@ mod tests {
         let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
         let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("f.json"), &mut cycles).await;
+                       &d.path().join("f.json"), None, &mut cycles).await;
         assert_eq!(code, 143);
         assert_eq!(sync_times(&t), 3, "one per cycle, and one on the way out");
     }
@@ -861,7 +1023,7 @@ mod tests {
         let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
         let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("no-such-dir").join("f.json"), &mut cycles).await;
+                       &d.path().join("no-such-dir").join("f.json"), None, &mut cycles).await;
         assert_eq!(code, 143, "ran to the end");
         assert_eq!(p.calls, 3);
         assert_eq!(sync_times(&t), 0, "no sync time for a sync that did not happen");
@@ -883,7 +1045,7 @@ mod tests {
         let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
         let mut cycles = Cycles::Fixed { remaining: 5, code: 143 };
         let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("f.json"), &mut cycles).await;
+                       &d.path().join("f.json"), None, &mut cycles).await;
         assert_eq!(code, ERR_DB_WRITE);
         assert_eq!(p.calls, 1, "stopped at the first sync");
         assert!(log.logged(log::Level::Info, "get_dynamic_fields_update_state_db() failed with"),
@@ -972,14 +1134,14 @@ mod tests {
 
     // ── the wiring that used to be inside main ───────────────────────────────
 
-    /// A platform that cannot enumerate its disks takes the daemon down.
+    /// A platform that cannot answer the enumeration at all takes the daemon
+    /// down.
     ///
-    /// This is bug 4: swallowing the error let the daemon run with an empty
-    /// disk list and then overwrite fsio-rw-stats.json with a document
-    /// containing no devices, destroying the lifetime-counter baseline the
-    /// file exists to preserve.  `stormond:DaemonStorage.__init__` constructs
-    /// StorageDevices() outside any try/except, so Python dies before it can
-    /// sync; this has to die in the same place.
+    /// Swallowing the error would let the daemon run with an empty disk list
+    /// and nothing to publish, with the baseline file only one sync away.
+    /// `stormond:DaemonStorage.__init__` constructs StorageDevices() outside
+    /// any try/except, so Python dies before it can sync; this has to die in
+    /// the same place.
     #[tokio::test]
     async fn a_platform_that_cannot_enumerate_its_disks_stops_before_it_syncs() {
         let log = pmon_common::logging::capture();
@@ -1044,6 +1206,44 @@ mod tests {
         // The static row goes in before the first cycle: `show platform
         // ssdhealth` must not have to sit through an hour of nothing.
         assert!(o.table(STORAGE_DEVICE_TABLE).unwrap().wrote("sda", "device_model"));
+    }
+
+    /// The start-up reading is the first cycle's too: each reading runs
+    /// smartctl once per disk, and a second one moments after the first would
+    /// say nothing new.  Two cycles, so two readings -- not three.
+    #[tokio::test]
+    async fn the_start_up_reading_serves_the_first_cycle() {
+        tokio::time::pause();
+        let d = tempfile::tempdir().unwrap();
+        let o = pmon_common::db::MockOpener::new();
+        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        start(
+            &mut p,
+            &|db, t| o.open(db, t),
+            &d.path().join("f.json"),
+            &mut Cycles::Fixed { remaining: 1, code: 143 },
+        )
+        .await;
+        assert_eq!(p.calls, 2, "start-up and the second cycle; the first reuses start-up's");
+        assert!(o.table(STORAGE_DEVICE_TABLE).unwrap().wrote("sda", "total_fsio_reads"),
+            "and the first cycle still published from it");
+    }
+
+    /// Handed a reading, the loop's first cycle publishes it without asking
+    /// the platform; every later cycle asks.
+    #[tokio::test]
+    async fn a_reading_handed_to_the_loop_is_used_once() {
+        tokio::time::pause();
+        let d = tempfile::tempdir().unwrap();
+        let t = MockTable::new();
+        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        let mut handed = disk("sda");
+        handed.fs_io_reads = Some(7);
+        let mut cycles = Cycles::Fixed { remaining: 0, code: 143 };
+        run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
+            &d.path().join("f.json"), Some(vec![handed]), &mut cycles).await;
+        assert_eq!(p.calls, 0);
+        assert_eq!(t.field("sda", "latest_fsio_reads").as_deref(), Some("7"));
     }
 
     /// And a STATE_DB that will not open stops the daemon rather than leaving

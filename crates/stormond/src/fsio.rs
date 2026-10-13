@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Lifetime filesystem read/write counters, across restarts.
 //!
 //! Ports `stormond:DaemonStorage._load_fsio_rw_json`,
@@ -94,9 +88,10 @@ fn counters_from(get: impl Fn(&str) -> Option<String>) -> Option<Counters> {
 impl Reconciler {
     /// Load both baselines and decide which one to use.
     ///
-    /// `disks` is every disk the platform reported, which is what both sanity
-    /// checks are against: a baseline that does not cover every disk is not a
-    /// baseline, because the disk it misses would silently start from zero.
+    /// `disks` is every disk this daemon publishes counters for, which is what
+    /// both sanity checks are against: a baseline that does not cover every
+    /// one is not a baseline, because the disk it misses would silently start
+    /// from zero.
     pub fn load(disks: &[String], json_text: Option<&str>, table: &dyn TableLike) -> Self {
         let mut r = Self::default();
         let statedb_ok = r.load_statedb(disks, table);
@@ -221,10 +216,17 @@ impl Reconciler {
 /// Read back out of the table rather than from the values just computed: the
 /// file is a snapshot of what was *published*, and a file that recorded a total
 /// STATE_DB never got would move the baseline past the published figure.
-pub fn sync_document(disks: &[String], table: &dyn TableLike, when: &str) -> String {
+///
+/// A row that is not there is written as nulls, which the loader rejects; a
+/// table that cannot be read is an error, so the caller can leave the file
+/// alone rather than replace it with one of nulls.
+pub fn sync_document(disks: &[String], table: &dyn TableLike, when: &str) -> Result<String, String> {
     let mut doc = serde_json::Map::new();
     for disk in disks {
-        let row = table.get(disk).ok().flatten().unwrap_or_default();
+        let row = table
+            .get(disk)
+            .map_err(|e| format!("failed to read {disk}: {e}"))?
+            .unwrap_or_default();
         let mut fields = serde_json::Map::new();
         for f in SYNC_FIELDS {
             let v = row.iter().find(|(k, _)| k == f).map(|(_, v)| v.clone());
@@ -242,7 +244,7 @@ pub fn sync_document(disks: &[String], table: &dyn TableLike, when: &str) -> Str
         "successful_sync_time".to_string(),
         serde_json::Value::String(when.to_string()),
     );
-    serde_json::Value::Object(doc).to_string()
+    Ok(serde_json::Value::Object(doc).to_string())
 }
 
 #[cfg(test)]
@@ -360,7 +362,7 @@ mod tests {
     #[test]
     fn the_file_records_what_state_db_holds() {
         let t = statedb(80, 1000);
-        let doc = sync_document(&disks(), &t, "2026-09-17 12:00:00");
+        let doc = sync_document(&disks(), &t, "2026-09-17 12:00:00").unwrap();
         let v: serde_json::Value = serde_json::from_str(&doc).unwrap();
         assert_eq!(v["sda"]["total_fsio_reads"], "1000");
         assert_eq!(v["sda"]["latest_fsio_reads"], "80");
@@ -371,7 +373,7 @@ mod tests {
     /// loader then rejects -- so a half-written file cannot become a baseline.
     #[test]
     fn a_disk_with_no_row_writes_nulls_the_loader_will_reject() {
-        let doc = sync_document(&disks(), &MockTable::new(), "now");
+        let doc = sync_document(&disks(), &MockTable::new(), "now").unwrap();
         let r = Reconciler::load(&disks(), Some(&doc), &MockTable::new());
         assert_eq!(r.baseline(), Baseline::Init);
     }
