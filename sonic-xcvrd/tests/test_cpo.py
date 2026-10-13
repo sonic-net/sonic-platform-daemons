@@ -2,7 +2,7 @@ import contextlib
 import threading
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from sonic_py_common import daemon_base, device_info
 from swsscommon import swsscommon
@@ -593,6 +593,27 @@ class TestCpoStateUpdateTask:
         task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_once_with(
             'Ethernet0', db_cache=vdm_db_cache)
 
+    def test_vdm_thresholds_go_to_the_standard_vdm_tables(self):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        xcvr_table_helper = MagicMock()
+        vdm_db_utils = CPOVDMDBUtils({1: MagicMock()}, port_mapping, xcvr_table_helper,
+                                     threading.Event(), MagicMock())
+        vdm_db_utils.vdm_utils = MagicMock()
+        thresholds = {'halarm': 80.0, 'lalarm': -5.0, 'hwarn': 75.0, 'lwarn': 0.0}
+        vdm_db_utils.vdm_utils.get_vdm_thresholds.return_value = {
+            f'laser_temperature_media1_{t}': v for t, v in thresholds.items()}
+
+        with patch.object(vdm_db_utils, '_validate_and_get_physical_port', return_value=1), \
+             patch.object(vdm_db_utils, '_write_values_to_table') as mock_write:
+            vdm_db_utils.post_port_vdm_thresholds_to_db('Ethernet0')
+
+        vdm_db_utils.vdm_utils.get_vdm_thresholds.assert_called_once_with(1)
+        for t in thresholds:
+            xcvr_table_helper.get_vdm_threshold_tbl.assert_any_call(0, t)
+        written = [c.args[1:] for c in mock_write.call_args_list]
+        assert written == [('Ethernet0', {'laser_temperature_media1': v}) for v in thresholds.values()]
+
     def test_post_port_dom_thresholds_to_db(self):
         oe_thresholds = {'temphighalarm': 75.0, 'vcchighalarm': 3.6, 'txpowerhighalarm': 5.0, 'txbiashighalarm': 12}
         elsfp_thresholds = {'temphighalarm': 70.0, 'laser_power_high_alarm': 12.5}
@@ -702,7 +723,18 @@ class TestCpoDomInfoUpdateTask:
                                         threading.Event(), True)
         task.check_port_update = MagicMock()
         task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
+        task.vdm_utils = MagicMock()
+        task.vdm_utils.is_transceiver_vdm_supported.return_value = False
+        task.vdm_db_utils = MagicMock()
         return task
+
+    def enable_vdm(self, task):
+        """VDM supported without statistic observables; each port's basic values
+        are tagged with its physical port so the publishing port is visible."""
+        task.vdm_utils.is_transceiver_vdm_supported.return_value = True
+        task.vdm_utils.is_vdm_statistic_supported.return_value = False
+        task.vdm_utils.get_vdm_real_values_basic.side_effect = \
+            lambda physical_port: {'laser_temperature_media1': float(physical_port)}
 
     def run_collect_and_publish(self, task):
         task.dom_db_utils = MagicMock()
@@ -884,6 +916,50 @@ class TestCpoDomInfoUpdateTask:
         }
         for device in devices.values():
             device.oe.get_api.return_value.get_non_banked_transceiver_dom_flags.assert_not_called()
+
+    def test_collect_and_publish_vdm_per_bank(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        self.enable_vdm(task)
+        self.run_collect_and_publish(task)
+
+        # VDM is banked: every physical port reads its own values and flags and
+        # publishes them to its own interface
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.assert_has_calls([
+            call('Ethernet0', {'laser_temperature_media1': 1.0}),
+            call('Ethernet8', {'laser_temperature_media1': 2.0}),
+            call('Ethernet16', {'laser_temperature_media1': 3.0}),
+        ])
+        assert task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.call_count == 3
+        task.vdm_db_utils.post_port_vdm_flags_to_db.assert_has_calls([
+            call('Ethernet0'), call('Ethernet8'), call('Ethernet16')])
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 3
+        task.vdm_utils.vdm_freeze_context.assert_not_called()
+
+    def test_collect_and_publish_skips_vdm_when_unsupported(self):
+        task = self.make_task(self.make_devices())
+        self.run_collect_and_publish(task)
+
+        task.vdm_utils.get_vdm_real_values_basic.assert_not_called()
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.assert_not_called()
+        task.vdm_db_utils.post_port_vdm_flags_to_db.assert_not_called()
+
+    def test_link_change_publishes_oe_vdm_flags_per_member_port(self):
+        task = self.make_task(self.make_devices())
+        self.enable_vdm(task)
+        self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_OE, 'OE1'))
+
+        task.vdm_db_utils.post_port_vdm_flags_to_db.assert_has_calls([
+            call('Ethernet0'), call('Ethernet8')])
+        assert task.vdm_db_utils.post_port_vdm_flags_to_db.call_count == 2
+        task.vdm_db_utils.post_port_vdm_real_values_from_dict_to_db.assert_not_called()
+
+    def test_link_change_on_elsfp_does_not_touch_vdm(self):
+        task = self.make_task(self.make_devices())
+        self.enable_vdm(task)
+        self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1'))
+
+        task.vdm_db_utils.post_port_vdm_flags_to_db.assert_not_called()
 
 
 class TestCpoDomThermalInfoUpdateTask:
