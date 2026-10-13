@@ -16,10 +16,10 @@ class VDMDBUtils(DBUtils):
         - TRANSCEIVER_VDM_XXXX_THRESHOLD
             - XXXX refers to HALARM, LALARM, HWARN or LWARN
     """
-    def __init__(self, sfp_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
-        super().__init__(sfp_obj_dict, port_mapping, task_stopping_event, logger)
+    def __init__(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
+        super().__init__(port_obj_dict, port_mapping, task_stopping_event, logger)
         self.xcvr_table_helper = xcvr_table_helper
-        self.vdm_utils = VDMUtils(self.sfp_obj_dict, logger)
+        self.vdm_utils = VDMUtils(self.port_obj_dict, logger)
         self.logger = logger
 
     def post_port_vdm_real_values_from_dict_to_db(self, logical_port_name, vdm_real_values_dict):
@@ -47,13 +47,8 @@ class VDMDBUtils(DBUtils):
         if not vdm_real_values_dict:
             return
 
-        self.beautify_info_dict(vdm_real_values_dict)
-        fvs = swsscommon.FieldValuePairs(
-            [(k, v) for k, v in vdm_real_values_dict.items()] +
-            [("last_update_time", self.get_current_time())]
-        )
-        table = self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index)
-        table.set(logical_port_name, fvs)
+        self._write_values_to_table(self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
+                                    logical_port_name, vdm_real_values_dict)
 
     def post_port_vdm_flags_to_db(self, logical_port_name, db_cache=None):
         return self._post_port_vdm_thresholds_or_flags_to_db(logical_port_name, self.xcvr_table_helper.get_vdm_flag_tbl,
@@ -114,14 +109,8 @@ class VDMDBUtils(DBUtils):
 
             for threshold_type, threshold_value_dict in vdm_threshold_type_value_dict.items():
                 if threshold_value_dict:
-                    self.beautify_info_dict(threshold_value_dict)
-                    fvs = swsscommon.FieldValuePairs(
-                        [(k, v) for k, v in threshold_value_dict.items()] +
-                        [("last_update_time", self.get_current_time())]
-                    )
-                    
                     table = get_vdm_table_func(self.port_mapping.get_asic_id_for_logical_port(logical_port_name), threshold_type)
-                    table.set(logical_port_name, fvs)
+                    self._write_values_to_table(table, logical_port_name, threshold_value_dict)
                 else:
                     return
         except NotImplementedError:
