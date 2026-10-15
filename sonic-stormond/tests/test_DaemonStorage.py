@@ -19,9 +19,9 @@ from sonic_py_common import syslogger
 
 # TODO: Clean this up once we no longer need to support Python 2
 if sys.version_info.major == 3:
-    from unittest.mock import patch, MagicMock, mock_open
+    from unittest.mock import call, patch, MagicMock, mock_open
 else:
-    from mock import patch, MagicMock, mock_open
+    from mock import call, patch, MagicMock, mock_open
 
 # Add mocked_libs path so that the file under test can load mocked modules from there
 tests_path = os.path.dirname(os.path.abspath(__file__))
@@ -63,7 +63,23 @@ class TestDaemonStorage(object):
     Test cases to cover functionality in DaemonStorage class
     """
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_db_connect_local_uses_unix_socket(self):
+        connector = MagicMock()
+        with patch.object(stormond.swsscommon, 'DBConnector', connector, create=True):
+            expected = MagicMock()
+            connector.return_value = expected
+
+            actual = stormond.db_connect_local("CONFIG_DB")
+
+        assert actual is expected
+        connector.assert_called_once_with(
+            "CONFIG_DB",
+            daemon_base.REDIS_TIMEOUT_MSECS,
+            False,
+            daemon_base.EMPTY_NAMESPACE,
+        )
+
+    @patch('stormond.db_connect_local', MagicMock())
     def test_default_configdb_intervals_no_config(self):
 
         stormon_daemon = stormond.DaemonStorage(log_identifier)
@@ -72,7 +88,7 @@ class TestDaemonStorage(object):
         assert (stormon_daemon.fsstats_sync_interval) == 86400
 
     
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_storage_devices(self):
 
         def new_mock_factory(self, key):
@@ -87,7 +103,7 @@ class TestDaemonStorage(object):
 
     @patch('os.path.exists', MagicMock(return_value=True))
     @patch('json.load', MagicMock(return_value=bad_fsio_json_dict))
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_json_false(self):
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
@@ -98,7 +114,7 @@ class TestDaemonStorage(object):
 
     @patch('os.path.exists', MagicMock(return_value=True))
     @patch('json.load', MagicMock(return_value=fsio_json_dict))
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_json_true(self):
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
@@ -109,7 +125,7 @@ class TestDaemonStorage(object):
 
     @patch('os.path.exists', MagicMock(return_value=True))
     @patch('json.load', MagicMock(side_effect=Exception))
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_json_exception(self):
 
         with patch('builtins.open', new_callable=mock_open, read_data='{}') as mock_fd:
@@ -117,7 +133,7 @@ class TestDaemonStorage(object):
 
             assert stormon_daemon.fsio_json_file_loaded == False
     
-    @patch('sonic_py_common.daemon_base.db_connect')
+    @patch('stormond.db_connect_local')
     def testget_configdb_intervals(self, mock_db_connect):
         # Test that get_configdb_intervals() reuses the connection from __init__
         # and does not create a new connection
@@ -135,28 +151,32 @@ class TestDaemonStorage(object):
         # Verify no additional connection was made
         assert mock_db_connect.call_count == initial_call_count
 
-    @patch('sonic_py_common.daemon_base.db_connect')
+    @patch('stormond.db_connect_local')
     def test_configdb_connection_established_in_init(self, mock_db_connect):
         # Test that CONFIG_DB connection is established during initialization
         mock_config_db = MagicMock()
         mock_state_db = MagicMock()
-        
-        # First call returns STATE_DB, second call returns CONFIG_DB
-        mock_db_connect.side_effect = [mock_state_db, mock_config_db]
+
+        mock_db_connect.side_effect = {
+            "CONFIG_DB": mock_config_db,
+            "STATE_DB": mock_state_db,
+        }.get
         
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         
-        # Verify db_connect was called twice (once for STATE_DB, once for CONFIG_DB)
-        assert mock_db_connect.call_count == 2
-        # Verify CONFIG_DB connection is stored
-        assert stormon_daemon.config_db is not None
+        assert mock_db_connect.call_args_list == [
+            call("CONFIG_DB"),
+            call("STATE_DB"),
+        ]
+        assert stormon_daemon.config_db is mock_config_db
+        assert stormon_daemon.state_db is mock_state_db
 
-    @patch('sonic_py_common.daemon_base.db_connect')
+    @patch('stormond.db_connect_local')
     def test_configdb_connection_failure_in_init(self, mock_db_connect):
         # Test that daemon continues even if CONFIG_DB connection fails
         mock_state_db = MagicMock()
         
-        # First call returns STATE_DB successfully, second call fails for CONFIG_DB
+        # CONFIG_DB fails, but STATE_DB still connects successfully.
         def side_effect_fn(db_name):
             if db_name == "STATE_DB":
                 return mock_state_db
@@ -173,7 +193,7 @@ class TestDaemonStorage(object):
         # Verify daemon still has STATE_DB connection
         assert stormon_daemon.state_db is not None
 
-    @patch('sonic_py_common.daemon_base.db_connect')
+    @patch('stormond.db_connect_local')
     def test_get_configdb_intervals_with_no_connection(self, mock_db_connect):
         # Test that get_configdb_intervals() handles missing CONFIG_DB connection gracefully
         mock_state_db = MagicMock()
@@ -200,7 +220,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.timeout == original_timeout
         assert stormon_daemon.fsstats_sync_interval == original_sync_interval
 
-    @patch('sonic_py_common.daemon_base.db_connect')
+    @patch('stormond.db_connect_local')
     def test_get_configdb_intervals_exception_logs_previous_values(self, mock_db_connect):
         # Test that exception handler logs previously set interval values instead of defaults
         mock_state_db = MagicMock()
@@ -242,7 +262,7 @@ class TestDaemonStorage(object):
         assert "7200" in log_call_args
         assert "43200" in log_call_args
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_statedb(self):
 
         keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
@@ -257,7 +277,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.statedb_storage_info_loaded == True
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_statedb_exception(self):
 
         keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
@@ -274,7 +294,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log.log_error.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_load_fsio_rw_statedb_value_none(self):
 
         keys_list = ['STORAGE_INFO|sda', 'STORAGE_INFO|FSSTATS_SYNC']
@@ -289,7 +309,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.statedb_storage_info_loaded == False
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     @patch('json.dump', MagicMock())
     def test_sync_fsio_rw_json_exception(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
@@ -303,7 +323,7 @@ class TestDaemonStorage(object):
             assert stormon_daemon.log.log_error.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     @patch('json.dump', MagicMock())
     @patch('time.time', MagicMock(return_value=1000))
     def test_sync_fsio_rw_json_happy(self):
@@ -314,7 +334,7 @@ class TestDaemonStorage(object):
 
             assert stormon_daemon.state_db.call_count == 0
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_reconcile_fsio_rw_values_init(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.use_statedb_baseline = False
@@ -326,7 +346,7 @@ class TestDaemonStorage(object):
         assert writes == '2000'
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_determine_sot(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.statedb_storage_info_loaded = True
@@ -337,7 +357,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.use_fsio_json_baseline == False
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_reconcile_fsio_rw_values_reboot(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         
@@ -351,7 +371,7 @@ class TestDaemonStorage(object):
         assert writes == '23000'
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_reconcile_fsio_rw_values_daemon_crash(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         
@@ -365,7 +385,7 @@ class TestDaemonStorage(object):
         assert writes == '22600'
     
     
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_update_storage_info_status_db(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
@@ -374,7 +394,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.device_table.getKeys() == ['sda']
     
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_static_fields_no_storage_device_object(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.log.log_notice = MagicMock()
@@ -386,7 +406,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log.log_notice.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_static_fields_happy(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
@@ -401,7 +421,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.device_table.get('sda') == {'device_model': 'Skynet', 'serial': 'T1000'}
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_static_fields_exception(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
@@ -418,7 +438,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log.log_error.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_dynamic_fields_no_storage_device_object(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.log.log_notice = MagicMock()
@@ -430,7 +450,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log.log_notice.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_dynamic_fields(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
 
@@ -452,7 +472,7 @@ class TestDaemonStorage(object):
             assert stormon_daemon.device_table.get('sda')[field] == value
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_dynamic_fields_fsio_counters_unavailable(self):
         # Simulate the disk going read-only: get_fs_io_reads/writes return 0.
         # The daemon must retain the last known-good latest and total FSIO values
@@ -490,7 +510,7 @@ class TestDaemonStorage(object):
         stormon_daemon.log.log_warning.assert_called_once()
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_last_fsio_statedb_value_defaults_to_zero(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.state_db = MagicMock()
@@ -499,7 +519,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon._get_last_fsio_statedb_value('sda', 'total_fsio_reads') == "0"
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_get_dynamic_fields_exception(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.log.log_notice = MagicMock()
@@ -513,7 +533,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.log.log_notice.call_count == 1
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     @patch('json.dump', MagicMock())
     @patch('time.time', MagicMock(return_value=1000))
     def test_write_sync_time_statedb(self):
@@ -524,7 +544,7 @@ class TestDaemonStorage(object):
         assert stormon_daemon.state_db.call_count == 0
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_signal_handler(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.sync_fsio_rw_json = MagicMock()
@@ -584,7 +604,7 @@ class TestDaemonStorage(object):
         assert stormond.exit_code == 0
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_signal_handler_sync_fsio_json_failed(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.sync_fsio_rw_json = MagicMock(return_value=False)
@@ -601,7 +621,7 @@ class TestDaemonStorage(object):
         assert stormond.exit_code == (128 + test_signal)
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_run(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
@@ -623,7 +643,7 @@ class TestDaemonStorage(object):
             assert rc == True
 
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_run_stop_event(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
@@ -639,7 +659,7 @@ class TestDaemonStorage(object):
             assert stormon_daemon.get_dynamic_fields_update_state_db.call_count == 1
             assert rc == False
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     def test_run_sync_fsio_rw_json_failed(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.get_dynamic_fields_update_state_db = MagicMock()
@@ -662,7 +682,7 @@ class TestDaemonStorage(object):
 
 class TestStormon():
 
-    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    @patch('stormond.db_connect_local', MagicMock())
     @patch('sonic_py_common.syslogger.SysLogger', MagicMock())
     def test_main(self):
 
