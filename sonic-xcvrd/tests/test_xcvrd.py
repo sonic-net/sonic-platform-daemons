@@ -248,6 +248,44 @@ media_settings_port_overrides_global_default = {
     }
 }
 
+# Fixture: PORT_MEDIA_SETTINGS vendor match should take precedence over a
+# GLOBAL_MEDIA_SETTINGS vendor match for the same port. This guards the priority
+# order: PORT explicit -> GLOBAL explicit -> PORT Default -> GLOBAL Default.
+media_settings_port_explicit_overrides_global_explicit = {
+    'GLOBAL_MEDIA_SETTINGS': {
+        '0-31': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example
+            }
+        }
+    },
+    'PORT_MEDIA_SETTINGS': {
+        '7': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example2
+            }
+        }
+    }
+}
+
+# Fixture: GLOBAL_MEDIA_SETTINGS vendor match should take precedence over a
+# PORT_MEDIA_SETTINGS Default for the same port. This guards the priority order:
+# PORT explicit -> GLOBAL explicit -> PORT Default -> GLOBAL Default.
+media_settings_global_explicit_overrides_port_default = {
+    'GLOBAL_MEDIA_SETTINGS': {
+        '0-31': {
+            'AMPHANOL-5678': {
+                'speed:100GAUI-2': asic_serdes_si_settings_example2
+            }
+        }
+    },
+    'PORT_MEDIA_SETTINGS': {
+        '7': {
+            'Default': asic_serdes_si_settings_example
+        }
+    }
+}
+
 media_settings_port_default_media_key_lane_speed_si = copy.deepcopy(media_settings_port_media_key_lane_speed_si)
 media_settings_port_default_media_key_lane_speed_si['PORT_MEDIA_SETTINGS']['7']['Default'] = {
     LANE_SPEED_DEFAULT_KEY: asic_serdes_si_settings_example,
@@ -1755,6 +1793,12 @@ class TestXcvrdScript(object):
     (media_settings_global_default_port_media_key_lane_speed_si, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
     (media_settings_port_overrides_global_default, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
     (media_settings_port_overrides_global_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
+    # PORT explicit match takes precedence over GLOBAL explicit match for the same port
+    (media_settings_port_explicit_overrides_global_explicit, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKNOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
+    # GLOBAL explicit match takes precedence over PORT Default for the same port
+    (media_settings_global_explicit_overrides_port_default, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'UNKNOWN', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example2),
+    # PORT Default is used only when neither PORT nor GLOBAL has an explicit match
+    (media_settings_global_explicit_overrides_port_default, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'UNKNOWN'}, asic_serdes_si_settings_example),
     (media_settings_global_list_of_ranges_media_key_lane_speed_si_with_default_section, 7, {'vendor_key': 'MISSING', 'media_key': 'MISSING', 'lane_speed_key': 'MISSING', 'medium_lane_speed_key': 'COPPER50'}, asic_serdes_si_settings_example),
     (media_settings_empty, 7, {'vendor_key': 'AMPHANOL-5678', 'media_key': 'QSFP-DD-active_cable_media_interface', 'lane_speed_key': 'speed:100GAUI-2', 'medium_lane_speed_key': 'COPPER50'}, {}),
     (media_settings_with_regular_expression_dict, 7, {'vendor_key': 'UNKOWN', 'media_key': 'QSFP28-40GBASE-CR4-1M', 'lane_speed_key': 'UNKOWN', 'medium_lane_speed_key': 'UNKNOWN'}, {'preemphasis': {'lane0': '0x16440A', 'lane1': '0x16440A', 'lane2': '0x16440A', 'lane3': '0x16440A'}}),
