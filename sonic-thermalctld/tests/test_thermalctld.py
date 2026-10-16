@@ -637,7 +637,7 @@ class TestLiquidCoolingUpdater(object):
         updater._refresh_leak_status()
 
         # The latch keeps it CRITICAL despite the live MINOR reading.
-        assert updater.system_table.get('system')['device_leak_status'] == 'CRITICAL'
+        assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'CRITICAL'
         assert updater.last_leak_status == LeakSeverity.CRITICAL
 
     @mock.patch('thermalctld.try_get')
@@ -669,7 +669,7 @@ class TestLiquidCoolingUpdater(object):
         assert 'leakage1' not in updater.latched_critical_sensors
         updater._refresh_leak_status()
 
-        assert updater.system_table.get('system')['device_leak_status'] == 'CRITICAL'
+        assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'CRITICAL'
 
     @mock.patch('thermalctld.try_get')
     def test_restart_clears_when_sensor_reads_no_leak(self, mock_try_get):
@@ -697,7 +697,7 @@ class TestLiquidCoolingUpdater(object):
         updater._refresh_leak_status()
 
         # Physical no-leak wins: state clears despite the recorded CRITICAL.
-        assert updater.system_table.get('system')['device_leak_status'] == 'None'
+        assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'None'
         assert 'leakage1' not in updater.leaking_sensors
         assert 'leakage1' not in updater.latched_critical_sensors
 
@@ -1387,6 +1387,33 @@ class TestLiquidCoolingUpdater(object):
         liquid_cooling_updater.event_logger.log_notice.assert_any_call(
             'Liquid cooling leaking sensor leakage1 recovered from fault')
 
+    def test_restart_state_restored_via_constructor(self):
+        """State persisted in STATE_DB is restored by __init__ itself (production path)."""
+        shared = {}
+        table_cls = thermalctld.swsscommon.Table
+
+        def shared_table(db, name):
+            return shared.setdefault(name, table_cls(db, name))
+
+        start_str = (datetime.now() - timedelta(seconds=3600)).strftime('%Y%m%d %H:%M:%S')
+        with mock.patch.object(thermalctld.swsscommon, 'Table', side_effect=shared_table):
+            shared_table(None, thermalctld.LiquidCoolingUpdater.SYSTEM_LEAK_STATUS_TABLE_NAME).set(
+                'system', thermalctld.swsscommon.FieldValuePairs([
+                    ('device_leak_status', 'CRITICAL'), ('timestamp', start_str)]))
+            shared_table(None, thermalctld.LiquidCoolingUpdater.LIQUID_COOLING_INFO_TABLE_NAME).set(
+                'leakage1', thermalctld.swsscommon.FieldValuePairs([
+                    ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_status', 'Yes'),
+                    ('leak_sensor_status', 'Good'), ('type', 'mock_sensor'),
+                    ('location', 'unknown'), ('leak_severity', 'CRITICAL'),
+                    ('timestamp', start_str)]))
+
+            restarted = thermalctld.LiquidCoolingUpdater(MockChassis(), 0.5)
+
+        assert restarted.last_leak_status == LeakSeverity.CRITICAL
+        assert 'leakage1' in restarted.leaking_sensors
+        assert 'leakage1' in restarted.latched_critical_sensors
+
+class TestThermalMonitor(object):
     """
     Test cases to cover functionality in ThermalMonitor class
     """
@@ -1844,7 +1871,7 @@ def test_updater_thermal_check_min_max():
     temperature_updater = thermalctld.TemperatureUpdater(chassis, threading.Event())
 
     temperature_updater.update()
-    slot_dict = temperature_updater.chassis_table.get(thermal.get_name())
+    slot_dict = dict(temperature_updater.chassis_table.get(thermal.get_name())[1])
     assert slot_dict['minimum_temperature'] == str(thermal.get_minimum_recorded())
     assert slot_dict['maximum_temperature'] == str(thermal.get_maximum_recorded())
 

@@ -645,15 +645,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
     @staticmethod
     def _row_to_dict(row):
-        """Normalise a Table.get() result to a field dict (or None).
-
-        Real swsscommon returns (found, fvs); the unit-test mock returns a plain dict.
-        """
-        if not row:
-            return None
-        if isinstance(row, dict):
-            return dict(row)
-        found, fvs = row[0], row[1]
+        """Normalise a Table.get() (found, fvs) result to a field dict (or None)."""
+        found, fvs = row
         return dict(fvs) if found else None
 
     def _restore_state_from_db(self):
