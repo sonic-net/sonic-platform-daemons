@@ -1340,6 +1340,40 @@ class TestYCableScript(object):
 
             assert is_initialized_y_cable('Ethernet0') is True
 
+    def test_check_identifier_presence_does_not_mark_failed_simulator_initialized(self):
+        class FailedSimulatorYCable(object):
+            def __init__(self, port, logger):
+                self._initialized = False
+
+            def get_vendor(self):
+                return "microsoft"
+
+        port_tbl = {0: MagicMock()}
+        port_tbl[0].get.return_value = (True, [('state', 'auto')])
+        y_cable_tbl = {0: MagicMock()}
+        static_tbl = {0: MagicMock()}
+        mux_tbl = {0: MagicMock()}
+
+        with patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', return_value=[0]), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', return_value=True), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_transceiver_info', return_value={
+                    'manufacturer': 'microsoft', 'model': 'simulated'}), \
+                patch('ycable.ycable_utilities.y_cable_helper.y_cable_vendor_mapping.mapping') as mapping, \
+                patch('ycable.ycable_utilities.y_cable_helper.import_module') as import_module, \
+                patch('ycable.ycable_utilities.y_cable_helper.read_y_cable_and_update_statedb_port_tbl'), \
+                patch('ycable.ycable_utilities.y_cable_helper.post_port_mux_static_info_to_db'), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_instances', {}, clear=True), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_initialization_status', {}, clear=True), \
+                patch.dict('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', {}, clear=True):
+            mapping.get.return_value = {'simulated': 'microsoft.y_cable_simulated'}
+            import_module.return_value.YCable = FailedSimulatorYCable
+            y_cable_presence = [True]
+            check_identifier_presence_and_update_mux_table_entry(
+                {}, port_tbl, y_cable_tbl, static_tbl, mux_tbl, 0,
+                'Ethernet0', y_cable_presence)
+
+            assert is_initialized_y_cable('Ethernet0') is False
+
     @patch('ycable.ycable_utilities.y_cable_helper.logical_port_name_to_physical_port_list', MagicMock(return_value=[0]))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_wrapper_get_presence', MagicMock(return_value=True))
     @patch('ycable.ycable_utilities.y_cable_helper.y_cable_port_locks', MagicMock(return_value=[0]))

@@ -1286,7 +1286,9 @@ def check_identifier_presence_and_update_mux_table_entry(state_db, port_tbl, y_c
                                     logical_port_name, vendor_name_api, vendor))
                                 return
 
-                            y_cable_port_initialization_status[physical_port] = True
+                            port_instance = y_cable_port_instances.get(physical_port)
+                            if port_instance is not None and getattr(port_instance, '_initialized', True):
+                                y_cable_port_initialization_status[physical_port] = True
 
                             y_cable_asic_table = y_cable_tbl.get(
                                 asic_index, None)
