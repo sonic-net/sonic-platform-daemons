@@ -30,3 +30,11 @@ pmon-common = { path = "../pmon-common", features = ["testing"] }
 tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-util"] }
 # The device ids come out of sysfs; the tests supply one.
 tempfile = "3"
+
+[features]
+# The Python daemon run against this one (`src/parity`, harness in
+# `pmon_common::parity`).  Off by default: it embeds Python and imports
+# sonic_py_common, sonic_platform_base and the Python daemon's own imports,
+# none of which the deb build's `cargo test` (debian/rules) has.  The repo's
+# CI turns it on; with it on, a module that cannot be imported fails the test.
+parity = ["pmon-common/parity"]
