@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of FanStatus / FanUpdater.
 //!
 //! Reads fan and drawer state directly from the `PlatformApi` trait object
@@ -153,7 +147,7 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
         (
             "direction",
             if fan.presence {
-                fmt::direction(fan.direction)
+                fmt::opt_str(&fan.direction)
             } else {
                 na()
             },
@@ -161,7 +155,7 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
         (
             "speed",
             if fan.presence {
-                fmt::opt_u32(fan.speed_pct)
+                fmt::number(fan.speed_pct)
             } else {
                 na()
             },
@@ -169,7 +163,7 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
         (
             "speed_target",
             if fan.presence {
-                fmt::opt_u32(fan.target_speed_pct)
+                fmt::number(fan.target_speed_pct)
             } else {
                 na()
             },
@@ -198,7 +192,9 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
 /// A pending LED write, collected during the pass and flushed afterwards.
 struct LedWrite {
     fan_name: String,
-    drawer_name: String,
+    fan_key: platform_api::DeviceKey,
+    /// The drawer the fan is in; the writes are only for fans in one.
+    drawer_key: Option<platform_api::DeviceKey>,
     /// One of the four colours the base class declares, not a loose string:
     /// the API takes the type, and a typo can no longer reach a platform.
     color: platform_api::LedColor,
@@ -215,6 +211,22 @@ struct LedWrite {
 fn fans_this_daemon_publishes(fans: Vec<FanInfo>) -> Vec<FanInfo> {
     fans.into_iter().filter(|f| f.kind != FanKind::Pdb).collect()
 }
+
+/// Every `FanInfo` column but the LED.  Python reads a fan's LED in a pass of
+/// its own, with its own `try` (`thermalctld:FanUpdater._update_led_color`),
+/// not in the refresh: a fan whose LED will not read is still published, and
+/// its LED is N/A.
+const FAN_COLS: FanInfoCols = FanInfoCols::POSITION_IN_PARENT
+    .with(FanInfoCols::PRESENCE)
+    .with(FanInfoCols::STATUS)
+    .with(FanInfoCols::IS_REPLACEABLE)
+    .with(FanInfoCols::MODEL)
+    .with(FanInfoCols::SERIAL)
+    .with(FanInfoCols::SPEED_PCT)
+    .with(FanInfoCols::TARGET_SPEED_PCT)
+    .with(FanInfoCols::DIRECTION)
+    .with(FanInfoCols::IS_UNDER_SPEED)
+    .with(FanInfoCols::IS_OVER_SPEED);
 
 pub struct FanUpdater {
     status: HashMap<String, FanStatus>,
@@ -288,7 +300,7 @@ impl FanUpdater {
         stop: &dyn Fn() -> bool,
     ) -> Result<(), UpdateError> {
         let drawers = platform.get_fan_drawers(FanDrawerInfoCols::ALL)?;
-        let fans = fans_this_daemon_publishes(platform.get_fans(FanInfoCols::ALL)?);
+        let fans = fans_this_daemon_publishes(platform.get_fans(FAN_COLS, false)?);
         let mut counters = BadFanCounters::default();
         let mut led_writes: Vec<LedWrite> = Vec::new();
 
@@ -325,33 +337,87 @@ impl FanUpdater {
             // `try` around the *call* --
             // `thermalctld:FanUpdater._collect_fans` wraps
             // `_refresh_fan_status` and logs a warning for each fan that
-            // fails -- so one fan whose row will not write must not cost the
-            // others.  The drawer path and the LED path, both called bare from
+            // fails, with `repr(e)` and a prefix naming where the fan sits
+            // (`thermalctld:FanUpdater.update`) -- so one fan whose readings
+            // failed, or whose row will not write, must not cost the others.
+            // A fan whose readings failed gets as far as Python got before
+            // the getter that raised.  The row names that getter's column
+            // (`error_column`), and the facade reads them in
+            // `thermalctld:FanUpdater._refresh_fan_status`'s order:
+            //
+            // * its name, or its position -- which `update_entity_info` reads:
+            //   nothing at all;
+            // * any reading up to its direction: its entity row, and its place
+            //   among the fans the LED pass colours (`fan_status_dict`), and
+            //   nothing else -- the status checks, their logs and the LED come
+            //   after every reading;
+            // * its model or serial, which are read building the FAN_INFO row:
+            //   everything but that row.
+            //
+            // The drawer path and the LED path, both called bare from
             // `thermalctld:FanUpdater.update`, have no such wrapper, which is
             // why those propagate.
-            if let Err(e) = self.refresh_fan(db, fan, seq, &mut counters, &mut led_writes) {
-                log::warn!("Failed to update fan status - {e}");
+            if let Some(e) = &fan.error_repr {
+                match fan.error_column.as_deref() {
+                    None | Some("name") | Some("position_in_parent") => {}
+                    Some("model") | Some("serial") => {
+                        let partial =
+                            self.refresh_fan(db, fan, seq, &mut counters, &mut led_writes, false);
+                        if let Err(db_err) = partial {
+                            log::warn!(
+                                "Failed to update {}fan status - {db_err}",
+                                error_prefix(fan.kind)
+                            );
+                            continue;
+                        }
+                    }
+                    Some(_) => {
+                        let position = fmt::position(fan.position_in_parent, seq);
+                        if let Err(db_err) = db.set_entity_info(&fan.name, &fan.parent_name, &position)
+                        {
+                            log::warn!(
+                                "Failed to update {}fan status - {db_err}",
+                                error_prefix(fan.kind)
+                            );
+                            continue;
+                        }
+                        self.status.entry(fan.name.clone()).or_default();
+                    }
+                }
+                log::warn!(
+                    "Failed to update {}fan status - {e}",
+                    error_prefix(fan.kind)
+                );
+                continue;
+            }
+            if let Err(e) = self.refresh_fan(db, fan, seq, &mut counters, &mut led_writes, true) {
+                log::warn!(
+                    "Failed to update {}fan status - {e}",
+                    error_prefix(fan.kind)
+                );
             }
         }
 
-        // Python re-reads get_status_led() after setting it so led_status
-        // reflects what the hardware actually accepted.  Keep that behaviour:
-        // take a fresh snapshot only when something was written, which in
-        // steady state (after the first cycle) is never.
-        if led_writes.is_empty() {
-            self.update_led_color(db, &fans, &drawers, stop)?;
-        } else {
+        // The LEDs are read in a pass of their own, after any were set, as
+        // `thermalctld:FanUpdater._update_led_color` reads them: what it
+        // publishes is what the hardware accepted.  A drawer's is re-read only
+        // when something was written, which in steady state (after the first
+        // cycle) is never.
+        let mut fresh_drawers = None;
+        if !led_writes.is_empty() {
             for write in &led_writes {
                 // Two calls, not one: `thermalctld:FanUpdater._set_fan_led`
                 // sets the fan's LED and then its drawer's with the same
                 // colour, tolerating either being unimplemented. Folding them
                 // into one call would hide which of the two a platform refused.
-                let fan_result = platform.set_fan_led(&write.fan_name, write.color);
-                if write.drawer_name != fmt::NOT_AVAILABLE {
-                    let _ = platform.set_fan_drawer_led(&write.drawer_name, write.color);
+                let fan_result = platform.set_fan_led(&write.fan_key, write.color);
+                if let Some(drawer) = &write.drawer_key {
+                    let _ = platform.set_fan_drawer_led(drawer, write.color);
                 }
                 if let Err(e) = fan_result {
-                    // NotSupported is expected for Phase-1 Mellanox (no SW LED).
+                    // The warning Python logs for a NotImplementedError
+                    // (`thermalctld:FanUpdater._set_fan_led`): a platform whose
+                    // fan LED is not software-controlled answers NotSupported.
                     log::warn!(
                         "Failed to set status LED for fan {}, set_status_led not implemented: {}",
                         write.fan_name,
@@ -359,11 +425,19 @@ impl FanUpdater {
                     );
                 }
             }
-            let fresh_fans =
-                fans_this_daemon_publishes(platform.get_fans(FanInfoCols::ALL).unwrap_or_default());
-            let fresh_drawers = platform.get_fan_drawers(FanDrawerInfoCols::ALL).unwrap_or_default();
-            self.update_led_color(db, &fresh_fans, &fresh_drawers, stop)?;
+            fresh_drawers = Some(
+                platform
+                    .get_fan_drawers(FanDrawerInfoCols::ALL)
+                    .unwrap_or_default(),
+            );
         }
+        let leds = fans_this_daemon_publishes(platform.get_fans(FanInfoCols::STATUS_LED, false)?);
+        self.update_led_color(
+            db,
+            &leds,
+            fresh_drawers.as_deref().unwrap_or(&drawers),
+            stop,
+        )?;
 
         let bad_fan_count = counters.total();
         if bad_fan_count > 0 && self.previous_bad_fan_count != bad_fan_count {
@@ -416,6 +490,7 @@ impl FanUpdater {
         seq: i32,
         counters: &mut BadFanCounters,
         led_writes: &mut Vec<LedWrite>,
+        publish: bool,
     ) -> Result<(), String> {
         let name = fan.name.as_str();
         db.set_entity_info(name, &fan.parent_name, &fmt::position(fan.position_in_parent, seq))?;
@@ -453,8 +528,8 @@ impl FanUpdater {
                     &format!(
                         "Fan low speed warning: {} current speed={}, target speed={}",
                         name,
-                        fmt::opt_u32(fan.speed_pct),
-                        fmt::opt_u32(fan.target_speed_pct)
+                        fmt::number(fan.speed_pct),
+                        fmt::number(fan.target_speed_pct)
                     ),
                 );
             }
@@ -467,8 +542,8 @@ impl FanUpdater {
                     &format!(
                         "Fan high speed warning: {} current speed={}, target speed={}",
                         name,
-                        fmt::opt_u32(fan.speed_pct),
-                        fmt::opt_u32(fan.target_speed_pct)
+                        fmt::number(fan.speed_pct),
+                        fmt::number(fan.target_speed_pct)
                     ),
                 );
             }
@@ -479,7 +554,8 @@ impl FanUpdater {
             let color = if status.is_ok() { LED_GREEN } else { LED_RED };
             led_writes.push(LedWrite {
                 fan_name: name.to_string(),
-                drawer_name: fan.drawer_name.clone(),
+                fan_key: fan.key.clone(),
+                drawer_key: fan.parent_key.clone(),
                 color,
             });
             // Mark initialized so we only retry on state changes, not every cycle.
@@ -492,6 +568,11 @@ impl FanUpdater {
             fan.drawer_name.clone()
         };
 
+        // Not when the model or the serial would not read: building this row
+        // is where Python reads them (see the caller).
+        if !publish {
+            return Ok(());
+        }
         let fvs = fan_row(fan, status, drawer_name_str);
         db.fan.set(name, &fvs).map_err(|e| format!("failed to update FAN_INFO for {name}: {e}"))
     }
@@ -507,7 +588,23 @@ impl FanUpdater {
             if stop() {
                 return Ok(());
             }
-            let fvs = [("led_status", fmt::led(&fan.status_led))];
+            // The fans Python has a status for, which are the ones its
+            // refresh got as far as registering (`fan_status_dict` in
+            // `thermalctld:FanUpdater._update_led_color`).
+            if !self.status.contains_key(&fan.name) {
+                continue;
+            }
+            // Only the LED is read here, so a row that failed is its LED that
+            // failed: Python's own `try` around `get_status_led`, which warns
+            // and publishes N/A.
+            let led = match &fan.error {
+                Some(e) => {
+                    log::warn!("Failed to get status LED state for fan {} - {e}", fan.name);
+                    fmt::NOT_AVAILABLE.to_string()
+                }
+                None => fmt::opt_str(&fan.status_led),
+            };
+            let fvs = [("led_status", led)];
             db.fan.set(&fan.name, &fvs).map_err(|e| {
                 format!("Failed to get status LED state for fan {} - {e}", fan.name)
             })?;
@@ -522,7 +619,7 @@ impl FanUpdater {
             if drawer.name == fmt::NOT_AVAILABLE {
                 continue;
             }
-            let fvs = [("led_status", fmt::led(&drawer.status_led))];
+            let fvs = [("led_status", fmt::opt_str(&drawer.status_led))];
             db.fan_drawer.set(&drawer.name, &fvs).map_err(|e| {
                 format!("Failed to get status LED state for fan drawer {} - {e}", drawer.name)
             })?;
@@ -539,10 +636,22 @@ fn log_status_change(normal: bool, normal_log: &str, abnormal_log: &str) {
     }
 }
 
+/// What Python's per-fan warning says the fan is: `_collect_fans`' own
+/// `error_prefix`, '' for a drawer's, `'module '` and `'PSU '` for the other
+/// two (`thermalctld:FanUpdater.update`).  A PDB's fans are not this daemon's.
+fn error_prefix(kind: FanKind) -> &'static str {
+    match kind {
+        FanKind::Drawer | FanKind::Pdb => "",
+        FanKind::Module => "module ",
+        FanKind::Psu => "PSU ",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_api::{ChassisInfoCols, FanDirection, FanDrawerInfoCols, FanInfoCols, PlatformError};
+    use platform_api::Number;
+    use platform_api::{ChassisInfoCols, DeviceKey, FanDrawerInfoCols, FanInfoCols, PlatformError};
 
 
     /// A PDB fan belongs to psud.  If this daemon published it too, two writers
@@ -594,6 +703,7 @@ mod tests {
     fn drawer(name: &str) -> FanDrawerInfo {
         FanDrawerInfo {
             name: name.to_string(),
+            key: DeviceKey::from("fan_drawers[0]"),
             position_in_parent: Some(1),
             presence: true,
             status: None,
@@ -605,24 +715,29 @@ mod tests {
         }
     }
 
+    /// A fan of the first drawer, at the position its name's number says.
     fn fan(name: &str) -> FanInfo {
+        let n: usize = name.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(1);
         FanInfo {
             name: name.to_string(),
+            key: DeviceKey::from(format!("fan_drawers[0]/fans[{}]", n - 1)),
+            parent_key: Some(DeviceKey::from("fan_drawers[0]")),
             kind: FanKind::Drawer,
             drawer_name: "drawer1".to_string(),
             parent_name: "drawer1".to_string(),
             position_in_parent: Some(1),
             presence: true,
             status: true,
-            direction: Some(FanDirection::Intake),
-            speed_pct: Some(50),
-            target_speed_pct: Some(50),
+            direction: Some("intake".to_string()),
+            speed_pct: Some(Number::Int(50)),
+            target_speed_pct: Some(Number::Int(50)),
             is_under_speed: Some(false),
             is_over_speed: Some(false),
             is_replaceable: true,
             model: None,
             serial: None,
             status_led: None,
+            ..FanInfo::new(FanKind::Drawer)
         }
     }
 
@@ -634,7 +749,7 @@ mod tests {
         row.iter().find(|(k, _)| *k == key).unwrap().1.clone()
     }
 
-    /// Requirement 1a is field names *and* order, so both are asserted.
+    /// Python's row is field names *and* order, so both are asserted.
     #[test]
     fn the_drawer_row_has_the_expected_fields_in_order() {
         assert_eq!(
@@ -690,8 +805,8 @@ mod tests {
         let mut f = fan("fan1");
         f.model = Some("MTEF-FANF-A".to_string());
         f.serial = Some("MT1234X00001".to_string());
-        f.speed_pct = Some(50);
-        f.target_speed_pct = Some(60);
+        f.speed_pct = Some(Number::Int(50));
+        f.target_speed_pct = Some(Number::Int(60));
         let row = fan_row(&f, &FanStatus::default(), "drawer1".to_string());
 
         assert_eq!(val(&row, "presence"), "True");
@@ -719,7 +834,7 @@ mod tests {
     fn booleans_are_written_the_way_python_spells_them() {
         let mut f = fan("fan1");
         f.is_replaceable = false;
-        f.direction = Some(FanDirection::Exhaust);
+        f.direction = Some("exhaust".to_string());
         let row = fan_row(&f, &FanStatus::default(), "d".to_string());
         assert_eq!(val(&row, "is_replaceable"), "False");
         assert_eq!(val(&row, "direction"), "exhaust", "lower case, unlike the booleans");
@@ -830,6 +945,7 @@ mod tests {
         drawers: Vec<FanDrawerInfo>,
         fans: Vec<FanInfo>,
         led_calls: std::cell::RefCell<Vec<(String, String)>>,
+        drawer_led_calls: std::cell::RefCell<Vec<(String, String)>>,
         /// A platform with no software-controllable LED, which is what
         /// Mellanox reports for a virtual drawer.
         led_fails: bool,
@@ -848,24 +964,36 @@ mod tests {
                 ..Default::default()
             })
         }
-        fn get_thermals(&mut self) -> Result<Vec<platform_api::ThermalInfo>, PlatformError> {
+        fn get_thermals(
+            &mut self,
+            _: platform_api::ThermalInfoCols,
+            _: &[DeviceKey],
+        ) -> Result<Vec<platform_api::ThermalInfo>, PlatformError> {
             Ok(Vec::new())
         }
         fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
             Ok(self.drawers.clone())
         }
-        fn get_fans(&mut self, _cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
             if self.fans_fail {
                 return Err(PlatformError::Backend("fan read failed".into()));
             }
             Ok(self.fans.clone())
         }
-        fn set_fan_led(&mut self, fan: &str, color: platform_api::LedColor) -> Result<(), PlatformError> {
+        fn set_fan_led(&mut self, fan: &DeviceKey, color: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
             self.led_calls.borrow_mut().push((fan.to_string(), color.to_string()));
             if self.led_fails {
                 return Err(PlatformError::NotSupported("no LED on this drawer".into()));
             }
-            Ok(())
+            Ok(Some(true))
+        }
+        fn set_fan_drawer_led(
+            &mut self,
+            drawer: &DeviceKey,
+            color: platform_api::LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
+            self.drawer_led_calls.borrow_mut().push((drawer.to_string(), color.to_string()));
+            Ok(Some(true))
         }
     }
 
@@ -880,6 +1008,7 @@ mod tests {
             drawers,
             fans,
             led_calls: std::cell::RefCell::new(Vec::new()),
+            drawer_led_calls: std::cell::RefCell::new(Vec::new()),
             led_fails: false,
             fans_fail: false,
         }
@@ -918,15 +1047,52 @@ mod tests {
         let mut u = FanUpdater::new();
 
         let mut d = drawer("drawer1");
-        d.status_led = Some(platform_api::LedColor::Green);
+        d.status_led = Some("green".to_string());
         let mut f = fan("fan1");
-        f.status_led = Some(platform_api::LedColor::Green);
+        f.status_led = Some("green".to_string());
 
         let mut p = platform(vec![d], vec![f]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("green"));
         assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green"));
+    }
+
+    /// A colour outside the four `LedColor` names is published as the
+    /// platform spelled it, as Python's `str(try_get(...))` does: mlnx's LEDs
+    /// read "orange", and "green_blink" while blinking.
+    #[test]
+    fn a_vendor_led_colour_is_published_as_the_platform_spelled_it() {
+        let m = MockDb::new(false);
+        let mut u = FanUpdater::new();
+
+        let mut d = drawer("drawer1");
+        d.status_led = Some("green_blink".to_string());
+        let mut f = fan("fan1");
+        f.status_led = Some("orange".to_string());
+
+        let mut p = platform(vec![d], vec![f]);
+        u.update(&mut p, &m.db, &never_stop).unwrap();
+
+        assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("orange"));
+        assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green_blink"));
+    }
+
+    /// A fan direction is published as the platform spelled it, as Python's
+    /// `str(try_get(...))` does: PDDF's valmaps answer "INTAKE" and
+    /// "UNKNOWN", where the base class spells "intake".
+    #[test]
+    fn a_vendor_fan_direction_is_published_as_the_platform_spelled_it() {
+        for answer in ["INTAKE", "UNKNOWN", "N/A"] {
+            let mut f = fan("fan1");
+            f.direction = Some(answer.to_string());
+            let row = fan_row(&f, &FanStatus::default(), "drawer1".into());
+            assert_eq!(val(&row, "direction"), answer);
+        }
+        let mut f = fan("fan1");
+        f.direction = None;
+        let row = fan_row(&f, &FanStatus::default(), "drawer1".into());
+        assert_eq!(val(&row, "direction"), "N/A", "no answer is try_get's N/A");
     }
 
     /// A platform with no software-readable LED reports nothing, which is
@@ -950,7 +1116,11 @@ mod tests {
         let mut p = platform(vec![drawer("drawer1")], vec![bad]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
         let calls = p.led_calls.borrow().clone();
-        assert!(calls.iter().any(|(f, c)| f == "fan1" && c == "red"), "{calls:?}");
+        let fan = "fan_drawers[0]/fans[0]";
+        assert!(calls.iter().any(|(f, c)| f == fan && c == "red"), "{calls:?}");
+        // And its drawer's, at the key the fan's row names as its parent.
+        let calls = p.drawer_led_calls.borrow().clone();
+        assert_eq!(calls, vec![("fan_drawers[0]".to_string(), "red".to_string())]);
     }
 
     /// Unlike TemperatureUpdater, the fan path does not sweep stale keys each
@@ -980,7 +1150,7 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = FanUpdater::new();
         let mut virtual_drawer = drawer("N/A");
-        virtual_drawer.status_led = Some(platform_api::LedColor::Green);
+        virtual_drawer.status_led = Some("green".to_string());
         let mut p = platform(vec![virtual_drawer], vec![fan("fan1")]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
@@ -988,6 +1158,89 @@ mod tests {
         assert_eq!(m.physical_entity.row("N/A"), None, "no PHYSICAL_ENTITY_INFO row");
         // The fan itself is still published.
         assert_eq!(m.fan.field("fan1", "presence").as_deref(), Some("True"));
+    }
+
+    /// The fans of a drawer that has no name -- every Mellanox platform
+    /// without hot-swap fans puts them all in one virtual drawer whose
+    /// `get_name()` is "N/A" -- are published under the chassis, as Python publishes them
+    /// (`thermalctld:FanUpdater._refresh_fan_status`), and the drawer is not published at all
+    /// (`thermalctld:FanUpdater._refresh_fan_drawer_status`).  The facade answers a fan of such a
+    /// drawer with `parent_name` "chassis 1" and `drawer_name` "N/A", and the drawer with the name
+    /// "N/A".
+    #[test]
+    fn the_fans_of_a_virtual_drawer_are_published_under_the_chassis() {
+        let m = MockDb::new(false);
+        let mut u = FanUpdater::new();
+        let mut f = fan("fan1");
+        f.parent_name = CHASSIS_INFO_KEY.to_string();
+        f.drawer_name = fmt::NOT_AVAILABLE.to_string();
+        let mut p = platform(vec![drawer("N/A")], vec![f]);
+        u.update(&mut p, &m.db, &never_stop).unwrap();
+
+        assert_eq!(
+            m.physical_entity.field("fan1", "parent_name").as_deref(),
+            Some("chassis 1")
+        );
+        assert_eq!(m.fan.field("fan1", "drawer_name").as_deref(), Some("N/A"));
+        assert!(m.fan_drawer.is_empty(), "no FAN_DRAWER_INFO row");
+        assert_eq!(
+            m.physical_entity.row("N/A"),
+            None,
+            "nor an entity row for the drawer"
+        );
+    }
+
+    /// One fan whose readings failed costs only itself, and Python changes
+    /// nothing for it: no row, no bad-fan count, no LED
+    /// (`thermalctld:FanUpdater._collect_fans`).  The warning carries `repr(e)` and the prefix
+    /// Python gives the fan's parent.
+    #[test]
+    fn a_fan_whose_readings_failed_is_logged_and_passed_over() {
+        let log = pmon_common::logging::capture();
+        let m = MockDb::new(false);
+        let mut u = FanUpdater::new();
+        let mut broken = fan("fan2");
+        broken.presence = false;
+        broken.error = Some("[Errno 5] Input/output error".into());
+        broken.error_repr = Some("OSError(5, 'Input/output error')".into());
+        let mut psu_fan = fan("psu1_fan1");
+        psu_fan.kind = FanKind::Psu;
+        psu_fan.error_repr = Some("OSError(5, 'Input/output error')".into());
+        psu_fan.error = Some("[Errno 5] Input/output error".into());
+        let mut p = platform(vec![drawer("drawer1")], vec![fan("fan1"), broken, psu_fan]);
+        u.update(&mut p, &m.db, &never_stop).unwrap();
+
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to update fan status - OSError(5, 'Input/output error')"
+        ));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to update PSU fan status - OSError(5, 'Input/output error')"
+        ));
+        assert_eq!(m.fan.row("fan2"), None, "no row for it");
+        assert_eq!(m.physical_entity.row("fan2"), None);
+        assert!(m.fan.row("fan1").is_some(), "the others are published");
+        assert!(
+            !log.logged(log::Level::Warn, "Insufficient number of working fans"),
+            "an absent reading it never made is not a missing fan"
+        );
+        assert_eq!(
+            p.led_calls
+                .borrow()
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>(),
+            ["fan_drawers[0]/fans[0]"],
+            "and no LED for it"
+        );
+    }
+
+    #[test]
+    fn the_warning_prefix_is_pythons() {
+        assert_eq!(error_prefix(FanKind::Drawer), "");
+        assert_eq!(error_prefix(FanKind::Module), "module ");
+        assert_eq!(error_prefix(FanKind::Psu), "PSU ");
     }
 
     /// Two virtual drawers must not collapse into one row either.
@@ -1235,7 +1488,7 @@ mod tests {
         let m = MockDb::new(false);
         let mut u = FanUpdater::new();
         let mut f = fan("fan1");
-        f.status_led = Some(platform_api::LedColor::Green);
+        f.status_led = Some("green".to_string());
         let mut p = platform(vec![drawer("drawer1")], vec![f]);
 
         u.update(&mut p, &m.db, &|| true).unwrap();

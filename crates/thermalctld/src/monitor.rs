@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of ThermalMonitor's polling loop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,8 +30,9 @@ pub struct Monitor {
     ///
     /// Python runs the policy on a second loop, on the main thread, at the
     /// interval the manager reports rather than the one the updaters use
-    /// (`thermalctld:ThermalControlDaemon.run`).  One loop here, gated — see 12
-    /// for what that costs — but the cadence is the manager's.
+    /// (`thermalctld:ThermalControlDaemon.run`).  One loop here, gated, so a
+    /// policy round waits for the cycle's updates and runs at most once per
+    /// cycle -- but within that, the cadence is the manager's.
     policy_gate: PollingGate,
     /// On the BMC, the watch over the mirror the switch host pushes.
     bmc_watch: Option<(ChassisThermalWatch, BmcEventLogger)>,
@@ -74,6 +69,15 @@ impl Monitor {
         // than the cycle is unreachable until this runs.
         let mut intervals = intervals;
         let update_interval = intervals.resolve(update_interval);
+        if is_switch_bmc {
+            // `thermalctld:ThermalMonitor._init_switch_host_thermal_monitor`,
+            // through the same INFO logger.  Nothing to open: the mirror is
+            // this BMC's own STATE_DB, which the loop already reads.
+            pmon_common::info_logger!(
+                "Monitoring chassis thermals (BMC STATE_DB {}) for CRITICAL breaches",
+                crate::db::TEMPERATURE_INFO
+            );
+        }
         Self {
             initial_interval,
             update_interval,
@@ -85,6 +89,22 @@ impl Monitor {
             policy_gate: PollingGate::new(),
             bmc_watch: is_switch_bmc.then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
         }
+    }
+
+    /// The same monitor with its temperature updater supplied, so a test can
+    /// hand it one whose BMC mirror it can read back.
+    #[cfg(test)]
+    pub fn with_temperature_updater(mut self, updater: TemperatureUpdater) -> Self {
+        self.temperature_updater = updater;
+        self
+    }
+
+    /// Take the rows the temperature updater mirrored to the BMC back off it.
+    ///
+    /// For `main::run`'s shutdown, beside `StateDb::clear`: the mirror lives
+    /// in the updater, and the updater lives here.
+    pub fn clear_bmc_mirror(&mut self) {
+        self.temperature_updater.clear_mirror();
     }
 
     /// Run the thermal monitoring loop.
@@ -118,7 +138,9 @@ impl Monitor {
         tm_ready: Arc<AtomicBool>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Option<i32> {
-        log::info!("Start thermal monitoring loop");
+        // `ThermalMonitor`'s own logger, which Python sets to INFO: the two
+        // INFO lines thermalctld sends.
+        pmon_common::info_logger!("Start thermal monitoring loop");
 
         // Learned once the manager is up, not here.  Python reads the interval
         // immediately after `initialize()` and `load()` in
@@ -245,7 +267,7 @@ impl Monitor {
             }
         }
 
-        log::info!("Stop thermal monitoring loop");
+        pmon_common::info_logger!("Stop thermal monitoring loop");
         None
     }
 }
@@ -255,7 +277,10 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use platform_api::{ChassisInfo, ChassisInfoCols, FanDrawerInfo, FanDrawerInfoCols, FanInfo, FanInfoCols, PlatformError, ThermalInfo};
+    use platform_api::{
+        ChassisInfo, ChassisInfoCols, DeviceKey, FanDrawerInfo, FanDrawerInfoCols, FanInfo,
+        FanInfoCols, PlatformError, ThermalInfo, ThermalInfoCols,
+    };
 
     use crate::db::mock::MockDb;
 
@@ -287,7 +312,11 @@ mod tests {
             Ok(ChassisInfo::default())
         }
 
-        fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, PlatformError> {
+        fn get_thermals(
+            &mut self,
+            _cols: ThermalInfoCols,
+            _skip: &[DeviceKey],
+        ) -> Result<Vec<ThermalInfo>, PlatformError> {
             self.log.lock().unwrap().push("thermals");
             // One cycle is one temperature update: the fan update may be gated
             // out, this never is.
@@ -314,12 +343,12 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn get_fans(&mut self, _cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
             Ok(Vec::new())
         }
 
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
         }
 
         fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
@@ -569,17 +598,21 @@ mod tests {
             fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
                 self.inner.get_chassis_info(cols)
             }
-            fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, PlatformError> {
+            fn get_thermals(
+                &mut self,
+                cols: ThermalInfoCols,
+                skip: &[DeviceKey],
+            ) -> Result<Vec<ThermalInfo>, PlatformError> {
                 std::thread::sleep(std::time::Duration::from_millis(30));
-                self.inner.get_thermals()
+                self.inner.get_thermals(cols, skip)
             }
             fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.inner.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
-                self.inner.get_fans(cols)
+            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+                self.inner.get_fans(cols, absorb)
             }
-            fn set_fan_led(&mut self, a: &str, c: platform_api::LedColor) -> Result<(), PlatformError> {
+            fn set_fan_led(&mut self, a: &platform_api::DeviceKey, c: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
                 self.inner.set_fan_led(a, c)
             }
             fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
@@ -696,19 +729,23 @@ mod tests {
             fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
                 self.inner.get_chassis_info(cols)
             }
-            fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, PlatformError> {
+            fn get_thermals(
+                &mut self,
+                cols: ThermalInfoCols,
+                skip: &[DeviceKey],
+            ) -> Result<Vec<ThermalInfo>, PlatformError> {
                 self.cycles += 1;
                 // Up from the third cycle on.
                 if self.cycles == 3 {
                     self.ready.store(true, Ordering::Release);
                 }
-                self.inner.get_thermals()
+                self.inner.get_thermals(cols, skip)
             }
             fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.inner.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
-                self.inner.get_fans(cols)
+            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+                self.inner.get_fans(cols, absorb)
             }
             fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
                 self.inner.tm_get_interval()
@@ -755,14 +792,18 @@ mod tests {
             fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
                 self.0.get_chassis_info(cols)
             }
-            fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, PlatformError> {
-                self.0.get_thermals()
+            fn get_thermals(
+                &mut self,
+                cols: ThermalInfoCols,
+                skip: &[DeviceKey],
+            ) -> Result<Vec<ThermalInfo>, PlatformError> {
+                self.0.get_thermals(cols, skip)
             }
             fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.0.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
-                self.0.get_fans(cols)
+            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+                self.0.get_fans(cols, absorb)
             }
             fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
                 self.0.tm_run_policy()
