@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! STATE_DB tables written by thermalctld.
 //!
 //! The tables sit behind [`TableLike`] rather than being `swss_common::Table`
@@ -13,6 +7,7 @@
 //! expressed as a trait.
 
 pub use pmon_common::db::{open as open_named, TableLike};
+use pmon_common::db::STATE_DB;
 
 pub const TEMPERATURE_INFO: &str = "TEMPERATURE_INFO";
 pub const FAN_INFO: &str = "FAN_INFO";
@@ -22,7 +17,6 @@ pub const PHYSICAL_ENTITY_INFO: &str = "PHYSICAL_ENTITY_INFO";
 /// Key under which chassis-level devices are parented.
 pub const CHASSIS_INFO_KEY: &str = "chassis 1";
 
-const STATE_DB: &str = "STATE_DB";
 const CHASSIS_STATE_DB: &str = "CHASSIS_STATE_DB";
 const LIQUID_COOLING_INFO: &str = "LIQUID_COOLING_INFO";
 const SYSTEM_LEAK_STATUS: &str = "SYSTEM_LEAK_STATUS";
@@ -89,7 +83,7 @@ impl LeakTables {
     /// still: `bmcctld` subscribes to it and cuts power to the switch host on
     /// what it says.
     ///
-    /// Measured on slm-31 against the Python daemon on the same switch:
+    /// Measured on a liquid-cooled switch against the Python daemon on the same switch:
     /// stopping thermalctld left 5 rows under Rust and 2 under Python, and the
     /// three extra were `LIQUID_COOLING_INFO|leakage1`, `|leakage2` and
     /// `SYSTEM_LEAK_STATUS|system`.
@@ -115,16 +109,20 @@ impl StateDb {
     /// and `thermalctld:TemperatureUpdater.__del__` -- which run when the
     /// interpreter finalises on `sys.exit()`.  The Rust updaters are Rust, so
     /// nothing runs on their behalf and the rows have to go explicitly.
-    /// Measured on an SN5640: stopping the Python daemon left 8 rows behind,
+    /// Measured on one switch: stopping the Python daemon left 8 rows behind,
     /// stopping this one left 60, every one of them stale and indistinguishable
     /// from live data to `show platform temperature`, to the entity MIB, and to
     /// system-health.
     ///
-    /// Every key in each table is removed, not just the ones this run
-    /// published -- that is what the Python destructors do, and a row written
-    /// by an earlier run of the same daemon is exactly as stale.
-    /// `PHYSICAL_ENTITY_INFO` is keyed the same way, so its matching rows go
-    /// with them.
+    /// Every key in `FAN_INFO`, `FAN_DRAWER_INFO` and `TEMPERATURE_INFO` is
+    /// removed, not just the ones this run published -- that is what the
+    /// Python destructors do, and a row written by an earlier run of the same
+    /// daemon is exactly as stale.  `PHYSICAL_ENTITY_INFO` and, where there is
+    /// one, the slot-suffixed chassis table are not enumerated: each is swept
+    /// only by the keys found in those three, so a row there with no local
+    /// counterpart stays.  That too is Python, whose destructors walk the
+    /// local tables' keys and delete the matching rows elsewhere.  The BMC
+    /// mirror is not here at all; it is `BmcMirror::clear`.
     ///
     /// Best-effort throughout: this runs while the switch is shutting down and
     /// a database that has already gone away must not stop the daemon exiting.
@@ -151,7 +149,7 @@ impl StateDb {
     ///
     /// `Table::new` takes the connector by value and `DbConnector` is not
     /// `Clone`, so each table opens its own redis connection. Python shares
-    /// one; the extra sockets are the price, and 12 records why.
+    /// one; the extra sockets are the price.
     pub fn open_with(slot_or_dpu_id: Option<i64>, mut open: OpenNamed) -> Result<Self, String> {
         Ok(Self {
             temperature: open(STATE_DB, TEMPERATURE_INFO)?,
@@ -333,8 +331,8 @@ mod tests {
         );
     }
 
-    /// Python writes position first and parent second; the order is part of
-    /// requirement 1a like every other row.
+    /// Python writes position first and parent second, and the order is
+    /// Python's here as in every other row.
     #[test]
     fn entity_info_field_order_matches_python() {
         let m = MockDb::new(false);
