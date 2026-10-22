@@ -1,20 +1,14 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
-//! thermalctld, in Rust, reading hardware via a native platform crate.
+//! thermalctld, in Rust, over the generated platform API.
 //!
-//! On Mellanox/NVIDIA: reads thermal and fan state directly from
-//! hw-management sysfs, writing the same TEMPERATURE_INFO, FAN_INFO,
-//! FAN_DRAWER_INFO and PHYSICAL_ENTITY_INFO entries to STATE_DB as the
-//! Python implementation.  No Python interpreter, no gRPC server, no
-//! separate platform-api-server supervisord program.
+//! Writes the same TEMPERATURE_INFO, FAN_INFO, FAN_DRAWER_INFO and
+//! PHYSICAL_ENTITY_INFO entries to STATE_DB as the Python implementation.
+//! The platform is reached through `platform_provider::open`, and which
+//! implementation that opens is the `--platform-api` switch.  The one every
+//! platform has today is the PyO3 bridge: it embeds a Python interpreter and
+//! calls the vendor's own `sonic_platform`, so this binary names no vendor.
 //!
-//! Other vendors keep running the Python thermalctld unchanged: this package
-//! names no vendor, and is built and installed only for a platform whose own
-//! `rules.mk` opts in.
+//! The Python thermalctld is unchanged, and `pmon_daemon_control.json` picks
+//! which of the two a platform runs.
 
 mod bmc;
 mod db;
@@ -24,6 +18,8 @@ mod fan_updater;
 mod fmt;
 mod leak_updater;
 mod monitor;
+#[cfg(all(test, feature = "parity"))]
+mod parity;
 mod polling;
 mod temp_updater;
 
@@ -31,10 +27,11 @@ use clap::Parser;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{signal, Signal, SignalKind};
 use tokio::sync::watch;
 
 use platform_api::{ChassisInfoCols, PlatformApi, PlatformError};
+use pmon_common::report_once::Latch;
 
 use db::StateDb;
 use monitor::Monitor;
@@ -182,7 +179,8 @@ async fn main() {
         }
     };
 
-    // Signal handling: SIGTERM and SIGINT both trigger a graceful shutdown.
+    // Signal handling: SIGTERM and SIGINT both trigger a graceful shutdown,
+    // and SIGHUP is absorbed (see `StopSignals`).
     //
     // The signal is remembered, not just the fact of it, because it decides the
     // exit code.  Python sets `exit_code = 128 + sig` in
@@ -201,19 +199,11 @@ async fn main() {
     // STATE_DB goes away.
     let shutdown_tx = Arc::new(shutdown_tx);
     let signal_tx = Arc::clone(&shutdown_tx);
+    // Installed here rather than inside the task, so all three are in place
+    // before anything below can take long enough for a signal to arrive.
+    let mut signals = StopSignals::install().expect("failed to install signal handlers");
     tokio::spawn(async move {
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-        let kind = tokio::select! {
-            _ = sigterm.recv() => {
-                log::info!("caught SIGTERM, shutting down");
-                SignalKind::terminate()
-            }
-            _ = sigint.recv() => {
-                log::info!("caught SIGINT, shutting down");
-                SignalKind::interrupt()
-            }
-        };
+        let kind = signals.wait().await;
         signal_code.store(pmon_common::cycles::exit_code_for(kind), Ordering::SeqCst);
         let _ = signal_tx.send(true);
     });
@@ -239,10 +229,17 @@ async fn main() {
         chassis.as_ref(),
         // Its own platform handle, for the same reason the leak thread has
         // one: the monitor holds this one mutably for the whole run.
+        //
+        // Either thread is half of this daemon, so a panic on one takes the
+        // process down, as one on the poll loop does (`pmon_common::thread`).
         &|ready| {
             std::thread::Builder::new()
                 .name("tm-init".into())
-                .spawn(move || tm_init_thread_main(which, ready))
+                .spawn(move || {
+                    pmon_common::thread::abort_on_panic("tm-init", || {
+                        tm_init_thread_main(which, ready)
+                    })
+                })
         },
         // Its own platform handle and its own tables: the monitor holds the
         // other one mutably, and each thread owning its DB connections is what
@@ -253,7 +250,9 @@ async fn main() {
             std::thread::Builder::new()
                 .name("leak-updater".into())
                 .spawn(move || {
-                    leak_thread_main(interval, is_bmc, which, rx, exit_code, shutdown_tx)
+                    pmon_common::thread::abort_on_panic("leak-updater", || {
+                        leak_thread_main(interval, is_bmc, which, rx, exit_code, shutdown_tx)
+                    })
                 })
         },
         shutdown_rx,
@@ -269,6 +268,52 @@ async fn main() {
     // not need to know that is what it holds.
     platform.finalize();
     std::process::exit(code);
+}
+
+/// The signals the daemon listens for, installed together.
+///
+/// SIGTERM and SIGINT stop it.  SIGHUP is listened for only so that it can be
+/// ignored: with no handler its default action ends the process on the spot,
+/// skipping everything `run` does on the way out -- `tm_deinitialize()`, which
+/// on Mellanox hands the fans back to hw-management-tc, and the STATE_DB
+/// cleanup -- and a SIGHUP is what a log rotation sends.  Python registers it
+/// and lets it through in `thermalctld:ThermalControlDaemon.signal_handler`,
+/// and `pmon_common::cycles` does the same for the other daemons; the log
+/// line is theirs.
+struct StopSignals {
+    sigterm: Signal,
+    sigint: Signal,
+    sighup: Signal,
+}
+
+impl StopSignals {
+    fn install() -> std::io::Result<Self> {
+        Ok(Self {
+            sigterm: signal(SignalKind::terminate())?,
+            sigint: signal(SignalKind::interrupt())?,
+            sighup: signal(SignalKind::hangup())?,
+        })
+    }
+
+    /// Wait for a signal that stops the daemon, and say which one it was.
+    async fn wait(&mut self) -> SignalKind {
+        loop {
+            tokio::select! {
+                // `thermalctld:ThermalControlDaemon.signal_handler`'s words.
+                _ = self.sigterm.recv() => {
+                    log::info!("Caught signal 'SIGTERM' - exiting...");
+                    return SignalKind::terminate();
+                }
+                _ = self.sigint.recv() => {
+                    log::info!("Caught signal 'SIGINT' - exiting...");
+                    return SignalKind::interrupt();
+                }
+                _ = self.sighup.recv() => {
+                    log::info!("Caught signal 'SIGHUP' - ignoring...");
+                }
+            }
+        }
+    }
 }
 
 /// The daemon between "the platform is up and the tables are open" and "the
@@ -369,16 +414,32 @@ async fn run(
 
     let db_lost = monitor.run(platform, db, Arc::clone(&tm_ready), shutdown_rx).await;
 
+    // What Python's signal handlers do the moment SIGTERM arrives, before
+    // anything is joined.  The vendor's first: a handler it installed while
+    // its chassis was built runs ahead of the daemon's, and mlnx's sets the
+    // event that ends `initialize()`'s 300 s wait for the thermal files on
+    // SPC1.  Then thermalctld's own, which stops the manager
+    // (`thermalctld:ThermalControlDaemon.signal_handler`).  Here the daemon
+    // owns the signal, so it hands both on itself -- without the first, the
+    // join below sat out the whole wait and supervisord SIGKILLed the daemon
+    // after 10 s, its rows left behind.  Python's loop ends only on a signal;
+    // this one also ends on a lost STATE_DB, which is a shutdown all the same.
+    pmon_common::cycles::notify_shutdown(platform);
+    if let Err(e) = platform.tm_stop() {
+        log::warn!("ThermalManager stop failed: {e}");
+    }
+
     if let Some(h) = leak_thread {
         let _ = h.join();
         pmon_common::notice!("Joined thread for liquid cooling updater");
     }
 
     // Joined before the manager is put back, so the two calls stay paired: a
-    // `deinitialize()` racing an `initialize()` still inside its 300 s wait
-    // would stop a manager that had not started.  Python cannot reach its
-    // `deinit()` at all while `initialize()` is blocked, so waiting here is
-    // the same behaviour rather than a stall this port introduces.
+    // `deinitialize()` racing an `initialize()` still inside its wait would
+    // stop a manager that had not started.  The join is prompt because of the
+    // notification above: Python cannot reach its `deinit()` while
+    // `initialize()` is blocked either, but there the vendor's handler has
+    // already ended the wait, and here nothing else would.
     if let Some(h) = tm_init_thread {
         let _ = h.join();
     }
@@ -390,7 +451,11 @@ async fn run(
     }
 
     // Rows this daemon owns go with it.  Mirrors the two Python destructors;
-    // see `StateDb::clear`.
+    // see `StateDb::clear`.  The copies on the BMC go too: the same
+    // `thermalctld:TemperatureUpdater.__del__` deletes each row from the
+    // BMC's TEMPERATURE_INFO as well, and a row left there reads on the BMC
+    // as a live temperature from a daemon that is no longer running.
+    monitor.clear_bmc_mirror();
     db.clear();
 
     db_lost
@@ -508,11 +573,6 @@ fn final_exit_code(signalled: i32, db_lost: Option<i32>) -> i32 {
     }
 }
 
-/// The leak thread's body, with the platform and the tables already opened.
-///
-/// The two steps above it — building a `Platform` and opening the three tables
-/// — reach hardware and redis; everything that decides *what is published* is
-/// here, where it can be driven.
 /// Which slot the daemon publishes under, if any.
 ///
 /// Mirrors the slot choice in `thermalctld:TemperatureUpdater.__init__`: a
@@ -531,6 +591,11 @@ fn slot_or_dpu_id_of(info: &platform_api::ChassisInfo) -> Option<i64> {
     }
 }
 
+/// The leak thread's body, with the platform and the tables already opened.
+///
+/// The two steps `leak_thread_main` takes first — building a `Platform` and
+/// opening the three tables — reach hardware and redis; everything that
+/// decides *what is published* is here, where it can be driven.
 fn leak_loop(
     platform: &mut dyn platform_api::PlatformApi,
     tables: &db::LeakTables,
@@ -556,8 +621,8 @@ fn leak_loop(
     let mut events = event_log::BmcEventLogger::new(is_switch_bmc);
     // Logged once, then again only after a read succeeds: this loop runs every
     // half second on a liquid-cooled box, and a per-cycle error would bury the
-    // log.  Same shape as the BMC mirror's `failed` flag.
-    let mut read_failed = false;
+    // log.
+    let mut read = Latch::new();
     let mut db_lost: Option<i32> = None;
 
     loop {
@@ -569,17 +634,14 @@ fn leak_loop(
         // without anyone noticing -- LIQUID_COOLING_INFO simply stays empty.
         let sensors = match platform.get_leak_sensors() {
             Ok(s) => {
-                if read_failed {
-                    pmon_common::notice!("leak updater: sensor read recovered");
-                    read_failed = false;
-                }
+                pmon_common::recovered!(read, "leak updater: sensor read recovered");
                 s
             }
             Err(e) => {
-                if !read_failed {
-                    log::error!("leak updater: cannot read leak sensors, leak detection is not running: {e}");
-                    read_failed = true;
-                }
+                pmon_common::fail_once!(
+                    read,
+                    "leak updater: cannot read leak sensors, leak detection is not running: {e}"
+                );
                 Vec::new()
             }
         };
@@ -644,7 +706,7 @@ fn sleep_or_shutdown(interval: Duration, shutdown: &watch::Receiver<bool>) -> bo
 /// `thermalctld:ThermalControlDaemon.__init__`: the flag is checked first and
 /// the platform is only asked when it is unset.  An `and` here would silently
 /// disable leak detection on a box whose flag is set but whose
-/// `is_liquid_cooled()` answers False -- SN6600_LD is such a box, and leak
+/// `is_liquid_cooled()` answers False -- such boxes exist, and leak
 /// detection is a safety function.
 fn leak_enabled(flag: bool, chassis: Option<&platform_api::ChassisInfo>) -> bool {
     flag || chassis.is_some_and(|i| i.is_liquid_cooled)
@@ -715,7 +777,10 @@ mod tests {
     // ── The leak thread's body ────────────────────────────────────────────
 
     use crate::db::mock::MockLeak;
-    use platform_api::{ChassisInfo, ChassisInfoCols, FanDrawerInfo, FanDrawerInfoCols, FanInfo, FanInfoCols, LeakProfile, LeakSensorInfo, PlatformError, ThermalInfo};
+    use platform_api::{
+        ChassisInfo, ChassisInfoCols, DeviceKey, FanDrawerInfo, FanDrawerInfoCols, FanInfo,
+        FanInfoCols, LeakProfile, LeakSensorInfo, PlatformError, ThermalInfo, ThermalInfoCols,
+    };
 
     struct FakePlatform {
         profiles: Vec<LeakProfile>,
@@ -726,17 +791,21 @@ mod tests {
         fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
             Ok(ChassisInfo::default())
         }
-        fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, PlatformError> {
+        fn get_thermals(
+            &mut self,
+            _: ThermalInfoCols,
+            _: &[DeviceKey],
+        ) -> Result<Vec<ThermalInfo>, PlatformError> {
             Ok(Vec::new())
         }
         fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fans(&mut self, _cols: FanInfoCols) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
         }
         fn get_leak_profiles(&mut self) -> Result<Vec<LeakProfile>, PlatformError> {
             Ok(self.profiles.clone())
@@ -955,6 +1024,9 @@ mod tests {
     struct Tm {
         calls: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
         refuse: bool,
+        /// Set by `notify_shutdown`, as a vendor's handler sets the event its
+        /// waits check.
+        shutdown: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     }
 
     /// A thermal-manager start that runs inline on a second handle sharing the
@@ -967,7 +1039,7 @@ mod tests {
         refuse: bool,
     ) -> impl Fn(Arc<AtomicBool>) -> std::io::Result<std::thread::JoinHandle<()>> {
         move |ready| {
-            let mut second = Tm { calls: std::sync::Arc::clone(&calls), refuse };
+            let mut second = Tm { calls: std::sync::Arc::clone(&calls), refuse, ..Default::default() };
             let _ = second.tm_initialize();
             ready.store(true, Ordering::Release);
             std::thread::Builder::new().spawn(|| {})
@@ -995,6 +1067,17 @@ mod tests {
         }
         fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
             self.answer()
+        }
+        fn tm_stop(&mut self) -> Result<(), PlatformError> {
+            self.calls.lock().unwrap().push("stop");
+            self.answer()
+        }
+        fn notify_shutdown(&mut self) -> Result<(), PlatformError> {
+            self.calls.lock().unwrap().push("notify");
+            let (told, cv) = &*self.shutdown;
+            *told.lock().unwrap() = true;
+            cv.notify_all();
+            Ok(())
         }
     }
 
@@ -1049,11 +1132,44 @@ mod tests {
         )
         .await;
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "deinitialize"]);
+        // The middle two are Python's signal handlers, the vendor's and then
+        // thermalctld's (`thermalctld:ThermalControlDaemon.signal_handler`).
+        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
         assert!(
             m.temperature.get("ASIC").unwrap().is_none(),
             "the rows this daemon owns go with it -- 60 were left behind on an SN5640 before"
         );
+    }
+
+    /// The rows mirrored to the BMC go on the way out as well as the local
+    /// ones.  `thermalctld:TemperatureUpdater.__del__` deletes each row from
+    /// the BMC's TEMPERATURE_INFO beside the local one; leaving them would
+    /// have the BMC reading temperatures from a daemon that is not running.
+    #[tokio::test]
+    async fn a_shutdown_takes_the_mirrored_rows_off_the_bmc_too() {
+        use crate::bmc::BmcMirror;
+        use crate::temp_updater::TemperatureUpdater;
+        use pmon_common::db::MockTable;
+
+        let mut p = Tm::default();
+        let m = MockDb::new(false);
+        let remote = MockTable::new();
+        let r = remote.clone();
+        let mut mirror = BmcMirror::with_opener(
+            "10.0.0.1",
+            Box::new(move |_addr: &str| Ok(Box::new(r.clone()) as Box<dyn TableLike>)),
+        );
+        mirror.set("ASIC", &[("temperature", "42".to_string())]);
+        assert!(!remote.is_empty());
+
+        let mut monitor = Monitor::with_env(
+            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false)
+            .with_temperature_updater(TemperatureUpdater::with_mirror(Some(mirror)));
+
+        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &tm_up,
+            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+
+        assert!(remote.is_empty(), "the BMC's copy goes with the daemon");
     }
 
     /// A platform with no thermal manager is not an error.  Most platforms
@@ -1072,7 +1188,7 @@ mod tests {
         run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &start_tm,
             &|_i, _rx| panic!("leak detection is off"), stopped()).await;
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "deinitialize"]);
+        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
         assert!(m.temperature.get("ASIC").unwrap().is_none());
     }
 
@@ -1098,7 +1214,7 @@ mod tests {
         let did_join = std::sync::Arc::clone(&joined);
         let seen = std::sync::Arc::clone(&calls);
         let start_tm = move |ready: Arc<AtomicBool>| {
-            let mut second = Tm { calls: std::sync::Arc::clone(&seen), refuse: false };
+            let mut second = Tm { calls: std::sync::Arc::clone(&seen), ..Default::default() };
             let f = std::sync::Arc::clone(&did_join);
             std::thread::Builder::new().spawn(move || {
                 let _ = second.tm_initialize();
@@ -1122,8 +1238,66 @@ mod tests {
         assert!(joined.load(Ordering::SeqCst), "the init thread has to be joined");
         // Still paired, though the two calls were made on different handles:
         // `ThermalManager`'s methods are @classmethod, so both reach the same
-        // Python class object.
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "deinitialize"]);
+        // Python class object.  Where `initialize` lands among the stop's
+        // calls is the thread's business; that it lands before
+        // `deinitialize` is the join's.
+        let calls = calls.lock().unwrap();
+        assert!(calls.contains(&"initialize"), "{calls:?}");
+        assert_eq!(calls.last(), Some(&"deinitialize"), "{calls:?}");
+    }
+
+    /// A stop reaches the platform before the thermal manager's thread is
+    /// joined, and ends the wait that thread is in.
+    ///
+    /// On SPC1 `tm_initialize()` waits up to 300 s for the thermal files, and
+    /// only the vendor's own shutdown handler ends that wait.  Joined first,
+    /// the thread held the daemon in it until supervisord SIGKILLed it 10 s
+    /// after the SIGTERM, the rows left behind.  The init thread here waits as
+    /// the vendor does, on what `notify_shutdown` sets, for longer than the
+    /// test may take.
+    #[tokio::test]
+    async fn a_stop_ends_the_thermal_managers_wait_before_it_is_joined() {
+        let mut p = Tm::default();
+        let calls = std::sync::Arc::clone(&p.calls);
+        let m = MockDb::new(false);
+        m.temperature.set("ASIC", &[("temperature", "42".to_string())]).unwrap();
+        let mut monitor = Monitor::with_env(
+            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+
+        let seen = std::sync::Arc::clone(&calls);
+        let shutdown = std::sync::Arc::clone(&p.shutdown);
+        let start_tm = move |ready: Arc<AtomicBool>| {
+            let (calls, shutdown) = (std::sync::Arc::clone(&seen), std::sync::Arc::clone(&shutdown));
+            // Waiting before `run` goes on, so the stop finds it waiting.
+            let (entered, waiting) = std::sync::mpsc::channel();
+            let h = std::thread::Builder::new().spawn(move || {
+                calls.lock().unwrap().push("initialize");
+                let (told, cv) = &*shutdown;
+                let told = told.lock().unwrap();
+                entered.send(()).unwrap();
+                let (told, _) = cv
+                    .wait_timeout_while(told, Duration::from_secs(60), |told| !*told)
+                    .unwrap();
+                calls.lock().unwrap().push(if *told { "aborted" } else { "timed out" });
+                ready.store(true, Ordering::Release);
+            });
+            waiting.recv().unwrap();
+            h
+        };
+
+        let begin = std::time::Instant::now();
+        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &start_tm,
+            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+
+        assert!(begin.elapsed() < Duration::from_secs(10), "took {:?}", begin.elapsed());
+        let calls = calls.lock().unwrap();
+        let at = |c: &str| calls.iter().position(|x| *x == c);
+        assert_eq!(calls.first(), Some(&"initialize"));
+        assert!(at("aborted").is_some(), "the wait has to have been ended: {calls:?}");
+        assert!(at("notify") < at("aborted"), "{calls:?}");
+        assert!(at("stop") < at("deinitialize"), "{calls:?}");
+        assert_eq!(calls.last(), Some(&"deinitialize"), "{calls:?}");
+        assert!(m.temperature.get("ASIC").unwrap().is_none());
     }
 
     /// A manager that refused still releases the policy.
@@ -1273,7 +1447,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "deinitialize"]);
+        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
         assert!(
             log.logged(log::Level::Error, "leak monitoring is off"),
             "a safety function that did not start has to say so"
@@ -1431,7 +1605,6 @@ mod tests {
                 "profiles that cannot be read disable the escalation timers, loudly");
         assert!(log.logged(log::Level::Error, "leak detection is not running"));
         assert!(log.contains("sensor read recovered"));
-        assert!(log.contains("leak updater stopped"));
     }
 
     /// The wait is sliced so a shutdown is not held up by it.  `run` joins this
@@ -1453,6 +1626,46 @@ mod tests {
         assert!(!sleep_or_shutdown(Duration::from_millis(1), &rx));
     }
 
+    /// Send `sig` to this test process, through the shell's `kill`: the crate
+    /// has no libc of its own to do it with.
+    fn raise(sig: &str) {
+        let status = std::process::Command::new("sh")
+            .args(["-c", &format!("kill -{sig} {}", std::process::id())])
+            .status()
+            .expect("sh runs");
+        assert!(status.success(), "kill -{sig} failed");
+    }
+
+    /// A SIGHUP is ignored, as Python's
+    /// `thermalctld:ThermalControlDaemon.signal_handler` ignores it, and a
+    /// SIGTERM after it still stops the daemon.  Quietly: Python's line is a
+    /// `log_info` through `DaemonBase`, which drops it.
+    ///
+    /// With no handler for it the SIGHUP's default action ends the process
+    /// outright -- this test binary included, which is how the test fails --
+    /// and on a switch that skips `tm_deinitialize()` and the STATE_DB
+    /// cleanup, leaving hw-management-tc suspended and every row behind.
+    #[tokio::test]
+    async fn a_sighup_does_not_stop_the_daemon() {
+        let log = pmon_common::logging::capture();
+        let mut signals = StopSignals::install().expect("handlers install");
+        let wait = signals.wait();
+        tokio::pin!(wait);
+
+        raise("HUP");
+        tokio::select! {
+            kind = &mut wait => panic!("a SIGHUP stopped the daemon ({kind:?})"),
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
+        assert!(!log.contains("Caught signal 'SIGHUP'"), "and says nothing, as Python does");
+
+        raise("TERM");
+        let kind = tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .expect("a SIGTERM still stops it");
+        assert_eq!(kind, SignalKind::terminate());
+    }
+
     /// Bug 16: the leak thread must take its rows with it.
     ///
     /// `StateDb::clear` covers the fan and temperature tables; the three leak
@@ -1460,7 +1673,7 @@ mod tests {
     /// their only writer -- and so nothing cleared them.  Python does, from
     /// `thermalctld:LiquidCoolingUpdater.__del__`.
     ///
-    /// Measured on slm-31: stopping thermalctld left `LIQUID_COOLING_INFO|
+    /// Measured on a liquid-cooled switch: stopping thermalctld left `LIQUID_COOLING_INFO|
     /// leakage1`, `|leakage2` and `SYSTEM_LEAK_STATUS|system` behind under
     /// Rust and nothing under Python.  A stale `leaking=No` reads exactly like
     /// a live one to `leakageshow`, to `show platform leak status`, and to

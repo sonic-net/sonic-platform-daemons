@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Why each DPU last went down, kept on disk and republished.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater.dpu_boot_id_update`,
@@ -19,27 +13,27 @@
 //! copy of this daemon publishes the boot_id into DPU_STATE, and the NPU
 //! records the cause on the DPU's behalf, because a DPU that crashed is in no
 //! position to record why.  It lives under `/host`, so it outlives both the
-//! container and the reboot -- which is the whole point: `show reboot-cause
-//! history` on a DPU is reading files this wrote.  Every file is written
-//! atomically and synced, as `chassisd:_atomic_write` does, so a power cut
-//! leaves either the old record or the new one and never half of either.
+//! container and the reboot -- the files are the record, and the REBOOT_CAUSE
+//! rows in CHASSIS_STATE_DB that `show reboot-cause history` reads are rebuilt
+//! from them.  Every file is written atomically and synced, as
+//! `chassisd:_atomic_write` does, so a power cut leaves either the old record
+//! or the new one and never half of either.
 
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use platform_api::{ModuleRebootCause, PlatformError};
+use platform_api::{ModuleRebootCause, PlatformApi, PlatformError};
 use pmon_common::db::TableLike;
+// What `chassisd:try_get` answers for a platform that does not implement
+// `get_reboot_cause`, and so the cause such a platform's reboots record.
+use pmon_common::fmt::NOT_AVAILABLE;
 
 /// `chassisd:MODULE_REBOOT_CAUSE_DIR`.
 pub const MODULE_REBOOT_CAUSE_DIR: &str = "/host/reboot-cause/module/";
-/// `chassisd:MAX_HISTORY_FILES`.  Ten is what `show reboot-cause history` pages
-/// through.
+/// `chassisd:MAX_HISTORY_FILES`: the history kept per DPU, and so the rows
+/// the table is rebuilt with.
 pub const MAX_HISTORY_FILES: usize = 10;
-
-/// What `chassisd:try_get` answers for a platform that does not implement
-/// `get_reboot_cause`, and so the cause such a platform's reboots record.
-const NOT_AVAILABLE: &str = "N/A";
 
 /// One recorded reboot.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,12 +53,31 @@ pub struct RebootCause {
 }
 
 impl RebootCause {
+    /// The record as `json.dump` lays it out: Python's key order and its
+    /// `", "` and `": "` separators, so a file written by either daemon reads
+    /// the same.
+    ///
+    /// Each value goes through serde_json's string encoder.  The cause and the
+    /// comment are whatever the vendor answered, and a newline or a tab in one
+    /// written raw is not JSON: `previous` would fail to read it back, find no
+    /// boot_id, and record the same reboot again on every DPU_STATE event --
+    /// pushing the real history out of the ten files kept.  Non-ASCII is left
+    /// as UTF-8 where Python escapes it (`ensure_ascii`); both are valid JSON
+    /// and read back the same.
     fn to_json(&self) -> String {
-        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+        let q = |s: &str| serde_json::Value::from(s).to_string();
         format!(
-            r#"{{"cause": "{}", "comment": "{}", "device": "{}", "time": "{}", "name": "{}", "boot_id": "{}"}}"#,
-            esc(&self.cause), esc(&self.comment), esc(&self.device),
-            esc(&self.time), esc(&self.name), esc(self.boot_id.as_deref().unwrap_or("")))
+            concat!(
+                r#"{{"cause": {}, "comment": {}, "device": {}, "#,
+                r#""time": {}, "name": {}, "boot_id": {}}}"#,
+            ),
+            q(&self.cause),
+            q(&self.comment),
+            q(&self.device),
+            q(&self.time),
+            q(&self.name),
+            q(self.boot_id.as_deref().unwrap_or(""))
+        )
     }
 
     fn from_json(text: &str) -> Option<Self> {
@@ -83,10 +96,14 @@ impl RebootCause {
 
 /// Splits a single answer into a cause and a comment.
 ///
-/// Only for the platforms that answer one `"cause,comment"` string rather than
-/// the `(cause, comment)` pair the base class documents -- the pair arrives as
-/// two arguments and does not come through here.  A platform that answers
-/// nothing gets the pair Python invents.
+/// For the platforms that answer one `"cause,comment"` string rather than the
+/// `(cause, comment)` pair the base class documents.  A pair with a detail
+/// arrives as two arguments and does not come through here; a pair whose
+/// detail is None does, because the facade hands it over exactly as it hands
+/// over a bare string.  Such a cause is split on its first comma where Python
+/// keeps it whole and writes a null comment -- at worst a cause with a comma
+/// in it loses its tail to the comment.  A platform that answers nothing gets
+/// the pair Python invents.
 pub fn split_cause(answer: Option<&str>) -> (String, String) {
     match answer {
         None | Some("") => ("Unknown".to_string(), NOT_AVAILABLE.to_string()),
@@ -183,8 +200,14 @@ pub fn previous(root: &Path, module: &str) -> Option<RebootCause> {
 /// Write one reboot cause: the history file, the symlink to the latest, and
 /// the rotation.
 ///
-/// Named for `now_name`, the moment the new boot_id was seen, which is when
-/// `chassisd:SmartSwitchModuleUpdater.persist_dpu_reboot_cause` names it too.
+/// Named for `now_name`, which the caller takes when it sees the new boot_id.
+/// `chassisd:SmartSwitchModuleUpdater.persist_dpu_reboot_cause` takes its name
+/// a little later, after `get_reboot_cause` has answered; the two differ by
+/// however long the platform took to answer.
+///
+/// A rotation that fails is a failed persist, as in Python, where the
+/// `os.remove` is not wrapped: the record is on disk, and the caller does not
+/// go on to publish.
 pub fn persist(
     root: &Path,
     module: &str,
@@ -217,7 +240,7 @@ pub fn persist(
     atomic_write(&file, record.to_json().as_bytes())?;
     atomic_replace_symlink(&file, &dir_for(root, module).join("previous-reboot-cause.json"))?;
 
-    rotate(root, module);
+    rotate(root, module)?;
     Ok(record)
 }
 
@@ -227,21 +250,26 @@ pub fn persist(
 /// also chronological -- the reason the file name carries that format.  Only
 /// the records count: a `.tmp` left by a write that was cut off is not
 /// history, and rotating it out would cost a real record its place.
-fn rotate(root: &Path, module: &str) {
+fn rotate(root: &Path, module: &str) -> std::io::Result<()> {
     let dir = history_dir(root, module);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|n| n.ends_with("_reboot_cause.json"))
         .collect();
     if names.len() <= MAX_HISTORY_FILES {
-        return;
+        return Ok(());
     }
     names.sort();
     for old in &names[..names.len() - MAX_HISTORY_FILES] {
-        let _ = std::fs::remove_file(dir.join(old));
+        std::fs::remove_file(dir.join(old))?;
     }
+    Ok(())
 }
 
 /// Republish one DPU's whole history into CHASSIS_STATE_DB.
@@ -252,10 +280,11 @@ fn rotate(root: &Path, module: &str) {
 /// A file that cannot be read, or whose row will not write, costs that one
 /// entry and is warned about in Python's words: each file is published under
 /// its own `try` in
-/// `chassisd:SmartSwitchModuleUpdater.update_dpu_reboot_cause_to_db`.  Only
-/// the key listing ends the pass, as it does in Python.  Every field the file
-/// holds is published, so the boot_id is too, and a record written before
-/// boot_ids were kept is published without one.
+/// `chassisd:SmartSwitchModuleUpdater.update_dpu_reboot_cause_to_db`.  Clearing
+/// the old rows is not wrapped there, so a key listing or a delete that fails
+/// ends the pass here, and the caller says the record is still on disk.  Every
+/// field the file holds is published, so the boot_id is too, and a record
+/// written before boot_ids were kept is published without one.
 pub fn publish(
     root: &Path,
     module: &str,
@@ -264,7 +293,7 @@ pub fn publish(
     let prefix = format!("{}|", module.to_uppercase());
     for key in table.get_keys()? {
         if key.starts_with(&prefix) {
-            let _ = table.del(&key);
+            table.del(&key)?;
         }
     }
 
@@ -275,12 +304,16 @@ pub fn publish(
         log::warn!("No reboot cause history files found for module: {module}");
         return Ok(());
     };
-    let mut any = false;
+    // Said when there are no history files, as Python's empty `glob` says
+    // it -- not when there are files and none of them would read, which the
+    // per-file warnings below have already said.
+    let mut found = false;
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.to_string_lossy().ends_with("_reboot_cause.json") {
             continue;
         }
+        found = true;
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(e) => {
@@ -292,7 +325,6 @@ pub fn publish(
             log::warn!("Failed to decode JSON from file: {}", path.display());
             continue;
         };
-        any = true;
         let key = format!("{}|{}", module.to_uppercase(), r.name);
         let mut fvs = vec![
             ("cause", r.cause.clone()),
@@ -308,7 +340,7 @@ pub fn publish(
             log::warn!("Error processing file {}: {e}", path.display());
         }
     }
-    if !any {
+    if !found {
         log::warn!("No reboot cause history files found for module: {module}");
     }
     Ok(())
@@ -321,20 +353,17 @@ pub fn publish(
 /// DPU_STATE row -- and records nothing, which is what keeps one reboot from
 /// showing up twice in the history.
 ///
-/// `ask` is the platform's `get_reboot_cause` for this DPU.  Each step that
-/// fails is logged in Python's words and ends the capture there: the history
-/// file is the record, so one that could not be written is not published, and
-/// one that could not be published is still on disk for the next pass.
-///
-/// The NOTICE naming the new boot_id comes before the platform is asked,
-/// because asking is what finds out whether the DPU exists; Python looks the
-/// module up first, so for a DPU the platform does not know it logs only the
-/// error where this logs both.
+/// The DPU is looked up by name as Python looks it up, with
+/// `get_module_index`, and its `get_reboot_cause` read through the key that
+/// answers.  Each step that fails is logged in Python's words and ends the
+/// capture there: the history file is the record, so one that could not be
+/// written is not published, and one that could not be published is still on
+/// disk for the next pass.
 pub fn boot_id_update(
     root: &Path,
     module: &str,
     boot_id: &str,
-    ask: impl FnOnce() -> Result<ModuleRebootCause, PlatformError>,
+    platform: &mut dyn PlatformApi,
     table: &dyn TableLike,
     now_name: &str,
     formatted: impl Fn(&str) -> String,
@@ -345,22 +374,33 @@ pub fn boot_id_update(
     if previous(root, module).and_then(|r| r.boot_id).as_deref() == Some(boot_id) {
         return;
     }
-    pmon_common::notice!("{module}: new boot_id {boot_id} detected, capturing reboot cause");
-
-    let (cause, detail) = match ask() {
-        // What a platform that answered nothing gets: `chassisd:try_get`
-        // turns both a NotImplementedError and a `None` into "N/A", and that
-        // string is then the cause.
-        Ok(ModuleRebootCause { cause: None, detail: None }) | Err(PlatformError::NotSupported(_)) => {
-            (Some(NOT_AVAILABLE.to_string()), None)
-        }
-        Ok(ModuleRebootCause { cause, detail }) => (cause, detail),
-        Err(PlatformError::NotFound(_)) => {
+    let key = match platform.get_module_key(module) {
+        Ok(Some(key)) => key,
+        // `try_get(get_module_index, default=INVALID_MODULE_INDEX)`: not
+        // implemented, or no such module.
+        Ok(None) | Err(PlatformError::NotSupported(_)) => {
             log::error!("Unable to get module-index for {module} to capture reboot cause");
             return;
         }
-        Err(PlatformError::Backend(e)) => {
-            log::error!("Failed to get reboot cause for {module}: {e}");
+        Err(e) => {
+            log::error!(
+                "Failed to look up module {module} to capture reboot cause: {}",
+                detail_of(&e)
+            );
+            return;
+        }
+    };
+    pmon_common::notice!("{module}: new boot_id {boot_id} detected, capturing reboot cause");
+
+    let (cause, detail) = match platform.get_module_reboot_cause(&key) {
+        // What a platform that answered nothing gets: `chassisd:try_get`
+        // turns both a NotImplementedError and a `None` into "N/A", and that
+        // string is then the cause.
+        Ok(ModuleRebootCause { cause: None, detail: None })
+        | Err(PlatformError::NotSupported(_)) => (Some(NOT_AVAILABLE.to_string()), None),
+        Ok(ModuleRebootCause { cause, detail }) => (cause, detail),
+        Err(e) => {
+            log::error!("Failed to get reboot cause for {module}: {}", detail_of(&e));
             return;
         }
     };
@@ -375,6 +415,15 @@ pub fn boot_id_update(
         log::error!(
             "Failed to update reboot cause to DB for {module}: {e}. \
              The boot_id and reboot cause is stored in json file.");
+    }
+}
+
+/// An error as Python's `{e}` prints the exception: its message alone.
+fn detail_of(e: &PlatformError) -> &str {
+    match e {
+        PlatformError::NotSupported(m)
+        | PlatformError::NotFound(m)
+        | PlatformError::Backend(m) => m,
     }
 }
 
@@ -423,6 +472,7 @@ pub fn clear_midplane_down_reason(root: &Path, module: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use platform_api::DeviceKey;
     use pmon_common::db::MockTable;
 
     fn root() -> tempfile::TempDir {
@@ -433,12 +483,50 @@ mod tests {
         "Mon Sep 15 01:02:03 PM UTC 2026".to_string()
     }
 
-    fn keep(r: &Path, module: &str, cause: Option<&str>, boot_id: Option<&str>, name: &str) -> RebootCause {
+    fn keep(
+        r: &Path,
+        module: &str,
+        cause: Option<&str>,
+        boot_id: Option<&str>,
+        name: &str,
+    ) -> RebootCause {
         persist(r, module, cause, None, boot_id, name, fixed).unwrap()
     }
 
     fn answered(cause: &str, detail: &str) -> Result<ModuleRebootCause, PlatformError> {
         Ok(ModuleRebootCause { cause: Some(cause.to_string()), detail: Some(detail.to_string()) })
+    }
+
+    /// A platform with one DPU, at `modules[0]`, answering `cause` for it.
+    struct Dpus {
+        key: Result<Option<DeviceKey>, PlatformError>,
+        cause: Result<ModuleRebootCause, PlatformError>,
+    }
+
+    impl PlatformApi for Dpus {
+        fn get_module_key(&mut self, _name: &str) -> Result<Option<DeviceKey>, PlatformError> {
+            self.key.clone()
+        }
+        fn get_module_reboot_cause(
+            &mut self,
+            key: &DeviceKey,
+        ) -> Result<ModuleRebootCause, PlatformError> {
+            assert_eq!(key.as_str(), "modules[0]", "asked through the key the name resolved to");
+            self.cause.clone()
+        }
+    }
+
+    fn dpu(cause: Result<ModuleRebootCause, PlatformError>) -> Dpus {
+        Dpus { key: Ok(Some(DeviceKey::from("modules[0]"))), cause }
+    }
+
+    /// A platform that must not be asked anything.
+    struct Untouched;
+
+    impl PlatformApi for Untouched {
+        fn get_module_key(&mut self, _name: &str) -> Result<Option<DeviceKey>, PlatformError> {
+            panic!("the platform must not be asked")
+        }
     }
 
     #[test]
@@ -495,6 +583,55 @@ mod tests {
         assert_eq!(prev.boot_id.as_deref(), Some("b-1"));
     }
 
+    /// Whatever the vendor put in the cause comes back out, control
+    /// characters and quotes included.  Written raw, a newline would make the
+    /// file unreadable, the boot_id in it unknowable, and the same reboot
+    /// recorded again on every DPU_STATE event.
+    #[test]
+    fn a_cause_with_control_characters_reads_back() {
+        let r = root();
+        let cause = "Watchdog\tfired \"twice\"\nsee \\var\\log";
+        persist(
+            r.path(),
+            "DPU0",
+            Some("Kernel Panic"),
+            Some(cause),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+            fixed,
+        )
+        .unwrap();
+        let prev = previous(r.path(), "DPU0").expect("valid JSON");
+        assert_eq!(prev.comment, cause);
+        assert_eq!(prev.boot_id.as_deref(), Some("b-1"), "so the same boot is not recorded twice");
+    }
+
+    /// Clearing the old rows is not wrapped in Python, and a delete that fails
+    /// here ends the publish too -- the caller then says the record is on disk.
+    #[test]
+    fn a_row_that_will_not_go_ends_the_publish() {
+        let r = root();
+        keep(r.path(), "DPU0", Some("a"), Some("b-1"), "2026_09_15_01_00_00");
+        let t = MockTable::new();
+        t.set("DPU0|2026_01_01_00_00_00", &[("cause", "old".to_string())]).unwrap();
+        t.fail_writes("redis is gone");
+        publish(r.path(), "DPU0", &t).expect_err("a stale row that will not go is reported");
+    }
+
+    /// "No history files" is for a DPU with none.  One whose files will not
+    /// decode has said so file by file, and is not also told it has none.
+    #[test]
+    fn files_that_will_not_decode_are_not_no_files() {
+        let log = pmon_common::logging::capture();
+        let r = root();
+        let dir = history_dir(r.path(), "DPU0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("2026_09_15_01_00_00_reboot_cause.json"), "{not json").unwrap();
+        publish(r.path(), "DPU0", &MockTable::new()).unwrap();
+        assert!(log.logged(log::Level::Warn, "Failed to decode JSON from file"));
+        assert!(!log.contains("No reboot cause history files found"));
+    }
+
     /// Replacing the link never leaves it missing: the second record's link
     /// points at the second record.
     #[test]
@@ -515,7 +652,8 @@ mod tests {
     fn the_history_keeps_the_newest_ten_records() {
         let r = root();
         std::fs::create_dir_all(history_dir(r.path(), "DPU0")).unwrap();
-        std::fs::write(history_dir(r.path(), "DPU0").join("0000_reboot_cause.json.tmp"), "").unwrap();
+        std::fs::write(history_dir(r.path(), "DPU0").join("0000_reboot_cause.json.tmp"), "")
+            .unwrap();
         for i in 0..14 {
             keep(r.path(), "DPU0", Some("x"), None, &format!("2026_09_15_01_00_{i:02}"));
         }
@@ -549,7 +687,10 @@ mod tests {
         std::fs::create_dir_all(history_dir(r.path(), "DPU0")).unwrap();
         std::fs::write(
             history_dir(r.path(), "DPU0").join("2026_01_01_00_00_00_reboot_cause.json"),
-            r#"{"cause": "Watchdog", "comment": "N/A", "device": "DPU0", "time": "t", "name": "2026_01_01_00_00_00"}"#,
+            concat!(
+                r#"{"cause": "Watchdog", "comment": "N/A", "device": "DPU0", "#,
+                r#""time": "t", "name": "2026_01_01_00_00_00"}"#,
+            ),
         ).unwrap();
         publish(r.path(), "DPU0", &t).unwrap();
         assert_eq!(t.field("DPU0|2026_01_01_00_00_00", "cause").as_deref(), Some("Watchdog"));
@@ -651,8 +792,15 @@ mod tests {
         let log = pmon_common::logging::capture();
         let r = root();
         let t = MockTable::new();
-        boot_id_update(r.path(), "DPU0", "b-2", || answered("Non-Hardware", "Reset due to Power off"),
-                       &t, "2026_09_20_04_06_29", fixed);
+        boot_id_update(
+            r.path(),
+            "DPU0",
+            "b-2",
+            &mut dpu(answered("Non-Hardware", "Reset due to Power off")),
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         let prev = previous(r.path(), "DPU0").expect("recorded");
         assert_eq!((prev.cause.as_str(), prev.comment.as_str()),
                    ("Non-Hardware", "Reset due to Power off"));
@@ -668,7 +816,7 @@ mod tests {
         let r = root();
         let t = MockTable::new();
         keep(r.path(), "DPU0", Some("Watchdog"), Some("b-1"), "2026_09_15_01_00_00");
-        boot_id_update(r.path(), "DPU0", "b-1", || panic!("the platform must not be asked"),
+        boot_id_update(r.path(), "DPU0", "b-1", &mut Untouched,
                        &t, "2026_09_20_04_06_29", fixed);
         assert!(t.is_empty());
     }
@@ -678,7 +826,7 @@ mod tests {
     fn an_empty_boot_id_records_nothing() {
         let r = root();
         let t = MockTable::new();
-        boot_id_update(r.path(), "DPU0", "", || panic!("the platform must not be asked"),
+        boot_id_update(r.path(), "DPU0", "", &mut Untouched,
                        &t, "2026_09_20_04_06_29", fixed);
         assert_eq!(previous(r.path(), "DPU0"), None);
     }
@@ -694,27 +842,38 @@ mod tests {
         ] {
             let r = root();
             let t = MockTable::new();
-            boot_id_update(r.path(), "DPU0", "b-2", || ask, &t, "2026_09_20_04_06_29", fixed);
+            boot_id_update(r.path(), "DPU0", "b-2", &mut dpu(ask), &t, "2026_09_20_04_06_29",
+                           fixed);
             let prev = previous(r.path(), "DPU0").expect("recorded");
             assert_eq!((prev.cause.as_str(), prev.comment.as_str()), ("N/A", "N/A"));
         }
     }
 
-    /// A DPU the platform does not know, or a getter that fails, records
-    /// nothing, and says which in Python's words.
+    /// A DPU the platform does not know, a lookup that fails, or a getter
+    /// that fails records nothing, and says which in Python's words.  The
+    /// DPU is looked up before the new boot_id is announced, as Python does.
     #[test]
     fn a_dpu_the_platform_cannot_answer_for_records_nothing() {
         let log = pmon_common::logging::capture();
         let r = root();
         let t = MockTable::new();
-        boot_id_update(r.path(), "DPU7", "b-2", || Err(PlatformError::NotFound("DPU7".to_string())),
-                       &t, "2026_09_20_04_06_29", fixed);
-        boot_id_update(r.path(), "DPU0", "b-2", || Err(PlatformError::Backend("i2c".to_string())),
-                       &t, "2026_09_20_04_06_29", fixed);
-        assert_eq!(previous(r.path(), "DPU7"), None);
-        assert_eq!(previous(r.path(), "DPU0"), None);
+        for key in [Ok(None), Err(PlatformError::NotSupported("get_module_index".to_string()))] {
+            let mut p = Dpus { key, cause: answered("Watchdog", "x") };
+            boot_id_update(r.path(), "DPU7", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        }
+        let lookup = Err(PlatformError::Backend("redis".to_string()));
+        let mut p = Dpus { key: lookup, cause: answered("Watchdog", "x") };
+        boot_id_update(r.path(), "DPU6", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        let mut p = dpu(Err(PlatformError::Backend("i2c".to_string())));
+        boot_id_update(r.path(), "DPU0", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        for m in ["DPU7", "DPU6", "DPU0"] {
+            assert_eq!(previous(r.path(), m), None);
+        }
         assert!(log.logged(log::Level::Error,
             "Unable to get module-index for DPU7 to capture reboot cause"));
+        assert!(log.logged(log::Level::Error,
+            "Failed to look up module DPU6 to capture reboot cause: redis"));
+        assert!(!log.contains("DPU7: new boot_id") && !log.contains("DPU6: new boot_id"));
         assert!(log.logged(log::Level::Error, "Failed to get reboot cause for DPU0: i2c"));
     }
 
@@ -725,7 +884,7 @@ mod tests {
         let r = root();
         let t = MockTable::new();
         t.fail_reads("redis went away");
-        boot_id_update(r.path(), "DPU0", "b-2", || answered("Watchdog", "x"),
+        boot_id_update(r.path(), "DPU0", "b-2", &mut dpu(answered("Watchdog", "x")),
                        &t, "2026_09_20_04_06_29", fixed);
         assert_eq!(previous(r.path(), "DPU0").unwrap().boot_id.as_deref(), Some("b-2"));
         assert!(log.logged(log::Level::Error, "Failed to update reboot cause to DB for DPU0"));
@@ -763,12 +922,14 @@ mod tests {
     fn an_unreadable_previous_record_reads_as_nothing_recorded() {
         let log = pmon_common::logging::capture();
         let r = root();
-        std::fs::create_dir_all(dir_for(r.path(), "DPU0").join("previous-reboot-cause.json")).unwrap();
+        std::fs::create_dir_all(dir_for(r.path(), "DPU0").join("previous-reboot-cause.json"))
+            .unwrap();
         assert_eq!(previous(r.path(), "DPU0"), None);
         assert!(log.logged(log::Level::Error, "DPU0: Failed to read previous-reboot-cause.json"));
 
         std::fs::create_dir_all(dir_for(r.path(), "DPU1")).unwrap();
-        std::fs::write(dir_for(r.path(), "DPU1").join("previous-reboot-cause.json"), "not json").unwrap();
+        std::fs::write(dir_for(r.path(), "DPU1").join("previous-reboot-cause.json"), "not json")
+            .unwrap();
         assert_eq!(previous(r.path(), "DPU1"), None);
         assert!(log.logged(log::Level::Error,
             "DPU1: Failed to read previous-reboot-cause.json: not valid JSON"));
@@ -819,7 +980,7 @@ mod tests {
         let r = d.path().join("not-a-dir");
         std::fs::write(&r, "").unwrap();
         let t = MockTable::new();
-        boot_id_update(&r, "DPU0", "b-2", || answered("Watchdog", "x"), &t,
+        boot_id_update(&r, "DPU0", "b-2", &mut dpu(answered("Watchdog", "x")), &t,
                        "2026_09_20_04_06_29", fixed);
         assert!(t.is_empty());
         assert!(log.logged(log::Level::Error, "Failed to persist reboot cause for DPU0"));

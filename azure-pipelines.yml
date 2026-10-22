@@ -210,7 +210,7 @@ jobs:
         echo "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a  /tmp/cargo-llvm-cov.tar.gz" | sha256sum -c -
         tar xzf /tmp/cargo-llvm-cov.tar.gz -C ~/.cargo/bin
         export PATH=$HOME/.cargo/bin:$PATH
-        # The platform API bridge imports platform_api.facade at run time.
+        # The platform API bridge imports sonic_platform_api.facade at run time.
         # Take it from the sonic-platform-common checkout cargo made for the
         # platform API crates, so the Python side is the commit the Rust is.
         cargo fetch --locked
@@ -219,8 +219,14 @@ jobs:
         api = next(p for p in json.load(sys.stdin)["packages"] if p["name"] == "platform-api")
         print(os.path.dirname(os.path.dirname(os.path.dirname(api["manifest_path"]))))')
         export CARGO_TARGET_DIR=$(Agent.TempDirectory)/rust-target CARGO_PROFILE_DEV_DEBUG=0
+        # `parity` adds the tests that run each Python daemon against its Rust
+        # port (crates/pmon-common/src/parity.rs).  They need sonic_py_common,
+        # installed above, and the PYTHONPATH set here, which the deb build's
+        # `cargo test` does not have, so the feature is off by default and
+        # turned on here.  Linted both ways: the deb build compiles without it.
         cargo clippy --locked --workspace --all-targets -- -D warnings
-        cargo llvm-cov --locked --workspace --cobertura --output-path crates/coverage.xml
+        cargo clippy --locked --workspace --all-targets --features parity -- -D warnings
+        cargo llvm-cov --locked --workspace --features parity --cobertura --output-path crates/coverage.xml
         rm -rf "$CARGO_TARGET_DIR"
       displayName: 'Rust daemons: lint and test with coverage'
 

@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The copy of this daemon that runs *on* a DPU.
 //!
 //! Ports `chassisd:DpuStateUpdater` and `chassisd:DpuChassisdDaemon`.  A DPU
@@ -11,6 +5,16 @@
 //! whether its control and data planes are up -- which is what the NPU's
 //! recovery machine reads.  Getting this wrong in the quiet direction gets the
 //! DPU power cycled.
+//!
+//! Polled every ten seconds, always.  Python has a second, event-driven mode
+//! (`chassisd:DpuStateManagerTask`) that subscribes to the tables the
+//! fallbacks read and republishes the moment one changes.
+//! `chassisd:DpuChassisdDaemon.run` picks it once, at start-up, when neither
+//! plane getter answers true -- not implemented, None, or both planes False at
+//! that moment -- and polls otherwise.  Not ported: the NPU acts on these
+//! planes over minutes -- a 600-second boot timeout, a 300-second
+//! self-recovery window -- so ten seconds more of latency changes none of its
+//! decisions.
 
 use std::path::Path;
 
@@ -51,13 +55,14 @@ pub fn data_plane_from_ports(
     config_ports: &dyn TableLike,
     port_table: &dyn TableLike,
 ) -> Result<bool, String> {
-    let ports = config_ports.get_keys()?;
-    if ports.is_empty() {
-        // Nothing configured is not "everything is up": a DPU whose port
-        // configuration has not been pushed yet has no data plane to speak of.
-        return Ok(false);
-    }
-    for p in &ports {
+    // No configured ports is "up", as in Python: its loop over
+    // `config_db.get_table('PORT')` finds nothing down and returns True
+    // (`chassisd:DpuStateUpdater._get_data_plane_state_common`).  It matters
+    // on the NPU, which counts a DPU Ready only with all three planes up -- a
+    // DPU with no ports reported "down" here would sit in Booting for good,
+    // with `ready_status` false, for want of ports it has nothing to forward
+    // through.
+    for p in &config_ports.get_keys()? {
         let up = port_table
             .get(p)?
             .and_then(|row| row.into_iter().find(|(k, _)| k == "oper_status"))
@@ -128,6 +133,11 @@ pub fn publish(
 ///
 /// Said explicitly rather than left to time out: this daemon stopping is the
 /// DPU's SONiC going away, and the NPU should hear it now rather than infer it.
+///
+/// Only a plane that is not already down is written, as everywhere else here.
+/// `chassisd:DpuStateUpdater.deinit` rewrites both and restamps them; a plane
+/// already down keeps the time it went down here, because that is what the
+/// timestamp means.
 pub fn shutdown(name: &str, table: &dyn TableLike) {
     // Logged, not propagated: this runs on the way out, where there is no
     // connection left to recover by leaving again.
@@ -168,11 +178,11 @@ mod tests {
         assert!(!data_plane_from_ports(&cfg, &MockTable::new()).unwrap());
     }
 
-    /// And no ports at all is not "everything is up": a DPU whose port
-    /// configuration has not landed yet has no data plane to report.
+    /// And no ports at all is "up", as Python's loop over nothing answers.
+    /// Reported down, it would hold the DPU out of Ready on the NPU forever.
     #[test]
-    fn an_unconfigured_dpu_does_not_claim_a_data_plane() {
-        assert!(!data_plane_from_ports(&MockTable::new(), &MockTable::new()).unwrap());
+    fn a_dpu_with_no_ports_has_nothing_down() {
+        assert!(data_plane_from_ports(&MockTable::new(), &MockTable::new()).unwrap());
     }
 
     #[test]
@@ -182,7 +192,10 @@ mod tests {
         t.set("SYSTEM_STATE", &[("Status", "DOWN".to_string())]).unwrap();
         assert!(!control_plane_from_system_ready(&t).unwrap());
         t.set("SYSTEM_STATE", &[("Status", "UP".to_string())]).unwrap();
-        assert!(control_plane_from_system_ready(&t).unwrap(), "the case is the platform's business");
+        assert!(
+            control_plane_from_system_ready(&t).unwrap(),
+            "the case is the platform's business"
+        );
     }
 
     /// The NPU subscribes to this table.  Rewriting it every cycle would wake

@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! CHASSIS_MODULE_TABLE, the ASIC tables and the midplane table.
 //!
 //! Ports `chassisd:ModuleUpdater`, the modular-chassis half of the daemon: what
@@ -16,7 +10,9 @@ use std::time::{Duration, SystemTime};
 use platform_api::{AsicInfo, ModuleInfo, ModuleStatus, ModuleType};
 use pmon_common::db::TableLike;
 use pmon_common::fmt;
+use pmon_common::report_once::Latch;
 
+use crate::config_updater::{should_apply, Machine};
 use crate::names::*;
 
 /// A module that has gone off-line, and whether its chassis app DB rows have
@@ -38,8 +34,13 @@ pub struct Tables<'a> {
     pub asic: &'a dyn TableLike,
     pub hostname: &'a dyn TableLike,
     pub module_reboot: &'a dyn TableLike,
-    /// CONFIG_DB CHASSIS_MODULE, for the admin state.
+    /// CONFIG_DB CHASSIS_MODULE, for the admin state.  Always there in the
+    /// daemon -- `run_modular` does not start without it -- and absent only in
+    /// a test with no CONFIG_DB, where every card reads as admin up.
     pub config: Option<&'a dyn TableLike>,
+    /// CONFIG_DB DEVICE_METADATA, for a line card's hostname; there or not as
+    /// `config` is.  Absent, the hostname is `"None"`.
+    pub device_metadata: Option<&'a dyn TableLike>,
 }
 
 pub struct ModuleUpdater {
@@ -53,15 +54,8 @@ pub struct ModuleUpdater {
     /// partition of the chassis app DB, so a module that came back under a
     /// different one is a different thing to clean up.
     down_modules: BTreeMap<String, DownModule>,
-}
-
-/// Only these three are cards of a modular chassis.  A name that is none of
-/// them is a platform bug, and publishing it would put a row in
-/// CHASSIS_MODULE_TABLE that `show chassis modules` cannot categorise.
-fn is_chassis_card(name: &str) -> bool {
-    [ModuleType::Supervisor, ModuleType::LineCard, ModuleType::FabricCard]
-        .iter()
-        .any(|t| name.starts_with(t.as_str()))
+    /// DEVICE_METADATA refusing the hostname read, said once.
+    hostname_read: Latch,
 }
 
 /// One field out of a row, or None.
@@ -82,6 +76,7 @@ impl ModuleUpdater {
             linecard_reboot_timeout,
             midplane_initialized,
             down_modules: BTreeMap::new(),
+            hostname_read: Latch::new(),
         }
     }
 
@@ -91,26 +86,6 @@ impl ModuleUpdater {
 
     pub fn down_modules(&self) -> &BTreeMap<String, DownModule> {
         &self.down_modules
-    }
-
-    /// How many cards the chassis has, published once per cycle.
-    ///
-    /// Zero is reported and not published: a chassis that answers zero has not
-    /// enumerated its slots yet, and writing 0 would have `show chassis
-    /// modules` print an empty chassis rather than wait.
-    pub fn publish_module_count(
-        &self,
-        modules: &[ModuleInfo],
-        table: &dyn TableLike,
-    ) -> Result<(), String> {
-        if modules.is_empty() {
-            log::error!("Chassisd has no modules available");
-            return Ok(());
-        }
-        let fvs = [(CHASSIS_INFO_CARD_NUM_FIELD, modules.len().to_string())];
-        table
-            .set(CHASSIS_INFO_KEY, &fvs)
-            .map_err(|e| format!("Failed to publish the module count: {e}"))
     }
 
     /// One pass over every module.
@@ -127,13 +102,12 @@ impl ModuleUpdater {
             if m.slot == Some(self.my_slot) {
                 my_module = Some(m);
             }
-            if !is_chassis_card(&m.name) {
-                log::error!(
-                    "Incorrect module-name {}. Should start with {} or {} or {}",
-                    m.name,
-                    ModuleType::Supervisor.as_str(),
-                    ModuleType::LineCard.as_str(),
-                    ModuleType::FabricCard.as_str());
+            // Only the three card types are cards of a modular chassis.  A name
+            // that is none of them is a platform bug, and publishing it would
+            // put a row in CHASSIS_MODULE_TABLE that `show chassis modules`
+            // cannot categorise.  The check, and its message, are the config
+            // watcher's too.
+            if !should_apply(Machine::Chassis, &m.name) {
                 continue;
             }
 
@@ -193,7 +167,8 @@ impl ModuleUpdater {
 
             // The hostname partitions the chassis app DB, so a module that
             // came back under a different one is a different thing to clean up.
-            let hostname = field(&tables.hostname.get(&m.name)?, HOSTNAME_FIELD).unwrap_or_default();
+            let hostname =
+                field(&tables.hostname.get(&m.name)?, HOSTNAME_FIELD).unwrap_or_default();
             let down_key = format!("{}|{}", m.name, hostname);
 
             if status != ModuleStatus::Online {
@@ -220,7 +195,7 @@ impl ModuleUpdater {
             // service; publishing its ASICs would have the fabric try to use
             // them (the `module_cfg_status != 'down'` check in
             // `chassisd:ModuleUpdater.module_db_update`).
-            if self.admin_status(&m.name, tables) != "down" {
+            if self.admin_status(&m.name, tables)? != "down" {
                 self.publish_asics(&m.name, &module_asics, tables.asic)?;
             }
         }
@@ -237,12 +212,17 @@ impl ModuleUpdater {
     /// CONFIG_DB's `admin_status` for one module; `up` when unset.
     ///
     /// Defaulting to up is what makes a chassis work before anyone configures
-    /// it: the absence of a row is not a decision to keep the card out.
-    fn admin_status(&self, name: &str, tables: &Tables<'_>) -> String {
-        tables
-            .config
-            .and_then(|c| field(&c.get(name).ok().flatten(), CHASSIS_MODULE_ADMIN_STATUS))
-            .unwrap_or_else(|| "up".to_string())
+    /// it: the absence of a row is not a decision to keep the card out.  A row
+    /// that cannot be *read* is another matter, and ends the pass like every
+    /// other read in it: Python's `chassisd:ModuleUpdater.get_module_admin_status`
+    /// has no `try`, and read as "up" a CONFIG_DB failure would publish the
+    /// ASICs of every card an operator had shut down.
+    fn admin_status(&self, name: &str, tables: &Tables<'_>) -> Result<String, String> {
+        let Some(config) = tables.config else { return Ok("up".to_string()) };
+        let row = config
+            .get(name)
+            .map_err(|e| format!("Failed to read the admin status of {name}: {e}"))?;
+        Ok(field(&row, CHASSIS_MODULE_ADMIN_STATUS).unwrap_or_else(|| "up".to_string()))
     }
 
     fn publish_asics(
@@ -274,8 +254,14 @@ impl ModuleUpdater {
 
     /// A line card publishes its own hostname, which is the key the chassis app
     /// DB is partitioned by and therefore what the supervisor cleans up under.
+    ///
+    /// A line card that cannot find its own slot among the modules publishes
+    /// an ASIC count of 0.  Python indexes its module list with the `None` it
+    /// found instead, and the TypeError ends the daemon; a card whose platform
+    /// does not know its own slot is better published with nothing to clean
+    /// than not running at all.
     fn publish_hostname(
-        &self,
+        &mut self,
         my_module: Option<&ModuleInfo>,
         asics: &[AsicInfo],
         tables: &Tables<'_>,
@@ -285,7 +271,7 @@ impl ModuleUpdater {
             .unwrap_or(0);
         // `LINE-CARD<slot-1>`: the table is zero-based where the slots are not.
         let key = format!("{}{}", ModuleType::LineCard.as_str(), self.my_slot - 1);
-        let hostname = hostname();
+        let hostname = self.hostname(tables);
         let fvs = [
             (SLOT_FIELD, self.my_slot.to_string()),
             (HOSTNAME_FIELD, hostname),
@@ -295,6 +281,39 @@ impl ModuleUpdater {
             .hostname
             .set(&key, &fvs)
             .map_err(|e| format!("Failed to publish the line card hostname: {e}"))
+    }
+
+    /// The switch's hostname, where `device_info.get_hostname` reads it:
+    /// CONFIG_DB DEVICE_METADATA|localhost.
+    ///
+    /// Not `/etc/hostname`.  Inside pmon that file is the one the container was
+    /// created with, and `config hostname` does not reach it until the container
+    /// is recreated -- while the containers whose rows the chassis app DB holds
+    /// are partitioned under the configured name.  A card cleaned up under its
+    /// old hostname is a cleanup that finds nothing.
+    ///
+    /// Never an error, because Python's is not one:
+    /// `device_info.get_localhost_info` swallows every exception and answers
+    /// None, which `chassisd:try_get` turns into the string `"None"`.  No row,
+    /// no field and a read that fails are all `"None"`.  An empty hostname is
+    /// published empty -- `try_get` replaces None and nothing else.  The failed
+    /// read is said once, where Python says nothing: a card published as
+    /// `"None"` is one the supervisor cannot clean up after.
+    fn hostname(&mut self, tables: &Tables<'_>) -> String {
+        let Some(metadata) = tables.device_metadata else { return "None".to_string() };
+        match metadata.get("localhost") {
+            Ok(row) => {
+                pmon_common::recovered!(self.hostname_read, "hostname read recovered");
+                field(&row, HOSTNAME_FIELD).unwrap_or_else(|| "None".to_string())
+            }
+            Err(e) => {
+                pmon_common::fail_once_warn!(
+                    self.hostname_read,
+                    "Failed to read the hostname from DEVICE_METADATA: {e}"
+                );
+                "None".to_string()
+            }
+        }
     }
 
     // ── midplane ──────────────────────────────────────────────────────────────
@@ -317,8 +336,8 @@ impl ModuleUpdater {
                 continue;
             }
             let slot = m.slot.unwrap_or(INVALID_SLOT);
-            let mine = slot == self.supervisor_slot;
-            if self.is_supervisor() == mine {
+            let is_supervisors_slot = slot == self.supervisor_slot;
+            if self.is_supervisor() == is_supervisors_slot {
                 // Supervisor skips itself; a line card skips everything that
                 // is not the supervisor.  The two conditions coincide.
                 continue;
@@ -437,26 +456,63 @@ impl ModuleUpdater {
     }
 
     /// Remove everything this updater published.
+    ///
+    /// Logged, not propagated: the process is already leaving, so there is no
+    /// connection left to recover by leaving again.  Logged all the same, so a
+    /// row left behind has a line that says why.
     pub fn clear(&self, modules: &[ModuleInfo], tables: &Tables<'_>) {
+        let warn = |what: &str, r: Result<(), String>| {
+            if let Err(e) = r {
+                log::warn!("Failed to remove {what}: {e}");
+            }
+        };
+        let drop_if_there = |table: &dyn TableLike, name: &str, key: &str| match table.get(key) {
+            Ok(Some(_)) => warn(&format!("{key} from {name}"), table.del(key)),
+            Ok(None) => {}
+            Err(e) => warn(&format!("{key} from {name}"), Err(e)),
+        };
         for m in modules {
-            let _ = tables.module.del(&m.name);
-            // On the way out; a read that fails here costs nothing.
-            if tables.midplane.get(&m.name).ok().flatten().is_some() {
-                let _ = tables.midplane.del(&m.name);
-            }
-            if tables.entity.get(&m.name).ok().flatten().is_some() {
-                let _ = tables.entity.del(&m.name);
-            }
+            warn(
+                &format!("{} from {CHASSIS_MODULE_INFO_TABLE}", m.name),
+                tables.module.del(&m.name),
+            );
+            drop_if_there(tables.midplane, CHASSIS_MIDPLANE_INFO_TABLE, &m.name);
+            drop_if_there(tables.entity, PHYSICAL_ENTITY_INFO_TABLE, &m.name);
         }
-        let _ = tables.chassis.del(CHASSIS_INFO_KEY);
+        warn(CHASSIS_INFO_KEY, tables.chassis.del(CHASSIS_INFO_KEY));
         // Only a line card clears the ASIC table: on the supervisor it holds
         // the fabric cards' ASICs, which outlive this daemon restarting.
         if !self.is_supervisor() {
-            for key in tables.asic.get_keys().unwrap_or_default() {
-                let _ = tables.asic.del(&key);
+            match tables.asic.get_keys() {
+                Ok(keys) => {
+                    for key in keys {
+                        warn(
+                            &format!("{key} from {CHASSIS_ASIC_INFO_TABLE}"),
+                            tables.asic.del(&key),
+                        );
+                    }
+                }
+                Err(e) => warn(CHASSIS_ASIC_INFO_TABLE, Err(e)),
             }
         }
     }
+}
+
+/// How many modules the machine has, published once, at start-up -- on a
+/// chassis and on a SmartSwitch alike.
+///
+/// Zero is reported and not published: a chassis that answers zero has not
+/// enumerated its slots yet, and writing 0 would have `show chassis modules`
+/// print an empty chassis rather than wait.
+pub fn publish_module_count(modules: &[ModuleInfo], table: &dyn TableLike) -> Result<(), String> {
+    if modules.is_empty() {
+        log::error!("Chassisd has no modules available");
+        return Ok(());
+    }
+    let fvs = [(CHASSIS_INFO_CARD_NUM_FIELD, modules.len().to_string())];
+    table
+        .set(CHASSIS_INFO_KEY, &fvs)
+        .map_err(|e| format!("Failed to publish the module count: {e}"))
 }
 
 /// Drop the ASIC rows of modules that have just gone off-line.
@@ -475,18 +531,10 @@ fn remove_asics_of(offline: &BTreeSet<String>, table: &dyn TableLike) -> Result<
     Ok(())
 }
 
-/// The switch's hostname, as `device_info.get_hostname` answers it.
-fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "None".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dpu_updater::tests::key_of;
     use pmon_common::db::MockTable;
 
     struct Db {
@@ -498,6 +546,7 @@ mod tests {
         hostname: MockTable,
         module_reboot: MockTable,
         config: MockTable,
+        device_metadata: MockTable,
     }
 
     impl Db {
@@ -511,6 +560,7 @@ mod tests {
                 hostname: MockTable::new(),
                 module_reboot: MockTable::new(),
                 config: MockTable::new(),
+                device_metadata: MockTable::new(),
             }
         }
         fn tables(&self) -> Tables<'_> {
@@ -523,6 +573,7 @@ mod tests {
                 hostname: &self.hostname,
                 module_reboot: &self.module_reboot,
                 config: Some(&self.config),
+                device_metadata: Some(&self.device_metadata),
             }
         }
     }
@@ -530,6 +581,8 @@ mod tests {
     fn module(name: &str, slot: i64, status: ModuleStatus) -> ModuleInfo {
         ModuleInfo {
             name: name.to_string(),
+            key: key_of(name),
+            parent_key: None,
             parent_name: CHASSIS_PARENT.to_string(),
             position_in_parent: Some(1),
             presence: true,
@@ -752,7 +805,10 @@ mod tests {
         down.is_midplane_reachable = Some(false);
         u.check_midplane(&[down], &db.tables()).unwrap();
         assert!(db.module_reboot.field("LINE-CARD0", REBOOT_TIMESTAMP_FIELD).is_some());
-        assert_eq!(db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(), Some("False"));
+        assert_eq!(
+            db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(),
+            Some("False")
+        );
     }
 
     /// Coming back clears the reboot record, so the next loss is judged afresh.
@@ -790,22 +846,24 @@ mod tests {
     fn an_uninitialised_midplane_publishes_nothing() {
         let db = Db::new();
         ModuleUpdater::new(16, 16, Duration::from_secs(180), false)
-            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables()).unwrap();
+            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables())
+            .unwrap();
         assert!(db.midplane.is_empty());
     }
 
     #[test]
     fn the_module_count_is_published_but_never_as_zero() {
         let db = Db::new();
-        let u = supervisor();
-        u.publish_module_count(&[], &db.chassis).unwrap();
+        publish_module_count(&[], &db.chassis).unwrap();
         assert!(db.chassis.is_empty(), "a chassis that has not enumerated is not an empty one");
-        u.publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis).unwrap();
+        publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis)
+            .unwrap();
         assert_eq!(db.chassis.field(CHASSIS_INFO_KEY, "module_num").as_deref(), Some("1"));
     }
 
-    /// A refusing table costs that card's row and nothing else: the pass goes
-    /// on to the next card rather than abandoning the chassis.
+    /// A refusing table ends the pass at the card it refused, as Python's
+    /// unwrapped `set` does: a STATE_DB that will not take one row will not
+    /// take the next, and the daemon leaves for a fresh connection.
     #[test]
     fn a_table_that_refuses_a_write_stops_the_pass() {
         let db = Db::new();
@@ -829,8 +887,7 @@ mod tests {
     #[test]
     fn an_unnamed_module_is_keyed_by_its_position() {
         let db = Db::new();
-        let mut anon = module("", 1, ModuleStatus::Online);
-        anon.name = String::new();
+        let anon = module("", 1, ModuleStatus::Online);
         supervisor().check_midplane(&[anon], &db.tables()).unwrap();
         assert_eq!(db.midplane.keys(), vec!["MODULE 0".to_string()]);
     }
@@ -852,9 +909,82 @@ mod tests {
     #[test]
     fn a_line_card_publishes_its_hostname_under_a_zero_based_key() {
         let db = Db::new();
-        line_card().refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
+        line_card()
+            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .unwrap();
         assert_eq!(db.hostname.field("LINE-CARD0", "slot").as_deref(), Some("1"));
         assert!(db.hostname.field("LINE-CARD0", "num_asics").is_some());
+    }
+
+    /// The hostname is the configured one, from DEVICE_METADATA, which is
+    /// what `device_info.get_hostname` reads -- and "None" when nothing is
+    /// configured, as Python's `try_get` writes it.
+    #[test]
+    fn the_hostname_is_the_configured_one() {
+        let db = Db::new();
+        let lc0 = [module("LINE-CARD0", 1, ModuleStatus::Online)];
+        line_card().refresh(&lc0, &[], &db.tables()).unwrap();
+        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("None"));
+
+        db.device_metadata.set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())]).unwrap();
+        line_card().refresh(&lc0, &[], &db.tables()).unwrap();
+        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("lc-a"));
+    }
+
+    /// A hostname that cannot be read does not fail the pass: Python's
+    /// `device_info.get_localhost_info` swallows the error, and the card is
+    /// published as "None" with the rest of the pass still done.  Said once,
+    /// and said again when the read comes back.
+    #[test]
+    fn an_unreadable_hostname_is_published_as_none() {
+        let log = pmon_common::logging::capture();
+        let lc0 = [module("LINE-CARD0", 1, ModuleStatus::Online)];
+        let mut u = line_card();
+
+        let broken = Db::new();
+        broken.device_metadata.fail_reads("CONFIG_DB is gone");
+        u.refresh(&lc0, &[], &broken.tables()).unwrap();
+        assert_eq!(broken.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("None"));
+        assert_eq!(broken.module.field("LINE-CARD0", "slot").as_deref(), Some("1"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to read the hostname from DEVICE_METADATA: CONFIG_DB is gone"
+        ));
+
+        let fixed = Db::new();
+        fixed.device_metadata.set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())]).unwrap();
+        u.refresh(&lc0, &[], &fixed.tables()).unwrap();
+        assert_eq!(fixed.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("lc-a"));
+        assert!(log.contains("hostname read recovered"));
+    }
+
+    /// An empty hostname is published empty: `try_get` replaces None and
+    /// nothing else, and the supervisor cleans up under what was published.
+    #[test]
+    fn an_empty_hostname_is_published_as_it_is() {
+        let db = Db::new();
+        db.device_metadata.set("localhost", &[(HOSTNAME_FIELD, String::new())]).unwrap();
+        line_card().refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .unwrap();
+        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some(""));
+    }
+
+    /// An admin status that cannot be read ends the pass.  Read as "up", a
+    /// CONFIG_DB failure would publish the ASICs of a card an operator shut
+    /// down; Python's read is unwrapped and ends the daemon.
+    #[test]
+    fn an_unreadable_admin_status_ends_the_pass() {
+        let db = Db::new();
+        db.config.fail_reads("CONFIG_DB is gone");
+        let e = line_card()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[asic("LINE-CARD0", "0", "0000:03:00.0")],
+                &db.tables(),
+            )
+            .expect_err("an admin status that cannot be read is not an answer");
+        assert!(e.contains("admin status"), "{e}");
+        assert!(db.asic.is_empty(), "and no ASIC was published on a guess");
     }
 
     /// A reboot record with an unreadable timestamp is not a deadline: the
@@ -863,7 +993,9 @@ mod tests {
     fn an_unparseable_reboot_timestamp_is_not_a_deadline() {
         let db = Db::new();
         let u = ModuleUpdater::new(16, 16, Duration::from_secs(0), true);
-        db.module_reboot.set("LINE-CARD0", &[(REBOOT_TIMESTAMP_FIELD, "soon".to_string())]).unwrap();
+        db.module_reboot
+            .set("LINE-CARD0", &[(REBOOT_TIMESTAMP_FIELD, "soon".to_string())])
+            .unwrap();
         assert!(!u.reboot_deadline_passed("LINE-CARD0", &db.tables()).unwrap());
         db.module_reboot.del("LINE-CARD0").unwrap();
         assert!(!u.reboot_deadline_passed("LINE-CARD0", &db.tables()).unwrap());
@@ -881,15 +1013,30 @@ mod tests {
             m.is_midplane_reachable = Some(up);
             m
         };
-        u.check_midplane(&[with(true)], &db.tables()).unwrap();
-        assert_eq!(db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(), Some("True"));
+        let access = || db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD);
+        // Each step under a fresh capture, so "said" and "not said again" are
+        // both about that step alone.
+        let up = "Module LINE-CARD0 (Slot 1) midplane connectivity is up";
+        let lost = "Unexpected: Module LINE-CARD0 (Slot 1) lost midplane connectivity";
 
-        // Unexpected loss, then still lost, then back.
-        u.check_midplane(&[with(false)], &db.tables()).unwrap();
-        assert_eq!(db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(), Some("False"));
-        u.check_midplane(&[with(false)], &db.tables()).unwrap();
+        let log = pmon_common::logging::capture();
         u.check_midplane(&[with(true)], &db.tables()).unwrap();
-        assert_eq!(db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(), Some("True"));
+        assert_eq!(access().as_deref(), Some("True"));
+        assert!(log.logged(log::Level::Info, up));
+
+        let log = pmon_common::logging::capture();
+        u.check_midplane(&[with(false)], &db.tables()).unwrap();
+        assert_eq!(access().as_deref(), Some("False"));
+        assert!(log.logged(log::Level::Warn, lost));
+
+        let log = pmon_common::logging::capture();
+        u.check_midplane(&[with(false)], &db.tables()).unwrap();
+        assert!(!log.contains("midplane connectivity"), "still lost is not news");
+
+        let log = pmon_common::logging::capture();
+        u.check_midplane(&[with(true)], &db.tables()).unwrap();
+        assert_eq!(access().as_deref(), Some("True"));
+        assert!(log.logged(log::Level::Info, up));
     }
 
     /// An expected reboot that overruns is reported once, and then the module
@@ -912,7 +1059,7 @@ mod tests {
         u.check_midplane(&[down], &db.tables()).unwrap();
     }
 
-    /// A refusing midplane table costs that row and not the pass.
+    /// A refusing midplane table ends the pass too.
     #[test]
     fn a_refusing_midplane_table_stops_the_pass() {
         let db = Db::new();
@@ -923,7 +1070,7 @@ mod tests {
         assert!(db.midplane.is_empty());
     }
 
-    /// Nor does a refusing ASIC or hostname table.
+    /// And so does a refusing ASIC or hostname table.
     #[test]
     fn a_refusing_asic_table_stops_the_pass() {
         let db = Db::new();
@@ -944,14 +1091,13 @@ mod tests {
         assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"));
     }
 
-    /// A chassis that has not enumerated its slots is not an empty chassis,
-    /// and a refusing table is reported rather than crashing the pass.
+    /// A chassis table that refuses the count is reported to the caller, which
+    /// ends the daemon with it.
     #[test]
     fn a_refusing_chassis_table_is_reported() {
         let db = Db::new();
         db.chassis.fail_writes("read-only replica");
-        supervisor()
-            .publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis)
+        publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis)
             .expect_err("a chassis table that will not take the count has to be reported");
         assert!(db.chassis.is_empty());
     }
@@ -967,7 +1113,7 @@ mod tests {
         assert!(!u.down_modules()["LINE-CARD0|"].cleaned);
         u.mark_cleaned("LINE-CARD0|");
         assert!(u.down_modules()["LINE-CARD0|"].cleaned);
-        u.mark_cleaned("NO-SUCH-MODULE|", );
+        u.mark_cleaned("NO-SUCH-MODULE|");
     }
 
     // ── What a lost STATE_DB does to each write of the pass ──────────────────
