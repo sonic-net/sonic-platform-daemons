@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Port of TemperatureStatus / TemperatureUpdater.
 //!
 //! Reads thermal data directly from `PlatformApi` (Mellanox: sysfs) instead
@@ -12,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use platform_api::{PlatformApi, ThermalInfo};
+use platform_api::{DeviceKey, Number, PlatformApi, ThermalInfo, ThermalInfoCols, ThermalKind};
 
 use std::time::Instant;
 
@@ -26,13 +20,15 @@ const TEMPERATURE_DIFF_THRESHOLD: f64 = 10.0;
 
 #[derive(Default)]
 struct TemperatureStatus {
-    temperature: Option<f64>,
+    /// As the platform answered it: an int is printed as one, as Python's
+    /// `format()` of it is.
+    temperature: Option<Number>,
     over_temperature: bool,
     under_temperature: bool,
 }
 
 impl TemperatureStatus {
-    fn set_temperature(&mut self, name: &str, temperature: Option<f64>) {
+    fn set_temperature(&mut self, name: &str, temperature: Option<Number>) {
         let Some(temperature) = temperature else {
             if self.temperature.is_some() {
                 log::warn!("Temperature of {name} became unavailable");
@@ -42,28 +38,28 @@ impl TemperatureStatus {
         };
 
         if let Some(previous) = self.temperature {
-            let diff = (temperature - previous).abs();
+            let diff = (temperature.as_f64() - previous.as_f64()).abs();
             if diff > TEMPERATURE_DIFF_THRESHOLD {
                 log::warn!(
                     "Temperature of {} changed too fast, from {} to {}, \
                      please check your hardware",
                     name,
-                    fmt::float(previous),
-                    fmt::float(temperature)
+                    fmt::number(Some(previous)),
+                    fmt::number(Some(temperature))
                 );
             }
         }
         self.temperature = Some(temperature);
     }
 
-    fn check_available(&self, temperature: Option<f64>, threshold: Option<f64>, current: bool) -> bool {
+    fn check_available(&self, temperature: Option<Number>, threshold: Option<Number>, current: bool) -> bool {
         if temperature.is_none() || threshold.is_none() {
             if current {
                 log::warn!(
                     "Thermal temperature or threshold became unavailable, \
                      temperature={}, threshold={}",
-                    fmt::opt_float(temperature),
-                    fmt::opt_float(threshold)
+                    fmt::number(temperature),
+                    fmt::number(threshold)
                 );
             }
             return false;
@@ -71,13 +67,13 @@ impl TemperatureStatus {
         true
     }
 
-    fn set_over_temperature(&mut self, temperature: Option<f64>, threshold: Option<f64>) -> bool {
+    fn set_over_temperature(&mut self, temperature: Option<Number>, threshold: Option<Number>) -> bool {
         if !self.check_available(temperature, threshold, self.over_temperature) {
             let old = self.over_temperature;
             self.over_temperature = false;
             return old;
         }
-        let status = temperature.unwrap() > threshold.unwrap();
+        let status = temperature.unwrap().as_f64() > threshold.unwrap().as_f64();
         if status == self.over_temperature {
             return false;
         }
@@ -85,13 +81,13 @@ impl TemperatureStatus {
         true
     }
 
-    fn set_under_temperature(&mut self, temperature: Option<f64>, threshold: Option<f64>) -> bool {
+    fn set_under_temperature(&mut self, temperature: Option<Number>, threshold: Option<Number>) -> bool {
         if !self.check_available(temperature, threshold, self.under_temperature) {
             let old = self.under_temperature;
             self.under_temperature = false;
             return old;
         }
-        let status = temperature.unwrap() < threshold.unwrap();
+        let status = temperature.unwrap().as_f64() < threshold.unwrap().as_f64();
         if status == self.under_temperature {
             return false;
         }
@@ -104,6 +100,10 @@ pub struct TemperatureUpdater {
     status: HashMap<String, TemperatureStatus>,
     /// Names seen in the last cycle; used to remove stale STATE_DB entries.
     known: HashSet<String>,
+    /// Every thermal the last cycle answered, by key: what the next cycle
+    /// decides is due before it reads, so that one that is not is read in
+    /// part.
+    seen: HashMap<DeviceKey, (String, ThermalKind)>,
     /// Tracks when each thermal was last refreshed, for platform.json's
     /// per-thermal polling_interval.
     gate: PollingGate,
@@ -126,8 +126,17 @@ impl TemperatureUpdater {
         Self {
             status: HashMap::new(),
             known: HashSet::new(),
+            seen: HashMap::new(),
             gate: PollingGate::new(),
             mirror,
+        }
+    }
+
+    /// Take this host's rows back off the BMC, on the way out.  Nothing to do
+    /// off the switch host, where there is no mirror.  See `BmcMirror::clear`.
+    pub fn clear_mirror(&mut self) {
+        if let Some(m) = self.mirror.as_mut() {
+            m.clear();
         }
     }
 
@@ -147,14 +156,33 @@ impl TemperatureUpdater {
         now: Instant,
         stop: &dyn Fn() -> bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let thermals = platform.get_thermals()?;
-
         // PSU *and* PDB thermals share one interval, keyed by parent rather
         // than by sensor: Python decides once per cycle and passes the same
-        // `should_update_psu` to both loops.
+        // `should_update_psu` to both loops
+        // (`thermalctld:TemperatureUpdater.update`).
         let psus_due = self.gate.is_due("psu", intervals.psu, now);
 
+        // Decided before the read, so that a thermal that is not due is not
+        // read: Python asks one that is not due for its name and its position
+        // and nothing else (the readings are behind `_should_update_thermal`
+        // in `thermalctld:TemperatureUpdater._collect_thermals`).  A key the
+        // last cycle did not answer is not in `skip`, so it is read in full,
+        // as a name Python has never timed is due
+        // (`thermalctld:TemperatureUpdater._should_update_thermal`).
+        let mut due_by_key: HashMap<DeviceKey, bool> = HashMap::with_capacity(self.seen.len());
+        let mut skip = Vec::new();
+        for (key, (name, kind)) in &self.seen {
+            let due = thermal_due(&mut self.gate, name, *kind, psus_due, intervals, now);
+            if !due {
+                skip.push(key.clone());
+            }
+            due_by_key.insert(key.clone(), due);
+        }
+
+        let thermals = platform.get_thermals(ThermalInfoCols::ALL, &skip)?;
+
         let mut available = HashSet::with_capacity(thermals.len());
+        let mut seen = HashMap::with_capacity(thermals.len());
         // The 1-based index of this thermal within its own parent, which is what
         // `thermalctld:TemperatureUpdater._collect_thermals` passes as the
         // fallback when the platform does not implement
@@ -167,34 +195,55 @@ impl TemperatureUpdater {
             if stop() {
                 return Ok(());
             }
-            // A thermal with its own polling_interval is refreshed only when it
-            // is due; the rest are refreshed every cycle.  Either way the name
-            // stays in `available`, so a throttled sensor is not deleted as
-            // stale between refreshes.
-            let due = if thermal.parent_name.starts_with("PSU ") || thermal.parent_name.starts_with("PDB ") {
-                psus_due
-            } else {
-                // A thermal that named no interval falls back to the cycle
-                // the daemon had before platform.json shrank it, but only when
-                // some other thermal did name one (`default_thermal_interval`
-                // in `thermalctld:ThermalMonitor.__init__`).
-                let interval = intervals
-                    .thermals
-                    .get(&thermal.name)
-                    .copied()
-                    .or(intervals.default_thermal);
-                self.gate.is_due(&thermal.name, interval, now)
-            };
             let seq = {
                 let n = seq_by_parent.entry(thermal.parent_name.clone()).or_insert(0);
                 *n += 1;
                 *n
             };
+            // Every pass, due or not, and whether or not the readings below
+            // fail: Python writes it outside the `try` around the readings
+            // (`thermalctld:TemperatureUpdater._collect_thermals`).  Logged
+            // and passed over, which is not what Python does: there nothing
+            // further up catches, and one refused write ends the monitor
+            // thread, so FAN_INFO and TEMPERATURE_INFO stop updating while the
+            // daemon stays up.  That is not a behaviour to carry over.
+            if let Err(e) = db.set_entity_info(
+                &thermal.name,
+                &thermal.parent_name,
+                &fmt::position(thermal.position_in_parent, seq),
+            ) {
+                log::warn!("{e}");
+            }
+            // A thermal that is not due is not refreshed; either way the name
+            // stays in `available`, so a throttled sensor is not deleted as
+            // stale between refreshes.
+            let due = match due_by_key.get(&thermal.key) {
+                Some(due) => *due,
+                None => thermal_due(
+                    &mut self.gate,
+                    &thermal.name,
+                    thermal.kind,
+                    psus_due,
+                    intervals,
+                    now,
+                ),
+            };
             if due {
-                self.refresh(db, thermal, seq);
+                match &thermal.error_repr {
+                    // One thermal's reading failed: Python's per-thermal `try`
+                    // logs it and leaves its rows as they were, and the rest of
+                    // the pass goes on
+                    // (`thermalctld:TemperatureUpdater._refresh_temperature_status`).
+                    Some(e) => {
+                        log::warn!("Failed to update thermal status for {} - {e}", thermal.name)
+                    }
+                    None => self.refresh(db, thermal),
+                }
             }
             available.insert(thermal.name.clone());
+            seen.insert(thermal.key.clone(), (thermal.name.clone(), thermal.kind));
         }
+        self.seen = seen;
 
         for stale in self.known.difference(&available) {
             if let Err(e) = db.temperature.del(stale) {
@@ -214,13 +263,13 @@ impl TemperatureUpdater {
         Ok(())
     }
 
-    fn refresh(&mut self, db: &StateDb, thermal: &ThermalInfo, seq: i32) {
+    fn refresh(&mut self, db: &StateDb, thermal: &ThermalInfo) {
         let name = thermal.name.as_str();
         let status = self.status.entry(name.to_string()).or_default();
 
         let temperature = thermal.temperature;
-        let high_threshold = thermal.high_threshold.map(|t| t.as_f64());
-        let low_threshold = thermal.low_threshold.map(|t| t.as_f64());
+        let high_threshold = thermal.high_threshold;
+        let low_threshold = thermal.low_threshold;
 
         let mut warning = false;
 
@@ -231,7 +280,7 @@ impl TemperatureUpdater {
         // unavailable" warning inside it -- unreachable there too, and leaves
         // the cached reading standing across a gap.  Reproduced rather than
         // corrected: the contract is that the two daemons publish the same
-        // rows, and reaching that arm here would be a seventh divergence.
+        // rows.
         if temperature.is_some() {
             status.set_temperature(name, temperature);
 
@@ -242,15 +291,15 @@ impl TemperatureUpdater {
                         "High temperature warning cleared: {} temperature restored to {}C, \
                          high threshold {}C",
                         name,
-                        fmt::opt_float(temperature),
-                        fmt::opt_float(high_threshold)
+                        fmt::number(temperature),
+                        fmt::threshold(thermal.high_threshold)
                     ),
                     &format!(
                         "High temperature warning: {} current temperature {}C, \
                          high threshold {}C",
                         name,
-                        fmt::opt_float(temperature),
-                        fmt::opt_float(high_threshold)
+                        fmt::number(temperature),
+                        fmt::threshold(thermal.high_threshold)
                     ),
                 );
             }
@@ -263,37 +312,19 @@ impl TemperatureUpdater {
                         "Low temperature warning cleared: {} temperature restored to {}C, \
                          low threshold {}C",
                         name,
-                        fmt::opt_float(temperature),
-                        fmt::opt_float(low_threshold)
+                        fmt::number(temperature),
+                        fmt::threshold(thermal.low_threshold)
                     ),
                     &format!(
                         "Low temperature warning: {} current temperature {}C, \
                          low threshold {}C",
                         name,
-                        fmt::opt_float(temperature),
-                        fmt::opt_float(low_threshold)
+                        fmt::number(temperature),
+                        fmt::threshold(thermal.low_threshold)
                     ),
                 );
             }
             warning |= status.under_temperature;
-        }
-
-        // Logged and passed over, which is not what Python does.  Python
-        // writes this row in
-        // `thermalctld:TemperatureUpdater._collect_thermals`, outside the `try`
-        // in `_refresh_temperature_status`, and nothing further up catches: one
-        // refused write ends the monitor thread, and FAN_INFO and
-        // TEMPERATURE_INFO stop updating while the daemon stays up.  That is
-        // not a behaviour to carry over.  Python also rewrites the row on every
-        // pass, due or not; writing it only on a refresh ends in the same
-        // table, since the row holds just parent and position and the first
-        // pass refreshes every sensor.
-        if let Err(e) = db.set_entity_info(
-            name,
-            &thermal.parent_name,
-            &fmt::position(thermal.position_in_parent, seq),
-        ) {
-            log::warn!("{e}");
         }
 
         let fvs = thermal_row(thermal, temperature, warning);
@@ -318,8 +349,45 @@ impl TemperatureUpdater {
     }
 }
 
-/// The `TEMPERATURE_INFO` row.  Field names and order are part of requirement
-/// 1a, and so is the int-versus-float threshold formatting.
+/// Whether a thermal is refreshed this pass.
+///
+/// A PSU or PDB thermal follows the PSU interval, decided once for the pass
+/// (`should_update_psu` in `thermalctld:TemperatureUpdater.update`); every
+/// other one -- the chassis', a module's, a module PSU's -- is timed by name
+/// (`thermalctld:TemperatureUpdater._should_update_thermal`), and one that
+/// named no interval falls back to the cycle the daemon had before
+/// platform.json shrank it, but only when some other thermal did name one
+/// (`default_thermal_interval` in `thermalctld:ThermalMonitor.__init__`).  Each
+/// name is asked once a pass: the gate records the time it says yes.
+fn thermal_due(
+    gate: &mut PollingGate,
+    name: &str,
+    kind: ThermalKind,
+    psus_due: bool,
+    intervals: &PollingIntervals,
+    now: Instant,
+) -> bool {
+    let interval = intervals
+        .thermals
+        .get(name)
+        .copied()
+        .or(intervals.default_thermal);
+    match kind {
+        // Both gates, the PSU one first: Python collects a PSU's (and a
+        // PDB's) thermals with `refresh=should_update_psu`, and
+        // `_collect_thermals` then asks `refresh and
+        // self._should_update_thermal(name)` -- so the thermal's own interval,
+        // or the default one, still applies on a pass the PSU interval let
+        // through, and is not even asked (nor advanced) on one it did not.
+        ThermalKind::Psu | ThermalKind::Pdb => psus_due && gate.is_due(name, interval, now),
+        ThermalKind::Chassis | ThermalKind::Module | ThermalKind::ModulePsu => {
+            gate.is_due(name, interval, now)
+        }
+    }
+}
+
+/// The `TEMPERATURE_INFO` row.  Field names and order are Python's, and so is
+/// the int-versus-float formatting of every reading and threshold.
 ///
 /// A sensor whose temperature could not be read reports `N/A` for everything
 /// derived from it.  Python reads the recorded extremes and all four
@@ -327,14 +395,14 @@ impl TemperatureUpdater {
 /// `thermalctld:TemperatureUpdater._refresh_temperature_status`, so publishing
 /// thresholds beside an unreadable temperature would be a row Python never
 /// writes.
-fn thermal_row(thermal: &ThermalInfo, temperature: Option<f64>, warning: bool) -> [(&'static str, String); 10] {
+fn thermal_row(thermal: &ThermalInfo, temperature: Option<Number>, warning: bool) -> [(&'static str, String); 10] {
     let na = || fmt::NOT_AVAILABLE.to_string();
     let readable = temperature.is_some();
     let when = |v: String| if readable { v } else { na() };
     [
-        ("temperature", fmt::opt_float(temperature)),
-        ("minimum_temperature", when(fmt::opt_float(thermal.min_recorded))),
-        ("maximum_temperature", when(fmt::opt_float(thermal.max_recorded))),
+        ("temperature", fmt::number(temperature)),
+        ("minimum_temperature", when(fmt::number(thermal.min_recorded))),
+        ("maximum_temperature", when(fmt::number(thermal.max_recorded))),
         ("high_threshold", when(fmt::threshold(thermal.high_threshold))),
         ("low_threshold", when(fmt::threshold(thermal.low_threshold))),
         ("warning_status", fmt::bool(warning)),
@@ -367,27 +435,27 @@ mod tests {
     #[test]
     fn over_temperature_trips_and_clears_once() {
         let mut status = TemperatureStatus::default();
-        assert!(status.set_over_temperature(Some(80.0), Some(70.0)));
+        assert!(status.set_over_temperature(Some(Number::Float(80.0)), Some(Number::Float(70.0))));
         assert!(status.over_temperature);
-        assert!(!status.set_over_temperature(Some(85.0), Some(70.0)));
-        assert!(status.set_over_temperature(Some(60.0), Some(70.0)));
+        assert!(!status.set_over_temperature(Some(Number::Float(85.0)), Some(Number::Float(70.0))));
+        assert!(status.set_over_temperature(Some(Number::Float(60.0)), Some(Number::Float(70.0))));
         assert!(!status.over_temperature);
     }
 
     #[test]
     fn missing_threshold_clears_rather_than_holds() {
         let mut status = TemperatureStatus::default();
-        status.set_over_temperature(Some(80.0), Some(70.0));
+        status.set_over_temperature(Some(Number::Float(80.0)), Some(Number::Float(70.0)));
         assert!(status.over_temperature);
-        assert!(status.set_over_temperature(Some(80.0), None));
+        assert!(status.set_over_temperature(Some(Number::Float(80.0)), None));
         assert!(!status.over_temperature);
     }
 
     #[test]
     fn unavailable_temperature_resets_cached_reading() {
         let mut status = TemperatureStatus::default();
-        status.set_temperature("t", Some(40.0));
-        assert_eq!(status.temperature, Some(40.0));
+        status.set_temperature("t", Some(Number::Float(40.0)));
+        assert_eq!(status.temperature, Some(Number::Float(40.0)));
         status.set_temperature("t", None);
         assert_eq!(status.temperature, None);
     }
@@ -398,15 +466,30 @@ mod tests {
         ThermalInfo {
             name: name.to_string(),
             parent_name: "chassis 1".to_string(),
+            key: DeviceKey::from(format!("thermals[{name}]")),
             position_in_parent: Some(1),
-            temperature: Some(45.0),
-            min_recorded: Some(40.0),
-            max_recorded: Some(50.0),
+            temperature: Some(Number::Float(45.0)),
+            min_recorded: Some(Number::Float(40.0)),
+            max_recorded: Some(Number::Float(50.0)),
             high_threshold: Some(Threshold::Int(105)),
             low_threshold: None,
             high_critical_threshold: Some(Threshold::Int(120)),
             low_critical_threshold: None,
             is_replaceable: false,
+            ..ThermalInfo::new(ThermalKind::Chassis)
+        }
+    }
+
+    /// What the facade answers for a row named in `skip`: the columns that
+    /// come from the walk and the unguarded ones, nothing read.
+    fn read_in_part(t: &ThermalInfo) -> ThermalInfo {
+        ThermalInfo {
+            name: t.name.clone(),
+            parent_name: t.parent_name.clone(),
+            key: t.key.clone(),
+            parent_key: t.parent_key.clone(),
+            position_in_parent: t.position_in_parent,
+            ..ThermalInfo::new(t.kind)
         }
     }
 
@@ -421,7 +504,7 @@ mod tests {
     #[test]
     fn the_thermal_row_has_the_expected_fields_in_order() {
         assert_eq!(
-            keys(&thermal_row(&thermal("ASIC"), Some(45.0), false)),
+            keys(&thermal_row(&thermal("ASIC"), Some(Number::Float(45.0)), false)),
             [
                 "temperature",
                 "minimum_temperature",
@@ -450,7 +533,7 @@ mod tests {
     #[test]
     fn a_healthy_sensor_publishes_every_field_by_value() {
         let th = thermal("ASIC");
-        let row = thermal_row(&th, Some(45.0), false);
+        let row = thermal_row(&th, Some(Number::Float(45.0)), false);
 
         assert_eq!(val(&row, "temperature"), "45.0", "a float keeps its point");
         assert_eq!(val(&row, "minimum_temperature"), "40.0");
@@ -472,9 +555,9 @@ mod tests {
     #[test]
     fn a_whole_degree_keeps_its_decimal_point() {
         let mut th = thermal("ASIC");
-        th.temperature = Some(45.0);
-        th.min_recorded = Some(0.0);
-        let row = thermal_row(&th, Some(45.0), false);
+        th.temperature = Some(Number::Float(45.0));
+        th.min_recorded = Some(Number::Float(0.0));
+        let row = thermal_row(&th, Some(Number::Float(45.0)), false);
         assert_eq!(val(&row, "temperature"), "45.0");
         assert_eq!(val(&row, "minimum_temperature"), "0.0", "not \"0\"");
     }
@@ -482,9 +565,9 @@ mod tests {
     #[test]
     fn an_int_threshold_is_not_written_as_a_float() {
         let mut th = thermal("ASIC");
-        assert_eq!(val(&thermal_row(&th, Some(45.0), false), "high_threshold"), "105");
+        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "high_threshold"), "105");
         th.high_threshold = Some(Threshold::Float(43.0));
-        assert_eq!(val(&thermal_row(&th, Some(45.0), false), "high_threshold"), "43.0");
+        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "high_threshold"), "43.0");
     }
 
     /// A sensor whose temperature could not be read reports N/A for everything
@@ -522,15 +605,16 @@ mod tests {
     #[test]
     fn the_warning_status_comes_from_the_caller_not_the_thresholds() {
         let th = thermal("ASIC");
-        assert_eq!(val(&thermal_row(&th, Some(45.0), false), "warning_status"), "False");
-        assert_eq!(val(&thermal_row(&th, Some(200.0), true), "warning_status"), "True");
+        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "warning_status"), "False");
+        assert_eq!(val(&thermal_row(&th, Some(Number::Float(200.0)), true), "warning_status"), "True");
     }
 
     // ── The write path, against a dictionary-backed database ──────────────────
 
     use crate::db::mock::MockDb;
 
-    /// A platform that reports exactly the thermals it is given.
+    /// A platform that reports exactly the thermals it is given, read in part
+    /// where asked to skip them, as the facade does.
     struct FakePlatform {
         thermals: Vec<ThermalInfo>,
     }
@@ -545,18 +629,32 @@ mod tests {
                 ..Default::default()
             })
         }
-        fn get_thermals(&mut self) -> Result<Vec<ThermalInfo>, platform_api::PlatformError> {
-            Ok(self.thermals.clone())
+        fn get_thermals(
+            &mut self,
+            _cols: ThermalInfoCols,
+            skip: &[DeviceKey],
+        ) -> Result<Vec<ThermalInfo>, platform_api::PlatformError> {
+            Ok(self
+                .thermals
+                .iter()
+                .map(|t| {
+                    if skip.contains(&t.key) {
+                        read_in_part(t)
+                    } else {
+                        t.clone()
+                    }
+                })
+                .collect())
         }
         fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<platform_api::FanDrawerInfo>, platform_api::PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fans(&mut self, _cols: platform_api::FanInfoCols)
+        fn get_fans(&mut self, _cols: platform_api::FanInfoCols, _absorb: bool)
             -> Result<Vec<platform_api::FanInfo>, platform_api::PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &str, _: platform_api::LedColor) -> Result<(), platform_api::PlatformError> {
-            Ok(())
+        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, platform_api::PlatformError> {
+            Ok(Some(true))
         }
     }
 
@@ -638,7 +736,7 @@ mod tests {
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
 
         let mut hot = thermal("ASIC");
-        hot.temperature = Some(90.0);
+        hot.temperature = Some(Number::Float(90.0));
         run(
             &mut u,
             &m,
@@ -667,10 +765,11 @@ mod tests {
         let t0 = Instant::now();
         let mut pdb = thermal("PDB-1 Temp");
         pdb.parent_name = "PDB 1".to_string();
+        pdb.kind = ThermalKind::Pdb;
 
         run(&mut u, &m, vec![pdb.clone()], &intervals, t0);
         let mut hot = pdb.clone();
-        hot.temperature = Some(90.0);
+        hot.temperature = Some(Number::Float(90.0));
         run(
             &mut u,
             &m,
@@ -695,6 +794,7 @@ mod tests {
         let t0 = Instant::now();
         let mut psu = thermal("PSU 1 Temp");
         psu.parent_name = "PSU 1".to_string();
+        psu.kind = ThermalKind::Psu;
 
         run(&mut u, &m, vec![psu.clone()], &intervals, t0);
         assert_eq!(
@@ -703,7 +803,7 @@ mod tests {
         );
 
         let mut hot = psu.clone();
-        hot.temperature = Some(90.0);
+        hot.temperature = Some(Number::Float(90.0));
         run(
             &mut u,
             &m,
@@ -738,7 +838,7 @@ mod tests {
         // Ten seconds on: due under the 3 s the ASIC asked for, not due under
         // the 60 s this sensor inherits.
         let mut hot = thermal("Ambient");
-        hot.temperature = Some(90.0);
+        hot.temperature = Some(Number::Float(90.0));
         run(
             &mut u,
             &m,
@@ -747,6 +847,198 @@ mod tests {
             t0 + std::time::Duration::from_secs(10),
         );
         assert_eq!(m.temperature.field("Ambient", "temperature").as_deref(), Some("45.0"));
+    }
+
+    /// What decides the interval is the source a thermal came from, not what
+    /// its parent is called: a PSU thermal whose PSU names itself something
+    /// other than "PSU n" still follows the PSU interval, and a module PSU's
+    /// thermal -- "<module> PSU n" -- is timed by name, as Python times it
+    /// (`_collect_thermals` with `refresh` left at True, `thermalctld:TemperatureUpdater.update`).
+    #[test]
+    fn the_source_not_the_parent_name_picks_the_interval() {
+        let m = MockDb::new(false);
+        let mut u = TemperatureUpdater::new();
+        let intervals = PollingIntervals {
+            psu: Some(100.0),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut psu = thermal("PWR-A Temp");
+        psu.parent_name = "PWR-A".to_string();
+        psu.kind = ThermalKind::Psu;
+        let mut lc = thermal("LC1 PSU 1 Temp");
+        lc.parent_name = "LC1 PSU 1".to_string();
+        lc.kind = ThermalKind::ModulePsu;
+
+        run(&mut u, &m, vec![psu.clone(), lc.clone()], &intervals, t0);
+        psu.temperature = Some(Number::Float(90.0));
+        lc.temperature = Some(Number::Float(90.0));
+        run(
+            &mut u,
+            &m,
+            vec![psu, lc],
+            &intervals,
+            t0 + std::time::Duration::from_secs(1),
+        );
+        assert_eq!(
+            m.temperature.field("PWR-A Temp", "temperature").as_deref(),
+            Some("45.0"),
+            "the PSU interval holds it"
+        );
+        assert_eq!(
+            m.temperature
+                .field("LC1 PSU 1 Temp", "temperature")
+                .as_deref(),
+            Some("90.0"),
+            "no interval of its own: refreshed every pass"
+        );
+    }
+
+    /// A platform that remembers what it was asked to skip.
+    struct Recording {
+        thermals: Vec<ThermalInfo>,
+        skipped: Vec<Vec<DeviceKey>>,
+    }
+
+    impl platform_api::PlatformApi for Recording {
+        fn get_thermals(
+            &mut self,
+            _cols: ThermalInfoCols,
+            skip: &[DeviceKey],
+        ) -> Result<Vec<ThermalInfo>, platform_api::PlatformError> {
+            self.skipped.push(skip.to_vec());
+            Ok(self
+                .thermals
+                .iter()
+                .map(|t| {
+                    if skip.contains(&t.key) {
+                        read_in_part(t)
+                    } else {
+                        t.clone()
+                    }
+                })
+                .collect())
+        }
+    }
+
+    /// A thermal that is not due is not read at all, only named: Python asks
+    /// it for its name and position and nothing else
+    /// (`thermalctld:TemperatureUpdater._collect_thermals`).  Every Mellanox platform.json asks for
+    /// 3 s on the ASIC, which makes the pass 3 s long; reading every other sensor on every one of
+    /// those passes, as the daemon used to, is twenty times the hardware traffic Python makes.  A
+    /// thermal the last pass did not see is read in full, as a name Python has never timed is due.
+    #[test]
+    fn a_thermal_that_is_not_due_is_not_read() {
+        let m = MockDb::new(false);
+        let mut u = TemperatureUpdater::new();
+        let intervals = PollingIntervals {
+            thermals: std::collections::HashMap::from([("ASIC".to_string(), 3.0)]),
+            default_thermal: Some(60.0),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut p = Recording {
+            thermals: vec![thermal("ASIC"), thermal("Ambient")],
+            skipped: Vec::new(),
+        };
+        u.update(&mut p, &m.db, &intervals, t0, &never_stop)
+            .unwrap();
+        assert_eq!(
+            p.skipped[0],
+            Vec::<DeviceKey>::new(),
+            "nothing is skipped the first time"
+        );
+
+        p.thermals.push(thermal("CPU"));
+        u.update(
+            &mut p,
+            &m.db,
+            &intervals,
+            t0 + std::time::Duration::from_secs(4),
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            p.skipped[1],
+            vec![DeviceKey::from("thermals[Ambient]")],
+            "the ASIC is due again, Ambient is not, CPU was never seen"
+        );
+        assert_eq!(
+            m.temperature.field("Ambient", "temperature").as_deref(),
+            Some("45.0")
+        );
+        assert_eq!(
+            m.temperature.field("CPU", "temperature").as_deref(),
+            Some("45.0")
+        );
+        assert_eq!(
+            m.physical_entity.field("Ambient", "parent_name").as_deref(),
+            Some("chassis 1"),
+            "named every pass, as Python names it"
+        );
+    }
+
+    /// One thermal whose reading failed costs only itself: Python's `try` is per thermal and logs
+    /// `repr(e)` (`thermalctld:TemperatureUpdater._refresh_temperature_status`).  Its rows stay as
+    /// the last good pass left them -- neither rewritten with what the failed read did not get, nor
+    /// deleted as stale -- and its entity row, written outside that `try`, is still written.
+    #[test]
+    fn a_thermal_whose_reading_failed_is_logged_and_left_as_it_was() {
+        let log = pmon_common::logging::capture();
+        let m = MockDb::new(false);
+        let mut u = TemperatureUpdater::with_mirror(None);
+        let now = Instant::now();
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC"), thermal("Ambient")],
+            &PollingIntervals::default(),
+            now,
+        );
+
+        let mut broken = read_in_part(&thermal("ASIC"));
+        broken.error = Some("[Errno 5] Input/output error".into());
+        broken.error_repr = Some("OSError(5, 'Input/output error')".into());
+        let mut hot = thermal("Ambient");
+        hot.temperature = Some(Number::Float(50.0));
+        run(
+            &mut u,
+            &m,
+            vec![broken, hot],
+            &PollingIntervals::default(),
+            now,
+        );
+
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to update thermal status for ASIC - OSError(5, 'Input/output error')"
+        ));
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("45.0")
+        );
+        assert_eq!(
+            m.temperature.field("ASIC", "high_threshold").as_deref(),
+            Some("105")
+        );
+        assert_eq!(
+            m.temperature.field("Ambient", "temperature").as_deref(),
+            Some("50.0")
+        );
+        assert_eq!(m.temperature.len(), 2, "not deleted as stale");
+
+        // The first pass it fails on, it has no rows to keep -- only the
+        // entity row, as Python writes it before the `try`.
+        let m = MockDb::new(false);
+        let mut u = TemperatureUpdater::with_mirror(None);
+        let mut broken = read_in_part(&thermal("ASIC"));
+        broken.error_repr = Some("OSError(5, 'Input/output error')".into());
+        run(&mut u, &m, vec![broken], &PollingIntervals::default(), now);
+        assert!(m.temperature.is_empty());
+        assert_eq!(
+            m.physical_entity.field("ASIC", "parent_name").as_deref(),
+            Some("chassis 1")
+        );
     }
 
     // ── Transitions and the BMC tee ───────────────────────────────────────
@@ -768,11 +1060,11 @@ mod tests {
     fn an_under_temperature_alarm_tracks_the_low_threshold() {
         let mut st = TemperatureStatus::default();
         // 20 degrees against a low threshold of 25 is under.
-        assert!(st.set_under_temperature(Some(20.0), Some(25.0)), "entering is a change");
+        assert!(st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))), "entering is a change");
         assert!(st.under_temperature);
-        assert!(!st.set_under_temperature(Some(20.0), Some(25.0)), "staying is not");
+        assert!(!st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))), "staying is not");
 
-        assert!(st.set_under_temperature(Some(30.0), Some(25.0)), "leaving is a change");
+        assert!(st.set_under_temperature(Some(Number::Float(30.0)), Some(Number::Float(25.0))), "leaving is a change");
         assert!(!st.under_temperature);
     }
 
@@ -781,9 +1073,9 @@ mod tests {
     #[test]
     fn losing_the_low_threshold_clears_the_under_temperature_alarm() {
         let mut st = TemperatureStatus::default();
-        st.set_under_temperature(Some(20.0), Some(25.0));
+        st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0)));
         assert!(st.under_temperature);
-        assert!(st.set_under_temperature(Some(20.0), None), "clearing is a change");
+        assert!(st.set_under_temperature(Some(Number::Float(20.0)), None), "clearing is a change");
         assert!(!st.under_temperature);
     }
 
@@ -867,19 +1159,19 @@ mod tests {
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
 
         // Above the high threshold.
-        p.thermals[0].temperature = Some(110.0);
+        p.thermals[0].temperature = Some(Number::Float(110.0));
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("True"));
 
         // Back into the band.
-        p.thermals[0].temperature = Some(45.0);
+        p.thermals[0].temperature = Some(Number::Float(45.0));
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
         assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
 
         // Below the low threshold.
-        p.thermals[0].temperature = Some(5.0);
+        p.thermals[0].temperature = Some(Number::Float(5.0));
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
         assert_eq!(
@@ -903,7 +1195,7 @@ mod tests {
 
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
-        p.thermals[0].temperature = Some(200.0);
+        p.thermals[0].temperature = Some(Number::Float(200.0));
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
 
@@ -935,7 +1227,7 @@ mod tests {
             .unwrap();
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("N/A"));
 
-        p.thermals[0].temperature = Some(45.0);
+        p.thermals[0].temperature = Some(Number::Float(45.0));
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
             .unwrap();
         assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
@@ -964,7 +1256,7 @@ mod tests {
 
     /// A refused entity row is a warning, and the temperature row behind it is
     /// still published.  Python loses its monitor thread here instead (see
-    /// `refresh`).  The fan path writes the same table bare; the two are not
+    /// `update`).  The fan path writes the same table bare; the two are not
     /// the same rule.
     #[test]
     fn a_refused_entity_row_is_a_warning_on_the_temperature_path() {

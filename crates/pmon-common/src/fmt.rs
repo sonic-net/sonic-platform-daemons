@@ -1,16 +1,11 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! STATE_DB field formatters matching Python's `str()` semantics.
 //!
 //! Every TEMPERATURE_INFO and FAN_INFO field that thermalctld writes goes
-//! through `str(value)` in Python; this module replicates the exact output so
+//! through `str(value)` in Python; this module reproduces that output so
 //! that `show platform temperature`, `show platform fan`, and any downstream
 //! telemetry consumers see identical strings from both the Python and Rust
-//! daemons.
+//! daemons -- for every value a sensor reports.  [`float`] says where the
+//! match ends.
 //!
 //! Two Python quirks we must reproduce:
 //!  * `str(45.0)` → `"45.0"` (always has a decimal point for floats)
@@ -21,22 +16,29 @@
 //!  * `Threshold::Int(105)` → `"105"`   (matching `str(int(105))`)
 //!  * `Threshold::Float(105.0)` → `"105.0"` (matching `str(float(105.0))`)
 
-use platform_api::Threshold;
+use platform_api::{Number, Threshold};
 
 /// The sentinel written whenever a platform API call yields nothing useful.
 pub const NOT_AVAILABLE: &str = "N/A";
 
-// ── Threshold ─────────────────────────────────────────────────────────────────
+// ── Number ────────────────────────────────────────────────────────────────────
 
-/// Format an optional threshold for STATE_DB.
+/// Format an optional reading or limit for STATE_DB, as Python's `str()` of
+/// whatever the platform answered: an `int` stays one, a `float` carries its
+/// point.
 ///
 /// `None` → `"N/A"`, `Int(105)` → `"105"`, `Float(105.0)` → `"105.0"`.
-pub fn threshold(t: Option<Threshold>) -> String {
+pub fn number(t: Option<Number>) -> String {
     match t {
         None => NOT_AVAILABLE.to_string(),
-        Some(Threshold::Int(v)) => v.to_string(),
-        Some(Threshold::Float(v)) => float(v),
+        Some(Number::Int(v)) => v.to_string(),
+        Some(Number::Float(v)) => float(v),
     }
+}
+
+/// [`number`], for a limit: the name says what is being written.
+pub fn threshold(t: Option<Threshold>) -> String {
+    number(t)
 }
 
 // ── Optional reading ──────────────────────────────────────────────────────────
@@ -56,6 +58,15 @@ pub fn opt_float(v: Option<f64>) -> String {
 /// The key invariant: integral floats always carry a decimal point.
 ///  * `str(45.0)` = `"45.0"` (not `"45"`)
 ///  * `str(36.5)` = `"36.5"`
+///
+/// Identical to Python for zero, NaN, the infinities and every
+/// `1e-4 <= |v| < 1e16` -- both print the shortest digits that read back as
+/// the same float, and that range covers any temperature, speed, voltage or
+/// threshold a platform reports.  Outside it Python switches to exponent form
+/// (`str(1e16)` is `"1e+16"`, `str(5e-05)` is `"5e-05"`) and this does not:
+/// Rust's `Display` never emits an exponent, so those come out as
+/// `"10000000000000000"` and `"0.00005"`.  Not reproduced, because nothing
+/// published goes there.
 pub fn float(v: f64) -> String {
     // Python spells these in lower case and Rust's Display does not, and the
     // contract here is exact `str()` parity: a provider that hands back a NaN
@@ -258,7 +269,7 @@ mod tests {
         // (`thermalctld:update_entity_info`, `sensormond:update_entity_info`).
         // A single -1 baked in here -- which is what the base class documents
         // and what the first port did -- was wrong for all three, and showed up
-        // on slm-111 as PDB rows reading -1 where Python wrote 0.
+        // on hardware as PDB rows reading -1 where Python wrote 0.
         assert_eq!(position(None, 0), "0");
         assert_eq!(position(None, 3), "3");
         assert_eq!(position(None, -1), "-1");
