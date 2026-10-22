@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Per-component polling intervals from `platform.json`.
 //!
 //! Ports `thermalctld:_parse_platform_json_polling_intervals` and

@@ -1,16 +1,10 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The BMC event log.  Ports `thermalctld:EventLogger`.
 //!
 //! Every call goes to syslog.  On a Switch-BMC it is *also* appended to
 //! `/host/bmc/event.log`; everywhere else that tee is skipped, because the file
 //! is only created on the BMC and opening it elsewhere would log a failure
-//! every cycle.  Requirement 1d is both halves of that: the same events on the
-//! platforms where Python writes them, and nothing anywhere else.
+//! every cycle.  Both halves are Python's: the same events on the platforms
+//! where Python writes them, and nothing anywhere else.
 
 use std::fs::OpenOptions;
 use std::io::Write;

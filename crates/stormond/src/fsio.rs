@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Lifetime filesystem read/write counters, across restarts.
 //!
 //! Ports `stormond:DaemonStorage._load_fsio_rw_json`,
@@ -80,10 +74,19 @@ pub struct Reconciler {
     baseline: Option<Baseline>,
 }
 
+/// A field that will not do as a counter, and what it held.
+type Unusable = (&'static str, Option<String>);
+
 /// Read every sync field of one disk out of a row source.
-fn counters_from(get: impl Fn(&str) -> Option<String>) -> Option<Counters> {
-    let n = |f: &str| get(f).and_then(|v| v.trim().parse::<i64>().ok());
-    Some(Counters {
+///
+/// `Err` names the first field that is not there or is not a number, so the
+/// warning can say which, as Python's does.
+fn counters_from(get: impl Fn(&str) -> Option<String>) -> Result<Counters, Unusable> {
+    let n = |f: &'static str| {
+        let v = get(f);
+        v.as_deref().and_then(|s| s.trim().parse::<i64>().ok()).ok_or((f, v))
+    };
+    Ok(Counters {
         latest_reads: n(SYNC_FIELDS[0])?,
         latest_writes: n(SYNC_FIELDS[1])?,
         total_reads: n(SYNC_FIELDS[2])?,
@@ -91,12 +94,27 @@ fn counters_from(get: impl Fn(&str) -> Option<String>) -> Option<Counters> {
     })
 }
 
+/// Say why one disk's counters void a baseline.
+///
+/// A value that is not there is Python's `None`, and gets Python's warning
+/// (`stormond:DaemonStorage._load_fsio_rw_json`,
+/// `stormond:DaemonStorage._load_fsio_rw_statedb`).  One that is there and is
+/// not a number Python takes, and fails on later in the arithmetic; here it
+/// is refused now, and says what it was.
+fn warn_unusable(disk: &str, source: &str, (field, value): Unusable) {
+    match value {
+        None => log::warn!("{disk}:{field} value = None in {source}"),
+        Some(v) => log::warn!("{disk}:{field} value = {v} in {source} is not a number"),
+    }
+}
+
 impl Reconciler {
     /// Load both baselines and decide which one to use.
     ///
-    /// `disks` is every disk the platform reported, which is what both sanity
-    /// checks are against: a baseline that does not cover every disk is not a
-    /// baseline, because the disk it misses would silently start from zero.
+    /// `disks` is every disk this daemon publishes counters for, which is what
+    /// both sanity checks are against: a baseline that does not cover every
+    /// one is not a baseline, because the disk it misses would silently start
+    /// from zero.
     pub fn load(disks: &[String], json_text: Option<&str>, table: &dyn TableLike) -> Self {
         let mut r = Self::default();
         let statedb_ok = r.load_statedb(disks, table);
@@ -112,16 +130,31 @@ impl Reconciler {
         r
     }
 
-    /// Read from `/usr/share/stormond/fsio-rw-stats.json`, if it is there.
+    /// Read `/usr/share/stormond/fsio-rw-stats.json`, if it is there.
+    ///
+    /// Absent is a first boot, said at NOTICE as Python says it.  There and
+    /// unreadable is an error, in Python's words for a file it could not load
+    /// (`stormond:DaemonStorage._load_fsio_rw_json`) -- not "not present",
+    /// which would send whoever reads the log looking for a file that exists.
+    /// Either way there is no file baseline.
     pub fn read_json_file(path: &Path) -> Option<String> {
-        std::fs::read_to_string(path).ok()
+        match std::fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                pmon_common::notice!("{} not present.", path.display());
+                None
+            }
+            Err(e) => {
+                log::error!("JSON file could not be loaded: {e}");
+                None
+            }
+        }
     }
 
+    /// The file baseline, out of `text` -- `None` when there was no file to
+    /// read, which `read_json_file` has already said.
     fn load_json(&mut self, disks: &[String], text: Option<&str>) -> bool {
-        let Some(text) = text else {
-            log::info!("{FSIO_RW_JSON_FILE} not present.");
-            return false;
-        };
+        let Some(text) = text else { return false };
         let parsed: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {
@@ -134,19 +167,19 @@ impl Reconciler {
                 parsed
                     .get(disk)
                     .and_then(|d| d.get(f))
-                    .and_then(|v| v.as_str().map(str::to_string).or_else(|| Some(v.to_string())))
+                    .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
                     .filter(|v| v != "null")
             };
             match counters_from(get) {
-                Some(c) => {
+                Ok(c) => {
                     self.json.insert(disk.clone(), c);
                 }
-                None => {
+                Err(unusable) => {
                     // One disk missing from the file invalidates the file, not
                     // just that disk: the alternative is a partial baseline,
                     // where one disk's total restarts from zero and nothing
                     // says why (`stormond:DaemonStorage._load_fsio_rw_json`).
-                    log::warn!("{disk} has no usable counters in the JSON file");
+                    warn_unusable(disk, "JSON file", unusable);
                     self.json.clear();
                     return false;
                 }
@@ -159,26 +192,38 @@ impl Reconciler {
         // A row count that does not match the disks plus the sync-time key
         // means something else has been editing the table, and a baseline read
         // out of it would be arithmetic on someone else's numbers.
-        // Swallowed: Python reads this inside the `try` in
-        // `stormond:DaemonStorage._load_fsio_rw_statedb`, whose `except` logs
-        // and leaves the baseline alone.  An unreadable table and a table of
-        // the wrong shape lead to the same place here -- do not trust it as a
-        // baseline.
-        let keys = table.get_keys().unwrap_or_default();
+        //
+        // A read that fails is no baseline either, and is said at ERROR, as the
+        // `except` in `stormond:DaemonStorage._load_fsio_rw_statedb` says it.
+        // Not fatal there or here: the file may still be one.
+        let keys = match table.get_keys() {
+            Ok(keys) => keys,
+            Err(e) => {
+                log::error!("Reading STATE_DB failed with: {e}");
+                return false;
+            }
+        };
         if keys.len() != disks.len() + 1 {
             return false;
         }
         for disk in disks {
-            let Some(row) = table.get(disk).ok().flatten() else { return false };
+            let row = match table.get(disk) {
+                Ok(row) => row.unwrap_or_default(),
+                Err(e) => {
+                    log::error!("Reading STATE_DB failed with: {e}");
+                    self.statedb.clear();
+                    return false;
+                }
+            };
             let get = |f: &str| {
                 row.iter().find(|(k, _)| k == f).map(|(_, v)| v.clone())
             };
             match counters_from(get) {
-                Some(c) => {
+                Ok(c) => {
                     self.statedb.insert(disk.clone(), c);
                 }
-                None => {
-                    log::warn!("{disk} has no usable counters in STATE_DB");
+                Err(unusable) => {
+                    warn_unusable(disk, "StateDB", unusable);
                     self.statedb.clear();
                     return false;
                 }
@@ -221,10 +266,21 @@ impl Reconciler {
 /// Read back out of the table rather than from the values just computed: the
 /// file is a snapshot of what was *published*, and a file that recorded a total
 /// STATE_DB never got would move the baseline past the published figure.
-pub fn sync_document(disks: &[String], table: &dyn TableLike, when: &str) -> String {
+///
+/// A row that is not there is written as nulls, which the loader rejects; a
+/// table that cannot be read is an error, so the caller can leave the file
+/// alone rather than replace it with one of nulls.
+pub fn sync_document(
+    disks: &[String],
+    table: &dyn TableLike,
+    when: &str,
+) -> Result<String, String> {
     let mut doc = serde_json::Map::new();
     for disk in disks {
-        let row = table.get(disk).ok().flatten().unwrap_or_default();
+        let row = table
+            .get(disk)
+            .map_err(|e| format!("failed to read {disk}: {e}"))?
+            .unwrap_or_default();
         let mut fields = serde_json::Map::new();
         for f in SYNC_FIELDS {
             let v = row.iter().find(|(k, _)| k == f).map(|(_, v)| v.clone());
@@ -242,7 +298,7 @@ pub fn sync_document(disks: &[String], table: &dyn TableLike, when: &str) -> Str
         "successful_sync_time".to_string(),
         serde_json::Value::String(when.to_string()),
     );
-    serde_json::Value::Object(doc).to_string()
+    Ok(serde_json::Value::Object(doc).to_string())
 }
 
 #[cfg(test)]
@@ -335,9 +391,57 @@ mod tests {
     /// in the log to say which or why.
     #[test]
     fn a_partial_file_is_not_a_partial_baseline() {
+        let log = pmon_common::logging::capture();
         let doc = r#"{"sda": {"latest_fsio_reads": "5"}}"#;
         let r = Reconciler::load(&disks(), Some(doc), &MockTable::new());
         assert_eq!(r.baseline(), Baseline::Init);
+        assert!(
+            log.logged(log::Level::Warn, "sda:latest_fsio_writes value = None in JSON file"),
+            "the warning names the field, as Python's does"
+        );
+    }
+
+    /// A value that is there and is not a number says what it was: "None"
+    /// would send the reader looking for a field that is present.
+    #[test]
+    fn a_counter_that_is_not_a_number_says_what_it_held() {
+        let log = pmon_common::logging::capture();
+        let t = statedb(80, 1000);
+        t.set("sda", &[("total_fsio_writes", "N/A".to_string())]).unwrap();
+        let r = Reconciler::load(&disks(), None, &t);
+        assert_eq!(r.baseline(), Baseline::Init);
+        assert!(log.logged(
+            log::Level::Warn,
+            "sda:total_fsio_writes value = N/A in StateDB is not a number"
+        ));
+    }
+
+    /// A STATE_DB that cannot be read is no baseline, and says so at ERROR as
+    /// Python's `except` does -- not quietly, as though the table were empty.
+    #[test]
+    fn a_state_db_that_cannot_be_read_is_said_so() {
+        let log = pmon_common::logging::capture();
+        let t = statedb(80, 1000);
+        t.fail_reads("connection reset");
+        let doc = json(1000);
+        let r = Reconciler::load(&disks(), Some(&doc), &t);
+        assert_eq!(r.baseline(), Baseline::Json, "and the file is still one");
+        assert!(log.logged(log::Level::Error, "Reading STATE_DB failed with: connection reset"));
+    }
+
+    /// No file is a first boot, said at NOTICE; a file that is there and will
+    /// not read is an error, and says why.
+    #[test]
+    fn an_absent_file_and_an_unreadable_one_are_told_apart() {
+        let log = pmon_common::logging::capture();
+        let d = tempfile::tempdir().unwrap();
+        assert!(Reconciler::read_json_file(&d.path().join("absent.json")).is_none());
+        assert!(log.logged(log::Level::Info, "absent.json not present."));
+        assert!(!log.logged(log::Level::Error, "JSON file could not be loaded"));
+
+        // A directory where the file should be: there, and not readable as one.
+        assert!(Reconciler::read_json_file(d.path()).is_none());
+        assert!(log.logged(log::Level::Error, "JSON file could not be loaded: "));
     }
 
     #[test]
@@ -360,7 +464,7 @@ mod tests {
     #[test]
     fn the_file_records_what_state_db_holds() {
         let t = statedb(80, 1000);
-        let doc = sync_document(&disks(), &t, "2026-09-17 12:00:00");
+        let doc = sync_document(&disks(), &t, "2026-09-17 12:00:00").unwrap();
         let v: serde_json::Value = serde_json::from_str(&doc).unwrap();
         assert_eq!(v["sda"]["total_fsio_reads"], "1000");
         assert_eq!(v["sda"]["latest_fsio_reads"], "80");
@@ -371,7 +475,7 @@ mod tests {
     /// loader then rejects -- so a half-written file cannot become a baseline.
     #[test]
     fn a_disk_with_no_row_writes_nulls_the_loader_will_reject() {
-        let doc = sync_document(&disks(), &MockTable::new(), "now");
+        let doc = sync_document(&disks(), &MockTable::new(), "now").unwrap();
         let r = Reconciler::load(&disks(), Some(&doc), &MockTable::new());
         assert_eq!(r.baseline(), Baseline::Init);
     }

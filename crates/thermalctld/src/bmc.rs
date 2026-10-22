@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The two halves of the Switch-BMC path.  Ports the host half,
 //! `thermalctld:TemperatureUpdater._init_bmc_temperature_table`,
 //! `thermalctld:TemperatureUpdater._bmc_table_set` and
@@ -24,7 +18,7 @@
 //!   — once, on entry.  Recovery is tracked silently, and a sensor that leaves
 //!   the mirror has its state dropped so a later breach is reported again.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use swss_common::{DbConnector, Table};
 
@@ -76,9 +70,19 @@ pub struct BmcMirror {
     address: String,
     table: Option<Box<dyn TableLike>>,
     /// Set once a failure has been logged, so the next one is silent until the
-    /// link recovers.
+    /// link recovers.  A flag rather than a `Latch`: it ports
+    /// `thermalctld:TemperatureUpdater._bmc_link_failed`, whose recovery is
+    /// not announced -- the line every connect logs is a `log_info` on a
+    /// logger left at NOTICE, dropped there and here -- and a `Latch` would
+    /// announce it at NOTICE.
     failed: bool,
     open: OpenTable,
+    /// Every key a write reached the BMC with and no delete has since
+    /// removed, so that [`BmcMirror::clear`] knows what to take back.  Kept
+    /// here rather than read off the local table at shutdown because by then
+    /// `StateDb::clear` may already have emptied it, and the two must not
+    /// depend on running in a particular order.
+    published: BTreeSet<String>,
 }
 
 impl BmcMirror {
@@ -98,6 +102,7 @@ impl BmcMirror {
             table: None,
             failed: false,
             open,
+            published: BTreeSet::new(),
         };
         mirror.connect();
         mirror
@@ -110,9 +115,9 @@ impl BmcMirror {
                 self.table = Some(t);
                 self.failed = false;
                 log::info!(
-                    "Mirroring {} to BMC STATE_DB at {}",
-                    crate::db::TEMPERATURE_INFO,
-                    self.address
+                    "Mirroring {table} to BMC STATE_DB at {} (table {table})",
+                    self.address,
+                    table = crate::db::TEMPERATURE_INFO,
                 );
             }
             Err(e) => {
@@ -133,20 +138,60 @@ impl BmcMirror {
         let Some(table) = self.table.as_ref() else {
             return;
         };
-        if let Err(e) = table.set(key, fvs) {
-            if !self.failed {
-                self.failed = true;
-                log::warn!("BMC mirror write for {key} failed: {e}");
+        match table.set(key, fvs) {
+            Ok(()) => {
+                self.published.insert(key.to_string());
             }
-            self.table = None;
+            Err(e) => self.lost(&format!("BMC mirror write for {key} failed: {e}")),
         }
     }
 
     /// Remove a row that no longer exists locally.
+    ///
+    /// A failure drops the handle, as one in `set` does and as
+    /// `thermalctld:TemperatureUpdater._bmc_table_del` does: a delete that
+    /// failed is a link that failed, and the next write should reconnect
+    /// rather than reuse it.  Said once, unlike Python, which says nothing --
+    /// the write that follows would otherwise be the first sign of trouble.
+    /// The key stays in `published`, since the row may well still be there.
     pub fn del(&mut self, key: &str) {
-        if let Some(table) = self.table.as_ref() {
-            let _ = table.del(key);
+        let Some(table) = self.table.as_ref() else {
+            return;
+        };
+        match table.del(key) {
+            Ok(()) => {
+                self.published.remove(key);
+            }
+            Err(e) => self.lost(&format!("BMC mirror delete of {key} failed: {e}")),
         }
+    }
+
+    /// Take every row this mirror published back off the BMC, on the way out.
+    ///
+    /// Python does it from `thermalctld:TemperatureUpdater.__del__`, which
+    /// deletes each row from `bmc_temperature_table` beside the local one.
+    /// Like that, it reuses the handle it has and never dials: a BMC that is
+    /// already unreachable is not worth holding the shutdown for, and the first
+    /// delete that fails drops the handle and ends the sweep.
+    pub fn clear(&mut self) {
+        for key in std::mem::take(&mut self.published) {
+            let Some(table) = self.table.as_ref() else {
+                break;
+            };
+            if let Err(e) = table.del(&key) {
+                self.lost(&format!("BMC mirror delete of {key} failed: {e}"));
+            }
+        }
+    }
+
+    /// The link is gone: drop the handle so the next write reconnects, and
+    /// say so if this outage has not been reported yet.
+    fn lost(&mut self, why: &str) {
+        if !self.failed {
+            self.failed = true;
+            log::warn!("{why}");
+        }
+        self.table = None;
     }
 }
 
@@ -455,6 +500,86 @@ mod tests {
         assert!(!remote.is_empty());
         m.del("ASIC");
         assert!(remote.is_empty());
+    }
+
+    /// A delete that fails is a link that failed.  The handle goes, so the next
+    /// write reconnects instead of writing into the same dead socket, and the
+    /// failure is said rather than swallowed.
+    #[test]
+    fn a_failed_delete_drops_the_handle_and_says_so() {
+        let log = pmon_common::logging::capture();
+        let remote = MockTable::new();
+        let (open, calls) = opener(remote.clone(), 0);
+        let mut m = BmcMirror::with_opener("10.0.0.1", open);
+        m.set("ASIC", &[("temperature", "45.0".to_string())]);
+
+        remote.fail_writes("broken pipe");
+        m.del("ASIC");
+        assert!(
+            log.logged(log::Level::Warn, "BMC mirror delete of ASIC failed: broken pipe"),
+            "a failed delete is reported"
+        );
+
+        remote.allow_writes();
+        m.set("CPU", &[("temperature", "50.0".to_string())]);
+        assert_eq!(*calls.lock().unwrap(), 2, "the write after it reconnected");
+        assert_eq!(remote.field("CPU", "temperature").as_deref(), Some("50.0"));
+    }
+
+    /// On the way out, every row this mirror put on the BMC is taken back off,
+    /// as `thermalctld:TemperatureUpdater.__del__` does.  A row this host
+    /// never wrote is not its to remove.
+    #[test]
+    fn clearing_the_mirror_takes_back_every_row_it_published() {
+        let remote = MockTable::new();
+        TableLike::set(&remote, "written elsewhere", &[("temperature", "30.0".to_string())]).unwrap();
+        let (open, _) = opener(remote.clone(), 0);
+        let mut m = BmcMirror::with_opener("10.0.0.1", open);
+        for name in ["ASIC", "CPU", "PSU-1 Temp"] {
+            m.set(name, &[("temperature", "45.0".to_string())]);
+        }
+        m.del("CPU");
+
+        m.clear();
+
+        assert_eq!(
+            remote.keys(),
+            vec!["written elsewhere"],
+            "nothing this host published is left on the BMC, and nothing else went"
+        );
+    }
+
+    /// Clearing reuses the handle it has and never dials: a BMC that went away
+    /// before the daemon did is not worth holding the shutdown for.
+    #[test]
+    fn clearing_a_mirror_with_no_link_does_not_reconnect() {
+        let remote = MockTable::new();
+        let (open, calls) = opener(remote.clone(), 0);
+        let mut m = BmcMirror::with_opener("10.0.0.1", open);
+        m.set("ASIC", &[("temperature", "45.0".to_string())]);
+        remote.fail_writes("broken pipe");
+        m.set("ASIC", &[("temperature", "46.0".to_string())]);
+
+        m.clear();
+
+        assert_eq!(*calls.lock().unwrap(), 1, "no second connection for the sweep");
+    }
+
+    /// The first delete that fails ends the sweep, as Python's `__del__` drops
+    /// its handle and skips the BMC for every row after.
+    #[test]
+    fn a_clear_that_loses_the_link_stops_there() {
+        let remote = MockTable::new();
+        let (open, calls) = opener(remote.clone(), 0);
+        let mut m = BmcMirror::with_opener("10.0.0.1", open);
+        m.set("ASIC", &[("temperature", "45.0".to_string())]);
+        m.set("CPU", &[("temperature", "50.0".to_string())]);
+        remote.fail_writes_after(0, "broken pipe");
+
+        m.clear();
+
+        assert_eq!(remote.len(), 2, "the delete was refused, so both rows are still there");
+        assert_eq!(*calls.lock().unwrap(), 1, "and nothing redialled to try again");
     }
 
     /// The mirror only exists on the switch host: on the BMC the same table is
