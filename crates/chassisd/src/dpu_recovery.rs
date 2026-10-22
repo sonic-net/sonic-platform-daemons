@@ -1,23 +1,19 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The DPU recovery state machine.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater._process_single_dpu_recovery` and
 //! the transitions around it
-//! (`chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`,
-//! `chassisd:SmartSwitchModuleUpdater._enter_power_cycle_or_unrecoverable`,
+//! (`chassisd:SmartSwitchModuleUpdater._enter_power_cycle_or_unrecoverable`,
 //! `chassisd:SmartSwitchModuleUpdater._enter_booting`,
 //! `chassisd:SmartSwitchModuleUpdater._enter_ready`,
 //! `chassisd:SmartSwitchModuleUpdater._enter_wait_for_self_recovery`,
 //! `chassisd:SmartSwitchModuleUpdater._should_handle_hw_offline`,
 //! `chassisd:SmartSwitchModuleUpdater._handle_boot_timeout_expired`,
 //! `chassisd:SmartSwitchModuleUpdater.init_dpu_recovery_state`,
-//! `chassisd:SmartSwitchModuleUpdater._npu_crash_on_last_boot`,
-//! `chassisd:SmartSwitchModuleUpdater.update_dpu_recovery_state`).  One DPU
+//! `chassisd:SmartSwitchModuleUpdater._npu_crash_on_last_boot`).  The per-pass
+//! driver that reads each DPU's inputs -- including
+//! `chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress` --
+//! is `DpuUpdater::update_recovery`, the port of
+//! `chassisd:SmartSwitchModuleUpdater.update_dpu_recovery_state`.  One DPU
 //! that stops answering is power cycled, up to a limit, and then left alone for
 //! an operator -- and the whole value of the thing is in *not* power cycling: a
 //! planned reboot, a data plane that has not converged yet, and a DPU an
@@ -30,7 +26,7 @@
 
 use std::time::{Duration, Instant};
 
-use platform_api::{ModuleMidplaneDownReason, PlatformError};
+use platform_api::{DeviceKey, ModuleMidplaneDownReason, PlatformError};
 
 /// Where one DPU is in its recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,9 +74,10 @@ impl Default for Thresholds {
 }
 
 /// `chassisd:MINIMUM_SELF_RECOVERY_GRACE_PERIOD` and
-/// `chassisd:MINIMUM_SELF_RECOVERY_POLL_COUNT`.  A DPU is given at least this
-/// much of the grace period however fast the loop runs, so a short poll
-/// interval cannot shorten it.
+/// `chassisd:MINIMUM_SELF_RECOVERY_POLL_COUNT`: nothing is evaluated until 30
+/// seconds have passed *or* three polls have run, whichever comes first -- the
+/// "or" in Python's own comment on the check.  So a fast poll does shorten the
+/// grace, to three polls; on the default ten-second loop the two coincide.
 const MINIMUM_GRACE: Duration = Duration::from_secs(30);
 const MINIMUM_GRACE_POLLS: u32 = 3;
 
@@ -146,24 +143,29 @@ pub enum Effect {
 pub trait PowerCycler {
     /// Take the state-transition lock, run the graceful down/up, release it.
     ///
-    /// False when the lock could not be taken, which means another operation
-    /// owns this DPU and nothing was done to it.
-    fn power_cycle(&mut self, module: &str) -> bool;
+    /// The DPU named `name` for the log, at `key` for the platform, as
+    /// `chassisd:SmartSwitchModuleUpdater._enter_power_cycle_or_unrecoverable`
+    /// takes both the name and the index.  `Ok(false)` when another operation
+    /// holds the lock.  `Err` when the lock call itself failed.  Either way
+    /// nothing was done to the DPU.
+    fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError>;
 
-    /// `ModuleBase.get_midplane_down_reason()` for one DPU, asked at the
-    /// moment its midplane goes down.  Not implemented unless the handle
+    /// `ModuleBase.get_midplane_down_reason()` for the DPU at `key`, asked at
+    /// the moment its midplane goes down.  Not implemented unless the handle
     /// reaches a platform.
     fn midplane_down_reason(
         &mut self,
-        module: &str,
+        key: &DeviceKey,
     ) -> Result<ModuleMidplaneDownReason, PlatformError> {
-        let _ = module;
+        let _ = key;
         Err(PlatformError::NotSupported("get_module_midplane_down_reason".to_string()))
     }
 }
 
 /// What the machine is told each cycle.
 pub struct Inputs<'a> {
+    /// Where the platform finds this DPU, for a power cycle.
+    pub key: &'a DeviceKey,
     pub planes: &'a Planes,
     /// `Offline` is the one value that matters.
     pub oper_status: &'a str,
@@ -235,6 +237,7 @@ impl Recovery {
     fn power_cycle_or_give_up(
         &mut self,
         name: &str,
+        key: &DeviceKey,
         t: &Thresholds,
         now: Instant,
         hw: &mut dyn PowerCycler,
@@ -253,13 +256,25 @@ impl Recovery {
         log::warn!(
             "{name}: Initiating power-cycle (reset_count={}/{})", self.reset_count, t.reset_limit);
 
-        if !hw.power_cycle(name) {
-            // Another operation holds the DPU.  The attempt is given back --
-            // nothing was done to the hardware, so counting it would spend the
-            // budget on an operation that never happened.
-            log::warn!(
-                "{name}: Cannot acquire state transition lock; another operation in progress \
-                 — skipping power-cycle");
+        let cycled = match hw.power_cycle(name, key) {
+            Ok(true) => true,
+            Ok(false) => {
+                log::warn!(
+                    "{name}: Cannot acquire state transition lock; another operation in \
+                     progress — skipping power-cycle");
+                false
+            }
+            // Not another operation: the lock call itself failed.  Python's
+            // call is outside its `try`, so there it ends the daemon.
+            Err(e) => {
+                log::error!("{name}: set_module_state_transition() failed: {e}");
+                false
+            }
+        };
+        if !cycled {
+            // The attempt is given back: nothing was done to the hardware, so
+            // counting it would spend the budget on an operation that never
+            // happened.
             self.reset_count -= 1;
             out.push(Effect::ResetCount(self.reset_count));
         }
@@ -282,7 +297,7 @@ impl Recovery {
         log::warn!("{name}: Boot timeout ({}s) expired {context}", t.boot_timeout.as_secs());
         out.push(Effect::ReadyStatus(false));
         if input.auto_recovery {
-            self.power_cycle_or_give_up(name, t, input.now, hw, out);
+            self.power_cycle_or_give_up(name, input.key, t, input.now, hw, out);
         } else {
             self.state = DpuState::ManualIntervention;
         }
@@ -333,7 +348,7 @@ impl Recovery {
             out.push(Effect::ReadyStatus(false));
             out.push(Effect::LastDownTime);
             if input.auto_recovery {
-                self.power_cycle_or_give_up(name, t, now, hw, &mut out);
+                self.power_cycle_or_give_up(name, input.key, t, now, hw, &mut out);
             } else {
                 self.state = DpuState::ManualIntervention;
             }
@@ -424,7 +439,7 @@ impl Recovery {
                         "{name}: self-recovery timeout ({}s) expired; both cp and midplane \
                          still down", t.self_recovery_timeout.as_secs());
                     if input.auto_recovery {
-                        self.power_cycle_or_give_up(name, t, now, hw, &mut out);
+                        self.power_cycle_or_give_up(name, input.key, t, now, hw, &mut out);
                     } else {
                         self.state = DpuState::ManualIntervention;
                     }
@@ -445,7 +460,7 @@ impl Recovery {
                 } else if input.auto_recovery {
                     // Auto-recovery was switched on while this DPU was waiting
                     // for a human.  Now there is something to try.
-                    self.power_cycle_or_give_up(name, t, now, hw, &mut out);
+                    self.power_cycle_or_give_up(name, input.key, t, now, hw, &mut out);
                 }
             }
 
@@ -469,17 +484,42 @@ impl Recovery {
         ]
     }
 
-    /// Unconditionally power cycle, for the NPU-crash path at start-up.
+    /// Power cycle without waiting for a failure, for the NPU-crash path at
+    /// start-up.  Still under the reset limit and the transition lock, as
+    /// every power cycle is; the caller has already checked the DPU is admin
+    /// up and auto-recovery is on.
     pub fn force_power_cycle(
         &mut self,
         name: &str,
+        key: &DeviceKey,
         t: &Thresholds,
         now: Instant,
         hw: &mut dyn PowerCycler,
     ) -> Vec<Effect> {
         let mut out = Vec::new();
-        self.power_cycle_or_give_up(name, t, now, hw, &mut out);
+        self.power_cycle_or_give_up(name, key, t, now, hw, &mut out);
         out
+    }
+}
+
+/// `chassisd:REBOOT_CAUSE_FILE`: why the NPU itself last rebooted.
+pub const REBOOT_CAUSE_FILE: &str = "/host/reboot-cause/reboot-cause.txt";
+
+/// The NPU's reboot cause, if there is one to read.
+///
+/// No file is a fresh boot and says nothing.  A file that is there and will
+/// not read is warned about, as
+/// `chassisd:SmartSwitchModuleUpdater._npu_crash_on_last_boot` warns, and
+/// reads as no crash: power cycling every DPU on a guess is the expensive way
+/// to be wrong.
+pub fn read_npu_reboot_cause(path: &std::path::Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            log::warn!("Failed to read {}: {e}", path.display());
+            None
+        }
     }
 }
 
@@ -495,25 +535,30 @@ pub fn npu_crash_on_last_boot(reboot_cause: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
-    /// Records what was asked of the hardware, and can refuse the lock.
+    /// Records what was asked of the hardware.  `lock` is the lock call's
+    /// answer; `None` is a lock call that fails.
     struct Hw {
         cycles: Vec<String>,
-        lock: bool,
+        lock: Option<bool>,
     }
 
     impl Hw {
         fn new() -> Self {
-            Self { cycles: Vec::new(), lock: true }
+            Self { cycles: Vec::new(), lock: Some(true) }
         }
         fn busy() -> Self {
-            Self { cycles: Vec::new(), lock: false }
+            Self { cycles: Vec::new(), lock: Some(false) }
+        }
+        fn broken() -> Self {
+            Self { cycles: Vec::new(), lock: None }
         }
     }
 
     impl PowerCycler for Hw {
-        fn power_cycle(&mut self, module: &str) -> bool {
-            self.cycles.push(module.to_string());
-            self.lock
+        fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError> {
+            assert_eq!(key.as_str(), "modules[0]");
+            self.cycles.push(name.to_string());
+            self.lock.ok_or_else(|| PlatformError::Backend("lock refused".to_string()))
         }
     }
 
@@ -561,7 +606,9 @@ mod tests {
         }
 
         fn step(&mut self, p: &Planes) -> Vec<Effect> {
+            let key = DeviceKey::from("modules[0]");
             let input = Inputs {
+                key: &key,
                 planes: p,
                 oper_status: &self.oper,
                 admin_up: self.admin_up,
@@ -629,23 +676,45 @@ mod tests {
         assert!(c.hw.cycles.is_empty());
     }
 
-    /// And the grace period is at least 30 seconds *and* three polls, so a
-    /// fast poll interval cannot shorten it.
+    /// And nothing is evaluated during the grace period, however the planes
+    /// look; a DPU still down once it is over is power cycled.
     #[test]
-    fn the_grace_period_is_a_time_and_a_poll_count() {
+    fn nothing_is_evaluated_inside_the_grace_period() {
         let mut c = Ctx::new();
         c.step(&all_up());
         c.step(&planes("down", "down", "down"));
 
-        // Two polls, one second apart: neither condition met.
+        // Two polls, one second apart: inside both limits.
         c.advance(Duration::from_secs(1)).step(&planes("down", "down", "down"));
         c.advance(Duration::from_secs(1)).step(&planes("down", "down", "down"));
         assert_eq!(c.r.state, DpuState::WaitForSelfRecovery);
         assert!(c.hw.cycles.is_empty());
 
-        // Past the self-recovery timeout, both conditions met.
+        // Past the self-recovery timeout, and still down.
         c.advance(Duration::from_secs(400)).step(&planes("down", "down", "down"));
         assert_eq!(c.hw.cycles, vec!["DPU0".to_string()]);
+    }
+
+    /// The grace ends at whichever comes first.  Three fast polls end it well
+    /// inside 30 seconds -- the third evaluates and sees the midplane back --
+    /// and one poll after 30 seconds ends it too.  Read as "30 seconds *and*
+    /// three polls", both would still be waiting.
+    #[test]
+    fn the_grace_period_ends_at_whichever_of_its_two_limits_comes_first() {
+        let mut c = Ctx::new();
+        c.step(&all_up());
+        c.step(&planes("down", "down", "down"));
+        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
+        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
+        assert_eq!(c.r.state, DpuState::WaitForSelfRecovery, "two polls, two seconds");
+        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
+        assert_eq!(c.r.state, DpuState::Booting, "the third poll evaluates");
+
+        let mut c = Ctx::new();
+        c.step(&all_up());
+        c.step(&planes("down", "down", "down"));
+        c.advance(Duration::from_secs(31)).step(&planes("up", "down", "down"));
+        assert_eq!(c.r.state, DpuState::Booting, "one poll, past 30 seconds");
     }
 
     /// The DPU comes back on its own inside the grace period, which is what it
@@ -818,6 +887,24 @@ mod tests {
         c.step(&planes("down", "down", "down"));
         assert_eq!(c.r.reset_count, 0, "the attempt is given back");
         assert_eq!(c.r.state, DpuState::PowerCycle, "but the DPU is still watched");
+    }
+
+    /// A lock call that fails is not another operation holding the DPU, and
+    /// the log says which one it was.  Nothing was done here either, so the
+    /// attempt is given back the same way.
+    #[test]
+    fn a_lock_call_that_fails_is_not_reported_as_a_busy_lock() {
+        let log = pmon_common::logging::capture();
+        let mut c = Ctx::new();
+        c.hw = Hw::broken();
+        c.advance(Duration::from_secs(700));
+        c.step(&planes("down", "down", "down"));
+        assert_eq!(c.r.reset_count, 0, "the attempt is given back");
+        assert_eq!(c.r.state, DpuState::PowerCycle);
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU0: set_module_state_transition() failed: platform error: lock refused"));
+        assert!(!log.contains("another operation in progress"));
     }
 
     /// Only a DPU that was Ready reads Offline as a new fault.  A stale

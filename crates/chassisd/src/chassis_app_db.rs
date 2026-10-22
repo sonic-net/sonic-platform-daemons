@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Removing a long-gone line card's rows from the chassis app DB.
 //!
 //! Ports `chassisd:ModuleUpdater._cleanup_chassis_app_db` and
@@ -14,8 +8,6 @@
 
 use std::process::Command;
 use std::time::{Duration, SystemTime};
-
-
 
 use crate::module_updater::{DownModule, Tables};
 use crate::names::*;
@@ -86,19 +78,27 @@ pub fn due<'a>(
 
 /// Run the cleanup for every ASIC of one module.
 ///
-/// Returns whether the module should be marked cleaned; it is marked either
-/// way, as Python does -- a cleanup that cannot be addressed will not become
-/// addressable by waiting, and retrying every ten seconds forever is the
-/// alternative.
-pub fn cleanup(down_key: &str, tables: &Tables<'_>) -> bool {
+/// Returns whether the module should be marked cleaned.  It is marked when
+/// there is nothing it could ever do -- not a line card, or no hostname to
+/// address -- and once the script has run, whatever it answered, as Python
+/// does: a cleanup that cannot be addressed will not become addressable by
+/// waiting, and retrying every ten seconds forever is the alternative.  It is
+/// not marked when the hostname table cannot be read, so the next pass tries
+/// again.
+pub fn cleanup(down_key: &str, slot: i64, tables: &Tables<'_>) -> bool {
     let (module, host) = split_down_key(down_key);
     // The supervisor is tracked as a down module like any other, but it has no
     // rows in the chassis app DB to remove -- the forwarding state there is the
     // line cards'.  `chassisd:ModuleUpdater.module_down_chassis_db_cleanup`
-    // gates on the same prefix.
+    // gates on the same prefix, and says nothing about a card it skips.
     if !module.starts_with(platform_api::ModuleType::LineCard.as_str()) {
         return true;
     }
+    // The whole down key, hostname and all, as Python prints it.
+    pmon_common::notice!(
+        "Module {down_key} (Slot {slot}) is down for long time. \
+         Initiating chassis app db clean up"
+    );
     if host.is_empty() {
         pmon_common::notice!(
             "Host name is not available for Module {module}. Chassis db clean up not done!");
@@ -151,6 +151,9 @@ fn asics_of(module: &str, tables: &Tables<'_>) -> Result<Vec<String>, String> {
 /// either way -- and it removes a load step whose failure mode is a stale sha
 /// against a redis that restarted underneath it.  This runs at most once per
 /// ASIC per pulled card.
+///
+/// The exit status is read, so a script redis refused says so.  Python logs
+/// "Cleaned up" whatever the call answered.
 fn run_script(host: &str, asic: &str) -> std::io::Result<()> {
     let out = Command::new("redis-cli")
         .args([
@@ -170,9 +173,26 @@ fn run_script(host: &str, asic: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use pmon_common::db::{MockTable, TableLike};
     use std::collections::BTreeMap;
+
+    use pmon_common::db::{MockTable, TableLike};
+
+    use super::*;
+
+    /// Every table the same mock: these tests look at one of them at a time.
+    fn tables(t: &MockTable) -> Tables<'_> {
+        Tables {
+            chassis: t,
+            module: t,
+            midplane: t,
+            entity: t,
+            asic: t,
+            hostname: t,
+            module_reboot: t,
+            config: None,
+            device_metadata: None,
+        }
+    }
 
     /// A module that went down at a fixed instant, so the arithmetic below is
     /// against a clock the test owns.
@@ -229,15 +249,17 @@ mod tests {
     /// the chassis app DB are the line cards' -- there is nothing of its own
     /// to remove, and running the script against it would be a scan of every
     /// SYSTEM_* key for nothing.
+    ///
+    /// The hostname table refuses every read, so a supervisor that got past
+    /// the gate would come back unmarked; and the announcement is a line
+    /// card's, so it is not made.
     #[test]
     fn a_supervisor_going_down_cleans_up_nothing() {
+        let log = pmon_common::logging::capture();
         let t = MockTable::new();
-        let tables = Tables {
-            chassis: &t, module: &t, midplane: &t, entity: &t,
-            asic: &t, hostname: &t, module_reboot: &t, config: None,
-        };
-        assert!(cleanup("SUPERVISOR0|sup", &tables));
-        assert_eq!(t.scans(), 0);
+        t.fail_reads("the gate should have stopped this read");
+        assert!(cleanup("SUPERVISOR0|sup", 1, &tables(&t)));
+        assert!(!log.contains("Initiating chassis app db clean up"));
     }
 
     /// The count is the line card's own statement.  A card that never
@@ -246,10 +268,7 @@ mod tests {
     #[test]
     fn the_asics_to_clean_come_from_the_count_the_card_published() {
         let t = MockTable::new();
-        let tables = Tables {
-            chassis: &t, module: &t, midplane: &t, entity: &t,
-            asic: &t, hostname: &t, module_reboot: &t, config: None,
-        };
+        let tables = tables(&t);
         assert!(asics_of("LINE-CARD0", &tables).unwrap().is_empty());
 
         t.set("LINE-CARD0", &[(NUM_ASICS_FIELD, "2".to_string())]).unwrap();
@@ -262,16 +281,18 @@ mod tests {
 
     /// Without a hostname there is nothing to address the cleanup to: the
     /// chassis app DB is partitioned by it.  The module is still marked, so
-    /// this is not retried every cycle forever.
+    /// this is not retried every cycle forever.  The hostname table refuses
+    /// reads, so a card that got past the check would come back unmarked.
     #[test]
     fn a_module_that_never_published_a_hostname_is_marked_and_skipped() {
+        let log = pmon_common::logging::capture();
         let t = MockTable::new();
-        let tables = Tables {
-            chassis: &t, module: &t, midplane: &t, entity: &t,
-            asic: &t, hostname: &t, module_reboot: &t, config: None,
-        };
-        assert!(cleanup("LINE-CARD0|", &tables), "marked, so it is not retried");
-        assert_eq!(t.scans(), 0, "and nothing was looked up");
+        t.fail_reads("the empty hostname should have stopped this read");
+        assert!(cleanup("LINE-CARD0|", 1, &tables(&t)), "marked, so it is not retried");
+        assert!(log.logged(
+            log::Level::Info,
+            "Module LINE-CARD0| (Slot 1) is down for long time. Initiating chassis app db clean up"
+        ));
     }
 
     /// A line card that published no ASIC count has nothing to clean, and is
@@ -279,12 +300,8 @@ mod tests {
     #[test]
     fn a_card_with_no_asics_is_marked_without_running_anything() {
         let t = MockTable::new();
-        let tables = Tables {
-            chassis: &t, module: &t, midplane: &t, entity: &t,
-            asic: &t, hostname: &t, module_reboot: &t, config: None,
-        };
-        t.set("LINE-CARD0", &[("hostname", "lc0".to_string())]).unwrap();
-        assert!(cleanup("LINE-CARD0|lc0", &tables));
+        t.set("LINE-CARD0", &[(HOSTNAME_FIELD, "lc0".to_string())]).unwrap();
+        assert!(cleanup("LINE-CARD0|lc0", 1, &tables(&t)));
     }
 
     /// A hostname table that cannot be read leaves the card unmarked, so the
@@ -298,12 +315,9 @@ mod tests {
     #[test]
     fn an_unreadable_hostname_table_leaves_the_card_unmarked() {
         let t = MockTable::new();
-        let tables = Tables {
-            chassis: &t, module: &t, midplane: &t, entity: &t,
-            asic: &t, hostname: &t, module_reboot: &t, config: None,
-        };
         t.fail_reads("redis is gone");
-        assert!(!cleanup("LINE-CARD0|lc0", &tables), "not marked: it has to be retried");
+        let tables = tables(&t);
+        assert!(!cleanup("LINE-CARD0|lc0", 1, &tables), "not marked: it has to be retried");
         assert!(asics_of("LINE-CARD0", &tables).is_err());
     }
 }

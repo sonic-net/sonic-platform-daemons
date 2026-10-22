@@ -1,17 +1,13 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! `config chassis modules shutdown` / `startup`, applied to the hardware.
 //!
-//! Ports `chassisd:ModuleConfigUpdater` and
-//! `chassisd:SmartSwitchModuleConfigUpdater` together with the two tasks that
-//! feed them (`chassisd:ConfigManagerTask`,
-//! `chassisd:SmartSwitchConfigManagerTask`).  Both watch the same CONFIG_DB
-//! table and disagree about what an event means, which is the whole of the
-//! difference between them and the reason the decision is a function here.
+//! The decision half of `chassisd:ModuleConfigUpdater`,
+//! `chassisd:SmartSwitchModuleConfigUpdater` and the two tasks that feed them
+//! (`chassisd:ConfigManagerTask`, `chassisd:SmartSwitchConfigManagerTask`).
+//! Both watch the same CONFIG_DB table and disagree about what an event means,
+//! which is the whole of the difference between them and the reason the
+//! decision is a function here.  Watching the table and applying the answer to
+//! the hardware live in `main.rs` (`spawn_config_watcher`,
+//! `apply_config_event`), beside the other thing that subscribes.
 
 use platform_api::ModuleType;
 
@@ -84,9 +80,10 @@ pub fn admin_state_for(machine: Machine, event: Event<'_>) -> bool {
 
 /// Whether the daemon should act on this key at all.
 ///
-/// A name the machine does not own is a misconfiguration, and applying it would
-/// send `set_admin_state` to whatever module index the platform happened to
-/// answer with.
+/// A name the machine does not own is a misconfiguration: a DPU name typed on a
+/// chassis, a line card's on a SmartSwitch.  Applying it would ask the
+/// platform to change the admin state of a module it may well have under that
+/// name -- the wrong kind of module, on the wrong machine.
 pub fn should_apply(machine: Machine, key: &str) -> bool {
     if machine.accepts(key) {
         return true;

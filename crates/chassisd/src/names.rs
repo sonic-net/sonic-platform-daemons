@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The table, key and field names chassisd publishes under.
 //!
 //! Gathered in one place because they are spread over four databases and two
@@ -24,7 +18,8 @@ pub const PHYSICAL_ENTITY_INFO_TABLE: &str = "PHYSICAL_ENTITY_INFO";
 // ── CHASSIS_STATE_DB ──────────────────────────────────────────────────────────
 
 pub const CHASSIS_STATE_DB: &str = "CHASSIS_STATE_DB";
-/// On a supervisor the fabric cards' ASICs; on a line card its own.
+/// A line card's own ASICs.  The supervisor writes the fabric cards' into
+/// [`CHASSIS_FABRIC_ASIC_INFO_TABLE`] instead.
 pub const CHASSIS_ASIC_INFO_TABLE: &str = "CHASSIS_ASIC_TABLE";
 pub const CHASSIS_FABRIC_ASIC_INFO_TABLE: &str = "CHASSIS_FABRIC_ASIC_TABLE";
 /// Same name as the STATE_DB table, different database and different contents:
@@ -38,6 +33,9 @@ pub const CHASSIS_MODULE_REBOOT_INFO_TABLE: &str = "CHASSIS_MODULE_REBOOT_INFO_T
 pub const CONFIG_DB: &str = "CONFIG_DB";
 pub const CHASSIS_CFG_TABLE: &str = "CHASSIS_MODULE";
 pub const CHASSIS_MODULE_ADMIN_STATUS: &str = "admin_status";
+/// `localhost` here holds the hostname a line card publishes and a
+/// SmartSwitch's `dpu_auto_recovery`.
+pub const DEVICE_METADATA_TABLE: &str = "DEVICE_METADATA";
 
 // ── Fields ────────────────────────────────────────────────────────────────────
 

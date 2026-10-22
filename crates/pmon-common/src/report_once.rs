@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Saying a thing went wrong once, and saying when it came back.
 //!
 //! Every polling daemon here reads the platform on a timer and has to survive

@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! The SmartSwitch half: the NPU's view of its DPUs.
 //!
 //! Ports `chassisd:SmartSwitchModuleUpdater`.  A DPU is a module like a line
@@ -44,9 +38,8 @@ pub const RESET_COUNT: &str = "reset_count";
 pub const LAST_DOWN_TIME: &str = "last_down_time";
 pub const LAST_READY_TIME: &str = "last_ready_time";
 
-/// CONFIG_DB DEVICE_METADATA|localhost, `chassisd:DPU_AUTO_RECOVERY_FIELD` and
+/// DEVICE_METADATA|localhost's `chassisd:DPU_AUTO_RECOVERY_FIELD` and
 /// `chassisd:DPU_AUTO_RECOVERY_ENABLED`.
-pub const DEVICE_METADATA_TABLE: &str = "DEVICE_METADATA";
 pub const DPU_AUTO_RECOVERY_FIELD: &str = "dpu_auto_recovery";
 const DPU_AUTO_RECOVERY_ENABLED: &str = "enable";
 
@@ -55,9 +48,11 @@ pub struct Tables<'a> {
     pub module: &'a dyn TableLike,
     pub midplane: &'a dyn TableLike,
     pub dpu_state: &'a dyn TableLike,
-    /// CONFIG_DB CHASSIS_MODULE.
+    /// CONFIG_DB CHASSIS_MODULE.  Always there in the daemon --
+    /// `run_smartswitch` does not start without it -- and absent only in a
+    /// test with no CONFIG_DB, where it reads as nothing configured.
     pub config: Option<&'a dyn TableLike>,
-    /// CONFIG_DB DEVICE_METADATA.
+    /// CONFIG_DB DEVICE_METADATA, likewise.
     pub device_metadata: Option<&'a dyn TableLike>,
 }
 
@@ -262,11 +257,18 @@ impl DpuUpdater {
         }
 
         let reason = reason.unwrap_or_else(|| {
-            let detail = match hw.midplane_down_reason(name) {
+            let detail = match hw.midplane_down_reason(&m.key) {
                 Ok(r) => {
-                    let parts: Vec<String> =
-                        [r.reason, r.detail].into_iter().flatten().filter(|p| !p.is_empty()).collect();
-                    if parts.is_empty() { "Unknown".to_string() } else { parts.join(", ") }
+                    let parts: Vec<String> = [r.reason, r.detail]
+                        .into_iter()
+                        .flatten()
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    if parts.is_empty() {
+                        "Unknown".to_string()
+                    } else {
+                        parts.join(", ")
+                    }
                 }
                 Err(PlatformError::NotSupported(_)) => {
                     log::error!("get_midplane_down_reason is not implemented");
@@ -290,28 +292,23 @@ impl DpuUpdater {
 
     // ── recovery ──────────────────────────────────────────────────────────────
 
-    fn auto_recovery(&self, tables: &Tables<'_>) -> bool {
-        tables
-            .device_metadata
-            // Swallowed:
-            // `chassisd:SmartSwitchModuleUpdater._is_auto_recovery_enabled`
-            // wraps this read and falls back to the default on any failure.
-            .and_then(|t| field(&t.get("localhost").ok().flatten(), DPU_AUTO_RECOVERY_FIELD))
-            .as_deref()
-            == Some(DPU_AUTO_RECOVERY_ENABLED)
-    }
-
-    fn admin_up(&self, name: &str, tables: &Tables<'_>) -> bool {
-        // Unlike a chassis card, an unconfigured DPU is *not* up: Python
-        // returns MODULE_STATUS_EMPTY here
-        // (`chassisd:SmartSwitchModuleUpdater.get_module_admin_status`), which
-        // is not 'up', so a SmartSwitch with no CHASSIS_MODULE rows keeps its
-        // DPUs powered down until somebody says otherwise.
-        tables
-            .config
-            .and_then(|c| field(&c.get(name).ok().flatten(), CHASSIS_MODULE_ADMIN_STATUS))
-            .as_deref()
-            == Some("up")
+    /// Whether DEVICE_METADATA|localhost turns automatic recovery on.
+    ///
+    /// A read that fails is the default, off, and says so in Python's words:
+    /// `chassisd:SmartSwitchModuleUpdater._is_auto_recovery_enabled` wraps this
+    /// read, logs, and falls back.  Off is the safe way to be wrong -- the DPU
+    /// waits for an operator rather than being power cycled on a guess.
+    fn auto_recovery(tables: &Tables<'_>) -> bool {
+        let Some(metadata) = tables.device_metadata else { return false };
+        match metadata.get("localhost") {
+            Ok(row) => {
+                field(&row, DPU_AUTO_RECOVERY_FIELD).as_deref() == Some(DPU_AUTO_RECOVERY_ENABLED)
+            }
+            Err(e) => {
+                log::error!("Failed to read {DPU_AUTO_RECOVERY_FIELD} from DEVICE_METADATA: {e}");
+                false
+            }
+        }
     }
 
     /// One cycle of the recovery machine for every DPU.
@@ -322,7 +319,7 @@ impl DpuUpdater {
         hw: &mut dyn PowerCycler,
         now: Instant,
     ) -> Result<(), String> {
-        let auto = self.auto_recovery(tables);
+        let auto = Self::auto_recovery(tables);
         for m in modules {
             let Some(recovery) = self.recovery.get_mut(&m.name) else { continue };
             let planes = {
@@ -335,23 +332,21 @@ impl DpuUpdater {
             };
             let oper = field(&tables.module.get(&m.name)?, OPERSTATUS_FIELD)
                 .unwrap_or_else(|| ModuleStatus::Empty.as_str().to_string());
-            let admin_up = tables
-                .config
-                .and_then(|c| field(&c.get(&m.name).ok().flatten(), CHASSIS_MODULE_ADMIN_STATUS))
-                .as_deref()
-                == Some("up");
+            let admin_up = admin_up(&m.name, tables)?;
             // A planned shutdown or reboot holds the transition flag; a
             // recovery this daemon started holds it too, and must not suppress
             // itself
             // (`chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`).
             let transition = m.state_transition.unwrap_or(false)
-                // Swallowed for the same reason as above: the `try` around the
-                // `transition_type` read in
-                // `chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`.
+                // A `transition_type` that cannot be read is a planned
+                // transition, the answer that leaves the DPU alone: Python's
+                // `try` swallows the error and answers True
+                // (`chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`).
                 && field(&tables.module.get(&m.name).ok().flatten(), "transition_type").as_deref()
                     != Some("recovery");
 
             let input = Inputs {
+                key: &m.key,
                 planes: &planes,
                 oper_status: &oper,
                 admin_up,
@@ -379,23 +374,27 @@ impl DpuUpdater {
         now: Instant,
     ) -> Result<(), String> {
         if npu_crashed {
-            log::warn!("NPU kernel crash detected; will power-cycle all admin-up DPUs");
+            log::warn!(
+                "NPU kernel crash detected from {}; will power-cycle all admin-up DPUs",
+                crate::dpu_recovery::REBOOT_CAUSE_FILE
+            );
         }
-        let auto = self.auto_recovery(tables);
         for m in modules {
-            let admin_up = self.admin_up(&m.name, tables);
             let Some(recovery) = self.recovery.get_mut(&m.name) else { continue };
             let effects = recovery.reset_for_startup(now);
             apply(&m.name, &effects, tables.dpu_state)?;
 
-            if !npu_crashed || !admin_up {
+            // Only a crash asks CONFIG_DB anything, in Python's order: admin
+            // status first, then the auto-recovery switch, per DPU.  A CONFIG_DB
+            // that cannot answer does not stop an ordinary start-up.
+            if !npu_crashed || !admin_up(&m.name, tables)? {
                 continue;
             }
-            if !auto {
+            if !Self::auto_recovery(tables) {
                 recovery.state = DpuState::ManualIntervention;
                 continue;
             }
-            let effects = recovery.force_power_cycle(&m.name, &self.thresholds, now, hw);
+            let effects = recovery.force_power_cycle(&m.name, &m.key, &self.thresholds, now, hw);
             apply(&m.name, &effects, tables.dpu_state)?;
         }
         Ok(())
@@ -407,21 +406,36 @@ impl DpuUpdater {
     /// running perfectly well should not vanish because the NPU's daemon
     /// restarted.
     pub fn clear(&self, modules: &[ModuleInfo], tables: &Tables<'_>) {
+        // Logged, not propagated: the process is already leaving, so there is
+        // no connection left to recover by leaving again.  Logged all the same,
+        // so a row left behind has a line that says why.
+        let warn = |what: &str, r: Result<(), String>| {
+            if let Err(e) = r {
+                log::warn!("Failed to remove {what}: {e}");
+            }
+        };
         for m in modules {
-            // Logged, not propagated: the process is already leaving, so there
-            // is no connection left to recover by leaving again.
-            if let Err(e) =
-                apply(&m.name, &[Effect::ReadyStatus(false), Effect::LastDownTime], tables.dpu_state)
-            {
+            if let Err(e) = apply(
+                &m.name,
+                &[Effect::ReadyStatus(false), Effect::LastDownTime],
+                tables.dpu_state,
+            ) {
                 log::warn!("{e}");
             }
-            let _ = tables.module.del(&m.name);
-            // On the way out; a read that fails here costs nothing.
-            if tables.midplane.get(&m.name).ok().flatten().is_some() {
-                let _ = tables.midplane.del(&m.name);
+            warn(
+                &format!("{} from {CHASSIS_MODULE_INFO_TABLE}", m.name),
+                tables.module.del(&m.name),
+            );
+            match tables.midplane.get(&m.name) {
+                Ok(Some(_)) => warn(
+                    &format!("{} from {CHASSIS_MIDPLANE_INFO_TABLE}", m.name),
+                    tables.midplane.del(&m.name),
+                ),
+                Ok(None) => {}
+                Err(e) => warn(&format!("{} from {CHASSIS_MIDPLANE_INFO_TABLE}", m.name), Err(e)),
             }
         }
-        let _ = tables.chassis.del(CHASSIS_INFO_KEY);
+        warn(CHASSIS_INFO_KEY, tables.chassis.del(CHASSIS_INFO_KEY));
     }
 
     /// Remove a DPU's leftover CHASSIS_STATE_DB rows while it is shut down.
@@ -434,18 +448,71 @@ impl DpuUpdater {
     /// two exceptions are recognised by their table name -- told only the
     /// unqualified keys a `Table` hands back, this would delete exactly the two
     /// rows it must keep.
-    pub fn cleanup_shut_down(&self, modules: &[ModuleInfo], tables: &Tables<'_>, rows: &dyn Keyspace) {
+    ///
+    /// A scan that fails skips that DPU's sweep for this pass: logged, nothing
+    /// deleted, and the next pass tries again.  Python's
+    /// `chassisd:SmartSwitchModuleUpdater.module_down_chassis_db_cleanup` has
+    /// no `try` around its `keys()`, so there a failed scan is an uncaught
+    /// exception and a restart.  Skipping is the departure, and the safe
+    /// one: the sweep is housekeeping, so losing one pass of it costs nothing,
+    /// while a failed scan that read as an empty key space would hide that
+    /// the database had gone away.  An admin status that cannot be read skips
+    /// the sweep the same way: read as "down" it would sweep a DPU that is up
+    /// and running.
+    pub fn cleanup_shut_down(
+        &self,
+        modules: &[ModuleInfo],
+        tables: &Tables<'_>,
+        rows: &dyn Keyspace,
+    ) {
         for m in modules {
-            if self.admin_up(&m.name, tables) {
-                continue;
+            match admin_up(&m.name, tables) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => {
+                    log::warn!("{e}, skipping its cleanup");
+                    continue;
+                }
             }
-            for key in rows.keys(&format!("*{}*", m.name)) {
+            let keys = match rows.keys(&format!("*{}*", m.name)) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to scan CHASSIS_STATE_DB for {}, skipping its cleanup: {e}",
+                        m.name
+                    );
+                    continue;
+                }
+            };
+            for key in keys {
                 if !key.contains(DPU_STATE_TABLE) && !key.contains("REBOOT_CAUSE") {
-                    let _ = rows.del(&key);
+                    if let Err(e) = rows.del(&key) {
+                        log::warn!("Failed to remove {key} from CHASSIS_STATE_DB: {e}");
+                    }
                 }
             }
         }
     }
+}
+
+/// Whether CONFIG_DB says this DPU is admin up.
+///
+/// Unlike a chassis card, an unconfigured DPU is *not* up: Python returns
+/// MODULE_STATUS_EMPTY here
+/// (`chassisd:SmartSwitchModuleUpdater.get_module_admin_status`), which is not
+/// 'up', so a SmartSwitch with no CHASSIS_MODULE rows keeps its DPUs powered
+/// down until somebody says otherwise.
+///
+/// A read that fails is an error, not "down".  Python's read has no `try`, so a
+/// CONFIG_DB it cannot read ends the daemon.  Read as "down", it would walk a
+/// Ready DPU to AdminDown, hand an Unrecoverable one a fresh power-cycle budget,
+/// and have `cleanup_shut_down` sweep the rows of a DPU that is running.
+fn admin_up(name: &str, tables: &Tables<'_>) -> Result<bool, String> {
+    let Some(config) = tables.config else { return Ok(false) };
+    let row = config
+        .get(name)
+        .map_err(|e| format!("Failed to read the admin status of {name}: {e}"))?;
+    Ok(field(&row, CHASSIS_MODULE_ADMIN_STATUS).as_deref() == Some("up"))
 }
 
 /// Write the midplane half of one DPU_STATE row.
@@ -517,10 +584,10 @@ fn apply(name: &str, effects: &[Effect], table: &dyn TableLike) -> Result<(), St
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use platform_api::ModuleMidplaneDownReason;
-    use pmon_common::db::MockTable;
+    use platform_api::{DeviceKey, ModuleMidplaneDownReason};
+    use pmon_common::db::{MockKeyspace, MockTable};
 
     struct Db {
         chassis: MockTable,
@@ -559,15 +626,24 @@ mod tests {
 
     struct Hw(Vec<String>);
     impl PowerCycler for Hw {
-        fn power_cycle(&mut self, module: &str) -> bool {
-            self.0.push(module.to_string());
-            true
+        fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError> {
+            assert_eq!(*key, key_of(name), "{name} is cycled at its own key");
+            self.0.push(name.to_string());
+            Ok(true)
         }
+    }
+
+    /// The key the walk publishes for "DPU0", "DPU1", ...: the DPU's position.
+    pub(crate) fn key_of(name: &str) -> DeviceKey {
+        let n = name.trim_start_matches(|c: char| !c.is_ascii_digit());
+        DeviceKey::from(format!("modules[{n}]"))
     }
 
     fn dpu(name: &str, status: ModuleStatus) -> ModuleInfo {
         ModuleInfo {
             name: name.to_string(),
+            key: key_of(name),
+            parent_key: None,
             parent_name: CHASSIS_PARENT.to_string(),
             position_in_parent: Some(0),
             presence: true,
@@ -602,8 +678,6 @@ mod tests {
         assert_eq!(db.module.field("DPU0", SLOT_FIELD).as_deref(), Some("N/A"),
             "a DPU has no slot, and the field shape stays the same");
     }
-
-
 
     /// DPU_STATE is subscribed to by the DPU's own copy of this daemon.
     /// Rewriting it every ten seconds would wake every DPU for nothing.
@@ -656,7 +730,10 @@ mod tests {
         let db = Db::new();
         db.admin_up("DPU0");
         db.dpu_state
-            .set("DPU0", &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())])
+            .set(
+                "DPU0",
+                &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())],
+            )
             .unwrap();
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
@@ -674,7 +751,10 @@ mod tests {
         db.admin_up("DPU0");
         db.module.set("DPU0", &[("transition_type", "recovery".to_string())]).unwrap();
         db.dpu_state
-            .set("DPU0", &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())])
+            .set(
+                "DPU0",
+                &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())],
+            )
             .unwrap();
         let mut m = [dpu("DPU0", ModuleStatus::Online)];
         m[0].state_transition = Some(true);
@@ -729,6 +809,20 @@ mod tests {
         u.init_recovery(&m, &db.tables(), &mut hw, false, Instant::now()).unwrap();
         assert!(hw.0.is_empty());
         assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("false"));
+    }
+
+    /// And asks CONFIG_DB nothing, as Python's start-up asks it nothing
+    /// without a crash: a CONFIG_DB that cannot answer does not stop it.
+    #[test]
+    fn an_ordinary_startup_does_not_read_config_db() {
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        db.config.fail_reads("CONFIG_DB is gone");
+        db.device_metadata.fail_reads("CONFIG_DB is gone");
+        let m = [dpu("DPU0", ModuleStatus::Online)];
+        let mut u = updater(&m, r.path());
+        u.init_recovery(&m, &db.tables(), &mut Hw(Vec::new()), false, Instant::now()).unwrap();
+        assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("false"));
         assert_eq!(db.dpu_state.field("DPU0", RESET_COUNT).as_deref(), Some("0"));
     }
 
@@ -740,7 +834,7 @@ mod tests {
     fn cleaning_up_a_shut_down_dpu_keeps_its_state_and_its_history() {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
-        let rows = pmon_common::db::MockKeyspace::new(&[
+        let rows = MockKeyspace::new(&[
             "DPU_STATE|DPU0", "REBOOT_CAUSE|DPU0|x", "TRANSCEIVER_INFO|DPU0|Ethernet0",
             "DPU_STATE|DPU1",
         ]);
@@ -753,6 +847,26 @@ mod tests {
         ]);
     }
 
+    /// A scan that fails costs that pass's sweep and nothing else: it is
+    /// logged, and nothing is deleted on the strength of it.
+    #[test]
+    fn a_failed_scan_skips_the_sweep_and_deletes_nothing() {
+        let log = pmon_common::logging::capture();
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        let rows = MockKeyspace::new(&[
+            "DPU_STATE|DPU0", "TRANSCEIVER_INFO|DPU0|Ethernet0",
+        ]);
+        rows.fail_reads("redis is gone");
+        let m = [dpu("DPU0", ModuleStatus::Offline)];
+        updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
+        assert_eq!(rows.remaining().len(), 2, "nothing was deleted");
+        assert!(
+            log.logged(log::Level::Warn, "Failed to scan CHASSIS_STATE_DB for DPU0"),
+            "and the skipped sweep is said"
+        );
+    }
+
     /// A DPU an operator has started is left entirely alone: the sweep is
     /// about a DPU that is *meant* to be off.
     #[test]
@@ -760,10 +874,65 @@ mod tests {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
         db.admin_up("DPU0");
-        let rows = pmon_common::db::MockKeyspace::new(&["TRANSCEIVER_INFO|DPU0|Ethernet0"]);
+        let rows = MockKeyspace::new(&["TRANSCEIVER_INFO|DPU0|Ethernet0"]);
         let m = [dpu("DPU0", ModuleStatus::Online)];
         updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
         assert_eq!(rows.remaining().len(), 1);
+    }
+
+    /// An admin status that cannot be read sweeps nothing: read as "down", it
+    /// would delete the rows of a DPU that is up and running.
+    #[test]
+    fn an_unreadable_admin_status_sweeps_nothing() {
+        let log = pmon_common::logging::capture();
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        db.config.fail_reads("CONFIG_DB is gone");
+        let rows = MockKeyspace::new(&["TRANSCEIVER_INFO|DPU0|Ethernet0"]);
+        let m = [dpu("DPU0", ModuleStatus::Online)];
+        updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
+        assert_eq!(rows.remaining().len(), 1, "nothing was deleted on a guess");
+        assert!(log.logged(log::Level::Warn, "Failed to read the admin status of DPU0"));
+    }
+
+    /// And the recovery pass that reads it ends, as Python's unwrapped read
+    /// ends its daemon, rather than walking the DPU to AdminDown.
+    #[test]
+    fn an_unreadable_admin_status_ends_the_recovery_pass() {
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        db.config.fail_reads("CONFIG_DB is gone");
+        let m = [dpu("DPU0", ModuleStatus::Online)];
+        let mut u = updater(&m, r.path());
+        let e = u
+            .update_recovery(&m, &db.tables(), &mut Hw(Vec::new()), Instant::now())
+            .expect_err("an admin status that cannot be read is not an answer");
+        assert!(e.contains("admin status"), "{e}");
+        assert_ne!(u.state_of("DPU0"), Some(DpuState::AdminDown));
+        u.init_recovery(&m, &db.tables(), &mut Hw(Vec::new()), true, Instant::now())
+            .expect_err("nor at start-up");
+    }
+
+    /// An auto-recovery setting that cannot be read is off, and said so in
+    /// Python's words: an NPU crash then leaves the DPUs for an operator
+    /// rather than power cycling them on a guess.
+    #[test]
+    fn an_unreadable_auto_recovery_setting_is_off_and_said_so() {
+        let log = pmon_common::logging::capture();
+        let r = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        db.admin_up("DPU0");
+        db.device_metadata.fail_reads("CONFIG_DB is gone");
+        let m = [dpu("DPU0", ModuleStatus::Online)];
+        let mut u = updater(&m, r.path());
+        let mut hw = Hw(Vec::new());
+        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now()).unwrap();
+        assert!(hw.0.is_empty(), "nothing power cycled");
+        assert_eq!(u.state_of("DPU0"), Some(DpuState::ManualIntervention));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to read dpu_auto_recovery from DEVICE_METADATA: "
+        ));
     }
 
     /// A name outside the DPU family is a platform bug; publishing it would
@@ -779,7 +948,9 @@ mod tests {
         assert!(db.module.is_empty());
     }
 
-    /// A refusing table costs that DPU's row and not the pass.
+    /// A refusing table ends the pass at the row it refused, as Python's
+    /// unwrapped `set` does: a STATE_DB that will not take one row will not
+    /// take the next, and the daemon leaves for a fresh connection.
     #[test]
     fn a_refusing_table_stops_the_pass() {
         let r = tempfile::tempdir().unwrap();
@@ -801,7 +972,8 @@ mod tests {
         assert!(db.midplane.is_empty());
     }
 
-    /// The midplane's loss and return are each said once.
+    /// The midplane's loss and return are each said once.  Each step under a
+    /// fresh capture, so "said" and "not said again" are about that step.
     #[test]
     fn the_dpu_midplane_reports_each_transition_once() {
         let r = tempfile::tempdir().unwrap();
@@ -811,13 +983,27 @@ mod tests {
             m.is_midplane_reachable = Some(up);
             m
         };
+        let up = "Module DPU0 midplane connectivity is up";
+        let lost = "Unexpected: Module DPU0 lost midplane connectivity";
         let u = updater(&[with(true)], r.path());
+
+        let log = pmon_common::logging::capture();
         u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new())).unwrap();
+        assert!(log.logged(log::Level::Info, up));
+
+        let log = pmon_common::logging::capture();
         u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new())).unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("down"));
+        assert!(log.logged(log::Level::Warn, lost));
+
+        let log = pmon_common::logging::capture();
         u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new())).unwrap();
+        assert!(!log.contains("midplane connectivity"), "still lost is not news");
+
+        let log = pmon_common::logging::capture();
         u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new())).unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
+        assert!(log.logged(log::Level::Info, up));
     }
 
     /// An NPU crash with auto-recovery off leaves the DPUs for an operator
@@ -834,8 +1020,6 @@ mod tests {
         assert!(hw.0.is_empty());
         assert_eq!(u.state_of("DPU0"), Some(DpuState::ManualIntervention));
     }
-
-
 
     /// A midplane row that will not write ends the pass, after the DPU_STATE
     /// half has gone through.
@@ -885,7 +1069,6 @@ mod tests {
         u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
     }
-
 
     /// On the way out a refusal is only logged, and the rest of the teardown
     /// still runs.
@@ -948,14 +1131,14 @@ mod tests {
         }
     }
     impl PowerCycler for Reasons {
-        fn power_cycle(&mut self, _module: &str) -> bool {
+        fn power_cycle(&mut self, _name: &str, _key: &DeviceKey) -> Result<bool, PlatformError> {
             unreachable!("the midplane check does not power cycle")
         }
         fn midplane_down_reason(
             &mut self,
-            module: &str,
+            key: &DeviceKey,
         ) -> Result<ModuleMidplaneDownReason, PlatformError> {
-            self.asked.push(module.to_string());
+            self.asked.push(key.to_string());
             self.answer.clone()
         }
     }
@@ -991,7 +1174,7 @@ mod tests {
         updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(),
                    Some("Unplanned: 'Power Loss, DPU power rail dropped'"));
-        assert_eq!(hw.asked, vec!["DPU0".to_string()]);
+        assert_eq!(hw.asked, vec!["modules[0]".to_string()]);
         assert_eq!(rc::read_midplane_down_reason(r.path(), "DPU0").as_deref(),
                    Some("Unplanned: 'Power Loss, DPU power rail dropped'"), "and it is kept");
     }
@@ -1057,7 +1240,10 @@ mod tests {
         let m = [m];
         let mut hw = Reasons::answering(Some("Power Loss"), None);
         updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Power Loss'"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Power Loss'")
+        );
     }
 
     /// A reason already kept is the one the midplane went down with: after a
@@ -1070,7 +1256,10 @@ mod tests {
         let m = [unreachable_dpu()];
         let mut hw = Reasons::answering(Some("Something later"), None);
         updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Power Loss'"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Power Loss'")
+        );
         assert!(hw.asked.is_empty());
     }
 
@@ -1118,7 +1307,10 @@ mod tests {
         updater(&m, &root)
             .check_midplane(&m, &db.tables(), &mut Reasons::answering(Some("Power Loss"), None))
             .unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Power Loss'"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Power Loss'")
+        );
         assert!(log.logged(log::Level::Error, "DPU0: persist midplane reason failed"));
     }
 
@@ -1159,8 +1351,13 @@ mod tests {
         let m = [m];
         let mut hw = Reasons::answering(Some("Power Loss"), None);
         updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Power Loss'"));
-        assert!(log.logged(log::Level::Error, "DPU0: failed to read transition_type: redis is gone"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Power Loss'")
+        );
+        assert!(
+            log.logged(log::Level::Error, "DPU0: failed to read transition_type: redis is gone")
+        );
     }
 
     /// A platform that fails to answer is still an unplanned loss, published
