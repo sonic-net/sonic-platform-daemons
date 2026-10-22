@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Syslog with a NOTICE level.
 //!
 //! Python's `sonic_py_common.logger` has eight severities and uses
@@ -15,6 +9,15 @@
 //!
 //! A record aimed at NOTICE carries [`NOTICE`] as its target and is routed
 //! past the level map; everything else maps as `syslog::BasicLogger` does.
+//!
+//! And INFO is not sent, as Python's is not.  Its daemons log through
+//! `DaemonBase`, whose `SysLogger` starts at NOTICE; the
+//! `set_min_log_priority_info()` psud, syseepromd and thermalctld call sets the
+//! level of the `Logger` `DaemonBase` derives from, which it never writes
+//! through.  So a `log_info` there is dropped in the process, and a
+//! `log::info!` here is too.  The one INFO Python does send is thermalctld's
+//! `ThermalMonitor`, which keeps a `logger.Logger` of its own at INFO; its
+//! lines carry [`INFO`].
 
 use std::sync::Mutex;
 #[cfg(any(test, feature = "testing"))]
@@ -30,6 +33,18 @@ pub const NOTICE: &str = "@notice";
 #[macro_export]
 macro_rules! notice {
     ($($arg:tt)+) => { log::info!(target: $crate::logging::NOTICE, $($arg)+) };
+}
+
+/// Target marking an INFO record as one that is sent: a line Python logs
+/// through a logger it set to INFO.  Every other INFO record is dropped; see
+/// the module doc.
+pub const INFO: &str = "@info";
+
+/// `log::info!` that reaches syslog -- the counterpart of `log_info` on a
+/// Python logger set to INFO, as thermalctld's `ThermalMonitor` sets its own.
+#[macro_export]
+macro_rules! info_logger {
+    ($($arg:tt)+) => { log::info!(target: $crate::logging::INFO, $($arg)+) };
 }
 
 struct SyslogLogger {
@@ -52,33 +67,38 @@ enum Severity {
     Info,
 }
 
-fn severity_of(target: &str, level: log::Level) -> Severity {
+/// `None` for a record that is not sent at all.
+fn severity_of(target: &str, level: log::Level) -> Option<Severity> {
     match (target, level) {
-        (NOTICE, _) => Severity::Notice,
-        (_, log::Level::Error) => Severity::Err,
-        (_, log::Level::Warn) => Severity::Warning,
-        _ => Severity::Info,
+        (NOTICE, _) => Some(Severity::Notice),
+        (_, log::Level::Error) => Some(Severity::Err),
+        (_, log::Level::Warn) => Some(Severity::Warning),
+        (INFO, log::Level::Info) => Some(Severity::Info),
+        // INFO that is not [`INFO`]'s, and anything below it: dropped, as a
+        // Python daemon's `log_info` is.
+        _ => None,
     }
 }
 
 impl log::Log for SyslogLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
+        severity_of(metadata.target(), metadata.level()).is_some()
     }
 
     fn log(&self, record: &log::Record) {
-        if !self.enabled(record.metadata()) {
+        let Some(severity) = severity_of(record.target(), record.level()) else {
             return;
-        }
-        // A poisoned lock means another thread panicked mid-write; the panic
-        // hook still has to suspend hw-management-tc, so take the lock anyway
-        // rather than lose the messages that explain what happened.
+        };
+        // A poisoned lock means another thread panicked mid-write.  The lines
+        // that follow are the ones that explain what happened -- the panic's
+        // own, from `pmon_common::thread`, among them -- so take the lock
+        // anyway rather than lose them.
         let mut w = match self.inner.lock() {
             Ok(w) => w,
             Err(poisoned) => poisoned.into_inner(),
         };
         let msg = record.args().to_string();
-        let _ = match severity_of(record.target(), record.level()) {
+        let _ = match severity {
             Severity::Notice => w.notice(msg),
             Severity::Err => w.err(msg),
             Severity::Warning => w.warning(msg),
@@ -156,17 +176,25 @@ impl log::Log for Captured {
         if !self.enabled(record.metadata()) {
             return;
         }
-        // The severity mapping is exercised here too, so a NOTICE that stopped
-        // being a NOTICE shows up as a failing assertion rather than as a line
-        // an operator no longer greps.
-        let level = match severity_of(record.target(), record.level()) {
-            Severity::Notice | Severity::Info => log::Level::Info,
-            Severity::Err => log::Level::Error,
-            Severity::Warning => log::Level::Warn,
-        };
         // Formatted whether or not anyone keeps it, for the reason above: a
         // format argument that panics should fail whichever test reaches it.
         let line = record.args().to_string();
+        // The severity mapping is exercised here too, so a NOTICE that stopped
+        // being a NOTICE shows up as a failing assertion rather than as a line
+        // an operator no longer greps -- and an INFO line that is dropped is
+        // not kept, so a test cannot pass on a line syslog never sees.
+        //
+        // NOTICE is kept as `Info` -- `log` has no NOTICE, and these are the
+        // lines the tests assert on -- and the INFO logger's lines as `Debug`,
+        // so that what reaches syslog at NOTICE stays apart from what reaches
+        // it at INFO: the parity tests compare the first only.
+        let level = match severity_of(record.target(), record.level()) {
+            Some(Severity::Notice) => log::Level::Info,
+            Some(Severity::Info) => log::Level::Debug,
+            Some(Severity::Err) => log::Level::Error,
+            Some(Severity::Warning) => log::Level::Warn,
+            None => return,
+        };
         let mut lines = self.lines.lock().unwrap_or_else(|p| p.into_inner());
         // A thread that is not capturing is a test that did not ask; its line
         // goes nowhere rather than into another test's answer.
@@ -213,6 +241,19 @@ impl CaptureGuard {
     /// The same, requiring the severity as well.
     pub fn logged(&self, level: log::Level, needle: &str) -> bool {
         self.any(|l, m| l == level && m.contains(needle))
+    }
+
+    /// Every line this test has logged, in order.  NOTICE arrives as `Info`,
+    /// as in [`logged`](Self::logged), and the INFO logger's lines as `Debug`.
+    pub fn lines(&self) -> Vec<(log::Level, String)> {
+        CAPTURED
+            .lines
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(t, _)| *t == self.thread)
+            .map(|(_, mine)| mine.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -263,12 +304,14 @@ pub fn capture() -> CaptureGuard {
 mod tests {
     use super::*;
 
-    /// The target has to be something no module path can produce, or a stray
-    /// `log::info!` from a module called `notice` would be promoted.
+    /// The targets have to be something no module path can produce, or a
+    /// stray `log::info!` from a module called `notice` would be promoted.
     #[test]
-    fn the_notice_target_cannot_collide_with_a_module_path() {
-        assert!(NOTICE.starts_with('@'));
-        assert!(!NOTICE.contains("::"));
+    fn the_targets_cannot_collide_with_a_module_path() {
+        for target in [NOTICE, INFO] {
+            assert!(target.starts_with('@'), "{target}");
+            assert!(!target.contains("::"), "{target}");
+        }
     }
 
     /// NOTICE outranks the record's own level, and everything else follows it.
@@ -279,14 +322,21 @@ mod tests {
     /// loganalyzer rules do not match.
     #[test]
     fn the_notice_target_outranks_the_records_own_level() {
-        assert_eq!(severity_of(NOTICE, log::Level::Info), Severity::Notice);
-        assert_eq!(severity_of(NOTICE, log::Level::Error), Severity::Notice);
-        assert_eq!(severity_of("thermalctld", log::Level::Error), Severity::Err);
-        assert_eq!(severity_of("thermalctld", log::Level::Warn), Severity::Warning);
-        assert_eq!(severity_of("thermalctld", log::Level::Info), Severity::Info);
-        // Below Info the logger is not enabled at all, so whatever this
-        // answers never reaches syslog; it must still not be an error.
-        assert_eq!(severity_of("thermalctld", log::Level::Debug), Severity::Info);
+        assert_eq!(severity_of(NOTICE, log::Level::Info), Some(Severity::Notice));
+        assert_eq!(severity_of(NOTICE, log::Level::Error), Some(Severity::Notice));
+        assert_eq!(severity_of("thermalctld", log::Level::Error), Some(Severity::Err));
+        assert_eq!(severity_of("thermalctld", log::Level::Warn), Some(Severity::Warning));
+    }
+
+    /// INFO stays in the process, as a Python daemon's `log_info` does --
+    /// a `psud-rs` that announced "Starting up..." would be saying something
+    /// psud never has -- except the lines of a logger Python set to INFO.
+    #[test]
+    fn info_is_sent_only_for_the_info_logger() {
+        assert_eq!(severity_of("psud", log::Level::Info), None);
+        assert_eq!(severity_of(INFO, log::Level::Info), Some(Severity::Info));
+        assert_eq!(severity_of("thermalctld", log::Level::Debug), None);
+        assert_eq!(severity_of(INFO, log::Level::Debug), None);
     }
 
     /// And the capturing logger sees what the daemons write, at the severity

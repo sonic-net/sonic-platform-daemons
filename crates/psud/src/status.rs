@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! One power entity's health, and when a change in it is worth a log line.
 //!
 //! Ports `psud:PsuStatus`.  Every field starts *good*: the daemon has not

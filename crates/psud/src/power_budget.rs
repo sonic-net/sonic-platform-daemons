@@ -1,16 +1,10 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! What the chassis can supply against what it draws, and the master PSU LED.
 //!
 //! Ports `psud:PsuChassisInfo`.  Only a modular chassis runs this: on a fixed
 //! platform there are no line cards to account for and Python never constructs
 //! the object (`is_modular_chassis()` in `psud:DaemonPsud.run`).
 
-use platform_api::{FanDrawerInfo, LedColor, ModuleInfo, PsuInfo};
+use platform_api::{FanDrawerInfo, LedColor, ModuleInfo, Number, PsuInfo};
 use pmon_common::db::TableLike;
 use pmon_common::fmt;
 
@@ -42,8 +36,9 @@ impl Default for PowerBudget {
 
 /// One row of the budget: a field name and what to do with it.
 enum Entry {
-    /// The device is there; publish its figure.
-    Set(String, f64),
+    /// The device is there; publish its figure, as the platform answered it:
+    /// Python writes `str()` of the getter's answer, so an int stays one.
+    Set(String, Number),
     /// It is not; stop listing it, without disturbing the other entries.
     Drop(String),
 }
@@ -56,17 +51,18 @@ fn supplier(row: &PsuInfo) -> Entry {
     // A present PSU that is not powered supplies nothing -- which is not the
     // same as not being there, and is why this is a 0 rather than a delete.
     if !row.power_good {
-        return Entry::Set(field, 0.0);
+        return Entry::Set(field, Number::Float(0.0));
     }
-    Entry::Set(field, row.maximum_supplied_power.unwrap_or(0.0))
+    // `try_get(get_maximum_supplied_power, 0.0)`: the default is a float.
+    Entry::Set(field, row.maximum_supplied_power.unwrap_or(Number::Float(0.0)))
 }
 
-fn consumer(name: &str, presence: bool, power: Option<f64>) -> Entry {
+fn consumer(name: &str, presence: bool, power: Option<Number>) -> Entry {
     let field = format!("{CONSUMER_FIELD} {name}");
     if !presence {
         return Entry::Drop(field);
     }
-    Entry::Set(field, power.unwrap_or(0.0))
+    Entry::Set(field, power.unwrap_or(Number::Float(0.0)))
 }
 
 impl PowerBudget {
@@ -93,7 +89,7 @@ impl PowerBudget {
             // about it, not a contribution.
             if let Entry::Set(_, w) = &e {
                 if row.presence && row.power_good {
-                    total_supplied += w;
+                    total_supplied += w.as_f64();
                 }
             }
             entries.push(e);
@@ -101,14 +97,14 @@ impl PowerBudget {
         for d in drawers {
             let e = consumer(&d.name, d.presence, d.maximum_consumed_power);
             if let Entry::Set(_, w) = &e {
-                total_consumed += w;
+                total_consumed += w.as_f64();
             }
             entries.push(e);
         }
         for m in modules {
             let e = consumer(&m.name, m.presence, m.maximum_consumed_power);
             if let Entry::Set(_, w) = &e {
-                total_consumed += w;
+                total_consumed += w.as_f64();
             }
             entries.push(e);
         }
@@ -119,7 +115,7 @@ impl PowerBudget {
         let mut row: Vec<(String, String)> = Vec::new();
         for e in &entries {
             match e {
-                Entry::Set(field, w) => row.push((field.clone(), fmt::float(*w))),
+                Entry::Set(field, w) => row.push((field.clone(), fmt::number(Some(*w)))),
                 Entry::Drop(field) => {
                     if let Err(e) = table.hdel(CHASSIS_POWER_KEY, field) {
                         log::error!("Failed to delete {field} power info from DB: {e}");
@@ -139,8 +135,8 @@ impl PowerBudget {
 
     /// The master LED: green while the chassis supplies more than it draws.
     ///
-    /// Returns whether the LED was written, which is what the caller uses to
-    /// decide there is a colour to apply.
+    /// Returns the colour to set the LED to, or `None` to leave it alone.  The
+    /// caller sets it; nothing here touches the hardware.
     pub fn master_status(&mut self) -> Option<LedColor> {
         let mut set_led = self.first_run;
         let mut master_status_good = false;
@@ -190,6 +186,7 @@ mod tests {
     fn psu(name: &str, presence: bool, power_good: bool, supplied: Option<f64>) -> PsuInfo {
         PsuInfo {
             name: name.to_string(),
+            key: crate::updater::tests::key_of(name),
             kind: platform_api::PowerEntityKind::Psu,
             position_in_parent: Some(1),
             presence,
@@ -209,7 +206,7 @@ mod tests {
             temperature_high_threshold: None,
             voltage_high_threshold: None,
             voltage_low_threshold: None,
-            maximum_supplied_power: supplied,
+            maximum_supplied_power: supplied.map(Number::Float),
             power_warning_suppress_threshold: None,
             power_critical_threshold: None,
         }
@@ -219,7 +216,7 @@ mod tests {
         FanDrawerInfo {
             name: name.to_string(),
             presence,
-            maximum_consumed_power: consumed,
+            maximum_consumed_power: consumed.map(Number::Float),
             ..Default::default()
         }
     }
@@ -314,7 +311,7 @@ mod tests {
         let module = |name: &str, presence: bool, w: f64| platform_api::ModuleInfo {
             name: name.to_string(),
             presence,
-            maximum_consumed_power: Some(w),
+            maximum_consumed_power: Some(Number::Float(w)),
             ..Default::default()
         };
         let mut b = PowerBudget::default();
