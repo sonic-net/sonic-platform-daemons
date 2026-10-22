@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! How long to wait before the next cycle.
 //!
 //! Every polling pmon daemon spells the same three constants -- a short first
@@ -11,8 +5,8 @@
 //! threshold past which a slow cycle is worth a warning -- and the same
 //! arithmetic between them (`thermalctld:ThermalMonitor.main`,
 //! `sensormond:SensorMonitorDaemon.run`, `psud`, `chassisd`).  It is four
-//! lines, and four lines copied seven times is how the seventh comes to differ
-//! from the first.
+//! lines, and four lines copied into every daemon is how the last copy comes
+//! to differ from the first.
 
 /// Seconds to wait after a cycle that took `elapsed`.
 ///
