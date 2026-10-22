@@ -14,7 +14,7 @@ Architecture: any
 # image pip-installs, not a Debian package, so dpkg could never satisfy it --
 # and an unsatisfiable Depends makes `apt-get install -f` want to remove this
 # package, which the pmon Dockerfile forbids with --no-remove.
-Depends: ${shlibs:Depends}, python3
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3
 Description: SONiC thermal control daemon, in Rust
  Rust port of thermalctld.  Writes the same TEMPERATURE_INFO, FAN_INFO,
  FAN_DRAWER_INFO and PHYSICAL_ENTITY_INFO entries as the Python
@@ -35,7 +35,7 @@ Architecture: any
 # image pip-installs, not a Debian package, so dpkg could never satisfy it --
 # and an unsatisfiable Depends makes `apt-get install -f` want to remove this
 # package, which the pmon Dockerfile forbids with --no-remove.
-Depends: ${shlibs:Depends}, python3
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3
 Description: SONiC system EEPROM daemon, in Rust
  Rust port of syseepromd.  Writes the same EEPROM_INFO entries as the
  Python implementation.
