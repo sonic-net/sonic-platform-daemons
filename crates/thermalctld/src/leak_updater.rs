@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! Leak detection.  Ports `thermalctld:LiquidCoolingUpdater`.
 //!
 //! Runs on its own thread at `liquid_cooling_update_interval` — 0.5 s on the

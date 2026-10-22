@@ -1,9 +1,3 @@
-//
-// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// Apache-2.0
-//
-
 //! syseepromd, in Rust.  Ports `sonic-syseepromd/scripts/syseepromd`.
 //!
 //! The daemon is small because the work is not its own: the platform decodes
@@ -24,7 +18,7 @@ use pmon_common::db::{self, TableLike};
 use pmon_common::logging;
 
 use clap::Parser;
-use platform_api::PlatformApi;
+use platform_api::{EepromUpdate, PlatformApi};
 use platform_provider::PlatformImpl;
 
 const SYSLOG_IDENTIFIER: &str = "syseepromd";
@@ -56,30 +50,49 @@ const UPDATE_PERIOD: Duration = Duration::from_secs(60);
 /// `syseepromd:ERR_EEPROM_LOAD`, the one the Python daemon exits with when it
 /// cannot get an EEPROM at all.  supervisord's `autorestart=unexpected` reads
 /// the code, so it has to keep meaning the same thing.
+///
+/// Here it means only that the platform API would not open.  Python also
+/// leaves with it when the platform opens but its chassis has no EEPROM
+/// (`get_eeprom()` is None).  The facade cannot be asked that apart from the
+/// write -- `eeprom_update_db` answers `ReadFailed` for it, as for an EEPROM it
+/// cannot read -- so such a platform gets the start-up error lines and a
+/// daemon that idles over an empty table, where Python's exits.  Neither
+/// publishes anything.
 const ERR_EEPROM_LOAD: i32 = 5;
 
-/// What a daemon that cannot reach CONFIG_DB/STATE_DB leaves with.
+/// What a daemon that cannot reach STATE_DB leaves with.
 ///
-/// Python has no constant for this because it does not choose: the write
+/// Python has no constant for this because it does not choose: the redis call
 /// raises, nothing catches it, and the interpreter exits 1.  The value has to
 /// be non-zero for supervisord's `autorestart=unexpected` to restart us, and
 /// restarting is the whole point -- `DBConnector` never reconnects, so a new
 /// process is the only way back to a working redis.
 const ERR_DB_WRITE: i32 = 1;
 
-/// Every key the platform's writer produced, so a later cycle can tell the
-/// table apart from one something else has edited.
-/// Propagates rather than treating an unreadable table as an empty one.
+/// What Python logs when the start-up post fails
+/// (`syseepromd:DaemonSyseeprom.__init__`)...
+const POST_FAILED: &str = "Failed to post system EEPROM info to database";
+
+/// ...and, in different words, when the repost after a changed table does
+/// (`syseepromd:DaemonSyseeprom.run`).
+const REPOST_FAILED: &str = "Failed to post EEPROM to database";
+
+/// Every key in the table, so a later cycle can tell the table the platform's
+/// writer produced apart from one something else has edited.
 ///
-/// That fold is what let a lost redis pass the integrity check: an empty read
-/// matched an empty cache, nothing looked changed, and the daemon stayed up
-/// publishing nothing.  Python's `getKeys()`
+/// An unreadable table is an error, never an empty key set.  Read as empty it
+/// would pass the integrity check whenever the cache was empty too -- nothing
+/// would look changed, and a daemon that had lost its redis would stay up
+/// publishing nothing.  Python's `getKeys()` is unwrapped wherever it is called
 /// (`syseepromd:DaemonSyseeprom.post_eeprom_to_db`,
-/// `syseepromd:DaemonSyseeprom.clear_db` and
-/// `syseepromd:DaemonSyseeprom.detect_eeprom_table_integrity`) is unwrapped at
-/// all three sites, so a read it cannot do ends the process.
+/// `syseepromd:DaemonSyseeprom.clear_db`,
+/// `syseepromd:DaemonSyseeprom.detect_eeprom_table_integrity`), so a read it
+/// cannot do ends the process; the callers here do the same with the error.
 fn snapshot(table: &dyn TableLike) -> Result<BTreeSet<String>, String> {
-    Ok(table.get_keys()?.into_iter().collect())
+    let keys = table
+        .get_keys()
+        .map_err(|e| format!("failed to read the keys of {EEPROM_TABLE}: {e}"))?;
+    Ok(keys.into_iter().collect())
 }
 
 /// Remove every row, as `syseepromd:DaemonSyseeprom.clear_db` does.
@@ -89,7 +102,7 @@ fn snapshot(table: &dyn TableLike) -> Result<BTreeSet<String>, String> {
 /// the process.  Carrying on past a failed delete would leave the table half
 /// cleared and the daemon believing it is empty.
 fn clear(table: &dyn TableLike) -> Result<(), String> {
-    for key in table.get_keys()? {
+    for key in snapshot(table)? {
         table
             .del(&key)
             .map_err(|e| format!("failed to delete {EEPROM_TABLE}|{key}: {e}"))?;
@@ -99,19 +112,39 @@ fn clear(table: &dyn TableLike) -> Result<(), String> {
 
 /// Ask the platform to republish, and remember what that produced.
 ///
-/// Returns None when the platform could not read or decode the EEPROM.  The
-/// Python daemon logs ERR_FAILED_EEPROM / ERR_FAILED_UPDATE_DB and carries on
-/// with whatever the table already held, which is better than half of one.
-fn publish(plat: &mut dyn PlatformApi, table: &dyn TableLike) -> Option<BTreeSet<String>> {
+/// `Ok(None)` when the platform could not read or decode the EEPROM.  The
+/// table keeps whatever it already held, as Python's does, which is better
+/// than half of one, and two lines are logged, as
+/// `syseepromd:DaemonSyseeprom.post_eeprom_to_db` and its caller log them:
+/// which half failed -- "Failed to read EEPROM" or "Failed to update EEPROM
+/// info in database" -- and then `failed`, the caller's line, because Python
+/// words it differently at start-up and in the loop.  A Python exception has
+/// no line of Python's own; its text is appended to `failed`.
+///
+/// `Err` when the platform wrote but the table cannot be read back.  That is
+/// the daemon's redis, not the platform's EEPROM, and `snapshot` explains why
+/// it is not folded into "nothing published": Python's `getKeys()` after the
+/// write (`syseepromd:DaemonSyseeprom.post_eeprom_to_db`) is unwrapped too.
+fn publish(
+    plat: &mut dyn PlatformApi,
+    table: &dyn TableLike,
+    failed: &str,
+) -> Result<Option<BTreeSet<String>>, String> {
     match plat.eeprom_update_db() {
-        Ok(true) => snapshot(table).ok(),
-        Ok(false) => {
-            log::error!("Failed to post system EEPROM info to database");
-            None
+        Ok(EepromUpdate::Updated) => snapshot(table).map(Some),
+        Ok(EepromUpdate::ReadFailed) => {
+            log::error!("Failed to read EEPROM");
+            log::error!("{failed}");
+            Ok(None)
+        }
+        Ok(EepromUpdate::UpdateFailed) => {
+            log::error!("Failed to update EEPROM info in database");
+            log::error!("{failed}");
+            Ok(None)
         }
         Err(e) => {
-            log::error!("Failed to post system EEPROM info to database: {e}");
-            None
+            log::error!("{failed}: {e}");
+            Ok(None)
         }
     }
 }
@@ -131,7 +164,7 @@ fn republish_if_changed(
     }
     log::info!("System EEPROM table was changed, needs update");
     clear(table)?;
-    if let Some(keys) = publish(plat, table) {
+    if let Some(keys) = publish(plat, table, REPOST_FAILED)? {
         *published = keys;
     }
     Ok(true)
@@ -149,22 +182,32 @@ async fn run(
 ) -> i32 {
     // Post once at start-up, before the first wait -- `show platform syseeprom`
     // must not have to sit through a minute of nothing on a fresh container.
-    let mut published = publish(platform, table).unwrap_or_default();
-
-    let code = loop {
-        match cycles.next(UPDATE_PERIOD).await {
-            Tick::Exit(code) => break code,
-            Tick::Cycle => {}
-        }
-
-        // A table we cannot write is a redis we have lost, and `DbConnector`
-        // does not reconnect -- so leaving is how we get a working one, the
-        // same way Python's unwrapped `_del` ends the process and lets
-        // supervisord start it again.  Staying would mean a daemon that is up
-        // and publishing nothing.
-        if let Err(e) = republish_if_changed(platform, table, &mut published) {
+    //
+    // A table that cannot be read back is a lost redis here as much as in the
+    // loop, and gets the same exit; see below.
+    let code = match publish(platform, table, POST_FAILED) {
+        Err(e) => {
             log::error!("{e}");
-            break ERR_DB_WRITE;
+            ERR_DB_WRITE
+        }
+        Ok(keys) => {
+            let mut published = keys.unwrap_or_default();
+            loop {
+                match cycles.next(UPDATE_PERIOD, platform).await {
+                    Tick::Exit(code) => break code,
+                    Tick::Cycle => {}
+                }
+
+                // A table we cannot write is a redis we have lost, and
+                // `DbConnector` does not reconnect -- so leaving is how we get
+                // a working one, the same way Python's unwrapped `_del` ends
+                // the process and lets supervisord start it again.  Staying
+                // would mean a daemon that is up and publishing nothing.
+                if let Err(e) = republish_if_changed(platform, table, &mut published) {
+                    log::error!("{e}");
+                    break ERR_DB_WRITE;
+                }
+            }
         }
     };
 
@@ -190,10 +233,27 @@ async fn main() {
         Ok(p) => p,
         Err(e) => {
             log::error!("Failed to load platform-specific eeprom: {e}");
+            // Python does not give up here: it falls back to the platform's
+            // legacy `eeprom.board` plugin, and exits with this code only
+            // when that fails too (`syseepromd:DaemonSyseeprom.__init__`).
+            // There is no such fallback here, on purpose, as in psud.  The
+            // plugin predates the platform API, so a platform that has only
+            // the plugin has no facade for this daemon to open, and runs the
+            // Python syseepromd.
             std::process::exit(ERR_EEPROM_LOAD);
         }
     };
 
+    // After the platform is opened, not before as Python's `DaemonBase`
+    // orders it, and the order is load-bearing.  Opening the PyO3 bridge ends
+    // with `signal.signal(SIGTERM/SIGINT, SIG_DFL)` -- a real `sigaction`,
+    // undoing whatever a vendor chassis installed -- and tokio installs its
+    // own `sigaction` once per signal, on first registration.  Registered
+    // first, the handlers would be overwritten and never put back, and every
+    // SIGTERM for the life of the process would kill it before the teardown
+    // below runs.  What the Python order buys -- a clean exit for a SIGTERM
+    // during the import -- has nothing to clean up here: nothing has been
+    // published yet.
     let code = start(
         &mut platform,
         &db::open,
@@ -211,23 +271,26 @@ async fn main() {
 
 /// Open the table and run.
 ///
-/// One decision, and it is the exit code: a table that will not open gets
-/// ERR_EEPROM_LOAD, the same code Python leaves with when it cannot get an
-/// EEPROM at all (`syseepromd:ERR_EEPROM_LOAD`), because supervisord's
-/// `autorestart=unexpected` reads the code and it has to keep meaning the same
-/// thing.
+/// One decision, and it is the exit code: a table that will not open is a
+/// STATE_DB the daemon cannot reach, and gets ERR_DB_WRITE.  Python's
+/// `daemon_base.py:db_connect` in `syseepromd:DaemonSyseeprom.__init__` is not
+/// wrapped, so there the exception ends the process with 1.  ERR_EEPROM_LOAD
+/// would say the platform has no EEPROM, which is not what happened.
 async fn start(platform: &mut dyn PlatformApi, open: db::Opener<'_>, cycles: &mut Cycles) -> i32 {
     let table = match open(db::STATE_DB, EEPROM_TABLE) {
         Ok(t) => t,
         Err(e) => {
             log::error!("Failed to open {EEPROM_TABLE}: {e}");
-            return ERR_EEPROM_LOAD;
+            return ERR_DB_WRITE;
         }
     };
     run(platform, table.as_ref(), cycles).await
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "parity"))]
+mod parity;
 
 #[cfg(test)]
 mod tests {
@@ -241,21 +304,27 @@ mod tests {
     struct FakePlatform {
         table: MockTable,
         rows: Vec<&'static str>,
-        ok: bool,
+        /// What `eeprom_update_db` answers.  Only `Updated` writes the rows.
+        answer: EepromUpdate,
+        /// Answer with this error instead of writing.
+        error: Option<PlatformError>,
         calls: usize,
     }
 
     impl FakePlatform {
         fn new(table: MockTable, rows: Vec<&'static str>) -> Self {
-            Self { table, rows, ok: true, calls: 0 }
+            Self { table, rows, answer: EepromUpdate::Updated, error: None, calls: 0 }
         }
     }
 
     impl PlatformApi for FakePlatform {
-        fn eeprom_update_db(&mut self) -> Result<bool, PlatformError> {
+        fn eeprom_update_db(&mut self) -> Result<EepromUpdate, PlatformError> {
             self.calls += 1;
-            if !self.ok {
-                return Ok(false);
+            if let Some(e) = self.error.clone() {
+                return Err(e);
+            }
+            if self.answer != EepromUpdate::Updated {
+                return Ok(self.answer);
             }
             for r in &self.rows {
                 // Ignored, not unwrapped: a vendor's writer that cannot reach
@@ -263,7 +332,7 @@ mod tests {
                 // daemon's own reaction to that is what these tests are about.
                 let _ = self.table.set(r, &[("Value", "x".to_string())]);
             }
-            Ok(true)
+            Ok(EepromUpdate::Updated)
         }
     }
 
@@ -271,46 +340,84 @@ mod tests {
     fn publishing_records_the_keys_the_platform_wrote() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let keys = publish(&mut p, &t).expect("the platform wrote the table");
+        let keys = publish(&mut p, &t, POST_FAILED).unwrap().expect("the platform wrote the table");
         assert_eq!(keys, ["0x21".to_string(), "TlvHeader".to_string()].into());
     }
 
-    /// The daemon must not adopt the key set of a write that failed, or the
+    /// The daemon must not adopt the key set of a post that failed, or the
     /// next cycle compares against something that was never published and it
     /// stops noticing that the table is wrong.
     #[test]
-    fn a_failed_write_yields_no_key_set() {
+    fn a_failed_read_yields_no_key_set() {
+        let log = pmon_common::logging::capture();
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
-        p.ok = false;
-        assert!(publish(&mut p, &t).is_none());
+        p.answer = EepromUpdate::ReadFailed;
+        assert!(publish(&mut p, &t, POST_FAILED).unwrap().is_none());
+        assert!(log.logged(log::Level::Error, "Failed to read EEPROM"));
+        assert!(log.logged(log::Level::Error, POST_FAILED));
+        assert!(!log.logged(log::Level::Error, "Failed to update EEPROM info in database"));
     }
 
+    /// The other half of `post_eeprom_to_db`: the EEPROM was read, the table
+    /// write failed.  The same nothing to adopt, but the line says which half
+    /// it was, as Python's does.
     #[test]
-    fn a_table_someone_else_emptied_is_noticed_and_rewritten() {
+    fn a_failed_update_yields_no_key_set_and_says_so() {
+        let log = pmon_common::logging::capture();
         let t = MockTable::new();
-        let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let published = publish(&mut p, &t).unwrap();
-
-        t.del("0x21").unwrap();
-        assert_ne!(snapshot(&t).unwrap(), published, "the loop's trigger");
-
-        clear(&t).unwrap();
-        assert!(t.is_empty());
-        let again = publish(&mut p, &t).unwrap();
-        assert_eq!(again, published, "the same table comes back");
-        assert_eq!(p.calls, 2);
+        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
+        p.answer = EepromUpdate::UpdateFailed;
+        assert!(publish(&mut p, &t, POST_FAILED).unwrap().is_none());
+        assert!(log.logged(log::Level::Error, "Failed to update EEPROM info in database"));
+        assert!(log.logged(log::Level::Error, POST_FAILED));
+        assert!(!log.logged(log::Level::Error, "Failed to read EEPROM"));
     }
 
-    /// An unchanged table is left alone: republishing every minute would churn
-    /// STATE_DB and wake every subscriber for nothing.
+    /// A platform that errors rather than answering `ReadFailed` or
+    /// `UpdateFailed` -- the bridge's mapping of a Python exception -- is the
+    /// same failed post: no key set to adopt, and the error in the log so the
+    /// cause is not lost.
     #[test]
-    fn an_untouched_table_is_not_rewritten() {
+    fn a_platform_error_yields_no_key_set_and_logs_why() {
+        let log = pmon_common::logging::capture();
         let t = MockTable::new();
-        let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader"]);
-        let published = publish(&mut p, &t).unwrap();
-        assert_eq!(snapshot(&t).unwrap(), published);
-        assert_eq!(p.calls, 1);
+        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
+        p.error = Some(PlatformError::Backend("EEPROM checksum mismatch".into()));
+        assert!(publish(&mut p, &t, POST_FAILED).unwrap().is_none());
+        assert!(t.is_empty(), "nothing was written");
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to post system EEPROM info to database: "
+        ));
+        assert!(log.logged(log::Level::Error, "EEPROM checksum mismatch"));
+    }
+
+    /// The platform wrote, but the table cannot be read back: that is the
+    /// daemon's redis gone, not an EEPROM it could not decode, and it is an
+    /// error rather than "nothing published".
+    #[test]
+    fn a_table_that_cannot_be_read_back_after_the_write_is_an_error() {
+        let t = MockTable::new();
+        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
+        t.fail_reads("redis is gone");
+        let e = publish(&mut p, &t, POST_FAILED).expect_err("the write cannot be confirmed");
+        assert!(e.contains("redis is gone"), "{e}");
+    }
+
+    /// And at start-up that ends the daemon with the database code, as the
+    /// same failure in the loop does: Python's unwrapped `getKeys()` after the
+    /// first post raises out of `__init__` and the process exits non-zero.
+    #[tokio::test]
+    async fn a_table_that_cannot_be_read_at_startup_ends_the_daemon() {
+        let t = MockTable::new();
+        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
+        t.fail_reads("redis is gone");
+        // No cycles: the exit has to come from the start-up publish itself,
+        // not from the first cycle's integrity check tripping over the same
+        // unreadable table a minute later.
+        let mut cycles = Cycles::Fixed { remaining: 0, code: 143 };
+        assert_eq!(run(&mut p, &t, &mut cycles).await, ERR_DB_WRITE);
     }
 
     /// The loop, driven end to end: publish at start-up, notice the table has
@@ -333,7 +440,7 @@ mod tests {
     fn a_table_someone_emptied_is_rewritten() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let mut published = publish(&mut p, &t).unwrap();
+        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
 
         assert!(!republish_if_changed(&mut p, &t, &mut published).unwrap(), "nothing changed");
         assert_eq!(p.calls, 1);
@@ -344,6 +451,24 @@ mod tests {
         assert_eq!(t.keys(), vec!["0x21".to_string(), "TlvHeader".to_string()]);
     }
 
+    /// A repost that fails is logged in the loop's words, not the start-up
+    /// one's: Python has a line for each, and which one appears tells a
+    /// reader whether it was the first post or a later repost that failed.
+    #[test]
+    fn a_failed_repost_is_logged_in_the_loops_words() {
+        let log = pmon_common::logging::capture();
+        let t = MockTable::new();
+        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
+        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
+
+        p.answer = EepromUpdate::ReadFailed;
+        t.del("0x21").unwrap();
+        assert!(republish_if_changed(&mut p, &t, &mut published).unwrap());
+        assert!(log.logged(log::Level::Error, "Failed to read EEPROM"));
+        assert!(log.logged(log::Level::Error, REPOST_FAILED));
+        assert!(!log.logged(log::Level::Error, POST_FAILED));
+    }
+
     /// A platform that has genuinely stopped reporting a TLV also trips this,
     /// and the answer is the same: republish and adopt what came back.  The
     /// key set is a statement about what this daemon wrote, not about the
@@ -352,7 +477,7 @@ mod tests {
     fn a_platform_that_reports_fewer_tlvs_settles_on_the_new_set() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let mut published = publish(&mut p, &t).unwrap();
+        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
 
         p.rows = vec!["TlvHeader"];
         t.del("0x21").unwrap();
@@ -379,7 +504,7 @@ mod tests {
     async fn a_platform_that_fails_at_startup_still_runs() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
-        p.ok = false;
+        p.answer = EepromUpdate::ReadFailed;
         let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
         assert_eq!(run(&mut p, &t, &mut cycles).await, 0);
         assert!(t.is_empty());
@@ -389,25 +514,26 @@ mod tests {
     fn teardown_leaves_nothing_behind() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21", "Checksum"]);
-        publish(&mut p, &t).unwrap();
+        publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
         clear(&t).unwrap();
         assert!(t.is_empty(), "a stale EEPROM is worse than no EEPROM");
     }
 
     // ── the wiring that used to be inside main ───────────────────────────────
 
-    /// A table that will not open is the load error, the same code Python
-    /// leaves with when it cannot get an EEPROM at all: supervisord's
-    /// `autorestart=unexpected` reads it, so it has to keep meaning the same
-    /// thing.
+    /// A table that will not open is a STATE_DB the daemon cannot reach, and
+    /// it leaves with the database code, as Python's unwrapped
+    /// `daemon_base.py:db_connect` does -- not the load error, which says the
+    /// platform has no EEPROM.
     #[tokio::test]
-    async fn a_table_that_will_not_open_is_the_load_error() {
+    async fn a_table_that_will_not_open_is_the_database_exit() {
         let log = pmon_common::logging::capture();
         let o = pmon_common::db::MockOpener::failing(EEPROM_TABLE);
         let mut p = FakePlatform::new(MockTable::new(), vec![]);
         let code =
             start(&mut p, &|d, t| o.open(d, t), &mut Cycles::Fixed { remaining: 0, code: 0 }).await;
-        assert_eq!(code, ERR_EEPROM_LOAD);
+        assert_eq!(code, ERR_DB_WRITE);
+        assert_eq!(p.calls, 0, "nothing was asked of the platform");
         assert!(log.logged(log::Level::Error, "Failed to open EEPROM_INFO"));
     }
 
@@ -452,8 +578,7 @@ mod tests {
     }
 
     /// And a key list that cannot be read is reported, rather than read as an
-    /// empty table -- which is what the old code did, calling the table
-    /// cleared when it had not been able to look.
+    /// empty table and the table called cleared when nothing looked.
     #[test]
     fn a_table_that_cannot_be_read_stops_the_clear() {
         let t = MockTable::new();
@@ -464,9 +589,22 @@ mod tests {
         assert!(!t.is_empty(), "and nothing was removed");
     }
 
+    /// The error names the table, as the delete error names the row: in the
+    /// log it is the line before "Shutting down...", and "redis is gone"
+    /// alone does not say which of the daemon's reads it was.
+    #[test]
+    fn a_key_read_that_fails_names_the_table() {
+        let t = MockTable::new();
+        t.fail_reads("redis is gone");
+        let e = snapshot(&t).expect_err("unreadable");
+        assert!(e.contains(EEPROM_TABLE), "{e}");
+        let e = clear(&t).expect_err("unreadable");
+        assert!(e.contains(EEPROM_TABLE), "{e}");
+    }
+
     /// The snapshot is the integrity check, so it has to be able to fail:
-    /// comparing an unreadable table against an empty cache and finding them
-    /// equal is how the daemon used to decide nothing had changed.
+    /// comparing an unreadable table against an empty cache would find them
+    /// equal and decide nothing had changed.
     #[test]
     fn an_unreadable_table_is_not_an_unchanged_one() {
         let t = MockTable::new();
@@ -494,7 +632,7 @@ mod tests {
         let t = o.table(EEPROM_TABLE).expect("just opened");
         t.set("0x99", &[("Value", "stale".to_string())]).unwrap();
         let mut p = FakePlatform::new(t.clone(), vec![]);
-        p.ok = false;
+        p.answer = EepromUpdate::ReadFailed;
         t.fail_writes("redis is gone");
         let code = start(
             &mut p,
