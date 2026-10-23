@@ -600,7 +600,7 @@ class TestLiquidCoolingUpdater(object):
 
         updater._restore_state_from_db()
 
-        assert updater.last_leak_status == LeakSeverity.CRITICAL
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
         # Escalation clock resumed from the recorded row timestamp.
         assert updater.leaking_sensors['leakage1'] == datetime(2025, 1, 1, 0, 5, 0)
         # A recorded CRITICAL is latched so it is not transiently downgraded.
@@ -638,7 +638,7 @@ class TestLiquidCoolingUpdater(object):
 
         # The latch keeps it CRITICAL despite the live MINOR reading.
         assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'CRITICAL'
-        assert updater.last_leak_status == LeakSeverity.CRITICAL
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
 
     @mock.patch('thermalctld.try_get')
     def test_restart_resumes_minor_timer_and_escalates(self, mock_try_get):
@@ -669,7 +669,7 @@ class TestLiquidCoolingUpdater(object):
         assert 'leakage1' not in updater.latched_critical_sensors
         updater._refresh_leak_status()
 
-        assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'CRITICAL'
+        assert dict(updater.system_table.get('system')[1])['device_leak_status'] == 'MAJOR'
 
     @mock.patch('thermalctld.try_get')
     def test_restart_clears_when_sensor_reads_no_leak(self, mock_try_get):
@@ -1818,7 +1818,7 @@ class TestLiquidCoolingUpdater(object):
 
             restarted = thermalctld.LiquidCoolingUpdater(MockChassis(), 0.5)
 
-        assert restarted.last_leak_status == LeakSeverity.CRITICAL
+        assert restarted.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
         assert 'leakage1' in restarted.leaking_sensors
         assert 'leakage1' in restarted.latched_critical_sensors
 

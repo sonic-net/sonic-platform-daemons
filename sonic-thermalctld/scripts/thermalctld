@@ -674,9 +674,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         """
         existing = self._row_to_dict(self.system_table.get('system'))
         if existing:
-            try:
-                self.last_leak_status = LeakSeverity(existing.get('device_leak_status'))
-            except ValueError:
+            stored_status = existing.get('device_leak_status')
+            if stored_status in (SystemLeakStatus.CRITICAL, SystemLeakStatus.MAJOR, SystemLeakStatus.MINOR):
+                self.last_leak_status = stored_status
+            else:
                 self.last_leak_status = None
 
         for sensor_name in self.sensor_table.getKeys():
