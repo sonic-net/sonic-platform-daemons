@@ -968,7 +968,14 @@ class PolicyReader(EventLogger):
         return DEFAULT_SHUTDOWN_DELAY_SECS
 
     def get_gnoi_cert_paths(self):
-        """Resolve the three client credential paths for one operation."""
+        """Resolve the client credential paths for one operation.
+
+        Each field comes from CONFIG_DB BMC_GNOI|certs when set, else from
+        its /etc/sonic/bmc-link default. Nothing else is consulted, so a BMC
+        without link credentials stays not_qualified instead of trying its
+        own gNMI server certificate; to reuse existing files, point these
+        fields at them.
+        """
         table = self._thread_database.table("CONFIG_DB", BMC_GNOI_TABLE)
         result = table.get("certs")
         entry = fvs_to_dict(result[1]) if result and result[0] else {}
