@@ -497,14 +497,6 @@ class TestCpoStateUpdateTask:
         assert task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, {}) == PHYSICAL_PORT_NOT_EXIST
         intf_tbl.set.assert_not_called()
 
-    def test_ganged_ports_are_rejected(self):
-        port_mapping = self.make_port_mapping()
-        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=[1, 2])
-        task = self.make_task(port_mapping)
-
-        with pytest.raises(NotImplementedError, match='Ganged ports are not yet supported'):
-            task.post_port_info_to_db('Ethernet0', port_mapping, MagicMock(), {})
-
     def test_non_present_elsfp_is_skipped(self):
         port_mapping = self.make_port_mapping()
         task = self.make_task(port_mapping)

@@ -158,6 +158,8 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
+    SYSLOG_IDENTIFIER = SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK
+
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
         threading.Thread.__init__(self)
         self.name = "SfpStateUpdateTask"
@@ -176,7 +178,7 @@ class SfpStateUpdateTask(threading.Thread):
         self.sfp_insert_events = {}
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
-        self.logger = syslogger.SysLogger(SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK, enable_runtime_config=True)
+        self.logger = syslogger.SysLogger(self.SYSLOG_IDENTIFIER, enable_runtime_config=True)
         self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)
         self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
         self.dom_db_utils = self.create_dom_db_utils(port_obj_dict, self.port_mapping, self.xcvr_table_helper,
@@ -337,6 +339,20 @@ class SfpStateUpdateTask(threading.Thread):
         """Return whether this task is responsible for physical_port"""
         return physical_port in self.port_obj_dict
 
+    def _owns_all_physical_ports(self, logical_port_name, physical_port_list):
+        """Return whether this task is responsible for every physical port in physical_port_list"""
+        physical_port_ownership = {physical_port: self._is_owned_physical_port(physical_port) for physical_port in physical_port_list}
+        # All ports owned. This task owns the logical port.
+        if all(physical_port_ownership.values()):
+            return True
+        # Some ports owned, some unowned. This should not happen, report an error.
+        if any(physical_port_ownership.values()):
+            unowned_physical_ports = [physical_port for physical_port, owned in physical_port_ownership.items() if not owned]
+            helper_logger.log_error("{}: This task only owns some of the physical ports for logical port '{}', unowned: {}".format(
+                self.name, logical_port_name, unowned_physical_ports))
+        # Not all ports owned. This task does not own the logical port.
+        return False
+
     def _get_owned_physical_ports(self, logical_port_name, port_mapping):
         """Return the physical ports of logical_port_name if this task is responsible for every one of them, else None"""
         physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
@@ -345,17 +361,9 @@ class SfpStateUpdateTask(threading.Thread):
                 self.name, logical_port_name))
             return None
 
-        physical_port_ownership = {physical_port: self._is_owned_physical_port(physical_port) for physical_port in physical_port_list}
-        # All ports owned. This task owns the logical port.
-        if all(physical_port_ownership.values()):
-            return physical_port_list
-        # Some ports owned, some unowned. This should not happen, report an error.
-        if any(physical_port_ownership.values()):
-            unowned_physical_ports = [physical_port for physical_port, owned in physical_port_ownership.items() if not owned]
-            helper_logger.log_error("{}: This task only owns some of the physical ports for logical port '{}', unowned: {}".format(
-                self.name, logical_port_name, unowned_physical_ports))
-        # Not all ports owned. This task does not own the logical port.
-        return None
+        if not self._owns_all_physical_ports(logical_port_name, physical_port_list):
+            return None
+        return physical_port_list
 
     def post_port_thresholds_to_db(self, logical_port_name, dom_db_cache=None, vdm_db_cache=None):
         """Post the DOM and VDM thresholds for a port to the DB.
@@ -430,8 +438,15 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored during sfp status table init".format(logical_port_name))
                 continue
 
-            physical_port_list = self._get_owned_physical_ports(logical_port_name, port_mapping)
-            if physical_port_list is None:
+            physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
+            if not physical_port_list:
+                # No physical port means nothing can be plugged into this logical port, so mark it
+                # REMOVED regardless of which task owns it.
+                helper_logger.log_error("No physical ports found for logical port '{}' during sfp status table init".format(logical_port_name))
+                common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
+                continue
+
+            if not self._owns_all_physical_ports(logical_port_name, physical_port_list):
                 continue
 
             for physical_port in physical_port_list:
@@ -448,11 +463,11 @@ class SfpStateUpdateTask(threading.Thread):
 
         # Post all the current interface sfp/dom threshold info to STATE_DB
         self.retry_eeprom_set = self._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
-        helper_logger.log_notice("SfpStateUpdateTask: Posted all port DOM/SFP info to DB")
+        helper_logger.log_notice("{}: Posted all port DOM/SFP info to DB".format(self.name))
 
         # Init port sfp status sw table
         self._init_port_sfp_status_sw_tbl(port_mapping_data, self.xcvr_table_helper, self.main_thread_stop_event)
-        helper_logger.log_notice("SfpStateUpdateTask: Initialized port sfp status table")
+        helper_logger.log_notice("{}: Initialized port sfp status table".format(self.name))
 
     def task_worker(self, stopping_event, sfp_error_event):
 

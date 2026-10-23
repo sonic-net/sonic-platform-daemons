@@ -1,6 +1,5 @@
 from xcvrd.dom.utilities.db.utils import DBUtils
 from xcvrd.dom.utilities.status.utils import StatusUtils
-from swsscommon import swsscommon
 
 
 class StatusDBUtils(DBUtils):

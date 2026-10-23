@@ -3,7 +3,6 @@ from xcvrd.xcvrd_utilities.utils import XCVRDUtils
 from xcvrd.xcvrd_utilities.xcvr_table_helper import VDM_THRESHOLD_TYPES
 from xcvrd.dom.utilities.db.utils import DBUtils
 from xcvrd.dom.utilities.vdm.utils import VDMUtils
-from swsscommon import swsscommon
 
 class VDMDBUtils(DBUtils):
     """

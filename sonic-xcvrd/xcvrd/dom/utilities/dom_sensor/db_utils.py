@@ -1,7 +1,6 @@
 from xcvrd.dom.utilities.db.utils import DBUtils
 from xcvrd.dom.utilities.dom_sensor.beautify import DOMBeautifyMixin
 from xcvrd.dom.utilities.dom_sensor.utils import DOMUtils
-from swsscommon import swsscommon
 
 
 class DOMDBUtils(DOMBeautifyMixin, DBUtils):

@@ -16,6 +16,8 @@ platform_chassis = None
 
 
 class CpoStateUpdateTask(SfpStateUpdateTask):
+    SYSLOG_IDENTIFIER = "CpoStateUpdateTask"
+
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
         super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event)
         self.name = "CpoStateUpdateTask"
@@ -46,21 +48,18 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
                              stop_event=threading.Event()):
         physical_port_list = port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
         if physical_port_list is None:
-            helper_logger.log_error("No physical ports found for logical port '{}'".format(logical_port_name))
+            helper_logger.log_error("CPO: No physical ports found for logical port '{}'".format(logical_port_name))
             return PHYSICAL_PORT_NOT_EXIST
-
-        if len(physical_port_list) > 1:
-            raise NotImplementedError("Ganged ports are not yet supported on CPO")
 
         for physical_port in physical_port_list:
             if stop_event.is_set():
                 break
 
             if not common._wrapper_get_presence(physical_port):
-                helper_logger.log_notice("ELSFP not present in port {}".format(logical_port_name))
+                helper_logger.log_notice("CPO: ELSFP not present in port {}".format(logical_port_name))
                 continue
 
-            port_name = common.get_physical_port_name(logical_port_name, physical_port, False)
+            port_name = logical_port_name
 
             port_device = common.get_port_device(physical_port)
             try:
@@ -69,7 +68,7 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
                 oe_info = transceiver_dict[physical_port]
                 elsfp_info = port_device.elsfp.get_api().get_elsfp_info()
             except Exception as e:
-                helper_logger.log_error("Failed to read OE/ELSFP info for physical port {}. Exception: {}".format(physical_port, e))
+                helper_logger.log_error("CPO: Failed to read OE/ELSFP info for physical port {}. Exception: {}".format(physical_port, e))
                 common.log_exception_traceback()
                 return SFP_EEPROM_NOT_READY
 
