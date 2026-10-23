@@ -2715,6 +2715,7 @@ class TestXcvrdScript(object):
         mock_port_mapping_data = MagicMock()
         mock_xcvrd.xcvr_table_helper = MagicMock()
         mock_xcvrd.xcvr_table_helper.get_intf_tbl.return_value = MagicMock()
+        mock_xcvrd.xcvr_table_helper.get_info_tables.return_value = [mock_xcvrd.xcvr_table_helper.get_intf_tbl.return_value]
 
         # Mock logical ports and their mappings
         mock_port_mapping_data.logical_port_list = logical_ports
@@ -6399,6 +6400,27 @@ class TestXcvrdScript(object):
 
             assert (status_tbl, status_sw_tbl) not in mock_del_port_sfp_dom_info_from_db.call_args_list
 
+
+    @pytest.mark.parametrize('cpo_obj_dict, expected_helper_type', [
+        ({}, XcvrTableHelper),
+        ({1: MagicMock()}, CpoXcvrTableHelper),
+    ])
+    @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))
+    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', '/tmp')))
+    @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
+    @patch('xcvrd.xcvrd.common.get_pluggable_obj_dict', MagicMock(return_value={}))
+    @patch('subprocess.check_output', MagicMock(return_value='false'))
+    def test_DaemonXcvrd_init_selects_table_helper_by_platform(self, cpo_obj_dict, expected_helper_type):
+        xcvrd.platform_chassis = MagicMock()
+        xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
+        xcvrdaemon.initialize_port_init_control_fields_in_port_table = MagicMock()
+        xcvrdaemon.remove_stale_transceiver_info = MagicMock()
+
+        with patch('xcvrd.xcvrd.common.get_cpo_obj_dict', MagicMock(return_value=cpo_obj_dict)):
+            xcvrdaemon.init()
+
+        assert type(xcvrdaemon.xcvr_table_helper) is expected_helper_type
 
     @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
     @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))

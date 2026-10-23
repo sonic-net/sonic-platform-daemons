@@ -32,6 +32,7 @@ try:
     from .cmis.cmis_manager_task import CmisManagerTask
     from .cpo.cpo_manager_task import CpoManagerTask
     from .cpo.dom_mgr import CpoDomInfoUpdateTask
+    from .cpo.xcvr_table_helper import CpoXcvrTableHelper
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
@@ -1009,22 +1010,20 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         logical_port_list = port_mapping_data.logical_port_list
         for lport in logical_port_list:
             asic_index = port_mapping_data.get_asic_id_for_logical_port(lport)
-            intf_tbl = self.xcvr_table_helper.get_intf_tbl(asic_index)
-            if not intf_tbl:
+            info_tables = self.xcvr_table_helper.get_info_tables(asic_index)
+            if not any(tbl.get(lport)[0] for tbl in info_tables):
                 continue
 
-            found, _ = intf_tbl.get(lport)
-            if found:
-                # If transceiver is absent, remove the entry from TRANSCEIVER_INFO table
-                pport_list = port_mapping_data.get_logical_to_physical(lport)
-                if not pport_list:
-                    self.log_error(f"Remove stale transceiver info: No physical port found for lport {lport}")
-                    continue
-                pport = pport_list[0]
+            # If transceiver is absent, remove the entry from the info tables
+            pport_list = port_mapping_data.get_logical_to_physical(lport)
+            if not pport_list:
+                self.log_error(f"Remove stale transceiver info: No physical port found for lport {lport}")
+                continue
+            pport = pport_list[0]
 
-                if not common._wrapper_get_presence(pport):
-                    self.log_notice(f"Remove stale transceiver info: Transceiver is absent for lport {lport}")
-                    common.del_port_sfp_dom_info_from_db(lport, port_mapping_data, [intf_tbl])
+            if not common._wrapper_get_presence(pport):
+                self.log_notice(f"Remove stale transceiver info: Transceiver is absent for lport {lport}")
+                common.del_port_sfp_dom_info_from_db(lport, port_mapping_data, info_tables)
 
     # Initialize daemon
     def init(self):
@@ -1064,9 +1063,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # creating any worker threads
         self.namespaces = multi_asic.get_front_end_namespaces()
 
-        # Initialize xcvr table helper
-        self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-
         if all(common.is_fast_reboot_enabled(ns) for ns in self.namespaces):
             self.log_notice("Skip loading media_settings.json and optics_si_settings.json in case of fast-reboot")
         else:
@@ -1081,9 +1077,16 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.log_notice("XCVRD INIT: After port config is done")
         port_mapping_data = port_event_helper.get_port_mapping(self.namespaces)
 
-        self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
         self.sfp_obj_dict = common.get_pluggable_obj_dict(port_mapping_data)
         self.cpo_obj_dict = common.get_cpo_obj_dict(port_mapping_data)
+
+        # Initialize xcvr table helper. CPO platforms have ELS tables in addition to the common ones.
+        if self.cpo_obj_dict:
+            self.xcvr_table_helper = CpoXcvrTableHelper(self.namespaces)
+        else:
+            self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+
+        self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
 
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
         # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
@@ -1116,31 +1119,15 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             namespace = common.get_namespace_from_asic_id(asic_index)
             is_warm_fast_reboot = warm_fast_reboot_status.get(namespace, False)
 
-            # Skip deleting intf_tbl for avoiding OA to trigger Tx disable signal
+            # Skip deleting the info tables for avoiding OA to trigger Tx disable signal
             # due to TRANSCEIVER_INFO table deletion during xcvrd shutdown/crash
-            intf_tbl = None
-
             common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
-                                          intf_tbl,
-                                          self.xcvr_table_helper.get_dom_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_temperature_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_flag_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_flag_change_count_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_flag_set_time_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_flag_clear_time_tbl(asic_index),
-                                          self.xcvr_table_helper.get_dom_threshold_tbl(asic_index),
-                                          *[self.xcvr_table_helper.get_vdm_threshold_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                          self.xcvr_table_helper.get_vdm_real_value_tbl(asic_index),
-                                          *[self.xcvr_table_helper.get_vdm_flag_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                          *[self.xcvr_table_helper.get_vdm_flag_change_count_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                          *[self.xcvr_table_helper.get_vdm_flag_set_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
-                                          *[self.xcvr_table_helper.get_vdm_flag_clear_time_tbl(asic_index, key) for key in VDM_THRESHOLD_TYPES],
+                                          *self.xcvr_table_helper.get_dom_tables(asic_index),
+                                          *self.xcvr_table_helper.get_vdm_tables(asic_index),
                                           self.xcvr_table_helper.get_status_flag_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_clear_time_tbl(asic_index),
-                                          self.xcvr_table_helper.get_pm_tbl(asic_index),
-                                          self.xcvr_table_helper.get_firmware_info_tbl(asic_index)
                                           ])
 
             if not is_warm_fast_reboot:
