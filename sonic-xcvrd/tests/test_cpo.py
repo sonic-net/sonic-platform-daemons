@@ -587,6 +587,37 @@ class TestCpoStateUpdateTask:
         task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_once_with(
             'Ethernet0', db_cache=vdm_db_cache)
 
+    def test_post_port_dom_thresholds_to_db(self):
+        oe_thresholds = {'temphighalarm': 75.0, 'vcchighalarm': 3.6, 'txpowerhighalarm': 5.0, 'txbiashighalarm': 12}
+        elsfp_thresholds = {'temphighalarm': 70.0, 'laser_power_high_alarm': 12.5}
+        device = MagicMock()
+        device.get_presence.return_value = True
+        device.oe.get_api.return_value.get_transceiver_threshold_info.return_value = dict(oe_thresholds)
+        device.elsfp.get_api.return_value.get_elsfp_threshold_info.return_value = dict(elsfp_thresholds)
+        task = self.make_task(port_obj_dict={1: device})
+
+        task.dom_db_utils.post_port_dom_thresholds_to_db('Ethernet0')
+
+        dom_thr_tbl = task.xcvr_table_helper.get_dom_threshold_tbl(0)
+        els_dom_thr_tbl = task.xcvr_table_helper.get_els_dom_threshold_tbl(0)
+        assert dom_thr_tbl is not els_dom_thr_tbl
+
+        # OE thresholds land in TRANSCEIVER_DOM_THRESHOLD, stringified and with a timestamp added
+        dom_thr_tbl.set.assert_called_once()
+        port_name, fvs = dom_thr_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        published = dict(fvs)
+        assert published.pop('last_update_time')
+        assert published == {'temphighalarm': '75.0', 'vcchighalarm': '3.6', 'txpowerhighalarm': '5.0', 'txbiashighalarm': '12'}
+
+        # ELSFP thresholds land in TRANSCEIVER_ELS_DOM_THRESHOLD, stringified
+        els_dom_thr_tbl.set.assert_called_once()
+        port_name, fvs = els_dom_thr_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        published = dict(fvs)
+        assert published.pop('last_update_time')
+        assert published == {'temphighalarm': '70.0', 'laser_power_high_alarm': '12.5'}
+
     def test_init_only_handles_cpo_ports(self):
         """On a mixed platform, the CPO task's init does not touch pluggable ports."""
         CPO_PORT, PLUGGABLE_PORT = 1, 2
