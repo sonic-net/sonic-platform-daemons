@@ -253,7 +253,7 @@ class SfpStateUpdateTask(threading.Thread):
     def _wrapper_is_replaceable(self, physical_port):
         port_device = common.get_port_device(physical_port)
         if port_device is None:
-            helper_logger.log_error("No port device found for port {}".format(physical_port))
+            helper_logger.log_debug("No port device found for port {}".format(physical_port))
             return False
 
         try:
