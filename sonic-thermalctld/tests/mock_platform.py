@@ -213,6 +213,10 @@ class MockLiquidCoolingSensor(liquid_cooling_base.LeakageSensorBase):
     def set_leak(self, leak_status):
         """Helper method for testing"""
         self._is_leak = leak_status
+        # Honor the LeakageSensorBase contract: is_leak() records the result in
+        # self.leaking, and the other accessors (e.g. get_leak_severity()) read
+        # self.leaking rather than calling is_leak() again.
+        self.leaking = leak_status
 
     def get_leak_profile(self):
         class MockProfile(liquid_cooling_base.LeakSensorProfileBase):

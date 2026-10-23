@@ -453,6 +453,53 @@ class TestDaemonStorage(object):
 
 
     @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_dynamic_fields_fsio_counters_unavailable(self):
+        # Simulate the disk going read-only: get_fs_io_reads/writes return 0.
+        # The daemon must retain the last known-good latest and total FSIO values
+        # from STATE_DB (keeping cumulative totals monotonic) and log 0 for latest.
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.log.log_warning = MagicMock()
+
+        mock_storage_device_object = MagicMock()
+        mock_storage_device_object.get_firmware.return_value = "N/A"
+        mock_storage_device_object.get_health.return_value = "N/A"
+        mock_storage_device_object.get_temperature.return_value = "N/A"
+        mock_storage_device_object.get_fs_io_reads.return_value = 0
+        mock_storage_device_object.get_fs_io_writes.return_value = 0
+        mock_storage_device_object.get_disk_io_reads.return_value = "1000"
+        mock_storage_device_object.get_disk_io_writes.return_value = "2000"
+        mock_storage_device_object.get_reserved_blocks.return_value = "3"
+
+        last_good = {
+            "latest_fsio_reads": "29166", "latest_fsio_writes": "20689390",
+            "total_fsio_reads": "57330", "total_fsio_writes": "20922224"}
+        stormon_daemon.state_db = MagicMock()
+        stormon_daemon.state_db.hget = MagicMock(side_effect=lambda key, field: last_good.get(field))
+
+        stormon_daemon.storage.devices = {'sda' : mock_storage_device_object}
+        stormon_daemon.get_dynamic_fields_update_state_db()
+
+        stored = stormon_daemon.device_table.get('sda')
+        # Cumulative totals must be retained (monotonic), not collapsed to 0.
+        assert stored["total_fsio_reads"] == "57330"
+        assert stored["total_fsio_writes"] == "20922224"
+        # Last known-good latest values are persisted.
+        assert stored["latest_fsio_reads"] == "29166"
+        assert stored["latest_fsio_writes"] == "20689390"
+        # A warning is emitted to flag the counter read failure.
+        stormon_daemon.log.log_warning.assert_called_once()
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
+    def test_get_last_fsio_statedb_value_defaults_to_zero(self):
+        stormon_daemon = stormond.DaemonStorage(log_identifier)
+        stormon_daemon.state_db = MagicMock()
+        stormon_daemon.state_db.hget = MagicMock(return_value=None)
+
+        assert stormon_daemon._get_last_fsio_statedb_value('sda', 'total_fsio_reads') == "0"
+
+
+    @patch('sonic_py_common.daemon_base.db_connect', MagicMock())
     def test_get_dynamic_fields_exception(self):
         stormon_daemon = stormond.DaemonStorage(log_identifier)
         stormon_daemon.log.log_notice = MagicMock()

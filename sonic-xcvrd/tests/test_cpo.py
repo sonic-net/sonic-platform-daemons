@@ -1,9 +1,22 @@
 import contextlib
+import threading
 
+import pytest
 from unittest.mock import MagicMock, patch
 
-from sonic_py_common import device_info
+from sonic_py_common import daemon_base, device_info
+from swsscommon import swsscommon
+from xcvrd import xcvrd  # noqa: F401
+from xcvrd.cmis import cmis_manager_task
+from xcvrd.cmis.cmis_manager_task import CmisManagerTask
+from xcvrd.cpo import cpo_state_task
+from xcvrd.cpo.cpo_manager_task import CpoManagerTask
+from xcvrd.cpo.cpo_state_task import CpoStateUpdateTask
+from xcvrd.xcvrd import PHYSICAL_PORT_NOT_EXIST, SFP_EEPROM_NOT_READY
 from xcvrd.xcvrd_utilities import common
+from xcvrd.xcvrd_utilities.port_event_helper import PortChangeEvent, PortMapping
+
+DEFAULT_NAMESPACE = ['']
 
 
 class TestPortDeviceResolver:
@@ -130,6 +143,21 @@ PLATFORM_DATA = {
     },
 }
 
+# All three interfaces share the very same optical engine
+SINGLE_OE_CPO_DATA = {
+    'devices': {
+        'OE1': {'device_type': 'optical_engine', 'max_banks': 3},
+    },
+    'interfaces': {
+        'Ethernet0': {'associated_devices': [{'device_id': 'OE1', 'bank': 0}]},
+        'Ethernet8': {'associated_devices': [{'device_id': 'OE1', 'bank': 1}]},
+        'Ethernet16': {'associated_devices': [{'device_id': 'OE1', 'bank': 2}]},
+    },
+}
+
+# Logical port to physical port mapping matching PLATFORM_DATA
+CPO_PORTS = (('Ethernet0', 1), ('Ethernet8', 2), ('Ethernet16', 3))
+
 
 @contextlib.contextmanager
 def patched_topology(cpo_data=CPO_DATA, platform_data=PLATFORM_DATA):
@@ -176,3 +204,430 @@ class TestCpoTopology:
             assert common.get_oe_sibling_pports(1) == {1}
             assert common.get_elsfp_sibling_pports(1) == {1}
 
+
+class TestCpoManager:
+    def _make_cpo_obj(self, module_type='CPO', tx_disable_ok=True):
+        api = MagicMock()
+        api.get_module_type_abbreviation.return_value = module_type
+        api.tx_disable_channel.return_value = tx_disable_ok
+        cpo = MagicMock()
+        cpo.get_xcvr_api.return_value = api
+        return cpo
+
+    def _make_cpo_manager_task(self, port_obj_dict, *, ports=CPO_PORTS, skip_cpo_mgr=False):
+        port_mapping = PortMapping()
+        for lport, pport in ports:
+            port_mapping.handle_port_change_event(PortChangeEvent(lport, pport, 0, PortChangeEvent.PORT_ADD))
+
+        with patch.object(cmis_manager_task, 'XcvrTableHelper'), \
+             patch.object(common, 'is_fast_reboot_enabled', return_value=False):
+            return CpoManagerTask(DEFAULT_NAMESPACE, port_mapping, port_obj_dict,
+                                  threading.Event(), skip_cpo_mgr=skip_cpo_mgr)
+
+    def test_returns_false_when_lport_is_unknown(self):
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet64') is False
+
+    def test_returns_false_when_physical_port_is_unknown(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling})
+        task.port_dict['Ethernet0'].pop('index')
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+        sibling.get_xcvr_api.assert_not_called()
+
+    def test_port_alone_on_its_optical_engine_is_a_noop(self):
+        # Ethernet16 (physical port 3) is the only interface of OE2
+        objs = {1: self._make_cpo_obj(), 2: self._make_cpo_obj(), 3: self._make_cpo_obj()}
+        task = self._make_cpo_manager_task(objs)
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet16') is True
+        for cpo in objs.values():
+            cpo.get_xcvr_api.return_value.set_datapath_deinit.assert_not_called()
+            cpo.get_xcvr_api.return_value.tx_disable_channel.assert_not_called()
+
+    def test_all_lanes_of_sibling_are_deinitialized(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling, 3: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is True
+
+        sibling_api = sibling.get_xcvr_api.return_value
+        sibling_api.set_datapath_deinit.assert_called_once_with(0xff)
+        sibling_api.tx_disable_channel.assert_called_once_with(0xff, True)
+
+        # The lanes of the physical port of lport itself are left to the superclass CMIS logic,
+        # and physical port 3 belongs to another optical engine
+        for untouched in (cpo, task.port_obj_dict[3]):
+            untouched.get_xcvr_api.return_value.set_datapath_deinit.assert_not_called()
+            untouched.get_xcvr_api.return_value.tx_disable_channel.assert_not_called()
+
+    def test_returns_false_when_sibling_object_is_missing(self):
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj()})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+    def test_returns_false_when_sibling_has_no_api(self):
+        sibling = self._make_cpo_obj()
+        sibling.get_xcvr_api.return_value = None
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: sibling})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+    def test_returns_false_when_tx_disable_fails(self):
+        sibling = self._make_cpo_obj(tx_disable_ok=False)
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: sibling})
+        with patched_topology():
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+        # The datapath was still deinitialized before the Tx output failed to turn off
+        sibling.get_xcvr_api.return_value.set_datapath_deinit.assert_called_once_with(0xff)
+
+    def test_remaining_siblings_are_deinitialized_after_a_failure(self):
+        broken, healthy = self._make_cpo_obj(), self._make_cpo_obj()
+        broken.get_xcvr_api.return_value.set_datapath_deinit.side_effect = Exception('I2C error')
+        task = self._make_cpo_manager_task({1: self._make_cpo_obj(), 2: broken, 3: healthy})
+
+        with patched_topology(cpo_data=SINGLE_OE_CPO_DATA), \
+             patch.object(common, 'log_exception_traceback') as mock_traceback:
+            assert task.deinit_oe_sibling_pports('Ethernet0') is False
+
+        mock_traceback.assert_called_once()
+
+        # The deinit of the broken sibling was attempted and raised, so its Tx output
+        # was never turned off
+        broken_api = broken.get_xcvr_api.return_value
+        broken_api.set_datapath_deinit.assert_called_once_with(0xff)
+        broken_api.tx_disable_channel.assert_not_called()
+
+        healthy_api = healthy.get_xcvr_api.return_value
+        healthy_api.set_datapath_deinit.assert_called_once_with(0xff)
+        healthy_api.tx_disable_channel.assert_called_once_with(0xff, True)
+
+    def test_siblings_are_untouched_outside_low_power(self):
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleReady'
+
+        task = self._make_cpo_manager_task({1: cpo, 2: self._make_cpo_obj()})
+        task.port_dict['Ethernet0']['api'] = api
+        task.deinit_oe_sibling_pports = MagicMock()
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is True
+
+        task.deinit_oe_sibling_pports.assert_not_called()
+        mock_parent.assert_called_once_with(task, 'Ethernet0')
+        assert 'cmis_retries' not in task.port_dict['Ethernet0']
+
+    def test_low_power_deinitializes_siblings_before_delegating(self):
+        cpo, sibling = self._make_cpo_obj(), self._make_cpo_obj()
+        api, sibling_api = cpo.get_xcvr_api(), sibling.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo, 2: sibling})
+        task.port_dict['Ethernet0']['api'] = api
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is True
+
+        sibling_api.set_datapath_deinit.assert_called_once_with(0xff)
+        sibling_api.tx_disable_channel.assert_called_once_with(0xff, True)
+        mock_parent.assert_called_once_with(task, 'Ethernet0')
+
+    def test_sibling_deinit_failure_retries_without_advancing(self):
+        # No CPO object for sibling physical port 2, so the deinit of the optical engine fails
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo})
+        task.port_dict['Ethernet0']['api'] = api
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True) as mock_parent, \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is False
+
+        mock_parent.assert_not_called()
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 1
+
+    def test_sibling_deinit_failure_increments_existing_retries(self):
+        cpo = self._make_cpo_obj()
+        api = cpo.get_xcvr_api()
+        api.get_module_state.return_value = 'ModuleLowPwr'
+
+        task = self._make_cpo_manager_task({1: cpo})
+        task.port_dict['Ethernet0']['api'] = api
+        task.port_dict['Ethernet0']['cmis_retries'] = 2
+
+        with patch.object(CmisManagerTask, 'handle_cmis_dp_deinit_state',
+                          autospec=True, return_value=True), \
+             patched_topology():
+            assert task.handle_cmis_dp_deinit_state('Ethernet0') is False
+
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 3
+
+
+class TestCpoStateUpdateTask:
+    OE_INFO = {'manufacturer': 'FAKE_MANUFACTURER', 'model': 'FAKE_MODEL', 'host_lane_count': 8}
+    ELSFP_INFO = {'type': 'OIF-ELSP', 'serial': 'SN0123456789', 'max_optical_power': 10.0}
+
+    @contextlib.contextmanager
+    def mocked_db_tables(self):
+        def new_table(*args, **kwargs):
+            return MagicMock()
+
+        with patch.object(daemon_base, 'db_connect', MagicMock()), \
+             patch.object(swsscommon, 'Table', MagicMock(side_effect=new_table)), \
+             patch.object(swsscommon, 'ProducerStateTable', MagicMock(side_effect=new_table)):
+            yield
+
+    def make_port_mapping(self, logical_port='Ethernet0', physical_port=1, asic_id=0):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(
+            PortChangeEvent(logical_port, physical_port, asic_id, PortChangeEvent.PORT_ADD))
+        return port_mapping
+
+    def make_task(self, port_mapping=None, port_obj_dict=None):
+        with self.mocked_db_tables():
+            return CpoStateUpdateTask(DEFAULT_NAMESPACE,
+                                      self.make_port_mapping() if port_mapping is None else port_mapping,
+                                      {} if port_obj_dict is None else port_obj_dict,
+                                      threading.Event(), threading.Event())
+
+    def make_cpo_device(self, oe_info=None, elsfp_info=None, is_replaceable=True):
+        device = MagicMock()
+        device.oe.get_api.return_value.get_transceiver_info.return_value = oe_info
+        device.elsfp.get_api.return_value.get_elsfp_info.return_value = elsfp_info
+        device.is_replaceable.return_value = is_replaceable
+        return device
+
+    def published_info(self, info, is_replaceable):
+        """The field/value pairs the task is expected to publish for the given info dict."""
+        published = {field: str(value) for field, value in info.items()}
+        published['is_replaceable'] = str(is_replaceable)
+        return published
+
+    def test_get_port_change_event_reads_elsfp_events(self):
+        task = self.make_task()
+        chassis = MagicMock()
+        chassis.get_elsfp_change_event.return_value = (True, {'elsfp': {'1': '1'},
+                                                              'elsfp_error': {'2': '4'}})
+        with patch.object(cpo_state_task, 'platform_chassis', chassis):
+            status, events, errors = task._get_port_change_event(1000)
+        chassis.get_elsfp_change_event.assert_called_once_with(1000)
+        assert (status, events, errors) == (True, {'1': '1'}, {'2': '4'})
+
+    def test_get_port_change_event_without_events(self):
+        task = self.make_task()
+        chassis = MagicMock()
+        chassis.get_elsfp_change_event.return_value = (False, {'elsfp': {}})
+        with patch.object(cpo_state_task, 'platform_chassis', chassis):
+            assert task._get_port_change_event(0) == (False, {}, None)
+
+    def test_get_port_error_description(self):
+        task = self.make_task()
+        device = MagicMock()
+        device.oe.get_api.return_value.get_error_description.return_value = 'Blocking Error|High Temp'
+        with patch.object(common, 'get_port_device', return_value=device) as mock_get_port_device:
+            assert task._get_port_error_description(1) == 'Blocking Error|High Temp'
+        mock_get_port_device.assert_called_once_with(1)
+
+    @pytest.mark.parametrize('is_replaceable', [True, False])
+    def test_wrapper_is_replaceable(self, is_replaceable):
+        task = self.make_task()
+        device = self.make_cpo_device(is_replaceable=is_replaceable)
+        with patch.object(common, 'get_port_device', return_value=device):
+            assert task._wrapper_is_replaceable(1) is is_replaceable
+        device.is_replaceable.assert_called_once_with()
+
+    def test_post_port_info_to_db(self):
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        device = self.make_cpo_device(self.OE_INFO, self.ELSFP_INFO, is_replaceable=True)
+        intf_tbl = MagicMock()
+        transceiver_dict = {}
+
+        with patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'get_port_device', return_value=device):
+            assert task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, transceiver_dict) is None
+
+        # The OE goes to the caller-supplied table, and is never reported as replaceable
+        intf_tbl.set.assert_called_once()
+        port_name, fvs = intf_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        assert dict(fvs) == self.published_info(self.OE_INFO, False)
+
+        # The ELSFP goes to the ELS info table of the port's asic, with its real replaceability
+        els_tbl = task.xcvr_table_helper.get_els_info_tbl(0)
+        els_tbl.set.assert_called_once()
+        port_name, fvs = els_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        assert dict(fvs) == self.published_info(self.ELSFP_INFO, True)
+
+        # The freshly read OE info is cached for the caller's next logical port
+        assert transceiver_dict == {1: self.OE_INFO}
+
+    def test_cached_oe_info_is_reused(self):
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        device = self.make_cpo_device(self.OE_INFO, self.ELSFP_INFO)
+        cached_oe_info = {'model': 'FAKE_CACHED_MODEL'}
+        intf_tbl = MagicMock()
+
+        with patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'get_port_device', return_value=device):
+            task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, {1: cached_oe_info})
+
+        device.oe.get_api.return_value.get_transceiver_info.assert_not_called()
+        assert dict(intf_tbl.set.call_args.args[1]) == self.published_info(cached_oe_info, False)
+
+    def test_no_physical_port(self):
+        port_mapping = self.make_port_mapping()
+        port_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=None)
+        task = self.make_task(port_mapping)
+        intf_tbl = MagicMock()
+
+        assert task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, {}) == PHYSICAL_PORT_NOT_EXIST
+        intf_tbl.set.assert_not_called()
+
+    def test_non_present_elsfp_is_skipped(self):
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        intf_tbl = MagicMock()
+        transceiver_dict = {}
+
+        with patch.object(common, '_wrapper_get_presence', return_value=False) as mock_get_presence, \
+             patch.object(common, 'get_port_device') as mock_get_port_device:
+            assert task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, transceiver_dict) is None
+
+        mock_get_presence.assert_called_once_with(1)
+        mock_get_port_device.assert_not_called()
+        intf_tbl.set.assert_not_called()
+        task.xcvr_table_helper.get_els_info_tbl(0).set.assert_not_called()
+        assert transceiver_dict == {}
+
+    def test_post_port_info_set_stop_event_publishes_nothing(self):
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        intf_tbl = MagicMock()
+        stop_event = threading.Event()
+        stop_event.set()
+
+        with patch.object(common, '_wrapper_get_presence') as mock_get_presence:
+            assert task.post_port_info_to_db('Ethernet0', port_mapping, intf_tbl, {}, stop_event) is None
+
+        mock_get_presence.assert_not_called()
+        intf_tbl.set.assert_not_called()
+
+    @pytest.mark.parametrize('oe_info, elsfp_info', [
+        (None, ELSFP_INFO),
+        (OE_INFO, None),
+        (None, None),
+    ])
+    def test_post_port_info_unreadable_eeprom(self, oe_info, elsfp_info):
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        device = self.make_cpo_device(oe_info, elsfp_info)
+        intf_tbl = MagicMock()
+
+        with patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'get_port_device', return_value=device):
+            assert task.post_port_info_to_db('Ethernet0', port_mapping,
+                                             intf_tbl, {}) == SFP_EEPROM_NOT_READY
+
+        intf_tbl.set.assert_not_called()
+        task.xcvr_table_helper.get_els_info_tbl(0).set.assert_not_called()
+
+    @pytest.mark.parametrize('failing_read', ['oe', 'elsfp'])
+    def test_post_port_info_read_exception_is_not_ready(self, failing_read):
+        """An exception reading ELSFP/OE info is reported as EEPROM not ready rather than killing the task."""
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        device = self.make_cpo_device(self.OE_INFO, self.ELSFP_INFO)
+        if failing_read == 'oe':
+            device.oe.get_api.return_value.get_transceiver_info.side_effect = OSError('I2C read failed')
+        else:
+            device.elsfp.get_api.return_value.get_elsfp_info.side_effect = OSError('I2C read failed')
+        intf_tbl = MagicMock()
+
+        with patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'get_port_device', return_value=device):
+            assert task.post_port_info_to_db('Ethernet0', port_mapping,
+                                             intf_tbl, {}) == SFP_EEPROM_NOT_READY
+
+        intf_tbl.set.assert_not_called()
+        task.xcvr_table_helper.get_els_info_tbl(0).set.assert_not_called()
+
+    def test_post_port_thresholds_to_db(self):
+        task = self.make_task()
+        task.dom_db_utils = MagicMock()
+        task.vdm_db_utils = MagicMock()
+        dom_db_cache = {1: {'temperature': '30.0'}}
+        vdm_db_cache = {1: {'laser_temperature': '40.0'}}
+
+        task.post_port_thresholds_to_db('Ethernet0', dom_db_cache=dom_db_cache, vdm_db_cache=vdm_db_cache)
+
+        task.dom_db_utils.post_port_dom_thresholds_to_db.assert_called_once_with(
+            'Ethernet0', db_cache=dom_db_cache)
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db.assert_called_once_with(
+            'Ethernet0', db_cache=vdm_db_cache)
+
+    def test_post_port_dom_thresholds_to_db(self):
+        oe_thresholds = {'temphighalarm': 75.0, 'vcchighalarm': 3.6, 'txpowerhighalarm': 5.0, 'txbiashighalarm': 12}
+        elsfp_thresholds = {'temphighalarm': 70.0, 'laser_power_high_alarm': 12.5}
+        device = MagicMock()
+        device.get_presence.return_value = True
+        device.oe.get_api.return_value.get_transceiver_threshold_info.return_value = dict(oe_thresholds)
+        device.elsfp.get_api.return_value.get_elsfp_threshold_info.return_value = dict(elsfp_thresholds)
+        task = self.make_task(port_obj_dict={1: device})
+
+        task.dom_db_utils.post_port_dom_thresholds_to_db('Ethernet0')
+
+        dom_thr_tbl = task.xcvr_table_helper.get_dom_threshold_tbl(0)
+        els_dom_thr_tbl = task.xcvr_table_helper.get_els_dom_threshold_tbl(0)
+        assert dom_thr_tbl is not els_dom_thr_tbl
+
+        # OE thresholds land in TRANSCEIVER_DOM_THRESHOLD, stringified and with a timestamp added
+        dom_thr_tbl.set.assert_called_once()
+        port_name, fvs = dom_thr_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        published = dict(fvs)
+        assert published.pop('last_update_time')
+        assert published == {'temphighalarm': '75.0', 'vcchighalarm': '3.6', 'txpowerhighalarm': '5.0', 'txbiashighalarm': '12'}
+
+        # ELSFP thresholds land in TRANSCEIVER_ELS_DOM_THRESHOLD, stringified
+        els_dom_thr_tbl.set.assert_called_once()
+        port_name, fvs = els_dom_thr_tbl.set.call_args.args
+        assert port_name == 'Ethernet0'
+        published = dict(fvs)
+        assert published.pop('last_update_time')
+        assert published == {'temphighalarm': '70.0', 'laser_power_high_alarm': '12.5'}
+
+    def test_init_only_handles_cpo_ports(self):
+        """On a mixed platform, the CPO task's init does not touch pluggable ports."""
+        CPO_PORT, PLUGGABLE_PORT = 1, 2
+        port_mapping = self.make_port_mapping('Ethernet0', CPO_PORT)
+        port_mapping.handle_port_change_event(
+            PortChangeEvent('Ethernet8', PLUGGABLE_PORT, 0, PortChangeEvent.PORT_ADD))
+        task = self.make_task(port_mapping, {CPO_PORT: self.make_cpo_device()})
+        task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
+        task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
+
+        with patch.object(task, 'post_port_info_to_db', return_value=None) as mock_post_info, \
+             patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'update_port_transceiver_status_table_sw') as mock_update_status, \
+             patch.object(xcvrd.media_settings_parser, 'notify_media_setting'):
+            task._post_port_sfp_info_and_dom_thr_to_db_once(port_mapping, task.xcvr_table_helper, threading.Event())
+            task._init_port_sfp_status_sw_tbl(port_mapping, task.xcvr_table_helper, threading.Event())
+
+        assert [call.args[0] for call in mock_post_info.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in task.dom_db_utils.post_port_dom_thresholds_to_db.call_args_list] == ['Ethernet0']
+        assert [call.args[0] for call in mock_update_status.call_args_list] == ['Ethernet0']
+        assert not task._is_owned_physical_port(PLUGGABLE_PORT)

@@ -2022,45 +2022,26 @@ class TestDBSetterMethods:
 class TestRebootCausePersistence:
     """Test reboot cause file I/O, symlink management, and history rotation."""
 
-    def test_persist_dpu_reboot_time(self):
-        """persist_dpu_reboot_time writes formatted time to file."""
+    def test_persist_dpu_reboot_cause_creates_missing_history_directory(self):
+        """The first reboot-cause capture creates the DPU history directory."""
         chassis = create_chassis_with_dpus(1)
         updater = create_updater(chassis)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                updater.persist_dpu_reboot_time("DPU0")
+                updater.persist_dpu_reboot_cause(("Power Loss", "Unexpected"), "DPU0", boot_id="boot-1")
 
-                path = os.path.join(tmpdir, "dpu0", "prev_reboot_time.txt")
-                assert os.path.exists(path)
-                content = open(path).read().strip()
-                # Format: YYYY_MM_DD_HH_MM_SS
-                assert len(content.split('_')) == 6
+                history_dir = os.path.join(tmpdir, "dpu0", "history")
+                files = os.listdir(history_dir)
+                assert len(files) == 1
 
-    def test_retrieve_dpu_reboot_time_exists(self):
-        """retrieve_dpu_reboot_time returns stored time."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
+                history_path = os.path.join(history_dir, files[0])
+                with open(history_path) as f:
+                    data = json.load(f)
+                assert data["boot_id"] == "boot-1"
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "prev_reboot_time.txt"), 'w') as f:
-                    f.write("2026_05_19_10_30_00")
-
-                result = updater.retrieve_dpu_reboot_time("DPU0")
-                assert result == "2026_05_19_10_30_00"
-
-    def test_retrieve_dpu_reboot_time_missing(self):
-        """retrieve_dpu_reboot_time returns None when file doesn't exist."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                result = updater.retrieve_dpu_reboot_time("DPU0")
-                assert result is None
+                symlink = os.path.join(tmpdir, "dpu0", "previous-reboot-cause.json")
+                assert os.path.realpath(symlink) == history_path
 
     def test_persist_dpu_reboot_cause_creates_history_file(self):
         """persist_dpu_reboot_cause creates JSON history file."""
@@ -2142,6 +2123,29 @@ class TestRebootCausePersistence:
                 target = os.readlink(symlink)
                 assert "_reboot_cause.json" in target
 
+    def test_persist_dpu_reboot_cause_write_failure_keeps_previous_baseline(self):
+        """A failed record write leaves the previous baseline intact and no partial file behind."""
+        chassis = create_chassis_with_dpus(1)
+        updater = create_updater(chassis)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
+                history_dir = os.path.join(tmpdir, "dpu0", "history")
+                os.makedirs(history_dir)
+                symlink = os.path.join(tmpdir, "dpu0", "previous-reboot-cause.json")
+
+                updater._get_current_time_str = MagicMock(return_value="2026_01_01_00_00_00")
+                updater.persist_dpu_reboot_cause(("First", ""), "DPU0", boot_id="boot-1")
+
+                updater._get_current_time_str = MagicMock(return_value="2026_01_01_00_00_01")
+                with patch("chassisd.json.dump", side_effect=OSError("disk full")):
+                    with pytest.raises(OSError):
+                        updater.persist_dpu_reboot_cause(("Second", ""), "DPU0", boot_id="boot-2")
+
+                # Baseline still resolves to the first record, so the second boot is re-captured later.
+                assert os.readlink(symlink).endswith("2026_01_01_00_00_00_reboot_cause.json")
+                assert os.listdir(history_dir) == ["2026_01_01_00_00_00_reboot_cause.json"]
+
     def test_rotate_files_removes_old_files(self):
         """_rotate_files removes oldest files when exceeding MAX_HISTORY_FILES."""
         chassis = create_chassis_with_dpus(1)
@@ -2183,35 +2187,6 @@ class TestRebootCausePersistence:
 
                 updater._rotate_files("DPU0")
                 assert len(os.listdir(history_dir)) == 3
-
-    def test_retrieve_dpu_reboot_info_valid(self):
-        """retrieve_dpu_reboot_info returns (cause, time) from JSON file."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                data = {"cause": "Kernel Panic", "name": "2026_05_19_10_00_00"}
-                with open(os.path.join(mod_dir, "previous-reboot-cause.json"), 'w') as f:
-                    json.dump(data, f)
-
-                cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause == "Kernel Panic"
-                assert time_str == "2026_05_19_10_00_00"
-
-    def test_retrieve_dpu_reboot_info_missing_file(self):
-        """retrieve_dpu_reboot_info returns (None, None) when file doesn't exist."""
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                cause, time_str = updater.retrieve_dpu_reboot_info("DPU0")
-                assert cause is None
-                assert time_str is None
-
 
 # ============================================================================
 # Test: update_dpu_reboot_cause_to_db
@@ -2407,48 +2382,6 @@ class TestMultipleDpuAdvanced:
              patch.object(updater, 'get_module_admin_status', return_value='up'):
             updater.update_dpu_recovery_state()
         assert updater.dpu_recovery_state["DPU0"]['state'] == DPU_STATE_WAIT_FOR_SELF_RECOVERY
-
-
-# ============================================================================
-# Test: _is_first_boot helper
-# ============================================================================
-
-class TestIsFirstBoot:
-    """Test _is_first_boot() helper method."""
-
-    def test_first_boot_detected(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "reboot-cause.txt"), 'w') as f:
-                    f.write("First boot")
-
-                assert updater._is_first_boot("DPU0") is True
-
-    def test_not_first_boot(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                mod_dir = os.path.join(tmpdir, "dpu0")
-                os.makedirs(mod_dir)
-                with open(os.path.join(mod_dir, "reboot-cause.txt"), 'w') as f:
-                    f.write("Watchdog")
-
-                assert updater._is_first_boot("DPU0") is False
-
-    def test_missing_file_returns_false(self):
-        chassis = create_chassis_with_dpus(1)
-        updater = create_updater(chassis)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("chassisd.MODULE_REBOOT_CAUSE_DIR", tmpdir):
-                assert updater._is_first_boot("DPU0") is False
 
 
 # ============================================================================
