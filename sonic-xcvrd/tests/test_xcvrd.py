@@ -6871,6 +6871,16 @@ class TestXcvrdScript(object):
         mock_on_remove.assert_called_once()
         assert mock_on_remove.call_args.args[0].port_name == 'Ethernet0'
 
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    def test_SfpStateUpdateTask_on_port_config_change_updates_mapping_before_add(self):
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, PortMapping(), {1: MagicMock()},
+                                  threading.Event(), threading.Event())
+        seen = []
+        with patch.object(task, 'on_add_logical_port',
+                          side_effect=lambda event: seen.append(task.port_mapping.get_logical_to_physical(event.port_name))):
+            task.on_port_config_change(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        assert seen == [[1]]
+
     @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
     def test_DomInfoUpdateTask_check_port_update(self):
         """Test the check_port_update method with various scenarios"""
