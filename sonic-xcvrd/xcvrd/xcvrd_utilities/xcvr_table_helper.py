@@ -315,6 +315,7 @@ class XcvrTableHelper:
 
         Note:
             - Returns empty dict if no gearbox configuration is found
+            - Returns None if the read fails, so callers can retry
             - Silently skips invalid or malformed entries
             - Only processes keys that start with "interface:"
         """
@@ -341,6 +342,31 @@ class XcvrTableHelper:
                                     helper_logger.log_debug("get_gearbox_line_lanes_dict: ASIC {}: Interface {} has empty 'line_lanes' field".format(asic_id, interface_name))
         except Exception as e:
             helper_logger.log_error("Error in get_gearbox_line_lanes_dict: {}".format(str(e)))
-            return gearbox_line_lanes_dict
+            return None
 
         return gearbox_line_lanes_dict
+
+    def is_gearbox_config_done(self):
+        """
+        Checks whether gearsyncd has finished publishing gearbox configuration.
+
+        gearsyncd writes _GEARBOX_TABLE:GearboxConfigDone last (after all phy and
+        interface entries), so its presence indicates the gearbox line lanes data
+        in APPL_DB is complete. GearboxConfigDone is set on every platform
+        (including non-gearbox ones), so this returns True once init completes.
+
+        Returns:
+            bool: True if GearboxConfigDone is present for all ASICs, else False
+        """
+        try:
+            for asic_id in self.appl_db:
+                appl_db = self.appl_db[asic_id]
+                gearbox_table = swsscommon.Table(appl_db, "_GEARBOX_TABLE")
+                (found, _) = gearbox_table.get("GearboxConfigDone")
+                if not found:
+                    return False
+        except Exception as e:
+            helper_logger.log_error("Error in is_gearbox_config_done: {}".format(str(e)))
+            return False
+
+        return True

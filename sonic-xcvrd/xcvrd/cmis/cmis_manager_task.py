@@ -66,7 +66,7 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
-        # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
+        # Cache of gearbox line lanes dict, populated once after gearsyncd finishes.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()
 
@@ -225,7 +225,7 @@ class CmisManagerTask(threading.Thread):
         Returns:
             Integer: number of host lanes
         """
-        # First try to get from gearbox configuration cache (refreshed each task_worker iteration)
+        # First try to get from gearbox configuration cache (populated once after gearsyncd finishes)
         gearbox_host_lane_count = (self._gearbox_lanes_dict or {}).get(lport, 0)
         if gearbox_host_lane_count > 0:
             self.log_debug("{}: Using gearbox line lanes count: {}".format(lport, gearbox_host_lane_count))
@@ -1360,8 +1360,10 @@ class CmisManagerTask(threading.Thread):
             # Handle port change event from main thread
             port_change_observer.handle_port_update_event()
 
-            # Cache gearbox line lanes dictionary once per iteration over all ports
-            self._gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
+            # Populate the gearbox line lanes cache once gearsyncd has finished
+            # publishing its configuration.
+            if self._gearbox_lanes_dict is None and self.xcvr_table_helper.is_gearbox_config_done():
+                self._gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
             for lport, info in self.port_dict.items():
                 if self.task_stopping_event.is_set():
