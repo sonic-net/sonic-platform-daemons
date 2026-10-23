@@ -63,10 +63,15 @@ class CpoStateUpdateTask(SfpStateUpdateTask):
             port_name = common.get_physical_port_name(logical_port_name, physical_port, False)
 
             port_device = common.get_port_device(physical_port)
-            if physical_port not in transceiver_dict:
-               transceiver_dict[physical_port] = port_device.oe.get_api().get_transceiver_info()
-            oe_info = transceiver_dict[physical_port]
-            elsfp_info = port_device.elsfp.get_api().get_elsfp_info()
+            try:
+                if physical_port not in transceiver_dict:
+                    transceiver_dict[physical_port] = port_device.oe.get_api().get_transceiver_info()
+                oe_info = transceiver_dict[physical_port]
+                elsfp_info = port_device.elsfp.get_api().get_elsfp_info()
+            except Exception as e:
+                helper_logger.log_error("Failed to read OE/ELSFP info for physical port {}. Exception: {}".format(physical_port, e))
+                common.log_exception_traceback()
+                return SFP_EEPROM_NOT_READY
 
             if oe_info is None or elsfp_info is None:
                 return SFP_EEPROM_NOT_READY

@@ -553,6 +553,26 @@ class TestCpoStateUpdateTask:
         intf_tbl.set.assert_not_called()
         task.xcvr_table_helper.get_els_info_tbl(0).set.assert_not_called()
 
+    @pytest.mark.parametrize('failing_read', ['oe', 'elsfp'])
+    def test_post_port_info_read_exception_is_not_ready(self, failing_read):
+        """An exception reading ELSFP/OE info is reported as EEPROM not ready rather than killing the task."""
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping)
+        device = self.make_cpo_device(self.OE_INFO, self.ELSFP_INFO)
+        if failing_read == 'oe':
+            device.oe.get_api.return_value.get_transceiver_info.side_effect = OSError('I2C read failed')
+        else:
+            device.elsfp.get_api.return_value.get_elsfp_info.side_effect = OSError('I2C read failed')
+        intf_tbl = MagicMock()
+
+        with patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(common, 'get_port_device', return_value=device):
+            assert task.post_port_info_to_db('Ethernet0', port_mapping,
+                                             intf_tbl, {}) == SFP_EEPROM_NOT_READY
+
+        intf_tbl.set.assert_not_called()
+        task.xcvr_table_helper.get_els_info_tbl(0).set.assert_not_called()
+
     def test_post_port_thresholds_to_db(self):
         task = self.make_task()
         task.dom_db_utils = MagicMock()
