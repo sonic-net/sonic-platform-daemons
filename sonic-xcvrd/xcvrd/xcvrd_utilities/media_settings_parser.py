@@ -21,6 +21,7 @@ VENDOR_KEY = 'vendor_key'
 MEDIA_KEY = 'media_key'
 LANE_SPEED_KEY = 'lane_speed_key'
 MEDIUM_LANE_SPEED_KEY = 'medium_lane_speed_key'
+PLATFORM_KEY = 'platform_key'
 DEFAULT_KEY = 'Default'
 RANGE_SEPARATOR = '-'
 COMMA_SEPARATOR = ','
@@ -51,7 +52,13 @@ class MediaSettingsParserBase(ABC):
 
     @staticmethod
     def get_media_settings(key, media_dict):
-        """Look up media settings by vendor key, media key, or medium lane speed key."""
+        """Look up media settings by platform key, vendor key, media key, or medium lane speed key."""
+        # Platform-specific key takes the highest precedence when provided
+        platform_key = key.get(PLATFORM_KEY)
+        if platform_key is not None:
+            for dict_key in media_dict.keys():
+                if re.match(dict_key, platform_key):
+                    return get_media_settings_for_speed(media_dict[dict_key], key[LANE_SPEED_KEY])
         for dict_key in media_dict.keys():
             if (re.match(dict_key, key[VENDOR_KEY]) or \
                 re.match(dict_key, key[VENDOR_KEY].split('-')[0]) or \
@@ -408,12 +415,22 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     medium = "COPPER" if common.is_copper(physical_port) else "OPTICAL"
     speed = int(int(int(port_speed) /lane_count)/1000)
     medium_lane_speed_key = medium + str(speed)
+
+    # Optional platform vendor override, takes the highest precedence when set
+    platform_key = None
+    try:
+        platform_key = xcvrd.platform_chassis.get_media_settings_key(
+            physical_port, transceiver_dict, port_speed, lane_count)
+    except Exception as e:
+        helper_logger.log_notice("Platform get_media_settings_key failed for port {}: {}".format(physical_port, e))
+
     # return (vendor_key, media_key, lane_speed_key)
     return {
         VENDOR_KEY: vendor_key,
         MEDIA_KEY: media_key,
         LANE_SPEED_KEY: lane_speed_key,
-        MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key
+        MEDIUM_LANE_SPEED_KEY: medium_lane_speed_key,
+        PLATFORM_KEY: platform_key
     }
 
 
