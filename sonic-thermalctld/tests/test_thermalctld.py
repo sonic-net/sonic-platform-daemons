@@ -847,10 +847,10 @@ class TestLiquidCoolingUpdater(object):
                 assert fvp.fv_dict['device_leak_status'] == 'MAJOR'
 
     @mock.patch('thermalctld.try_get')
-    def test_refresh_status_no_major_when_platform_unsupported(self, mock_try_get):
-        """When get_major_leak_num_min_sensors() returns 0 the platform does not
-        support the MAJOR classification: concurrent minor leaks stay MINOR and a
-        long-standing minor leak is not escalated."""
+    def test_refresh_status_no_count_major_when_min_n_zero(self, mock_try_get):
+        """When get_major_leak_num_min_sensors() returns 0 the count-based MAJOR rule
+        is off: concurrent minor leaks stay MINOR. The MAX-T timer rule is independent
+        of MIN-N, so a long-standing minor leak still escalates to MAJOR."""
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
 
@@ -871,14 +871,14 @@ class TestLiquidCoolingUpdater(object):
         lc.make_sensor_leak(0)
         lc.make_sensor_leak(1)
         liquid_cooling_updater._refresh_leak_status()
-        # Two concurrent minors, but MAJOR unsupported -> MINOR.
+        # Two concurrent minors, count rule off (MIN-N=0) -> MINOR.
         assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
 
         time.sleep(2)
         liquid_cooling_updater._refresh_leak_status()
-        # Even after MAX-T, no escalation to MAJOR.
-        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
-        assert len(liquid_cooling_updater.escalated_sensors) == 0
+        # After MAX-T the timer rule escalates to MAJOR regardless of MIN-N.
+        assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        assert len(liquid_cooling_updater.escalated_sensors) > 0
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_major_config_override(self, mock_try_get):
@@ -1575,9 +1575,9 @@ class TestLiquidCoolingUpdater(object):
         assert len(major_detected) == 1
 
     @mock.patch('thermalctld.try_get')
-    def test_refresh_status_no_escalation_when_unsupported_single_sensor(self, mock_try_get):
-        """With MAJOR unsupported (MIN-N=0), a single long-standing minor leak is
-        never escalated to MAJOR even after MAX-T elapses."""
+    def test_refresh_status_escalation_when_min_n_zero_single_sensor(self, mock_try_get):
+        """With MIN-N=0 the count rule is off, but a single long-standing minor leak
+        still escalates to MAJOR after MAX-T elapses."""
         mock_chassis = MockChassis()
         mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=1)
         lc = mock_chassis.get_liquid_cooling()
@@ -1592,8 +1592,8 @@ class TestLiquidCoolingUpdater(object):
 
         time.sleep(2)
         updater._refresh_leak_status()
-        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
-        assert len(updater.escalated_sensors) == 0
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+        assert len(updater.escalated_sensors) == 1
 
     @mock.patch('thermalctld.try_get')
     def test_resolve_major_leak_min_override_below_floor_ignored(self, mock_try_get):

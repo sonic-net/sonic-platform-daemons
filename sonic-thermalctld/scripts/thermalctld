@@ -726,8 +726,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
         The platform-provided default (get_major_leak_num_min_sensors()) can be
         overridden by system_major_leak_num_min_sensors in the CONFIG_DB
-        LEAK_CONTROL_POLICY table. A returned value of 0 means the MAJOR
-        classification is not applied.
+        LEAK_CONTROL_POLICY table. A returned value of 0 means the count-based
+        MAJOR rule is not applied (the MAX-T timer rule is unaffected).
         """
         min_n = self.liquid_cooling.get_major_leak_num_min_sensors()
 
@@ -760,9 +760,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         return min_n if min_n >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR else 0
 
     def _refresh_leak_status(self):
-        # MIN-N and whether the platform supports the MAJOR classification.
+        # MIN-N drives only the count-based MAJOR rule; 0 disables that rule.
+        # The MAX-T timer rule is independent of MIN-N.
         major_leak_min = self._resolve_major_leak_min()
-        major_supported = major_leak_min > 0
+        count_rule_enabled = major_leak_min > 0
         status = None
         minor_count = 0
         major_escalated = False
@@ -798,7 +799,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
                         # A value of 0 (or negative) means the platform does not support
                         # time-based escalation from MINOR to MAJOR; skip escalation.
-                        if major_supported and 0 < max_minor_secs < inf:
+                        if 0 < max_minor_secs < inf:
                             max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
                             if max_minor <= now:
                                 major_escalated = True
@@ -882,8 +883,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
         # Apply the MAJOR aggregate (precedence below CRITICAL): MIN-N or more
         # concurrent minor leaks, or a single minor leak escalated beyond MAX-T.
-        if status != SystemLeakStatus.CRITICAL and major_supported \
-                and (major_escalated or minor_count >= major_leak_min):
+        if status != SystemLeakStatus.CRITICAL \
+                and (major_escalated or (count_rule_enabled and minor_count >= major_leak_min)):
             status = SystemLeakStatus.MAJOR
 
         if status == SystemLeakStatus.CRITICAL and self.last_leak_status != SystemLeakStatus.CRITICAL:
