@@ -746,13 +746,13 @@ def setup_grpc_channels(stop_event, loopback_keys, hw_mux_cable_tbl, hw_mux_cabl
     namespaces = multi_asic.get_front_end_namespaces()
     for namespace in namespaces:
         asic_id = multi_asic.get_asic_index_from_namespace(namespace)
-        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace)
+        config_db[asic_id] = daemon_base.db_connect("CONFIG_DB", namespace, use_tcp=False)
         port_tbl[asic_id] = swsscommon.Table(config_db[asic_id], "MUX_CABLE")
         loopback_tbl[asic_id] = swsscommon.Table(
             config_db[asic_id], "LOOPBACK_INTERFACE")
         loopback_keys[asic_id] = loopback_tbl[asic_id].getKeys()
         port_table_keys[asic_id] = port_tbl[asic_id].getKeys()
-        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+        state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace, use_tcp=False)
         hw_mux_cable_tbl[asic_id] = swsscommon.Table(
             state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
         hw_mux_cable_tbl_peer[asic_id] = swsscommon.Table(
@@ -1481,7 +1481,7 @@ def change_ports_status_for_y_cable_change_event(port_dict, y_cable_presence, po
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(
                 namespace)
-            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
+            state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace, use_tcp=False)
             yc_hw_mux_cable_table[asic_id] = swsscommon.Table(
                 state_db[asic_id], swsscommon.STATE_HW_MUX_CABLE_TABLE_NAME)
             y_cable_table_size = len(yc_hw_mux_cable_table[asic_id].getKeys())

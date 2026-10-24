@@ -73,7 +73,7 @@ def try_get(callback, *args, **kwargs):
 # 
 def provision_db(platform_chassis, log):
     # Init state db connection
-    state_db = daemon_base.db_connect("STATE_DB")
+    state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
     chassis_table = swsscommon.Table(state_db, CHASSIS_INFO_TABLE)
     device_metadata_table = swsscommon.Table(state_db, DEVICE_METADATA_TABLE)
 

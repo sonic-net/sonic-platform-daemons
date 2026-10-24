@@ -817,7 +817,7 @@ class CmisManagerTask(threading.Thread):
 
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
+        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace, use_tcp=False)
 
         sel = swsscommon.Select()
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)

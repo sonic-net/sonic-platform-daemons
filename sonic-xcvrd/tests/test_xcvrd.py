@@ -756,7 +756,7 @@ class TestXcvrdScript(object):
             result = is_syncd_warm_restore_complete(namespace)
             assert result == expected
             # Verify db_connect was called with the correct namespace
-            mock_connect.assert_called_with("STATE_DB", namespace=namespace)
+            mock_connect.assert_called_with("STATE_DB", namespace=namespace, use_tcp=False)
 
     def test_post_port_dom_sensor_info_to_db(self):
         def mock_get_transceiver_dom_sensor_real_value(physical_port):
