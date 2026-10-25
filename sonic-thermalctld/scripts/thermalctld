@@ -732,29 +732,25 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         min_n = self.liquid_cooling.get_major_leak_num_min_sensors()
 
         # LEAK_CONTROL_POLICY is a single-row table; the CLI writes key "policy".
-        # Fall back to legacy key variants to stay consistent with bmcctld.
-        for key in ('policy', LiquidCoolingUpdater.LEAK_CONTROL_POLICY_TABLE_NAME, ''):
-            result = self.policy_table.get(key)
-            if result and result[0]:
-                fvs = dict(result[1])
-                override = fvs.get(LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD)
-                if override is not None:
-                    try:
-                        override_val = int(override)
-                    except (TypeError, ValueError):
-                        self.log_warning(
-                            'Invalid {} value {!r} in LEAK_CONTROL_POLICY; ignoring override'.format(
-                                LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD, override))
+        result = self.policy_table.get('policy')
+        if result and result[0]:
+            override = dict(result[1]).get(LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD)
+            if override is not None:
+                try:
+                    override_val = int(override)
+                except (TypeError, ValueError):
+                    self.log_warning(
+                        'Invalid {} value {!r} in LEAK_CONTROL_POLICY; ignoring override'.format(
+                            LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD, override))
+                else:
+                    if override_val >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR:
+                        min_n = override_val
                     else:
-                        if override_val >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR:
-                            min_n = override_val
-                        else:
-                            self.log_warning(
-                                '{} must be >= {}; ignoring override value {}'.format(
-                                    LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD,
-                                    LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR,
-                                    override_val))
-                break
+                        self.log_warning(
+                            '{} must be >= {}; ignoring override value {}'.format(
+                                LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FIELD,
+                                LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR,
+                                override_val))
 
         # A MIN-N below the floor cannot classify a MAJOR aggregate.
         return min_n if min_n >= LiquidCoolingUpdater.MAJOR_LEAK_MIN_SENSORS_FLOOR else 0
