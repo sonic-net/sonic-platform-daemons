@@ -1392,6 +1392,8 @@ class TestLiquidCoolingUpdater(object):
         assert updater.last_leak_status == thermalctld.SystemLeakStatus.CRITICAL
         assert self._event_logged(updater.event_logger.log_error,
                                   'CRITICAL system leak detected')
+        assert self._event_logged(updater.event_logger.log_notice,
+                                  'MAJOR system leak cleared')
 
         statuses = [dict(c[0][1].fv_dict)['device_leak_status']
                     for c in updater.system_table.set.call_args_list]
@@ -1420,6 +1422,8 @@ class TestLiquidCoolingUpdater(object):
         assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
         assert self._event_logged(updater.event_logger.log_warning,
                                   'MAJOR system leak detected')
+        assert self._event_logged(updater.event_logger.log_notice,
+                                  'CRITICAL system leak cleared')
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_major_clears_to_minor(self, mock_try_get):

@@ -895,7 +895,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
             self.event_logger.log_warning(
                 'MAJOR system leak detected (sensors: {})'.format(leaking_names))
-        elif self.last_leak_status == SystemLeakStatus.CRITICAL and status != SystemLeakStatus.CRITICAL:
+
+        # Evaluated independently of detection so that a CRITICAL <-> MAJOR transition
+        # logs both the new detection and the previous severity's cleared event.
+        if self.last_leak_status == SystemLeakStatus.CRITICAL and status != SystemLeakStatus.CRITICAL:
             self.event_logger.log_notice(
                 'CRITICAL system leak cleared (current status: {})'.format(
                     status if status is not None else SystemLeakStatus.NONE))
