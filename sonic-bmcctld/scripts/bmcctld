@@ -1062,6 +1062,8 @@ class BmcEventHandler(EventLogger):
 
         elif severity == ALERT_SEVERITY_MAJOR:
             action = policy.get("rack_mgr_major_alert_action", DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION)
+            self._event_log.log_notice("MAJOR RACK MGR ALERT (severity={} key={}); "
+                                       "action={}".format(severity, key, action))
             self._dispatch_action(action, "RACK_MGR_MAJOR_EVENT key={}".format(key))
 
         elif severity == ALERT_SEVERITY_MINOR:

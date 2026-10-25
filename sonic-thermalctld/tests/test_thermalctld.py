@@ -762,7 +762,7 @@ class TestLiquidCoolingUpdater(object):
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_minor_no_escalation_when_duration_zero(self, mock_try_get):
         """A get_leak_max_minor_duration_sec() value of 0 means the platform does
-        not support time-based escalation from MINOR to CRITICAL. The severity
+        not support time-based escalation from MINOR to MAJOR. The severity
         must stay MINOR even after the leak has persisted across polls."""
         mock_chassis = MockChassis()
         mock_chassis.get_liquid_cooling().make_sensor_leak(0)
@@ -793,9 +793,9 @@ class TestLiquidCoolingUpdater(object):
 
         assert liquid_cooling_updater.last_leak_status == thermalctld.SystemLeakStatus.MINOR
         assert "leakage1" not in liquid_cooling_updater.critical_sensors
-        # No "escalated from MINOR to CRITICAL" error should have been logged.
-        for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
-            assert 'escalated from MINOR to CRITICAL' not in call[0][0]
+        # No "escalated from MINOR to MAJOR" warning should have been logged.
+        for call in liquid_cooling_updater.event_logger.log_warning.call_args_list:
+            assert 'escalated from MINOR to MAJOR' not in call[0][0]
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_with_long_leak(self, mock_try_get):
@@ -913,7 +913,7 @@ class TestLiquidCoolingUpdater(object):
     def test_refresh_leak_status_platform_severity_bump(self, mock_try_get):
         """Platform reports MINOR then directly bumps to CRITICAL (no time escalation).
         Verifies CRITICAL is logged once and sensor is added to critical_sensors,
-        even though new_leak=False and escalated_to_critical=False on the bump cycle."""
+        even though the sensor was already leaking on the bump cycle."""
         mock_chassis = MockChassis()
         mock_chassis.get_liquid_cooling().make_sensor_leak(0)
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
@@ -956,7 +956,6 @@ class TestLiquidCoolingUpdater(object):
         liquid_cooling_updater._refresh_leak_status()
         for call in liquid_cooling_updater.event_logger.log_error.call_args_list:
             assert 'CRITICAL leak reported' not in call[0][0]
-            assert 'escalated from MINOR to CRITICAL' not in call[0][0]
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_leak_status_timestamp_on_transitions_only(self, mock_try_get):

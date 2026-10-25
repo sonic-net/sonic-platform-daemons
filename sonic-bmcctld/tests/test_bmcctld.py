@@ -894,6 +894,15 @@ class TestBmcEventHandlerRackMgrAlerts:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_GRACEFUL_SHUTDOWN
 
+    def test_major_rack_alert_logged_to_event_log(self, event_handler):
+        event_handler._event_log = MagicMock()
+        event_handler._handle_rack_mgr_alert(
+            "Inlet_liquid_flow_rate",
+            {bmcctld.FIELD_SEVERITY: bmcctld.ALERT_SEVERITY_MAJOR},
+        )
+        msgs = [c[0][0] for c in event_handler._event_log.log_notice.call_args_list]
+        assert any("MAJOR RACK MGR ALERT" in m for m in msgs)
+
     def test_rack_mgr_leak_policy_disabled_skips_action(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
             return_value=self._make_policy(rack_mgr_leak_policy="disabled")

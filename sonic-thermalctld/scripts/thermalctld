@@ -763,9 +763,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         # MIN-N drives only the count-based MAJOR rule; 0 disables that rule.
         # The MAX-T timer rule is independent of MIN-N.
         major_leak_min = self._resolve_major_leak_min()
-        count_rule_enabled = major_leak_min > 0
+        major_by_min_leaks_enabled = major_leak_min > 0
         status = None
-        minor_count = 0
+        concurrent_minor_leaks = 0
         major_escalated = False
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
             sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
@@ -793,7 +793,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                     # Count concurrent minor leaks (for the MIN-N MAJOR rule) and
                     # escalate a minor leak that persists beyond MAX-T to MAJOR.
                     if sensor_leak_severity == LeakSeverity.MINOR:
-                        minor_count += 1
+                        concurrent_minor_leaks += 1
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
@@ -827,8 +827,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
                     # Log CRITICAL once per leak episode.
                     if sensor_leak_severity == LeakSeverity.CRITICAL and sensor_name not in self.critical_sensors:
-                        self.event_logger.log_error(
-                            'CRITICAL leak reported by sensor {}'.format(sensor_name))
+                        msg = 'CRITICAL leak reported by sensor {}'.format(sensor_name)
+                        self.event_logger.log_error(msg)
                         self.critical_sensors.add(sensor_name)
 
                     # System severity follows precedence CRITICAL > MINOR here; the
@@ -884,7 +884,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         # Apply the MAJOR aggregate (precedence below CRITICAL): MIN-N or more
         # concurrent minor leaks, or a single minor leak escalated beyond MAX-T.
         if status != SystemLeakStatus.CRITICAL \
-                and (major_escalated or (count_rule_enabled and minor_count >= major_leak_min)):
+                and (major_escalated or (major_by_min_leaks_enabled and concurrent_minor_leaks >= major_leak_min)):
             status = SystemLeakStatus.MAJOR
 
         if status == SystemLeakStatus.CRITICAL and self.last_leak_status != SystemLeakStatus.CRITICAL:
