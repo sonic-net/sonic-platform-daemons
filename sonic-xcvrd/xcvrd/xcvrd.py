@@ -1157,8 +1157,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             # Skip deleting the info tables for avoiding OA to trigger Tx disable signal
             # due to TRANSCEIVER_INFO table deletion during xcvrd shutdown/crash
             common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
-                                          *self.xcvr_table_helper.get_dom_tables(asic_index),
-                                          *self.xcvr_table_helper.get_vdm_tables(asic_index),
+                                          *self.xcvr_table_helper.get_dom_tables(asic_index, include_thresholds=True),
+                                          *self.xcvr_table_helper.get_vdm_tables(asic_index, include_thresholds=True),
                                           self.xcvr_table_helper.get_status_flag_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
