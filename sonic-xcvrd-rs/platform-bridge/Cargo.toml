@@ -1,0 +1,26 @@
+[package]
+name = "platform-bridge"
+version = "0.1.0"
+edition = "2021"
+
+# PyO3 wrappers around the existing Python sonic_platform HAL and
+# sonic_platform_base CMIS/SFF decoders. Build with the target pmon's Python
+# development libraries; run where its sonic_platform plugin is importable.
+[lib]
+name = "platform_bridge"
+path = "src/lib.rs"
+
+# Standalone smoke test: construct the platform, list SFPs, print identity for
+# present modules, poll one change event. Proves the PyO3 -> sonic_platform spine
+# end to end on the live DUT.
+[[bin]]
+name = "bridge-smoke"
+path = "src/bin/bridge_smoke.rs"
+
+[dependencies]
+# auto-initialize embeds + starts the CPython interpreter on first GIL acquire
+# (this is an application embedding Python, not a Python extension module).
+pyo3 = { version = "0.22", features = ["auto-initialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

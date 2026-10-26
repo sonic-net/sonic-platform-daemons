@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["xcvrd-rs", "platform-bridge"]
+
+[profile.release]
+opt-level = 2
