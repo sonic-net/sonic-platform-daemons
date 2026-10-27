@@ -173,55 +173,6 @@ fn decide_run_action(
 /// pmon supervisor command line to the daemon).
 const ENABLE_SFF_MGR_FLAG: &str = "--enable_sff_mgr";
 
-/// Guarantee the daemon actually runs the SFF (non-CMIS) manager on the injected DUT build.
-///
-/// SONiC starts the SFF-8636 control path only when xcvrd is launched with
-/// `--enable_sff_mgr` (xcvrd.py:1150 `if self.enable_sff_mgr:`), and pmon's supervisor conf
-/// sets that flag. But the reversible-injection shim execs this binary with NO argv
-/// (`os.execv("/usr/local/bin/xcvrd-rs", ["xcvrd-rs"])`), so the flag never reaches us —
-/// [`SffManagerTask`] would never start, and the SFF-8636 TX_DISABLE (00h:86) / power
-/// (00h:93) registers stay inert. The e2e SFF gate (`lib/sff8636.py::sff_mgr_enabled`)
-/// probes the live `/proc/<pid>/cmdline` for the literal `--enable_sff_mgr`, so merely
-/// defaulting the manager on internally is NOT observable to it — the daemon must genuinely
-/// carry the flag.
-///
-/// So, if the flag is absent, re-exec ourselves once with it appended. `execv` replaces the
-/// process image in place (same PID), so pmon's supervisor keeps tracking us as RUNNING, the
-/// new `/proc/self/cmdline` advertises the flag for the probe, and the existing argv gate in
-/// [`serve`] then starts [`SffManagerTask`]. The presence check makes this a one-shot (the
-/// re-exec'd process sees the flag and skips), so there is no exec loop.
-fn ensure_sff_mgr_flag() {
-    use std::os::unix::process::CommandExt;
-
-    if std::env::args().any(|a| a == ENABLE_SFF_MGR_FLAG) {
-        return; // Real Python-style launch already carries it, or this IS the re-exec'd image.
-    }
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!(
-                "xcvrd-rs: cannot resolve current exe to enable SffManagerTask ({e}); \
-                 continuing WITHOUT {ENABLE_SFF_MGR_FLAG}"
-            );
-            return;
-        }
-    };
-    // Preserve any real argv (the shim passes none) and append the flag.
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    args.push(ENABLE_SFF_MGR_FLAG.to_string());
-    eprintln!(
-        "xcvrd-rs: no {ENABLE_SFF_MGR_FLAG} in argv (injection shim drops it); re-exec {} \
-         with it so SffManagerTask runs and /proc/cmdline advertises it",
-        exe.display()
-    );
-    // `exec` only returns on failure (otherwise the image is replaced).
-    let err = std::process::Command::new(&exe).args(&args).exec();
-    eprintln!(
-        "xcvrd-rs: re-exec to enable SffManagerTask failed ({err}); continuing WITHOUT \
-         {ENABLE_SFF_MGR_FLAG}"
-    );
-}
-
 /// The command-line arguments the reference `xcvrd` accepts (`xcvrd.py:main`, `argparse`).
 /// The Rust daemon parses the exact same inputs so it is a drop-in replacement:
 ///
@@ -337,11 +288,6 @@ fn resolve_int<I: Iterator<Item = String>>(
 /// Signal handlers are installed up front so a SIGTERM at any point — including during a
 /// setup-retry sleep — drives a clean exit instead of leaving a zombie the supervisor SIGKILLs.
 pub fn run() -> ! {
-    // Enable SffManagerTask on the injected DUT build before anything else (must precede
-    // Python/PyO3 init + thread spawns, since it may re-exec the process image).
-    ensure_sff_mgr_flag();
-    // Parse the command-line arguments (same set as the reference xcvrd) once, after the
-    // SFF re-exec so `--enable_sff_mgr` (which the injection shim drops) is now in argv.
     let args = Args::from_env();
     eprintln!("xcvrd-rs: starting (presence, identity, DOM, CMIS, SFF)");
     install_signal_handlers();
@@ -493,10 +439,7 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     cmis_task.set_optics_si_settings(optics_si_settings);
 
     // Optional SFF (non-CMIS) deterministic link bring-up, gated on the `--enable_sff_mgr`
-    // flag (xcvrd.py:1150 forwards it to the SffManagerTask). On the injected DUT build
-    // `ensure_sff_mgr_flag` (called first thing in `run`) guarantees the flag is in our argv
-    // — re-exec'ing once if the injection shim dropped it — so this gate is satisfied and
-    // `/proc/self/cmdline` advertises it for the e2e SFF probe. Spawned before the CMIS
+    // flag (xcvrd.py:1150 forwards it to the SffManagerTask). Spawned before the CMIS
     // manager, mirroring the reference thread start order (xcvrd.py:1148). Production wires
     // each port's SFF-8636 control surface to a `BridgeSffApi` over the real SfpHandle; unit
     // tests inject MockSffApi.
@@ -662,8 +605,7 @@ mod tests {
         }
     }
 
-    // No arguments (the injection-shim launch, before the SFF re-exec): every flag defaults
-    // off / absent, exactly like argparse's defaults.
+    // Every flag defaults off / absent, exactly like argparse's defaults.
     #[test]
     fn args_default_when_empty() {
         assert_eq!(parsed(&[]), Args::default());
