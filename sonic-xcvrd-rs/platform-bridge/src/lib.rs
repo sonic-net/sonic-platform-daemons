@@ -160,6 +160,12 @@ impl Platform {
     /// up yet, exactly like the Python daemon at start-up).
     pub fn new() -> Result<Self> {
         Python::with_gil(|py| {
+            // Vendor plugins use argv[0] to select daemon-owned module initialization.
+            let sys = py.import_bound("sys")?;
+            let argv: Vec<String> = sys.getattr("argv")?.extract()?;
+            if argv.is_empty() || argv[0].is_empty() {
+                sys.setattr("argv", std::env::args().collect::<Vec<_>>())?;
+            }
             let module = py.import_bound("sonic_platform.platform")?;
             let platform = module.getattr("Platform")?.call0()?;
             let chassis = platform.call_method0("get_chassis")?;
@@ -378,6 +384,65 @@ impl Sfp {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn platform_construction_initializes_placeholder_python_argv() {
+        Python::with_gil(|py| {
+            let sys = py.import_bound("sys").unwrap();
+            let original_argv = sys.getattr("argv").unwrap();
+            let module = PyModule::from_code_bound(
+                py,
+                r#"
+import sys
+class Platform:
+    def get_chassis(self):
+        if sys.argv != expected_argv:
+            raise RuntimeError("platform startup lost the host process arguments")
+        return self
+    def get_num_sfps(self):
+        return 1
+"#,
+                "platform_context_test.py",
+                "sonic_platform.platform",
+            )
+            .unwrap();
+            let overrides = PyDict::new_bound(py);
+            overrides.set_item("sonic_platform", &module).unwrap();
+            overrides
+                .set_item("sonic_platform.platform", &module)
+                .unwrap();
+            let patch = py
+                .import_bound("unittest.mock")
+                .unwrap()
+                .getattr("patch")
+                .unwrap()
+                .call_method1("dict", (sys.getattr("modules").unwrap(), overrides))
+                .unwrap();
+            patch.call_method0("__enter__").unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let host_argv: Vec<String> = std::env::args().collect();
+                for (initial, expected) in [
+                    (vec![String::new()], host_argv.clone()),
+                    (Vec::new(), host_argv),
+                    (
+                        vec!["custom-host".into(), "--keep".into()],
+                        vec!["custom-host".into(), "--keep".into()],
+                    ),
+                ] {
+                    sys.setattr("argv", initial).unwrap();
+                    module.setattr("expected_argv", expected).unwrap();
+                    assert_eq!(Platform::new().unwrap().num_sfps().unwrap(), 1);
+                }
+            }));
+            sys.setattr("argv", original_argv).unwrap();
+            patch
+                .call_method1("__exit__", (py.None(), py.None(), py.None()))
+                .unwrap();
+            if let Err(payload) = result {
+                std::panic::resume_unwind(payload);
+            }
+        });
+    }
 
     #[test]
     fn nonfinite_values_survive_all_json_getter_paths() {
