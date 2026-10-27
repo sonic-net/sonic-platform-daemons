@@ -229,6 +229,7 @@ ALERT_SEVERITY_CRITICAL = "CRITICAL"
 ALERT_SEVERITY_MAJOR = "MAJOR"
 ALERT_SEVERITY_MINOR = "MINOR"
 ALERT_SEVERITY_NORMAL = "NORMAL"
+LEAK_SEVERITIES_HIGH_TO_LOW = (ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_MAJOR, ALERT_SEVERITY_MINOR)
 
 # Dispatch action values (LEAK_CONTROL_POLICY and queue items)
 ACTION_SYSLOG_ONLY = "syslog_only"
@@ -236,6 +237,8 @@ ACTION_GRACEFUL_SHUTDOWN = "graceful_shutdown"
 ACTION_POWER_OFF = "power_off"
 ACTION_POWER_ON = "power_on"
 ACTION_POWER_CYCLE = "power_cycle"
+# Actions that take the Switch-Host down; these block a power-on while the event is active
+POWER_DOWN_ACTIONS = (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF)
 
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
@@ -680,18 +683,61 @@ class CriticalEventChecker(logger.Logger):
                     return True
         return False
 
-    def has_any_critical_event(self):
-        """Return True if any critical system or Rack Manager event is active and its policy is enabled.
+    def get_highest_rack_mgr_alert_severity(self):
+        """Return the highest active RACK_MANAGER_ALERT severity (CRITICAL > MAJOR > MINOR), or None."""
+        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        active = set()
+        for alert_key in self.ALERT_KEYS:
+            result = tbl.get(alert_key)
+            if result and result[0]:
+                d = fvs_to_dict(result[1])
+                active.add(d.get(FIELD_SEVERITY) or d.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL))
+        for severity in LEAK_SEVERITIES_HIGH_TO_LOW:
+            if severity in active:
+                return severity
+        return None
 
-        Skips system leak check if system_leak_policy == 'disabled'.
-        Skips Rack Manager alert check if rack_mgr_leak_policy == 'disabled'.
+    @staticmethod
+    def _power_down_configured(policy, severity, action_key_fmt):
+        """Return True if the action for `severity` or any lower severity is a power-down action."""
+        for sev in LEAK_SEVERITIES_HIGH_TO_LOW[LEAK_SEVERITIES_HIGH_TO_LOW.index(severity):]:
+            if policy.get(action_key_fmt.format(sev.lower())) in POWER_DOWN_ACTIONS:
+                return True
+        return False
+
+    def has_power_down_event(self):
+        """Return True if an active leak/alert has a power-down action configured for its
+        severity or any lower one. Powering the Switch-Host on would only be undone by that action.
+
+        Skips the system check if system_leak_policy == 'disabled' and the Rack Manager
+        check if rack_mgr_leak_policy == 'disabled'.
+        """
+        policy = self.policy_reader.get_leak_control_policy()
+        if policy.get("system_leak_policy") != "disabled":
+            status = self.get_system_leak_status()
+            if status in LEAK_SEVERITIES_HIGH_TO_LOW and \
+                    self._power_down_configured(policy, status, "system_{}_leak_action"):
+                return True
+        if policy.get("rack_mgr_leak_policy") != "disabled":
+            severity = self.get_highest_rack_mgr_alert_severity()
+            if severity and self._power_down_configured(policy, severity, "rack_mgr_{}_alert_action"):
+                return True
+        return False
+
+    def is_power_on_blocked(self):
+        """Return True if Switch-Host power-on must be blocked.
+
+        Blocked when a CRITICAL system leak or Rack Manager alert is active, or when an
+        active MAJOR/MINOR leak or alert has a power-down action configured for its
+        severity or a lower one (see has_power_down_event). Policies set to 'disabled'
+        are skipped.
         """
         policy = self.policy_reader.get_leak_control_policy()
         if policy.get("system_leak_policy") != "disabled" and self.has_critical_system_leak():
             return True
         if policy.get("rack_mgr_leak_policy") != "disabled" and self.has_critical_rack_mgr_alert():
             return True
-        return False
+        return self.has_power_down_event()
 
     def get_system_leak_status(self):
         """Return device_leak_status string from SYSTEM_LEAK_STATUS table."""
@@ -937,7 +983,7 @@ class BmcEventHandler(EventLogger):
         self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
 
         if command == CMD_POWER_ON:
-            if self.critical_event_checker.has_any_critical_event():
+            if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
                     "RACK_MGR_CMD FAILED: key={} command={} reason=CRITICAL_LEAK_PRESENT "
                     "(active critical leak or alert)".format(key, command))
@@ -993,7 +1039,7 @@ class BmcEventHandler(EventLogger):
                 self._event_log.log_notice(
                     "CHASSIS_MODULE admin_up: key={} NOOP (Switch-Host already ONLINE)".format(key))
                 return
-            if self.critical_event_checker.has_any_critical_event():
+            if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
                     "CHASSIS_MODULE admin_up: key={} BLOCKED "
                     "(CRITICAL_LEAK_PRESENT: active critical leak or alert)".format(key))
@@ -1309,7 +1355,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                                        "during boot delay; skipping automatic power-on")
             return
 
-        if self.critical_event_checker.has_any_critical_event():
+        if self.critical_event_checker.is_power_on_blocked():
             self._event_log.log_warning("STARTUP: Critical leak or Rack Manager alert detected; NOT powering on Switch-Host")
             return
 

@@ -480,20 +480,80 @@ class TestCriticalEventChecker:
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
             assert critical_event_checker.has_critical_rack_mgr_alert() is True
 
-    def test_has_any_critical_event_system(self, critical_event_checker):
+    def test_is_power_on_blocked_system(self, critical_event_checker):
         critical_event_checker.has_critical_system_leak = MagicMock(return_value=True)
         critical_event_checker.has_critical_rack_mgr_alert = MagicMock(return_value=False)
-        assert critical_event_checker.has_any_critical_event() is True
+        assert critical_event_checker.is_power_on_blocked() is True
 
-    def test_has_any_critical_event_rack_mgr(self, critical_event_checker):
+    def test_is_power_on_blocked_rack_mgr(self, critical_event_checker):
         critical_event_checker.has_critical_system_leak = MagicMock(return_value=False)
         critical_event_checker.has_critical_rack_mgr_alert = MagicMock(return_value=True)
-        assert critical_event_checker.has_any_critical_event() is True
+        assert critical_event_checker.is_power_on_blocked() is True
 
     def test_no_critical_events(self, critical_event_checker):
         critical_event_checker.has_critical_system_leak = MagicMock(return_value=False)
         critical_event_checker.has_critical_rack_mgr_alert = MagicMock(return_value=False)
-        assert critical_event_checker.has_any_critical_event() is False
+        assert critical_event_checker.is_power_on_blocked() is False
+
+    def _power_down_checker(self, checker, policy, system_status="", rack_alerts=None):
+        """Configure the checker with a policy, system leak status and rack alerts."""
+        full_policy = {
+            "system_leak_policy": "enabled", "rack_mgr_leak_policy": "enabled",
+            "system_critical_leak_action": "syslog_only", "system_major_leak_action": "syslog_only",
+            "system_minor_leak_action": "syslog_only",
+            "rack_mgr_critical_alert_action": "syslog_only", "rack_mgr_major_alert_action": "syslog_only",
+            "rack_mgr_minor_alert_action": "syslog_only",
+        }
+        full_policy.update(policy)
+        checker.policy_reader.get_leak_control_policy = MagicMock(return_value=full_policy)
+        checker.get_system_leak_status = MagicMock(return_value=system_status)
+        tbl = Table(None, bmcctld.RACK_MANAGER_ALERT_TABLE)
+        for key, severity in (rack_alerts or {}).items():
+            _set_table_entry(tbl, key, {bmcctld.FIELD_SEVERITY: severity})
+        return tbl
+
+    @pytest.mark.parametrize("status,policy,expected", [
+        ("MAJOR", {"system_major_leak_action": "power_off"}, True),
+        ("MAJOR", {"system_major_leak_action": "graceful_shutdown"}, True),
+        ("MAJOR", {"system_minor_leak_action": "power_off"}, True),
+        ("MINOR", {"system_minor_leak_action": "power_off"}, True),
+        ("MINOR", {"system_major_leak_action": "power_off"}, False),
+        ("MAJOR", {}, False),
+        ("MINOR", {}, False),
+        ("None", {"system_major_leak_action": "power_off"}, False),
+        ("", {"system_major_leak_action": "power_off"}, False),
+        ("MAJOR", {"system_major_leak_action": "power_off", "system_leak_policy": "disabled"}, False),
+    ])
+    def test_power_down_event_system(self, critical_event_checker, status, policy, expected):
+        tbl = self._power_down_checker(critical_event_checker, policy, system_status=status)
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_power_down_event() is expected
+
+    @pytest.mark.parametrize("alerts,policy,expected", [
+        ({"Inlet_liquid_flow_rate": "MAJOR"}, {"rack_mgr_major_alert_action": "power_off"}, True),
+        ({"Inlet_liquid_flow_rate": "MINOR"}, {"rack_mgr_minor_alert_action": "graceful_shutdown"}, True),
+        ({"Inlet_liquid_flow_rate": "MAJOR"}, {"rack_mgr_minor_alert_action": "power_off"}, True),
+        ({"Inlet_liquid_flow_rate": "MINOR"}, {"rack_mgr_major_alert_action": "power_off"}, False),
+        ({"Inlet_liquid_flow_rate": "MAJOR"}, {}, False),
+        ({"Inlet_liquid_flow_rate": "MINOR", "Inlet_liquid_pressure": "MAJOR"},
+         {"rack_mgr_major_alert_action": "power_off"}, True),
+        ({}, {"rack_mgr_major_alert_action": "power_off"}, False),
+        ({"Inlet_liquid_flow_rate": "MAJOR"},
+         {"rack_mgr_major_alert_action": "power_off", "rack_mgr_leak_policy": "disabled"}, False),
+    ])
+    def test_power_down_event_rack_mgr(self, critical_event_checker, alerts, policy, expected):
+        tbl = self._power_down_checker(critical_event_checker, policy, rack_alerts=alerts)
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_power_down_event() is expected
+
+    def test_is_power_on_blocked_power_down_action(self, critical_event_checker):
+        critical_event_checker.has_critical_system_leak = MagicMock(return_value=False)
+        critical_event_checker.has_critical_rack_mgr_alert = MagicMock(return_value=False)
+        critical_event_checker.has_power_down_event = MagicMock(return_value=True)
+        critical_event_checker.policy_reader.get_leak_control_policy = MagicMock(
+            return_value={"system_leak_policy": "enabled", "rack_mgr_leak_policy": "enabled"})
+        assert critical_event_checker.is_power_on_blocked() is True
+
 
 
 # --------------------------------------------------------------------------
@@ -575,14 +635,14 @@ class TestBmcEventHandlerRackMgrCommands:
         assert item.on_complete is not None
 
     def test_power_on_command_no_leak_enqueues_power_on(self, event_handler):
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         event_handler._handle_rack_mgr_command("CMD_2", self._cmd_fvs(bmcctld.CMD_POWER_ON))
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_ON
         assert item.on_complete is not None
 
     def test_power_on_command_blocked_by_critical_leak(self, event_handler):
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=True)
         event_handler._handle_rack_mgr_command("CMD_3", self._cmd_fvs(bmcctld.CMD_POWER_ON))
         assert event_handler.action_queue.empty()
 
@@ -632,7 +692,7 @@ class TestBmcEventHandlerChassisModule:
         # host is OFFLINE → admin_up should enqueue power_on
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
@@ -644,7 +704,7 @@ class TestBmcEventHandlerChassisModule:
         # host is already ONLINE → admin_up should be a no-op
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_ONLINE})
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
@@ -654,7 +714,7 @@ class TestBmcEventHandlerChassisModule:
     def test_admin_up_blocked_by_critical_leak(self, event_handler, controller):
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=True)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
@@ -666,7 +726,7 @@ class TestBmcEventHandlerChassisModule:
         so a subsequent real admin_status (e.g. 'up') is not silently dropped."""
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
 
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
@@ -690,7 +750,7 @@ class TestBmcEventHandlerChassisModule:
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
 
         event_handler.seed_chassis_module_admin_status()
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
@@ -1276,7 +1336,7 @@ class TestBmcctldDaemonInitialSequence:
     def test_powers_on_when_no_leak_and_host_offline(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_called_once()
@@ -1284,7 +1344,7 @@ class TestBmcctldDaemonInitialSequence:
     def test_skips_power_on_if_critical_leak_present(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=True)
         daemon.controller.power_on = MagicMock()
         daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
@@ -1292,7 +1352,7 @@ class TestBmcctldDaemonInitialSequence:
     def test_refreshes_state_when_already_online(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
         daemon.controller.init_host_state = MagicMock()
         daemon._initial_power_on_sequence()
@@ -1304,7 +1364,7 @@ class TestBmcctldDaemonInitialSequence:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         # Pretend the system has been up for 10 minutes — bmcctld restart mid-life
         # must not re-arm the full 60s delay.
@@ -1318,7 +1378,7 @@ class TestBmcctldDaemonInitialSequence:
     def test_stop_event_during_boot_delay_skips_sequence(self, chassis):
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock()
         daemon.stop_event.set()  # Signal stop before delay expires
         with patch('time.clock_gettime', return_value=0):
@@ -1331,7 +1391,7 @@ class TestBmcctldDaemonInitialSequence:
         daemon = self._make_daemon(chassis)
         # Use a small non-zero delay so the queue-drain loop runs at least once
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=1)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_off = MagicMock(return_value=True)
         # Simulate a POWER_OFF arriving from Rack Manager during boot delay
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
@@ -1431,7 +1491,7 @@ class TestBmcctldDaemonInitialSequence:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         # Bound the sequence by setting stop_event after one queue.get cycle
         daemon.stop_event.set()
@@ -1444,7 +1504,7 @@ class TestBmcctldDaemonInitialSequence:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=60)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._initial_power_on_sequence()
         # Boot delay is skipped → get_power_on_delay must NOT be called
@@ -1458,7 +1518,7 @@ class TestBmcctldDaemonInitialSequence:
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_power_on_delay = MagicMock(return_value=5)
-        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.critical_event_checker.is_power_on_blocked = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon.stop_event.set()
         daemon._initial_power_on_sequence()
@@ -1658,7 +1718,7 @@ class TestChassisModuleInfo:
         # Simulate an admin_up event while host is OFFLINE and a critical leak blocks power-on
         _set_table_entry(controller.host_state_table, bmcctld.HOST_STATE_KEY,
                          {bmcctld.FIELD_DEVICE_STATUS: bmcctld.SWITCH_HOST_OFFLINE})
-        event_handler.critical_event_checker.has_any_critical_event = MagicMock(return_value=True)
+        event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=True)
         event_handler._handle_chassis_module(
             bmcctld.SWITCH_HOST_MODULE_KEY,
             {bmcctld.FIELD_ADMIN_STATUS: bmcctld.ADMIN_UP},
