@@ -132,16 +132,14 @@ pub fn del_port_sfp_dom_info_from_db(logical_port_name: &str, tables: &[&dyn DbT
 
 /// `is_fast_reboot_enabled()` — STATE_DB `FAST_RESTART_ENABLE_TABLE` gate.
 ///
-/// Mirrors `common.is_fast_reboot_enabled`, which reads
-/// `FAST_RESTART_ENABLE_TABLE|system` field `enable` and returns `"true" in <value>`
-/// (a substring test, so any value containing `true` — e.g. `"true"` — enables it).
-/// The reference shells out to `sonic-db-cli`; here the caller passes the
-/// `FAST_RESTART_ENABLE_TABLE` handle so the read goes through the [`DbTable`] seam.
-/// An absent row/field (or a value without `true`) means fast reboot is NOT enabled.
+/// Mirrors `common.is_fast_reboot_enabled`: read the `enable` field from
+/// `FAST_RESTART_ENABLE_TABLE|system` and compare the trimmed value to `true`,
+/// ignoring ASCII case. The caller supplies the table through the [`DbTable`] seam.
+/// An absent row/field or a nonmatching value means fast reboot is disabled.
 pub fn is_fast_reboot_enabled(fast_restart_enable_tbl: &dyn DbTable) -> bool {
     fast_restart_enable_tbl
         .hget("system", "enable")
-        .map(|v| v.contains("true"))
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 
