@@ -42,7 +42,7 @@ use crate::xcvrd_utilities::common::{
     CMIS_STATE_REMOVED, CMIS_TERMINAL_STATES,
 };
 use crate::xcvrd_utilities::port_event_helper::{
-    read_port_config_change, PortChangeEvent, PortChangeEventType, PortChangeObserver,
+    read_port_config_change, MultiPortChangeObserver, PortChangeEvent, PortChangeEventType,
     PortConfigChangeSubscriber, PortMapping, SELECT_TIMEOUT_MSECS,
 };
 use crate::xcvrd_utilities::sfp_status_helper::detect_port_in_error_status;
@@ -494,7 +494,7 @@ impl DomInfoUpdateTask {
     fn poll_once_interleaved(
         &self,
         stop: &AtomicBool,
-        mut observer: Option<&mut PortChangeObserver>,
+        mut observer: Option<&mut MultiPortChangeObserver>,
         next_reconcile: &mut Instant,
     ) {
         for (physical_port, logical_ports) in self.port_mapping.iter_physical_to_logical() {
@@ -757,7 +757,7 @@ impl DomInfoUpdateTask {
     }
 
     /// Seed the per-physical-port `flap_count` baseline from the observer's **initial
-    /// snapshot** (see [`PortChangeObserver::take_initial_snapshot`]) at task start,
+    /// snapshot** (see [`MultiPortChangeObserver::take_initial_snapshot`]) at task start,
     /// WITHOUT scheduling any re-read. The observer already folds the boot snapshot into
     /// its own dedup cache, so a re-delivered snapshot is normally suppressed one layer up;
     /// seeding here makes the daemon-level `last_flap_count` dedup *independent* of that
@@ -1243,7 +1243,7 @@ impl DomInfoUpdateTask {
     fn check_port_update(
         &self,
         stop: &AtomicBool,
-        observer: Option<&mut PortChangeObserver>,
+        observer: Option<&mut MultiPortChangeObserver>,
         timeout_ms: u64,
     ) {
         match observer {
@@ -1380,7 +1380,7 @@ impl DomInfoUpdateTask {
     /// added to / dropped from the DOM poll set ([`Self::handle_port_config_change`] →
     /// [`Self::on_port_config_change`], dom_mgr.py:286,303). Between passes it services
     /// APPL_DB `PORT_TABLE` link-change flaps on a ~1 s cadence — both via a best-effort
-    /// [`PortChangeObserver`] and, notification-independently, by reconciling `flap_count`
+    /// [`MultiPortChangeObserver`] and, notification-independently, by reconciling `flap_count`
     /// straight from APPL_DB ([`Self::reconcile_link_change_flap_counts`]) — so a flap's
     /// latched-flag re-capture lands well inside the e2e fast-timeout without waiting for
     /// the next 60 s periodic pass, even if the keyspace observer misses the wake.
@@ -1388,7 +1388,8 @@ impl DomInfoUpdateTask {
         // Best-effort APPL_DB PORT_TABLE observer for fast link-change flag re-reads. If
         // the subscription can't be built (redis not ready), fall back to periodic-only
         // polling rather than taking the DOM task down.
-        let mut observer = match PortChangeObserver::for_appl_port_table() {
+        let namespaces = self.table_helper.namespaces();
+        let mut observer = match MultiPortChangeObserver::for_appl_port_table(&namespaces) {
             Ok(obs) => Some(obs),
             Err(e) => {
                 eprintln!(
@@ -1403,16 +1404,8 @@ impl DomInfoUpdateTask {
         // `subscribe_port_config_change`). Drained once per outer pass so a runtime
         // logical-port add/remove keeps the DOM poll mapping current; non-fatal, so the
         // periodic poll still runs if the subscription can't be established.
-        let mut port_config_sub = match PortConfigChangeSubscriber::new(0) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!(
-                    "xcvrd-rs: DOM CONFIG_DB PORT config-change watch unavailable ({e}); \
-                     DOM poll mapping fixed at boot"
-                );
-                None
-            }
-        };
+        let mut port_config_subs = PortConfigChangeSubscriber::for_namespaces(&namespaces);
+        let config_timeout_ms = SELECT_TIMEOUT_MSECS / port_config_subs.len().max(1) as u64;
 
         // Seed the per-port flap_count baseline from the observer's boot snapshot so the
         // daemon-level dedup independently rejects a re-delivered snapshot (no spurious
@@ -1434,10 +1427,10 @@ impl DomInfoUpdateTask {
         while !stop.load(Ordering::Relaxed) {
             // React to a CONFIG_DB PORT add/remove at the top of each pass (dom_mgr.py:303),
             // routing add/drop through the mapping so the DOM poll set below is current.
-            if let Some(sub) = port_config_sub.as_mut() {
-                self.handle_port_config_change(sub, SELECT_TIMEOUT_MSECS);
+            for sub in &mut port_config_subs {
+                self.handle_port_config_change(sub, config_timeout_ms);
                 if stop.load(Ordering::Relaxed) {
-                    break;
+                    return;
                 }
             }
 
@@ -3279,7 +3272,7 @@ mod tests {
         let flat = task_with(
             &[("Ethernet0", 0)],
             vec![MockSfp::present()
-                .with_json("is_flat_memory", json!(true))
+                .with_api_json("is_flat_memory", json!(true))
                 .with_json("get_transceiver_pm", json!({"prefec_ber_avg": "0.1"}))],
             true,
         );

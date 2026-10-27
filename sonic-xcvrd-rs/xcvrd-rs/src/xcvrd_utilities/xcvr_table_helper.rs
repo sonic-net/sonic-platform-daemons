@@ -14,7 +14,7 @@ use swss_common::DbConnector;
 
 use crate::db::{DbTable, RealDbTable};
 use crate::env;
-use crate::error::Result;
+use crate::error::{Result, XcvrdError};
 use crate::xcvrd_utilities::port_event_helper::PortMapping;
 
 // --- TRANSCEIVER_* table names (real data) ----------------------------------------
@@ -91,6 +91,8 @@ pub const STATE_PORT_TABLE: &str = "PORT_TABLE";
 pub const CFG_PORT_TABLE: &str = "PORT";
 /// APPL_DB `PORT_TABLE` (`swsscommon.APP_PORT_TABLE_NAME`, `:`-separated).
 pub const APP_PORT_TABLE: &str = "PORT_TABLE";
+/// APPL_DB gearbox interfaces and PHY configuration.
+pub const GEARBOX_TABLE: &str = "_GEARBOX_TABLE";
 
 /// Which Redis DB a registry table lives in — selects the connection + key separator
 /// the production builder uses (STATE/CONFIG use `|`, APPL uses `:`).
@@ -101,8 +103,9 @@ enum Db {
     Appl,
 }
 
-/// One ASIC's table handles (single-ASIC on this testbed → just `asic_id` 0).
+/// One ASIC's namespace and table handles.
 struct AsicTables {
+    namespace: String,
     int_tbl: Arc<dyn DbTable>,
     dom_tbl: Arc<dyn DbTable>,
     dom_flag_tbl: Arc<dyn DbTable>,
@@ -128,43 +131,50 @@ struct AsicTables {
     state_port_tbl: Arc<dyn DbTable>,
     cfg_port_tbl: Arc<dyn DbTable>,
     app_port_tbl: Arc<dyn DbTable>,
+    gearbox_tbl: Arc<dyn DbTable>,
     fast_restart_enable_tbl: Arc<dyn DbTable>,
     warm_restart_tbl: Arc<dyn DbTable>,
     warm_restart_enable_tbl: Arc<dyn DbTable>,
 }
 
 /// `XcvrTableHelper` — one [`DbTable`] handle per TRANSCEIVER_* table per ASIC, plus the
-/// CONFIG_DB / APPL_DB / STATE_DB port tables. Indexed by `asic_id` (0-based; single
-/// ASIC → index 0), mirroring the Python per-ASIC dicts.
+/// CONFIG_DB / APPL_DB / STATE_DB port tables. Keyed by actual ASIC index, which
+/// need not be contiguous when backend ASICs are excluded.
 pub struct XcvrTableHelper {
-    asics: Vec<AsicTables>,
+    asics: BTreeMap<usize, AsicTables>,
 }
 
 impl XcvrTableHelper {
-    /// Build the registry with real STATE_DB/CONFIG_DB/APPL_DB-backed tables (one
-    /// connection per DB per ASIC, shared across that ASIC's table handles).
+    /// Build cached native tables using each namespace's DB configuration.
     pub fn new(namespaces: &[String]) -> Result<Self> {
         struct Conns {
             state: Arc<Mutex<DbConnector>>,
             config: Arc<Mutex<DbConnector>>,
             appl: Arc<Mutex<DbConnector>>,
         }
-        let mut conns = Vec::with_capacity(namespaces.len());
-        for _ in namespaces {
-            conns.push(Conns {
-                state: Arc::new(Mutex::new(env::open_state_db()?)),
-                config: Arc::new(Mutex::new(env::open_config_db()?)),
-                appl: Arc::new(Mutex::new(env::open_appl_db()?)),
-            });
+        let mut conns = BTreeMap::new();
+        for namespace in namespaces {
+            conns.insert(
+                env::namespace_asic_id(namespace)?,
+                Conns {
+                    state: Arc::new(Mutex::new(env::open_state_db_in_namespace(namespace)?)),
+                    config: Arc::new(Mutex::new(env::open_config_db_in_namespace(namespace)?)),
+                    appl: Arc::new(Mutex::new(env::open_appl_db_in_namespace(namespace)?)),
+                },
+            );
         }
-        Ok(Self::build(namespaces, |asic, db, name| {
-            let c = &conns[asic];
-            match db {
-                Db::State => Arc::new(RealDbTable::new(c.state.clone(), name)) as Arc<dyn DbTable>,
-                Db::Config => Arc::new(RealDbTable::new(c.config.clone(), name)),
-                Db::Appl => Arc::new(RealDbTable::new_with_sep(c.appl.clone(), name, ":")),
-            }
-        }))
+        Self::build(namespaces, |asic, db, name| {
+            let c = &conns[&asic];
+            let table = match db {
+                Db::State => RealDbTable::new(c.state.clone(), name)?,
+                Db::Config => RealDbTable::new(c.config.clone(), name)?,
+                Db::Appl if name == APP_PORT_TABLE => {
+                    RealDbTable::new_producer(c.appl.clone(), name)?
+                }
+                Db::Appl => RealDbTable::new(c.appl.clone(), name)?,
+            };
+            Ok(Arc::new(table) as Arc<dyn DbTable>)
+        })
     }
 
     /// Test constructor: every handle is an in-memory [`crate::mock::MockDbTable`]
@@ -173,18 +183,23 @@ impl XcvrTableHelper {
     #[cfg(test)]
     pub fn with_mock_tables(namespaces: &[String]) -> Self {
         Self::build(namespaces, |_asic, _db, name| {
-            Arc::new(crate::mock::MockDbTable::new(name)) as Arc<dyn DbTable>
+            Ok(Arc::new(crate::mock::MockDbTable::new(name)) as Arc<dyn DbTable>)
         })
+        .expect("valid mock ASIC namespaces")
     }
 
     /// Build the per-ASIC table set via a factory that turns a `(asic, db, name)`
     /// triple into a [`DbTable`] handle — real (`swss-common`) or mock.
-    fn build<F>(namespaces: &[String], mut make: F) -> Self
+    fn build<F>(namespaces: &[String], mut make: F) -> Result<Self>
     where
-        F: FnMut(usize, Db, &str) -> Arc<dyn DbTable>,
+        F: FnMut(usize, Db, &str) -> Result<Arc<dyn DbTable>>,
     {
-        let mut asics = Vec::with_capacity(namespaces.len());
-        for asic_id in 0..namespaces.len() {
+        let mut asics = BTreeMap::new();
+        for namespace in namespaces {
+            let asic_id = env::namespace_asic_id(namespace)?;
+            if asics.contains_key(&asic_id) {
+                return Err(XcvrdError::Other(format!("duplicate ASIC index {asic_id}")));
+            }
             let mut vdm_threshold_tbl = BTreeMap::new();
             let mut vdm_flag_tbl = BTreeMap::new();
             let mut vdm_flag_change_count_tbl = BTreeMap::new();
@@ -193,85 +208,107 @@ impl XcvrTableHelper {
             for t in VDM_THRESHOLD_TYPES {
                 vdm_threshold_tbl.insert(
                     t.to_string(),
-                    make(asic_id, Db::State, &vdm_threshold_table_name(t)),
+                    make(asic_id, Db::State, &vdm_threshold_table_name(t))?,
                 );
                 vdm_flag_tbl.insert(
                     t.to_string(),
-                    make(asic_id, Db::State, &vdm_flag_table_name(t)),
+                    make(asic_id, Db::State, &vdm_flag_table_name(t))?,
                 );
                 vdm_flag_change_count_tbl.insert(
                     t.to_string(),
-                    make(asic_id, Db::State, &vdm_flag_change_count_table_name(t)),
+                    make(asic_id, Db::State, &vdm_flag_change_count_table_name(t))?,
                 );
                 vdm_flag_set_time_tbl.insert(
                     t.to_string(),
-                    make(asic_id, Db::State, &vdm_flag_set_time_table_name(t)),
+                    make(asic_id, Db::State, &vdm_flag_set_time_table_name(t))?,
                 );
                 vdm_flag_clear_time_tbl.insert(
                     t.to_string(),
-                    make(asic_id, Db::State, &vdm_flag_clear_time_table_name(t)),
+                    make(asic_id, Db::State, &vdm_flag_clear_time_table_name(t))?,
                 );
             }
-            asics.push(AsicTables {
-                int_tbl: make(asic_id, Db::State, TRANSCEIVER_INFO_TABLE),
-                dom_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_SENSOR_TABLE),
-                dom_flag_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_FLAG_TABLE),
-                dom_flag_change_count_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_DOM_FLAG_CHANGE_COUNT_TABLE,
-                ),
-                dom_flag_set_time_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE,
-                ),
-                dom_flag_clear_time_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE,
-                ),
-                dom_threshold_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_THRESHOLD_TABLE),
-                dom_temperature_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_TEMPERATURE_TABLE),
-                status_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_TABLE),
-                status_flag_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_FLAG_TABLE),
-                status_flag_change_count_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE,
-                ),
-                status_flag_set_time_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_STATUS_FLAG_SET_TIME_TABLE,
-                ),
-                status_flag_clear_time_tbl: make(
-                    asic_id,
-                    Db::State,
-                    TRANSCEIVER_STATUS_FLAG_CLEAR_TIME_TABLE,
-                ),
-                status_sw_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_SW_TABLE),
-                pm_tbl: make(asic_id, Db::State, TRANSCEIVER_PM_TABLE),
-                firmware_info_tbl: make(asic_id, Db::State, TRANSCEIVER_FIRMWARE_INFO_TABLE),
-                vdm_real_value_tbl: make(asic_id, Db::State, TRANSCEIVER_VDM_REAL_VALUE_TABLE),
-                vdm_threshold_tbl,
-                vdm_flag_tbl,
-                vdm_flag_change_count_tbl,
-                vdm_flag_set_time_tbl,
-                vdm_flag_clear_time_tbl,
-                state_port_tbl: make(asic_id, Db::State, STATE_PORT_TABLE),
-                cfg_port_tbl: make(asic_id, Db::Config, CFG_PORT_TABLE),
-                app_port_tbl: make(asic_id, Db::Appl, APP_PORT_TABLE),
-                fast_restart_enable_tbl: make(asic_id, Db::State, FAST_RESTART_ENABLE_TABLE),
-                warm_restart_tbl: make(asic_id, Db::State, WARM_RESTART_TABLE),
-                warm_restart_enable_tbl: make(asic_id, Db::State, WARM_RESTART_ENABLE_TABLE),
-            });
+            asics.insert(
+                asic_id,
+                AsicTables {
+                    namespace: namespace.clone(),
+                    int_tbl: make(asic_id, Db::State, TRANSCEIVER_INFO_TABLE)?,
+                    dom_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_SENSOR_TABLE)?,
+                    dom_flag_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_FLAG_TABLE)?,
+                    dom_flag_change_count_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_DOM_FLAG_CHANGE_COUNT_TABLE,
+                    )?,
+                    dom_flag_set_time_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_DOM_FLAG_SET_TIME_TABLE,
+                    )?,
+                    dom_flag_clear_time_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_DOM_FLAG_CLEAR_TIME_TABLE,
+                    )?,
+                    dom_threshold_tbl: make(asic_id, Db::State, TRANSCEIVER_DOM_THRESHOLD_TABLE)?,
+                    dom_temperature_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_DOM_TEMPERATURE_TABLE,
+                    )?,
+                    status_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_TABLE)?,
+                    status_flag_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_FLAG_TABLE)?,
+                    status_flag_change_count_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_STATUS_FLAG_CHANGE_COUNT_TABLE,
+                    )?,
+                    status_flag_set_time_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_STATUS_FLAG_SET_TIME_TABLE,
+                    )?,
+                    status_flag_clear_time_tbl: make(
+                        asic_id,
+                        Db::State,
+                        TRANSCEIVER_STATUS_FLAG_CLEAR_TIME_TABLE,
+                    )?,
+                    status_sw_tbl: make(asic_id, Db::State, TRANSCEIVER_STATUS_SW_TABLE)?,
+                    pm_tbl: make(asic_id, Db::State, TRANSCEIVER_PM_TABLE)?,
+                    firmware_info_tbl: make(asic_id, Db::State, TRANSCEIVER_FIRMWARE_INFO_TABLE)?,
+                    vdm_real_value_tbl: make(asic_id, Db::State, TRANSCEIVER_VDM_REAL_VALUE_TABLE)?,
+                    vdm_threshold_tbl,
+                    vdm_flag_tbl,
+                    vdm_flag_change_count_tbl,
+                    vdm_flag_set_time_tbl,
+                    vdm_flag_clear_time_tbl,
+                    state_port_tbl: make(asic_id, Db::State, STATE_PORT_TABLE)?,
+                    cfg_port_tbl: make(asic_id, Db::Config, CFG_PORT_TABLE)?,
+                    app_port_tbl: make(asic_id, Db::Appl, APP_PORT_TABLE)?,
+                    gearbox_tbl: make(asic_id, Db::Appl, GEARBOX_TABLE)?,
+                    fast_restart_enable_tbl: make(asic_id, Db::State, FAST_RESTART_ENABLE_TABLE)?,
+                    warm_restart_tbl: make(asic_id, Db::State, WARM_RESTART_TABLE)?,
+                    warm_restart_enable_tbl: make(asic_id, Db::State, WARM_RESTART_ENABLE_TABLE)?,
+                },
+            );
         }
-        XcvrTableHelper { asics }
+        Ok(XcvrTableHelper { asics })
     }
 
     fn asic(&self, asic_id: usize) -> &AsicTables {
-        &self.asics[asic_id]
+        &self.asics[&asic_id]
+    }
+
+    /// Actual front-end ASIC indices.
+    pub fn asic_ids(&self) -> impl Iterator<Item = usize> + '_ {
+        self.asics.keys().copied()
+    }
+
+    /// Namespaces corresponding to the registered front-end ASICs.
+    pub fn namespaces(&self) -> Vec<String> {
+        self.asics
+            .values()
+            .map(|asic| asic.namespace.clone())
+            .collect()
     }
 
     pub fn get_intf_tbl(&self, asic_id: usize) -> &dyn DbTable {
@@ -389,7 +426,7 @@ impl XcvrTableHelper {
         key: &str,
     ) -> Option<String> {
         let asic_index = port_mapping?.get_asic_id_for_logical_port(lport)?;
-        let tbl = self.asics.get(asic_index)?.state_port_tbl.as_ref();
+        let tbl = self.asics.get(&asic_index)?.state_port_tbl.as_ref();
         tbl.hget(lport, key)
     }
 
@@ -410,21 +447,40 @@ impl XcvrTableHelper {
 
     /// `get_gearbox_line_lanes_dict()` — the per-logical-port gearbox *line* (media-side)
     /// lane count, read from the APPL_DB `_GEARBOX_TABLE` `interface:*` rows the CMIS
-    /// manager consults to pick the host lane count on gearbox platforms
-    /// (`cmis_manager_task.get_host_lane_count`). The emulator testbed has no gearbox, so
-    /// this returns an empty map — the CMIS manager then falls back to the CONFIG_DB PORT
-    /// `lanes` count, which is the only path the CMIS bring-up e2e exercises. (The APPL_DB gearbox
-    /// table parse is deferred until a gearbox platform needs it; the CMIS manager's
-    /// gearbox-count cache is injectable so its unit tests cover the count-selection
-    /// logic directly.)
+    /// manager consults to pick the host lane count on gearbox platforms.
     pub fn get_gearbox_line_lanes_dict(&self) -> HashMap<String, u32> {
-        HashMap::new()
+        let mut lanes = HashMap::new();
+        for asic in self.asics.values() {
+            for key in asic.gearbox_tbl.get_keys() {
+                if !key.starts_with("interface:") {
+                    continue;
+                }
+                let Some(row) = asic.gearbox_tbl.get(&key) else {
+                    continue;
+                };
+                let fields: HashMap<_, _> = row.into_iter().collect();
+                let Some(name) = fields.get("name").filter(|name| !name.is_empty()) else {
+                    continue;
+                };
+                let Some(line_lanes) = fields.get("line_lanes") else {
+                    continue;
+                };
+                let count = line_lanes
+                    .split(',')
+                    .filter(|lane| !lane.trim().is_empty())
+                    .count();
+                if count > 0 {
+                    lanes.insert(name.clone(), count as u32);
+                }
+            }
+        }
+        lanes
     }
 }
 
 /// Open a real STATE_DB-backed table over a shared connection (registry helper).
 pub fn open_table(conn: Arc<Mutex<DbConnector>>, name: &str) -> Result<RealDbTable> {
-    Ok(RealDbTable::new(conn, name))
+    RealDbTable::new(conn, name)
 }
 
 #[cfg(test)]
@@ -456,6 +512,65 @@ mod tests {
         // A different table for the same key is empty → distinct handles.
         assert_eq!(th.get_status_tbl(0).get_size_for_key("Ethernet0"), 0);
         assert_eq!(th.get_intf_tbl(0).get_size_for_key("Ethernet0"), 0);
+    }
+
+    #[test]
+    fn registry_preserves_sparse_asic_indices() {
+        let th = XcvrTableHelper::with_mock_tables(&["asic1".into(), "asic3".into()]);
+        th.get_dom_tbl(1).hset("Ethernet0", "temperature", "22");
+        th.get_dom_tbl(3).hset("Ethernet0", "temperature", "33");
+        assert_eq!(
+            th.get_dom_tbl(1)
+                .hget("Ethernet0", "temperature")
+                .as_deref(),
+            Some("22")
+        );
+        assert_eq!(
+            th.get_dom_tbl(3)
+                .hget("Ethernet0", "temperature")
+                .as_deref(),
+            Some("33")
+        );
+        assert_eq!(th.asic_ids().collect::<Vec<_>>(), [1, 3]);
+    }
+
+    #[test]
+    fn gearbox_lanes_are_read_across_namespaces_and_invalid_rows_are_skipped() {
+        let th = XcvrTableHelper::with_mock_tables(&["asic1".into(), "asic3".into()]);
+        for (asic, key, fields) in [
+            (
+                1,
+                "interface:0",
+                vec![("name", "Ethernet0"), ("line_lanes", "0,1")],
+            ),
+            (
+                3,
+                "interface:1",
+                vec![("name", "Ethernet8"), ("line_lanes", "4,5,6,7")],
+            ),
+            (
+                1,
+                "phy:0",
+                vec![("name", "Ethernet16"), ("line_lanes", "0,1")],
+            ),
+            (1, "interface:missing-name", vec![("line_lanes", "0,1")]),
+            (3, "interface:missing-lanes", vec![("name", "Ethernet24")]),
+            (
+                3,
+                "interface:empty-lanes",
+                vec![("name", "Ethernet32"), ("line_lanes", "")],
+            ),
+        ] {
+            let fields: Vec<_> = fields
+                .into_iter()
+                .map(|(f, v)| (f.into(), v.into()))
+                .collect();
+            th.asic(asic).gearbox_tbl.set(key, &fields);
+        }
+        assert_eq!(
+            th.get_gearbox_line_lanes_dict(),
+            HashMap::from([("Ethernet0".into(), 2), ("Ethernet8".into(), 4),])
+        );
     }
 
     // Each VDM threshold type gets its own four handles.

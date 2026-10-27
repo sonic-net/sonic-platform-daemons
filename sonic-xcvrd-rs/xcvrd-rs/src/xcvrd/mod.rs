@@ -213,6 +213,7 @@ impl DaemonXcvrd {
             self.hal = Some(hal);
         }
         if self.xcvr_table_helper.is_none() {
+            self.namespaces = crate::env::front_end_namespaces()?;
             self.xcvr_table_helper = Some(XcvrTableHelper::new(&self.namespaces)?);
         }
         Ok(())
@@ -311,10 +312,12 @@ impl DaemonXcvrd {
 /// None` to avoid an OA Tx-disable on INFO deletion). `TRANSCEIVER_STATUS`/`_STATUS_SW`
 /// are PRESERVED on a warm (syncd restore) or fast reboot — the last-known transceiver
 /// status must survive so an in-service datapath is not disturbed — and deleted only on a
-/// normal (cold) shutdown. The fast-reboot flag is read once (a global STATE_DB flag,
-/// asic 0), matching `xcvrd.py:1086`.
+/// normal (cold) shutdown. Fast reboot is enabled only when every front-end ASIC
+/// enables it, matching `xcvrd.py:1086`.
 pub fn deinit_transceiver_tables(th: &XcvrTableHelper, port_mapping: &PortMapping) {
-    let is_fast_reboot = is_fast_reboot_enabled(th.get_fast_restart_enable_tbl(0));
+    let is_fast_reboot = th
+        .asic_ids()
+        .all(|asic| is_fast_reboot_enabled(th.get_fast_restart_enable_tbl(asic)));
     for lport in port_mapping.logical_port_list() {
         let Some(asic) = port_mapping.get_asic_id_for_logical_port(lport) else {
             continue;

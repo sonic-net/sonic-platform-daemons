@@ -47,6 +47,13 @@ cargo build --locked --release --bin xcvrd-rs
 Tests use mock HAL/DB implementations and need neither a switch nor Redis, but
 their executables still dynamically link CPython and `libswsscommon`.
 
+The optional Redis integration test starts isolated Unix-socket servers and also
+requires `redis-server` and SWSS's Lua scripts in `/usr/share/swss`:
+
+```sh
+cargo test --locked -p xcvrd-rs --test redis_tables -- --ignored
+```
+
 The included `Dockerfile` supplies the Trixie build dependencies and pinned C API
 checkout. Use `Dockerfile.bookworm` instead when targeting a Bookworm pmon.
 Build against the same Debian release and Python ABI as the target container:
@@ -70,8 +77,10 @@ mount. For a release binary, replace the final command above with
 
 Run `target/release/xcvrd-rs` inside a matching SONiC pmon environment, with
 `sonic_platform`, `sonic_platform_base`, `sonic_py_common`, and `swsscommon`
-importable by the embedded interpreter. Redis defaults to
-`/var/run/redis/redis.sock`; `REDIS_SOCK` overrides it.
+importable by the embedded interpreter. Database endpoints and separators come
+from SONiC's database configuration, with front-end ASIC namespaces discovered
+through `sonic_py_common.multi_asic`. `REDIS_SOCK` overrides the socket only for
+the default (single-ASIC) namespace.
 
 Use the existing `xcvrd` supervisor slot and its usual arguments when explicitly
 opting into the Rust daemon. Stop Python xcvrd first: never run both daemons

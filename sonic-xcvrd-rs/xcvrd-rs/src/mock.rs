@@ -28,6 +28,7 @@ struct MockDbInner {
     /// transient STATE_DB read failure — mirrors the `RealDbTable::hgetall` error path so
     /// tests can exercise callers that must not treat a failed read as a deleted row.
     fail_size_reads: bool,
+    fail_writes: bool,
 }
 
 /// In-memory STATE_DB table: `set/get/hget/del/hdel/getKeys/get_size/
@@ -45,14 +46,13 @@ impl MockDbTable {
                 keys: Vec::new(),
                 rows: HashMap::new(),
                 fail_size_reads: false,
+                fail_writes: false,
             }),
         }
     }
 
     /// Test-only: drop the tracked key list while KEEPING every row readable by key —
-    /// models a table the daemon only ever READS (CONFIG_DB `PORT`), where the production
-    /// `RealDbTable::get_keys` (a local write-tracking set) returns nothing even though the
-    /// rows exist in Redis.
+    /// models failed/incomplete key enumeration without deleting the underlying rows.
     pub fn clear_tracked_keys_for_test(&self) {
         self.inner.lock().unwrap().keys.clear();
     }
@@ -63,15 +63,29 @@ impl MockDbTable {
     pub fn set_fail_size_reads(&self, fail: bool) {
         self.inner.lock().unwrap().fail_size_reads = fail;
     }
+
+    /// Test-only: reject row sets without changing the table.
+    #[cfg(test)]
+    pub fn set_fail_writes(&self, fail: bool) {
+        self.inner.lock().unwrap().fail_writes = fail;
+    }
 }
 
 impl DbTable for MockDbTable {
     fn set(&self, key: &str, fvs: &[(String, String)]) {
+        self.set_checked(key, fvs);
+    }
+
+    fn set_checked(&self, key: &str, fvs: &[(String, String)]) -> bool {
         let mut g = self.inner.lock().unwrap();
+        if g.fail_writes {
+            return false;
+        }
         if !g.keys.iter().any(|k| k == key) {
             g.keys.push(key.to_string());
         }
         g.rows.insert(key.to_string(), fvs.to_vec());
+        true
     }
 
     fn hset(&self, key: &str, field: &str, value: &str) {
@@ -192,10 +206,8 @@ pub struct MockSfp {
     /// confirm-before-believing path without any timing dependency.
     pub presence_misses: Arc<AtomicUsize>,
     /// Canned results for the direct decode seam `xcvr_api_call_json(method)`
-    /// (`sfp.get_xcvr_api().<method>()`). EMPTY BY DEFAULT, so by default every mock
-    /// reports the seam as unavailable and `BridgeCmisApi` keeps answering from the
-    /// aggregate getters -- which is what the existing tests assert. Opt in to exercise
-    /// the fast path.
+    /// (`sfp.get_xcvr_api().<method>()`). Present mocks report paged memory; other
+    /// decoder methods default to unavailable so aggregate fallbacks remain testable.
     pub api_calls: BTreeMap<String, Value>,
     /// Shared log of every `xcvr_api_call_json(method)` invocation, so a test can assert
     /// the CMIS manager actually took the cheap route.
@@ -211,6 +223,7 @@ impl MockSfp {
         MockSfp {
             presence: true,
             replaceable: true,
+            api_calls: BTreeMap::from([("is_flat_memory".to_string(), Value::Bool(false))]),
             ..Default::default()
         }
     }
@@ -246,6 +259,12 @@ impl MockSfp {
 
     pub fn with_json(mut self, method: &str, value: Value) -> Self {
         self.json_calls.insert(method.to_string(), value);
+        self
+    }
+
+    /// Seed a method on `get_xcvr_api()`, separately from generic SFP methods.
+    pub fn with_api_json(mut self, method: &str, value: Value) -> Self {
+        self.api_calls.insert(method.to_string(), value);
         self
     }
 

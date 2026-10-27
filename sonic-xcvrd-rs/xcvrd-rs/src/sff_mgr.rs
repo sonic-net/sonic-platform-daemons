@@ -687,7 +687,7 @@ impl SffManagerTask {
     /// task is purely event-driven: it processes only when a watched table changes (a real
     /// SET/DEL), plus once for the boot snapshot (the reference's field replay on restart).
     pub fn task_worker(&mut self, stop: &Arc<AtomicBool>) {
-        let mut observer = match MultiPortChangeObserver::for_sff() {
+        let mut observer = match MultiPortChangeObserver::for_sff(&self.namespaces) {
             Ok(o) => Some(o),
             Err(e) => {
                 eprintln!("{SFF_LOGGER_PREFIX}SffManagerTask: failed to start MultiPortChangeObserver: {e}");

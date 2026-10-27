@@ -5,7 +5,7 @@
 //! unit tests build (`set/get/hget/getKeys/_del/hdel/get_size/get_size_for_key`),
 //! so Rust tests can assert **field counts** exactly as they do
 //! (`dom_tbl.get_size_for_key("Ethernet0") == 27`). Production uses
-//! [`RealDbTable`] (wraps a STATE_DB `DbConnector`); tests use
+//! [`RealDbTable`] (wraps native SWSS tables); tests use
 //! `crate::mock::MockDbTable`.
 //!
 //! Trait-semantics note (intentional, documented): the real swss `Table::set`
@@ -15,10 +15,9 @@
 //! [`RealDbTable::set`] therefore merges and `MockDbTable::set` replaces, matching
 //! each reference exactly. [`DbTable::hset`] merges a single field in both.
 
-use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use swss_common::{CxxString, DbConnector};
+use swss_common::{DbConnector, ProducerStateTable, Table};
 
 use crate::error::Result;
 
@@ -27,6 +26,11 @@ use crate::error::Result;
 pub trait DbTable: Send + Sync {
     /// `Table.set(key, FieldValuePairs)` - write a row (real: merge; mock: replace).
     fn set(&self, key: &str, fvs: &[(String, String)]);
+    /// Write a row, reporting whether it was submitted successfully.
+    fn set_checked(&self, key: &str, fvs: &[(String, String)]) -> bool {
+        self.set(key, fvs);
+        true
+    }
     /// Merge a single field into a row (real `HSET`; used for the `cmis_state`
     /// projection so it never clobbers `status`/`error`).
     fn hset(&self, key: &str, field: &str, value: &str);
@@ -59,176 +63,136 @@ pub trait DbTable: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// Real table: a named view over a shared STATE_DB [`DbConnector`].
-///
-/// The daemon is the sole writer of `TRANSCEIVER_*`, so rows are addressed by the
-/// explicit composite key `"<table>|<logical_port>"` (exactly what the bootstrap
-/// and the e2e harness read, e.g. `TRANSCEIVER_INFO|Ethernet0`) - no dependency on
-/// `Table`'s separator handling. A local `keys` index tracks what we've written so
-/// `get_keys`/`get_size` stay meaningful without a Redis `KEYS`/`SCAN`.
-///
-/// `DbConnector` is `Send` but not `Sync`, so it is held behind an `Arc<Mutex<_>>`
-/// (which is `Send + Sync`) to satisfy `DbTable: Send + Sync`; the two transceiver
-/// tables share one connection.
+/// Cached native SWSS table handles. `Table::set` merges a complete row atomically;
+/// producer-backed tables also enqueue and publish updates for SWSS consumers.
+/// Native tables resolve separators from SONiC DB configuration and enumerate Redis
+/// keys, including rows written by other daemons.
 pub struct RealDbTable {
-    conn: Arc<Mutex<DbConnector>>,
+    table: Mutex<Table>,
+    producer: Option<Mutex<ProducerStateTable>>,
     table_name: String,
-    /// Redis key separator between the table name and the row key. STATE_DB /
-    /// CONFIG_DB use `"|"` (the default); APPL_DB tables (e.g. `PORT_TABLE`) use
-    /// `":"`. See [`RealDbTable::new_with_sep`].
-    sep: String,
-    keys: Mutex<BTreeSet<String>>,
 }
 
 impl RealDbTable {
-    pub fn new(conn: Arc<Mutex<DbConnector>>, table_name: impl Into<String>) -> Self {
-        Self::new_with_sep(conn, table_name, "|")
+    pub fn new(conn: Arc<Mutex<DbConnector>>, table_name: impl Into<String>) -> Result<Self> {
+        let table_name = table_name.into();
+        let db = conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone_timeout(0)?;
+        Ok(RealDbTable {
+            table: Mutex::new(Table::new(db, &table_name)?),
+            producer: None,
+            table_name,
+        })
     }
 
-    /// Build a table view whose Redis key is `"<table><sep><key>"`. Use `":"` for
-    /// APPL_DB tables such as `PORT_TABLE` (`PORT_TABLE:Ethernet0`); STATE_DB and
-    /// CONFIG_DB use the `"|"` default via [`RealDbTable::new`].
-    pub fn new_with_sep(
+    /// Read committed table data normally, but send writes through `ProducerStateTable`.
+    pub fn new_producer(
         conn: Arc<Mutex<DbConnector>>,
         table_name: impl Into<String>,
-        sep: impl Into<String>,
-    ) -> Self {
-        RealDbTable {
-            conn,
-            table_name: table_name.into(),
-            sep: sep.into(),
-            keys: Mutex::new(BTreeSet::new()),
-        }
+    ) -> Result<Self> {
+        let mut table = Self::new(conn.clone(), table_name)?;
+        let db = conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone_timeout(0)?;
+        table.producer = Some(Mutex::new(ProducerStateTable::new(db, &table.table_name)?));
+        Ok(table)
     }
 
-    fn redis_key(&self, key: &str) -> String {
-        format!("{}{}{}", self.table_name, self.sep, key)
-    }
-
-    fn track(&self, key: &str) {
-        self.locked_keys().insert(key.to_string());
-    }
-
-    fn untrack(&self, key: &str) {
-        self.locked_keys().remove(key);
-    }
-
-    /// Lock the shared STATE_DB connection, recovering from a poisoned mutex.
-    ///
-    /// The `DbConnector` is shared (`Arc<Mutex<_>>`) across the DOM/CMIS/SFP threads.
-    /// If one thread panics while holding the lock (e.g. a PyO3 bridge error, or an
-    /// `eprintln!` hitting a broken supervisor stderr pipe mid-write), a plain
-    /// `.lock().unwrap()` on the other threads would panic too, cascading a single
-    /// transient fault into a full `serve` teardown + chassis rebuild — which resets
-    /// the emulator change-event baseline and drops in-flight SFP-error transitions.
-    /// Python's GIL means one thread's exception never corrupts a shared object, so we
-    /// mirror that: recover the guard and carry on. The connection is only read/written
-    /// under this lock, so no partially-mutated invariant is exposed.
-    fn locked_conn(&self) -> MutexGuard<'_, DbConnector> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Lock the per-table key set, recovering from a poisoned mutex (see
-    /// [`Self::locked_conn`]).
-    fn locked_keys(&self) -> MutexGuard<'_, BTreeSet<String>> {
-        self.keys.lock().unwrap_or_else(|e| e.into_inner())
+    fn locked_table(&self) -> MutexGuard<'_, Table> {
+        self.table.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 impl DbTable for RealDbTable {
     fn set(&self, key: &str, fvs: &[(String, String)]) {
-        let rkey = self.redis_key(key);
-        let conn = self.locked_conn();
-        for (field, value) in fvs {
-            if let Err(e) = conn.hset(&rkey, field, &CxxString::new(value)) {
-                eprintln!("xcvrd-rs: hset {rkey}.{field} failed: {e}");
-            }
+        self.set_checked(key, fvs);
+    }
+
+    fn set_checked(&self, key: &str, fvs: &[(String, String)]) -> bool {
+        let fields = fvs.iter().map(|(f, v)| (f.as_str(), v.as_str()));
+        let result = if let Some(producer) = &self.producer {
+            producer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set(key, fields)
+        } else {
+            self.locked_table().set(key, fields)
+        };
+        if let Err(e) = result {
+            eprintln!("xcvrd-rs: set {}[{key}] failed: {e}", self.table_name);
+            return false;
         }
-        drop(conn);
-        self.track(key);
+        true
     }
 
     fn hset(&self, key: &str, field: &str, value: &str) {
-        let rkey = self.redis_key(key);
-        {
-            let conn = self.locked_conn();
-            if let Err(e) = conn.hset(&rkey, field, &CxxString::new(value)) {
-                eprintln!("xcvrd-rs: hset {rkey}.{field} failed: {e}");
-            }
-        }
-        self.track(key);
+        self.set(key, &[(field.to_string(), value.to_string())]);
     }
 
     fn get(&self, key: &str) -> Option<Vec<(String, String)>> {
-        let rkey = self.redis_key(key);
-        let conn = self.locked_conn();
-        match conn.hgetall(&rkey) {
-            Ok(map) if !map.is_empty() => Some(
+        match self.locked_table().get(key) {
+            Ok(Some(map)) => Some(
                 map.into_iter()
                     .map(|(k, v)| (k, v.to_string_lossy().into_owned()))
                     .collect(),
             ),
-            Ok(_) => None,
+            Ok(None) => None,
             Err(e) => {
-                eprintln!("xcvrd-rs: hgetall {rkey} failed: {e}");
+                eprintln!("xcvrd-rs: get {}[{key}] failed: {e}", self.table_name);
                 None
             }
         }
     }
 
     fn hget(&self, key: &str, field: &str) -> Option<String> {
-        let rkey = self.redis_key(key);
-        let conn = self.locked_conn();
-        match conn.hget(&rkey, field) {
+        match self.locked_table().hget(key, field) {
             Ok(Some(v)) => Some(v.to_string_lossy().into_owned()),
             Ok(None) => None,
             Err(e) => {
-                eprintln!("xcvrd-rs: hget {rkey}.{field} failed: {e}");
+                eprintln!(
+                    "xcvrd-rs: hget {}[{key}].{field} failed: {e}",
+                    self.table_name
+                );
                 None
             }
         }
     }
 
     fn del(&self, key: &str) {
-        let rkey = self.redis_key(key);
-        {
-            let conn = self.locked_conn();
-            if let Err(e) = conn.del(&rkey) {
-                eprintln!("xcvrd-rs: del {rkey} failed: {e}");
-            }
+        let result = if let Some(producer) = &self.producer {
+            producer.lock().unwrap_or_else(|e| e.into_inner()).del(key)
+        } else {
+            self.locked_table().del(key)
+        };
+        if let Err(e) = result {
+            eprintln!("xcvrd-rs: del {}[{key}] failed: {e}", self.table_name);
         }
-        self.untrack(key);
     }
 
     fn hdel(&self, key: &str, field: &str) {
-        let rkey = self.redis_key(key);
-        let conn = self.locked_conn();
-        if let Err(e) = conn.hdel(&rkey, field) {
-            eprintln!("xcvrd-rs: hdel {rkey}.{field} failed: {e}");
-        }
-        let empty = matches!(conn.hgetall(&rkey), Ok(map) if map.is_empty());
-        drop(conn);
-        if empty {
-            self.untrack(key);
+        if let Err(e) = self.locked_table().hdel(key, field) {
+            eprintln!(
+                "xcvrd-rs: hdel {}[{key}].{field} failed: {e}",
+                self.table_name
+            );
         }
     }
 
     fn get_keys(&self) -> Vec<String> {
-        // WARNING: this returns only the keys THIS daemon has written (the local
-        // write-tracking set maintained by `track`/`untrack`), NOT the rows present in
-        // Redis. It is meaningful only for tables the daemon owns and populates (the
-        // `TRANSCEIVER_*` STATE_DB tables). Calling it on a table the daemon only ever
-        // READS — CONFIG_DB `PORT`, STATE_DB `PORT_TABLE` — yields an empty list, which
-        // silently looks like "no rows" rather than failing. Enumerate such tables from an
-        // authoritative source instead (e.g. `PortMapping` for the CONFIG_DB port list).
-        // Note `MockDbTable::get_keys` returns whatever a test `set()`, so unit tests do
-        // NOT reproduce this behaviour — see `get_sibling_port_configs`, which was broken
-        // in production for exactly this reason while its unit test passed.
-        self.locked_keys().iter().cloned().collect()
+        match self.locked_table().get_keys() {
+            Ok(keys) => keys,
+            Err(e) => {
+                eprintln!("xcvrd-rs: get keys for {} failed: {e}", self.table_name);
+                Vec::new()
+            }
+        }
     }
 
     fn get_size(&self) -> usize {
-        self.locked_keys().len()
+        self.get_keys().len()
     }
 
     fn get_size_for_key(&self, key: &str) -> usize {
@@ -236,11 +200,10 @@ impl DbTable for RealDbTable {
     }
 
     fn get_size_for_key_checked(&self, key: &str) -> Option<usize> {
-        let rkey = self.redis_key(key);
-        let conn = self.locked_conn();
-        // A transient `hgetall` failure returns `None` (indeterminate) rather than being
-        // collapsed to 0, so callers can tell "row absent" apart from "read failed".
-        conn.hgetall(&rkey).ok().map(|m| m.len())
+        self.locked_table()
+            .get(key)
+            .ok()
+            .map(|row| row.map_or(0, |m| m.len()))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -250,5 +213,5 @@ impl DbTable for RealDbTable {
 
 /// Open a real STATE_DB-backed table over a shared connection.
 pub fn open_state_table(conn: Arc<Mutex<DbConnector>>, name: &str) -> Result<RealDbTable> {
-    Ok(RealDbTable::new(conn, name))
+    RealDbTable::new(conn, name)
 }

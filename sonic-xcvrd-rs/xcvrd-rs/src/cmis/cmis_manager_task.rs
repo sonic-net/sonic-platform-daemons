@@ -237,7 +237,9 @@ impl CmisManagerTask {
     fn is_fast_reboot_enabled(&mut self) -> bool {
         if self._is_fast_reboot_enabled.is_none() {
             let helper = self.xcvr_table_helper.clone();
-            let enabled = common::is_fast_reboot_enabled(helper.get_fast_restart_enable_tbl(0));
+            let enabled = helper.asic_ids().all(|asic| {
+                common::is_fast_reboot_enabled(helper.get_fast_restart_enable_tbl(asic))
+            });
             self._is_fast_reboot_enabled = Some(enabled);
         }
         self._is_fast_reboot_enabled.unwrap_or(false)
@@ -633,16 +635,8 @@ impl CmisManagerTask {
     /// `get_sibling_port_configs` — sibling logical ports sharing this physical port.
     ///
     /// The breakout group is enumerated from the daemon's [`PortMapping`] — which is built
-    /// from CONFIG_DB `PORT` and is authoritative — and **not** from `cfg.get_keys()`.
-    /// `RealDbTable::get_keys` returns only the keys this daemon has itself *written* (its
-    /// local write-tracking set), and nothing ever writes CONFIG_DB `PORT`, so in production
-    /// that call yields an EMPTY list: every port looked like it had no siblings,
-    /// `get_desired_app_map` came back all zeros, and `is_decommission_required` therefore
-    /// reported `true` for any lane with a non-zero active AppSel — i.e. **always**, for
-    /// every module. That drove a permanent decommission of every cage (link flap on a live
-    /// module, and siblings blocked in `INSERTED` behind a decommission that kept
-    /// re-triggering). Unit tests missed it because `MockDbTable::get_keys` returns the keys
-    /// the test itself `set()`, so the mock reported siblings where the real table cannot.
+    /// from CONFIG_DB `PORT` and is authoritative — rather than a separate key enumeration
+    /// that can fail or disagree with the current breakout mapping.
     pub fn get_sibling_port_configs(&self, lport: &str) -> Vec<SiblingConfig> {
         let mut siblings = Vec::new();
         let pport = self.port_dict.get(lport).and_then(|p| p.index);
@@ -1755,7 +1749,7 @@ impl CmisManagerTask {
     /// [`Self::process_single_lport`] returns early and the state machine never leaves
     /// `INSERTED`. (The DOM task's APPL_DB `flap_count` watch is a *different* observer.)
     pub fn task_worker(&mut self, stop: &Arc<AtomicBool>) {
-        let mut observer = match MultiPortChangeObserver::for_cmis() {
+        let mut observer = match MultiPortChangeObserver::for_cmis(&self.namespaces) {
             Ok(o) => Some(o),
             Err(e) => {
                 eprintln!("CmisManagerTask: failed to start MultiPortChangeObserver: {e}");
@@ -2417,13 +2411,7 @@ mod tests {
         assert_eq!(task.port_dict["Ethernet0"].lanes.as_deref(), Some("1"));
     }
 
-    // ---- REGRESSION: siblings must come from PortMapping, not the written-key set ----
-    // In production `RealDbTable::get_keys` returns only the keys the daemon has WRITTEN;
-    // nothing writes CONFIG_DB PORT, so the old `cfg.get_keys()` enumeration returned an
-    // empty list, `get_desired_app_map` came back all zeros, and `is_decommission_required`
-    // was therefore true for every module forever. This test pins the real-world shape:
-    // the CONFIG_DB rows exist and are readable by key, but the table reports NO tracked
-    // keys — exactly what the live daemon sees.
+    // Sibling discovery must remain valid even if separate key enumeration fails.
     #[test]
     fn test_get_sibling_port_configs_uses_port_mapping_not_written_keys() {
         let th = helper();
@@ -2439,14 +2427,14 @@ mod tests {
                 ]),
             );
         }
-        // Simulate the production table: rows readable by key, but nothing "tracked".
+        // Rows remain readable by key despite missing enumeration results.
         cfg.as_any()
             .downcast_ref::<crate::mock::MockDbTable>()
             .expect("helper() builds mock tables")
             .clear_tracked_keys_for_test();
         assert!(
             cfg.get_keys().is_empty(),
-            "test must model a read-only table"
+            "test must model missing key enumeration"
         );
 
         let mut pm = PortMapping::new();
@@ -3819,19 +3807,38 @@ mod tests {
     // re-read, mirroring the Python `_is_fast_reboot_enabled` caching.
     #[test]
     fn test_is_fast_reboot_enabled_gate_and_cache() {
-        let th = helper();
-        let tbl = th.get_fast_restart_enable_tbl(0);
+        let th = Arc::new(XcvrTableHelper::with_mock_tables(&[
+            "asic1".into(),
+            "asic3".into(),
+        ]));
+        let tbl = th.get_fast_restart_enable_tbl(3);
         assert!(!common::is_fast_reboot_enabled(tbl), "absent → disabled");
         tbl.hset("system", "enable", "false");
         assert!(!common::is_fast_reboot_enabled(tbl), "'false' → disabled");
         tbl.hset("system", "enable", "true");
         assert!(common::is_fast_reboot_enabled(tbl), "'true' → enabled");
 
-        let mut task = empty_task(th.clone());
+        let make_task = || {
+            CmisManagerTask::new(
+                th.namespaces(),
+                PortMapping::new(),
+                Arc::new(MockHal::default()),
+                th.clone(),
+                noop_factory(),
+                false,
+            )
+        };
+        assert!(
+            !make_task().is_fast_reboot_enabled(),
+            "all ASICs must enable fast reboot"
+        );
+        th.get_fast_restart_enable_tbl(1)
+            .hset("system", "enable", "true");
+        let mut task = make_task();
         assert!(task.is_fast_reboot_enabled());
         assert_eq!(task._is_fast_reboot_enabled, Some(true));
         // Flip the table AFTER the first sample — the cached value must stick.
-        th.get_fast_restart_enable_tbl(0)
+        th.get_fast_restart_enable_tbl(3)
             .hset("system", "enable", "false");
         assert!(task.is_fast_reboot_enabled(), "cached true is not re-read");
     }

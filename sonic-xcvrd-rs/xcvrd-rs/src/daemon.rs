@@ -371,12 +371,10 @@ pub fn run() -> ! {
 }
 
 fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
-    // Single-ASIC testbed: one (empty) namespace.
-    let namespaces = vec![String::new()];
+    let namespaces = env::front_end_namespaces()?;
 
     let hal: Arc<dyn Hal> = Arc::new(BridgeHal::new()?); // PyO3 -> sonic_platform -> xcvr-emu
     let table_helper = Arc::new(XcvrTableHelper::new(&namespaces)?); // swss-common -> STATE_DB
-    let config = env::open_config_db()?; // swss-common -> CONFIG_DB
 
     let num_sfps = hal.num_sfps()?;
 
@@ -393,7 +391,7 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
         });
     }
 
-    let port_mapping = get_port_mapping(&config, num_sfps)?;
+    let port_mapping = get_port_mapping(&namespaces, num_sfps)?;
     eprintln!(
         "xcvrd-rs: {} configured ports discovered",
         port_mapping.logical_port_list().len()
@@ -463,18 +461,20 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     // Load media_settings.json + optics_si_settings.json once at startup, skipped on a
     // fast-reboot (xcvrd.py:1056-1060) — the ASIC/module SI state survives a fast-reboot,
     // so re-publishing it would be redundant and could disrupt an in-service datapath.
-    let (media_settings, optics_si_settings) =
-        if is_fast_reboot_enabled(table_helper.get_fast_restart_enable_tbl(0)) {
-            eprintln!(
-                "xcvrd-rs: fast-reboot — skip loading media_settings.json / optics_si_settings.json"
-            );
-            (serde_json::json!({}), serde_json::json!({}))
-        } else {
-            (
-                media_settings_parser::load_media_settings(),
-                optics_si_parser::load_optics_si_settings(),
-            )
-        };
+    let (media_settings, optics_si_settings) = if table_helper
+        .asic_ids()
+        .all(|asic| is_fast_reboot_enabled(table_helper.get_fast_restart_enable_tbl(asic)))
+    {
+        eprintln!(
+            "xcvrd-rs: fast-reboot — skip loading media_settings.json / optics_si_settings.json"
+        );
+        (serde_json::json!({}), serde_json::json!({}))
+    } else {
+        (
+            media_settings_parser::load_media_settings(),
+            optics_si_parser::load_optics_si_settings(),
+        )
+    };
 
     // CMIS datapath bring-up state machine, started unless `--skip_cmis_mgr` is set
     // (xcvrd.py:1159 `if not self.skip_cmis_mgr:`). Production wires each port's

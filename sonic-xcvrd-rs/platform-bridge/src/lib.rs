@@ -67,7 +67,7 @@ pub struct ChangeEvent {
 }
 
 /// `json.dumps(obj, default=str)` -> `serde_json::Value`. Robust to arbitrary
-/// nesting and future fields; anything not natively JSON-able is str()'d.
+/// nesting and future fields; unsupported values and non-finite floats use Python str().
 fn py_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> Result<Value> {
     if obj.is_none() {
         return Ok(Value::Null);
@@ -78,7 +78,57 @@ fn py_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> Result<Value> {
     kwargs.set_item("default", builtins.getattr("str")?)?;
     let dumped = json.call_method("dumps", (obj,), Some(&kwargs))?;
     let s: String = dumped.extract()?;
-    serde_json::from_str(&s).map_err(|e| BridgeError::Json(e.to_string()))
+    serde_json::from_str(&sanitize_nonfinite_json(&s)).map_err(|e| BridgeError::Json(e.to_string()))
+}
+
+/// Quote Python's non-standard JSON number tokens without modifying string contents.
+fn sanitize_nonfinite_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_str = false;
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        let ch = rest.chars().next().unwrap();
+        let ch_len = ch.len_utf8();
+        if in_str {
+            out.push(ch);
+            if ch == '\\' {
+                if let Some(next) = rest[ch_len..].chars().next() {
+                    out.push(next);
+                    i += ch_len + next.len_utf8();
+                    continue;
+                }
+            } else if ch == '"' {
+                in_str = false;
+            }
+            i += ch_len;
+            continue;
+        }
+        if ch == '"' {
+            in_str = true;
+            out.push('"');
+            i += ch_len;
+            continue;
+        }
+        if rest.starts_with("-Infinity") {
+            out.push_str("\"-inf\"");
+            i += "-Infinity".len();
+            continue;
+        }
+        if rest.starts_with("Infinity") {
+            out.push_str("\"inf\"");
+            i += "Infinity".len();
+            continue;
+        }
+        if rest.starts_with("NaN") {
+            out.push_str("\"nan\"");
+            i += "NaN".len();
+            continue;
+        }
+        out.push(ch);
+        i += ch_len;
+    }
+    out
 }
 
 /// Pull a `{str: str}` map out of a JSON object value (missing/!object -> empty).
@@ -321,5 +371,77 @@ impl Sfp {
             let r = api.call_method0(method)?;
             py_to_json(py, &r)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nonfinite_values_survive_all_json_getter_paths() {
+        Python::with_gil(|py| {
+            let module = PyModule::from_code_bound(
+                py,
+                r#"
+class Sfp:
+    def get_xcvr_api(self):
+        return self
+    def get_transceiver_dom_real_value(self):
+        return {
+            "temperature": 42.5, "voltage": 3.3, "rxpower1": float("-inf"),
+            "nested": [float("inf"), float("nan")],
+            "note": 'quoted "Infinity" and NaN',
+        }
+    generic_getter = get_transceiver_dom_real_value
+    decoder_getter = get_transceiver_dom_real_value
+"#,
+                "bridge_test.py",
+                "bridge_test",
+            )
+            .unwrap();
+            let sfp = Sfp {
+                obj: module.getattr("Sfp").unwrap().call0().unwrap().unbind(),
+                index: 0,
+            };
+            for value in [
+                sfp.get_transceiver_dom_real_value().unwrap(),
+                sfp.call_json("generic_getter", ()).unwrap(),
+                sfp.xcvr_api_call_json("decoder_getter").unwrap(),
+            ] {
+                assert_eq!(
+                    value,
+                    json!({
+                        "temperature": 42.5, "voltage": 3.3, "rxpower1": "-inf",
+                        "nested": ["inf", "nan"], "note": "quoted \"Infinity\" and NaN",
+                    })
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn bare_nonfinite_tokens_become_quoted_python_str_form() {
+        let raw =
+            r#"{"temphighalarm": -Infinity, "vcchighalarm": Infinity, "txbiashighalarm": NaN}"#;
+        let v: Value = serde_json::from_str(&sanitize_nonfinite_json(raw)).unwrap();
+        assert_eq!(v["temphighalarm"], json!("-inf"));
+        assert_eq!(v["vcchighalarm"], json!("inf"));
+        assert_eq!(v["txbiashighalarm"], json!("nan"));
+    }
+
+    #[test]
+    fn quoted_and_escaped_field_text_is_untouched() {
+        let raw = r#"{"note": "a \"quoted -Infinity\" and NaN", "x": Infinity}"#;
+        let v: Value = serde_json::from_str(&sanitize_nonfinite_json(raw)).unwrap();
+        assert_eq!(v["note"], json!("a \"quoted -Infinity\" and NaN"));
+        assert_eq!(v["x"], json!("inf"));
+    }
+
+    #[test]
+    fn finite_json_is_byte_identical() {
+        let raw = r#"{"temp": -40.0, "voltage": 3.3, "vendor": "ACME", "ok": true, "n": null}"#;
+        assert_eq!(sanitize_nonfinite_json(raw), raw);
     }
 }

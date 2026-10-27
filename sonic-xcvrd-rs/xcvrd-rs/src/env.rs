@@ -9,6 +9,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use swss_common::DbConnector;
 
+use crate::error::{Result, XcvrdError};
+
+const GLOBAL_DB_CONFIG: &str = "/var/run/redis/sonic-db/database_global.json";
+
 /// STATE_DB hash the emulator's test-only SFP-error injection hook reads (mirrors
 /// `sonic_platform.chassis.INJECT_TABLE`). Probed by [`init_embedded_db_config`] to prove the
 /// embedded interpreter's STATE_DB read path (the emulator's `Chassis._get_statedb`) is warm.
@@ -39,26 +43,87 @@ pub fn open_platform() -> platform_bridge::Result<Platform> {
     Platform::new()
 }
 
-/// Open a STATE_DB connection over the Redis unix socket.
+/// Discover front-end namespaces and initialize multi-ASIC DB configuration.
+pub fn front_end_namespaces() -> Result<Vec<String>> {
+    let (multi_asic, namespaces) = Python::with_gil(|py| -> PyResult<(bool, Vec<String>)> {
+        let multi = py.import_bound("sonic_py_common.multi_asic")?;
+        let is_multi = multi.call_method0("is_multi_asic")?.extract::<bool>()?;
+        if is_multi {
+            py.import_bound("swsscommon.swsscommon")?
+                .getattr("SonicDBConfig")?
+                .call_method0("initializeGlobalConfig")?;
+        }
+        Ok((
+            is_multi,
+            multi.call_method0("get_front_end_namespaces")?.extract()?,
+        ))
+    })
+    .map_err(platform_bridge::BridgeError::from)?;
+    if multi_asic {
+        swss_common::sonic_db_config_initialize_global(GLOBAL_DB_CONFIG, false)?;
+    }
+    for namespace in &namespaces {
+        namespace_asic_id(namespace)?;
+    }
+    Ok(namespaces)
+}
+
+/// SONiC ASIC index, including non-contiguous front-end ASICs.
+pub fn namespace_asic_id(namespace: &str) -> Result<usize> {
+    if namespace.is_empty() {
+        return Ok(0);
+    }
+    namespace
+        .strip_prefix("asic")
+        .and_then(|index| index.parse().ok())
+        .ok_or_else(|| XcvrdError::Other(format!("invalid ASIC namespace {namespace:?}")))
+}
+
+fn open_db(db_name: &str, db_id: i32, namespace: &str) -> swss_common::Result<DbConnector> {
+    if namespace.is_empty() {
+        if let Ok(sock) = std::env::var("REDIS_SOCK") {
+            return DbConnector::new_unix(db_id, sock, 0);
+        }
+        DbConnector::new_named(db_name, false, 0)
+    } else {
+        DbConnector::new_keyed(db_name, false, 0, "", namespace)
+    }
+}
+
+/// Open the default namespace's STATE_DB.
 ///
 /// Use the returned [`DbConnector`] for direct hash access (`hset`/`hgetall`/…),
 /// or wrap it in a `swss_common::Table` / `ProducerStateTable` for table-scoped
 /// writes like `TRANSCEIVER_INFO`.
 pub fn open_state_db() -> swss_common::Result<DbConnector> {
-    DbConnector::new_unix(STATE_DB, redis_sock(), 0)
+    open_state_db_in_namespace("")
+}
+
+/// Open STATE_DB using the namespace's SONiC database configuration.
+pub fn open_state_db_in_namespace(namespace: &str) -> swss_common::Result<DbConnector> {
+    open_db("STATE_DB", STATE_DB, namespace)
 }
 
 /// Open a CONFIG_DB connection over the Redis unix socket (for the PORT table /
 /// logical↔physical port mapping).
 pub fn open_config_db() -> swss_common::Result<DbConnector> {
-    DbConnector::new_unix(CONFIG_DB, redis_sock(), 0)
+    open_config_db_in_namespace("")
+}
+
+/// Open CONFIG_DB using the namespace's SONiC database configuration.
+pub fn open_config_db_in_namespace(namespace: &str) -> swss_common::Result<DbConnector> {
+    open_db("CONFIG_DB", CONFIG_DB, namespace)
 }
 
 /// Open an APPL_DB connection over the Redis unix socket (for the `PORT_TABLE`
-/// `flap_count` link-change watch). APPL_DB table keys are colon-separated
-/// (`PORT_TABLE:Ethernet0`), so wrap this in a `RealDbTable::new_with_sep(_, ":")`.
+/// `flap_count` link-change watch).
 pub fn open_appl_db() -> swss_common::Result<DbConnector> {
-    DbConnector::new_unix(APPL_DB, redis_sock(), 0)
+    open_appl_db_in_namespace("")
+}
+
+/// Open APPL_DB using the namespace's SONiC database configuration.
+pub fn open_appl_db_in_namespace(namespace: &str) -> swss_common::Result<DbConnector> {
+    open_db("APPL_DB", APPL_DB, namespace)
 }
 
 /// Force-load the embedded interpreter's process-global `swsscommon.SonicDBConfig` so the
@@ -66,20 +131,9 @@ pub fn open_appl_db() -> swss_common::Result<DbConnector> {
 /// resolve STATE_DB's unix socket and surface injected SFP errors
 /// (`tests/test_status_error.py`).
 ///
-/// WHY the daemon must do this (and the Python reference need not): the reference
-/// `DaemonXcvrd` connects its DBs BY NAME at boot (`sonic_py_common.daemon_base.db_connect`,
-/// `xcvrd.py:918` → `daemon_base.py:29`), which force-loads `SonicDBConfig` as a side effect
-/// BEFORE the SFP task first polls `get_change_event`. The Rust daemon connects
-/// STATE_DB/CONFIG_DB through the `swss-common` bindings by db-id + unix socket (see
-/// [`open_state_db`]), which NEVER loads the Python singleton. So without this call nothing
-/// loads `SonicDBConfig` in-process, and the emulator's FIRST `_get_statedb`
-/// fail-caches `False` for the chassis lifetime — every injected SFP error then silently
-/// returns `{}` and `TRANSCEIVER_STATUS_SW.error` is never written (gRPC presence events keep
-/// working, which is why only the error-injection tests regress).
-///
-/// We therefore reproduce the reference's by-name config-load side effect explicitly
-/// (via [`load_embedded_sonic_db_config`]) at a clean single-threaded boot point, then VERIFY
-/// the emulator's EXACT read path
+/// Explicitly initialize the Python bindings as well as the native Rust DB layer
+/// (including when `REDIS_SOCK` bypasses named connection initialization), then verify
+/// the emulator's exact read path
 /// (`SonicV2Connector(use_unix_socket_path=True).connect('STATE_DB').get_all(_, 'XCVR_EMU_INJECT')`)
 /// so a `true` return means that identical later call inside `_get_statedb` cannot fail for
 /// the `SonicDBConfig` reason. Bounded-retried (a just-restarted xcvrd can briefly race
@@ -183,8 +237,7 @@ fn load_embedded_sonic_db_config(sc: &Bound<'_, PyModule>) {
     // Faithful to the reference `DaemonXcvrd.init()` (`xcvrd.py:1046-1048`): load the multi-ASIC
     // namespace map via `SonicDBConfig.initializeGlobalConfig()` ONLY when
     // `multi_asic.is_multi_asic()`. Calling it UNCONDITIONALLY on single-ASIC is NOT a harmless
-    // no-op: with `SonicDBConfig` not yet initialized (the Rust `swss-common` bindings connect by
-    // db-id + socket and never load the Python singleton), it flips the singleton into
+    // no-op: with `SonicDBConfig` not yet initialized, it flips the singleton into
     // global/namespace-resolution mode WITHOUT a `database_global.json`, so the emulator's later
     // `SonicV2Connector(...)` can no longer resolve STATE_DB and `_get_statedb` fail-caches. Gate
     // it exactly like the reference so single-ASIC takes the clean by-name lazy load below.
@@ -219,10 +272,8 @@ fn load_embedded_sonic_db_config(sc: &Bound<'_, PyModule>) {
 /// gates:
 ///   1. the process-global `swsscommon.SonicDBConfig` resolves + STATE_DB is reachable, so the
 ///      emulator's `_get_statedb` (`SonicV2Connector(use_unix_socket_path=True).connect(...)`)
-///      connects on its first call. Because the Rust `swss-common` bindings connect by db-id +
-///      socket and never load the Python singleton, [`init_embedded_db_config`] must load it
-///      first (mirroring the reference daemon's by-name `db_connect` side effect) — otherwise
-///      that first `_get_statedb` fail-caches `False` for the chassis lifetime and every
+///      connects on its first call. [`init_embedded_db_config`] verifies this path
+///      before polling, since a failed first `_get_statedb` is cached for the chassis lifetime and every
 ///      injected error is silenced;
 ///   2. the `.test_hooks` MARKER is present next to the `sonic_platform.chassis` module the
 ///      embedded interpreter actually imported — the deploy drops it and the `Chassis`

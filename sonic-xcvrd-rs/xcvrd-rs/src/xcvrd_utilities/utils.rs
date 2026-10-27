@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::dom::utilities::db::py_truthy;
 use crate::hal::SfpHandle;
 
 /// `XCVRDUtils.get_transceiver_presence` — `sfp.get_presence()`, any error → `false`
@@ -23,24 +22,13 @@ pub fn get_transceiver_presence(sfp: &dyn SfpHandle) -> bool {
 
 /// `XCVRDUtils.is_transceiver_flat_memory` — is the module SFF flat-memory (no paged
 /// upper memory)? The Python does `sfp.get_xcvr_api().is_flat_memory()` (defaulting to
-/// `True` when there is no api or the call raises).
-///
-/// The `platform-bridge` cannot chain `get_xcvr_api().is_flat_memory()` (§3.5) and no
-/// SONiC `SfpOptoeBase` exposes a *direct* `is_flat_memory` (it lives on the chained
-/// `CmisApi`/`Sff8636Api`), so `call_json("is_flat_memory")` succeeds only on a mock/
-/// bridge that opts in and otherwise errors. On the error path we return **`false`**
-/// (paged), NOT the Python source's `True`, because that reproduces the reference
-/// daemon's *runtime* behaviour on this platform: every module the emulator/DUT serves
-/// is CMIS/SFF-8636 (paged), whose real `is_flat_memory()` returns `False`, so the
-/// reference daemon publishes VDM/PM for them. Returning `false` here keeps that parity
-/// (VDM/PM proceed); a genuinely flat module still yields empty VDM/PM dicts upstream,
-/// so nothing spurious is published. A mock/bridge that *does* answer `is_flat_memory`
-/// is honoured verbatim (so the `flat==true` skip path stays testable).
+/// `True` when there is no api or the call raises). Unusable answers also disable
+/// paged-memory accesses conservatively.
 pub fn is_transceiver_flat_memory(sfp: &dyn SfpHandle) -> bool {
-    match sfp.call_json("is_flat_memory") {
-        Ok(v) => py_truthy(&v),
-        Err(_) => false,
-    }
+    sfp.xcvr_api_call_json("is_flat_memory")
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
 }
 
 /// `XCVRDUtils.is_transceiver_lpmode_on` — `sfp.get_lpmode()`, any error → `false`
@@ -100,18 +88,25 @@ mod tests {
         assert!(!get_transceiver_presence(&MockSfp::absent()));
     }
 
-    // ← tests/test_xcvrd.py::test_wrapper_is_flat_memory (behaviourally): a module that
-    // answers `is_flat_memory` is honoured; the un-answerable bridge path → paged (false).
     #[test]
     fn test_is_transceiver_flat_memory() {
-        // Module reports flat memory → true.
-        let flat = MockSfp::present().with_json("is_flat_memory", json!(true));
+        let flat = MockSfp::present().with_api_json("is_flat_memory", json!(true));
         assert!(is_transceiver_flat_memory(&flat));
-        // Module reports paged → false.
-        let paged = MockSfp::present().with_json("is_flat_memory", json!(false));
+        let paged = MockSfp::present().with_api_json("is_flat_memory", json!(false));
         assert!(!is_transceiver_flat_memory(&paged));
-        // No answer (bridge can't chain get_xcvr_api) → paged (false), so VDM/PM proceed.
-        assert!(!is_transceiver_flat_memory(&MockSfp::present()));
+        assert_eq!(*paged.api_call_log.lock().unwrap(), ["is_flat_memory"]);
+        assert!(paged.call_log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unavailable_or_unusable_decoder_defaults_to_flat_memory() {
+        let mut unavailable = MockSfp::present().with_json("is_flat_memory", json!(false));
+        unavailable.api_calls.clear();
+        assert!(is_transceiver_flat_memory(&unavailable));
+        for value in [Value::Null, json!("false"), json!(0)] {
+            let sfp = MockSfp::present().with_api_json("is_flat_memory", value);
+            assert!(is_transceiver_flat_memory(&sfp));
+        }
     }
 
     #[test]

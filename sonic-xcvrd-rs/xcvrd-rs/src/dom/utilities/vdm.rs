@@ -749,7 +749,7 @@ mod tests {
         // flat memory → nothing.
         let th = XcvrTableHelper::with_mock_tables(&[String::new()]);
         let flat = MockHal::with_sfps(vec![MockSfp::present()
-            .with_json("is_flat_memory", json!(true))
+            .with_api_json("is_flat_memory", json!(true))
             .with_json("get_transceiver_vdm_thresholds", thresholds())]);
         vdm_db.post_port_vdm_thresholds_to_db(&stop, "Ethernet0", &pm, &flat, &th, None);
         for t in VDM_THRESHOLD_TYPES {

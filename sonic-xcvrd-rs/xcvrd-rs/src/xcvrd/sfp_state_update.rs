@@ -226,8 +226,9 @@ impl SfpStateUpdateTask {
         let th = self.table_helper.clone();
         // Pre-fetch the per-ASIC warm-start status once (xcvrd.py:314-317): a warm reboot
         // suppresses the boot media SI notify so an in-service datapath is not flapped.
-        let warm_start: Vec<bool> = (0..self.namespaces.len())
-            .map(|a| th.is_syncd_warm_restore_complete(a))
+        let warm_start: BTreeMap<_, _> = th
+            .asic_ids()
+            .map(|a| (a, th.is_syncd_warm_restore_complete(a)))
             .collect();
         let mut retry_eeprom_set = BTreeSet::new();
         for logical_port_name in self.port_mapping.logical_port_list() {
@@ -248,7 +249,7 @@ impl SfpStateUpdateTask {
             );
             if rc == SFP_EEPROM_NOT_READY {
                 retry_eeprom_set.insert(logical_port_name.to_string());
-            } else if !warm_start.get(asic_index).copied().unwrap_or(false) {
+            } else if !warm_start.get(&asic_index).copied().unwrap_or(false) {
                 // Publish the ASIC-side media SI + stamp NPU_SI_SETTINGS_NOTIFIED for a
                 // module already present at boot (xcvrd.py:336-338).
                 notify_media_setting_for_logical_port(
@@ -660,21 +661,16 @@ impl SfpStateUpdateTask {
         // re-add) tears down or repopulates the port's TRANSCEIVER_* table set
         // (xcvrd.py:471 `subscribe_port_config_change`). Non-fatal: if the subscription
         // can't be established the presence/identity engine still runs.
-        let mut port_config_sub = match PortConfigChangeSubscriber::new(0) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!("xcvrd-rs: CONFIG_DB PORT config-change watch unavailable: {e}");
-                None
-            }
-        };
+        let mut port_config_subs = PortConfigChangeSubscriber::for_namespaces(&self.namespaces);
+        let config_timeout_ms = SELECT_TIMEOUT_MSECS / port_config_subs.len().max(1) as u64;
 
         while !stop.load(Ordering::Relaxed) {
             // React to a CONFIG_DB PORT add/remove first (xcvrd.py:473), blocking up to
             // SELECT_TIMEOUT_MSECS — this also paces the loop so `stop` is re-checked ~1 s.
-            if let Some(sub) = port_config_sub.as_mut() {
-                self.handle_port_config_change(sub, SELECT_TIMEOUT_MSECS, stop);
+            for sub in &mut port_config_subs {
+                self.handle_port_config_change(sub, config_timeout_ms, stop);
                 if stop.load(Ordering::Relaxed) {
-                    break;
+                    return;
                 }
             }
 
@@ -1294,6 +1290,56 @@ mod tests {
         );
         t.set_fast_timing();
         t
+    }
+
+    #[test]
+    fn boot_and_teardown_use_actual_asic_indices() {
+        let namespaces = vec!["asic1".into(), "asic3".into()];
+        let th = Arc::new(XcvrTableHelper::with_mock_tables(&namespaces));
+        th.get_warm_restart_tbl(3)
+            .hset("syncd", "restore_count", "1");
+        let mut pm = PortMapping::new();
+        for (name, physical, asic) in [("Ethernet0", 0, 1), ("Ethernet8", 1, 3)] {
+            pm.handle_port_change_event(&PortChangeEvent::new(
+                name.into(),
+                Some(physical),
+                asic,
+                PortChangeEventType::Add,
+                "CONFIG_DB".into(),
+                "PORT".into(),
+            ));
+        }
+        let hal = MockHal::with_sfps(vec![
+            MockSfp::present().with_info(cmis_info()),
+            MockSfp::present().with_info(cmis_info()),
+        ]);
+        let mut task = SfpStateUpdateTask::new(namespaces, pm, Arc::new(hal), th.clone());
+        task.post_port_sfp_info_and_dom_thr_to_db_once(&AtomicBool::new(false));
+        assert_eq!(
+            th.get_intf_tbl(1)
+                .hget("Ethernet0", "manufacturer")
+                .as_deref(),
+            Some("xcvr-emu")
+        );
+        assert_eq!(
+            th.get_intf_tbl(3)
+                .hget("Ethernet8", "manufacturer")
+                .as_deref(),
+            Some("xcvr-emu")
+        );
+        assert!(th.get_intf_tbl(1).get("Ethernet8").is_none());
+        th.get_status_sw_tbl(1)
+            .hset("Ethernet0", "cmis_state", "READY");
+        th.get_status_sw_tbl(3)
+            .hset("Ethernet8", "cmis_state", "READY");
+        crate::xcvrd::deinit_transceiver_tables(&th, &task.port_mapping);
+        assert!(th.get_status_sw_tbl(1).get("Ethernet0").is_none());
+        assert_eq!(
+            th.get_status_sw_tbl(3)
+                .hget("Ethernet8", "cmis_state")
+                .as_deref(),
+            Some("READY")
+        );
     }
 
     fn insert_event(phys: usize) -> ChangeEvent {

@@ -729,6 +729,7 @@ pub fn notify_media_setting(
 
     let mut ganged_port = false;
     let mut ganged_member_num = 1usize;
+    let mut notified = false;
 
     let Some(physical_port_list) =
         port_mapping.logical_port_name_to_physical_port_list(logical_port_name)
@@ -792,9 +793,15 @@ pub fn notify_media_setting(
             return;
         }
 
-        xcvr_table_helper
+        if !xcvr_table_helper
             .get_app_port_tbl(asic_index)
-            .set(&port_name, &fvs_list);
+            .set_checked(&port_name, &fvs_list)
+        {
+            return;
+        }
+        notified = true;
+    }
+    if notified {
         xcvr_table_helper.get_state_port_tbl(asic_index).set(
             logical_port_name,
             &[(
@@ -1136,6 +1143,17 @@ mod tests {
             },
         };
         let pm = port_mapping_with(1);
+        let app = helper
+            .get_app_port_tbl(0)
+            .as_any()
+            .downcast_ref::<crate::mock::MockDbTable>()
+            .unwrap();
+        app.set_fail_writes(true);
+        notify_media_setting(&g, "Ethernet0", &td, &helper, &pm, &resolver);
+        assert!(app.get("Ethernet0").is_none());
+        assert!(helper.is_npu_si_settings_update_required("Ethernet0", &pm));
+
+        app.set_fail_writes(false);
         notify_media_setting(&g, "Ethernet0", &td, &helper, &pm, &resolver);
 
         let row = helper.get_app_port_tbl(0).get("Ethernet0").unwrap();

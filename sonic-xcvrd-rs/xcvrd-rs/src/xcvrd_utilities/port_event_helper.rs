@@ -93,6 +93,17 @@ impl PortMapping {
         PortMapping::default()
     }
 
+    fn extend(&mut self, other: Self) {
+        self.logical_port_list.extend(other.logical_port_list);
+        self.logical_to_physical.extend(other.logical_to_physical);
+        self.logical_to_asic.extend(other.logical_to_asic);
+        for (physical, logical) in other.physical_to_logical {
+            let ports = self.physical_to_logical.entry(physical).or_default();
+            ports.extend(logical);
+            ports.sort_by(|a, b| natural_cmp(&a.to_lowercase(), &b.to_lowercase()));
+        }
+    }
+
     /// `handle_port_change_event` — apply a `PORT_ADD`/`PORT_REMOVE` to the map
     /// (`SET`/`DEL` are handled by the observer, which emits add/remove).
     pub fn handle_port_change_event(&mut self, event: &PortChangeEvent) {
@@ -229,10 +240,27 @@ pub fn build_port_mapping(
 /// names are dense (`Ethernet0,Ethernet1,…`) rather than one-per-cage.
 ///
 /// `num_sfps` is retained only for the legacy fallback below.
-pub fn get_port_mapping(config: &DbConnector, num_sfps: usize) -> Result<PortMapping> {
+pub fn get_port_mapping(namespaces: &[String], num_sfps: usize) -> Result<PortMapping> {
+    let mut mapping = PortMapping::new();
+    for namespace in namespaces {
+        let config = crate::env::open_config_db_in_namespace(namespace)?;
+        mapping.extend(get_asic_port_mapping(
+            &config,
+            num_sfps,
+            crate::env::namespace_asic_id(namespace)?,
+        )?);
+    }
+    Ok(mapping)
+}
+
+fn get_asic_port_mapping(
+    config: &DbConnector,
+    num_sfps: usize,
+    asic_id: usize,
+) -> Result<PortMapping> {
     match read_port_config_rows(config) {
         Ok(rows) if !rows.is_empty() => {
-            let mapping = build_port_mapping(rows, 0);
+            let mapping = build_port_mapping(rows, asic_id);
             if !mapping.logical_port_list().is_empty() {
                 return Ok(mapping);
             }
@@ -251,7 +279,7 @@ pub fn get_port_mapping(config: &DbConnector, num_sfps: usize) -> Result<PortMap
     }
     Ok(build_port_mapping(
         synthesised_port_rows(config, num_sfps),
-        0,
+        asic_id,
     ))
 }
 
@@ -553,8 +581,8 @@ fn pops_to_updates(pops: Vec<KeyOpFieldValues>) -> Vec<PortUpdate> {
 /// its notifications into [`PortChangeEvent`]s. The DOM task watches
 /// `{APPL_DB: PORT_TABLE, FILTER: ['flap_count']}` so a link-change flap triggers an
 /// off-cadence diagnostic-flag re-read ([`crate::dom::dom_mgr`]). The reference watches a
-/// *list* of tables via a `swsscommon.Select`; the DOM watch needs exactly one table, so a lone
-/// `SubscriberStateTable` (whose `read_data` self-selects) suffices.
+/// *list* of tables via a `swsscommon.Select`; each instance here watches one table
+/// in one namespace.
 pub struct PortChangeObserver {
     sub: SubscriberStateTable,
     db_name: String,
@@ -576,15 +604,15 @@ pub struct PortChangeObserver {
 impl PortChangeObserver {
     /// Subscribe to `APPL_DB` `PORT_TABLE` filtered on `flap_count` — the DOM
     /// link-change watch (`DomInfoUpdateTask.DOM_PORT_CHG_OBSERVER_TBL_MAP`).
-    pub fn for_appl_port_table() -> Result<Self> {
-        let db = crate::env::open_appl_db()
+    pub fn for_appl_port_table(namespace: &str) -> Result<Self> {
+        let db = crate::env::open_appl_db_in_namespace(namespace)
             .map_err(|e| XcvrdError::Db(format!("open APPL_DB for PORT_TABLE watch: {e}")))?;
         Self::subscribe(
             db,
             "APPL_DB",
             "PORT_TABLE",
             Some(vec!["flap_count".to_string()]),
-            0,
+            crate::env::namespace_asic_id(namespace)?,
         )
     }
 
@@ -724,9 +752,8 @@ impl PortChangeObserver {
 ///
 /// The CMIS manager needs `CONFIG_DB PORT` (`index`/`speed`/`lanes`/`subport`/
 /// `admin_status` → the datapath bring-up trigger), `STATE_DB TRANSCEIVER_INFO` (xcvr
-/// insert/remove), and `STATE_DB PORT_TABLE` filtered on `host_tx_ready`. The DOM task keeps
-/// its single-table [`PortChangeObserver::for_appl_port_table`] (APPL_DB `flap_count`) — this
-/// type does not affect it.
+/// insert/remove), and `STATE_DB PORT_TABLE` filtered on `host_tx_ready`. The DOM task
+/// watches APPL_DB `flap_count` across the same front-end namespaces.
 pub struct MultiPortChangeObserver {
     observers: Vec<PortChangeObserver>,
 }
@@ -742,29 +769,20 @@ fn multi_observer_slice_ms(timeout_ms: u64, n_tables: usize) -> u64 {
 }
 
 impl MultiPortChangeObserver {
+    /// Subscribe to the DOM link-change table in every front-end namespace.
+    pub fn for_appl_port_table(namespaces: &[String]) -> Result<Self> {
+        let observers = namespaces
+            .iter()
+            .map(|namespace| PortChangeObserver::for_appl_port_table(namespace))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { observers })
+    }
+
     /// Subscribe to the reference `DEFAULT_PORT_TBL_MAP` for the CMIS manager:
     /// `[{CONFIG_DB: PORT}, {STATE_DB: TRANSCEIVER_INFO}, {STATE_DB: PORT_TABLE,
     /// FILTER:[host_tx_ready]}]`.
-    pub fn for_cmis() -> Result<Self> {
-        let cfg_db = crate::env::open_config_db()
-            .map_err(|e| XcvrdError::Db(format!("open CONFIG_DB for PORT watch: {e}")))?;
-        let state_db_info = crate::env::open_state_db().map_err(|e| {
-            XcvrdError::Db(format!("open STATE_DB for TRANSCEIVER_INFO watch: {e}"))
-        })?;
-        let state_db_port = crate::env::open_state_db()
-            .map_err(|e| XcvrdError::Db(format!("open STATE_DB for PORT_TABLE watch: {e}")))?;
-        let observers = vec![
-            PortChangeObserver::subscribe(cfg_db, "CONFIG_DB", "PORT", None, 0)?,
-            PortChangeObserver::subscribe(state_db_info, "STATE_DB", "TRANSCEIVER_INFO", None, 0)?,
-            PortChangeObserver::subscribe(
-                state_db_port,
-                "STATE_DB",
-                "PORT_TABLE",
-                Some(vec!["host_tx_ready".to_string()]),
-                0,
-            )?,
-        ];
-        Ok(Self { observers })
+    pub fn for_cmis(namespaces: &[String]) -> Result<Self> {
+        Self::for_manager(namespaces, None)
     }
 
     /// Subscribe to the reference SFF `PORT_TBL_MAP` (`sff_mgr.py:73`): `[{CONFIG_DB:
@@ -776,31 +794,36 @@ impl MultiPortChangeObserver {
     /// reference comment — the `PORT_TABLE` filter keeps STATE_DB's stale `admin_status`
     /// out so only CONFIG_DB drives admin_status). The `op` core key is always retained,
     /// so a filtered `TRANSCEIVER_INFO` DEL still surfaces (never deduped against its SET).
-    pub fn for_sff() -> Result<Self> {
-        let cfg_db = crate::env::open_config_db()
-            .map_err(|e| XcvrdError::Db(format!("open CONFIG_DB for PORT watch: {e}")))?;
-        let state_db_info = crate::env::open_state_db().map_err(|e| {
-            XcvrdError::Db(format!("open STATE_DB for TRANSCEIVER_INFO watch: {e}"))
-        })?;
-        let state_db_port = crate::env::open_state_db()
-            .map_err(|e| XcvrdError::Db(format!("open STATE_DB for PORT_TABLE watch: {e}")))?;
-        let observers = vec![
-            PortChangeObserver::subscribe(cfg_db, "CONFIG_DB", "PORT", None, 0)?,
-            PortChangeObserver::subscribe(
-                state_db_info,
+    pub fn for_sff(namespaces: &[String]) -> Result<Self> {
+        Self::for_manager(namespaces, Some(vec!["type".to_string()]))
+    }
+
+    fn for_manager(namespaces: &[String], info_filter: Option<Vec<String>>) -> Result<Self> {
+        let mut observers = Vec::new();
+        for namespace in namespaces {
+            let asic_id = crate::env::namespace_asic_id(namespace)?;
+            observers.push(PortChangeObserver::subscribe(
+                crate::env::open_config_db_in_namespace(namespace)?,
+                "CONFIG_DB",
+                "PORT",
+                None,
+                asic_id,
+            )?);
+            observers.push(PortChangeObserver::subscribe(
+                crate::env::open_state_db_in_namespace(namespace)?,
                 "STATE_DB",
                 "TRANSCEIVER_INFO",
-                Some(vec!["type".to_string()]),
-                0,
-            )?,
-            PortChangeObserver::subscribe(
-                state_db_port,
+                info_filter.clone(),
+                asic_id,
+            )?);
+            observers.push(PortChangeObserver::subscribe(
+                crate::env::open_state_db_in_namespace(namespace)?,
                 "STATE_DB",
                 "PORT_TABLE",
                 Some(vec!["host_tx_ready".to_string()]),
-                0,
-            )?,
-        ];
+                asic_id,
+            )?);
+        }
         Ok(Self { observers })
     }
 
@@ -845,7 +868,11 @@ impl MultiPortChangeObserver {
     /// `Select`, which correctly reports `Timeout` when there is genuinely no new event.
     pub fn handle_port_update_event(&mut self, timeout_ms: u64) -> Result<Vec<PortChangeEvent>> {
         let ready = self.drain_all();
-        if !ready.is_empty() {
+        if !ready.is_empty() || timeout_ms == 0 {
+            return Ok(ready);
+        }
+        if self.observers.is_empty() {
+            std::thread::sleep(Duration::from_millis(timeout_ms));
             return Ok(ready);
         }
         // Slice the idle wait across the tables so the total block ≈ `timeout_ms` (no spin)
@@ -1006,9 +1033,23 @@ pub struct PortConfigChangeSubscriber {
 }
 
 impl PortConfigChangeSubscriber {
-    /// Subscribe to CONFIG_DB `PORT` on the given asic id (0 on this single-ASIC testbed).
-    pub fn new(asic_id: usize) -> Result<Self> {
-        let db = crate::env::open_config_db()
+    /// Best-effort subscriptions for all front-end namespaces.
+    pub fn for_namespaces(namespaces: &[String]) -> Vec<Self> {
+        namespaces.iter().filter_map(|namespace| {
+            match Self::new(namespace) {
+                Ok(sub) => Some(sub),
+                Err(e) => {
+                    eprintln!("xcvrd-rs: CONFIG_DB PORT config-change watch unavailable in {namespace:?}: {e}");
+                    None
+                }
+            }
+        }).collect()
+    }
+
+    /// Subscribe to CONFIG_DB `PORT` in the given namespace.
+    pub fn new(namespace: &str) -> Result<Self> {
+        let asic_id = crate::env::namespace_asic_id(namespace)?;
+        let db = crate::env::open_config_db_in_namespace(namespace)
             .map_err(|e| XcvrdError::Db(format!("open CONFIG_DB for PORT config watch: {e}")))?;
         let sub = SubscriberStateTable::new(db, "PORT", None, None)
             .map_err(|e| XcvrdError::Db(format!("subscribe CONFIG_DB.PORT: {e}")))?;
@@ -1154,8 +1195,8 @@ impl PortConfigDoneSubscriber {
     /// Subscribe to APPL_DB `PORT_TABLE` for the boot readiness gate (the reference
     /// `daemon_base.db_connect("APPL_DB")` + `SubscriberStateTable(_, APP_PORT_TABLE_NAME)`,
     /// `xcvrd.py:918-921`).
-    pub fn for_appl_port_table(timeout_ms: u64) -> Result<Self> {
-        let db = crate::env::open_appl_db()
+    pub fn for_appl_port_table(namespace: &str, timeout_ms: u64) -> Result<Self> {
+        let db = crate::env::open_appl_db_in_namespace(namespace)
             .map_err(|e| XcvrdError::Db(format!("open APPL_DB for PortConfigDone gate: {e}")))?;
         Self::subscribe(db, "PORT_TABLE", timeout_ms)
     }
@@ -1235,17 +1276,18 @@ pub fn port_config_gate_max_polls() -> usize {
 /// [`crate::daemon::serve`], and [`crate::cmis::cmis_manager_task::CmisManagerTask::wait_for_port_config_done`]).
 /// Returns the gate outcome for logging/gating.
 pub fn run_port_config_done_gate(namespace: &str, stop: &dyn Fn() -> bool) -> PortConfigGate {
-    let mut notifier = match PortConfigDoneSubscriber::for_appl_port_table(SELECT_TIMEOUT_MSECS) {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!(
-                "xcvrd-rs: PortConfigDone gate: could not subscribe APPL_DB PORT_TABLE for \
+    let mut notifier =
+        match PortConfigDoneSubscriber::for_appl_port_table(namespace, SELECT_TIMEOUT_MSECS) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!(
+                    "xcvrd-rs: PortConfigDone gate: could not subscribe APPL_DB PORT_TABLE for \
                  namespace {namespace:?} ({e}); proceeding (CONFIG_DB is pre-populated on the \
                  pmon testbed)"
-            );
-            return PortConfigGate::TimedOut;
-        }
-    };
+                );
+                return PortConfigGate::TimedOut;
+            }
+        };
     let (outcome, polls) =
         wait_for_port_config_done_gate(&mut notifier, stop, port_config_gate_max_polls());
     match outcome {
@@ -2088,6 +2130,15 @@ mod tests {
     // the state machine (test_cmis_state_progression) and starving the concurrent DOM
     // flag publish (test_dom_flag_groups_temp_and_vcc). This guards the slice contract:
     // total ≈ timeout, div-by-zero-safe, and floored at 1 ms so every table still blocks.
+    #[test]
+    fn test_empty_namespace_observer_waits_instead_of_spinning() {
+        let mut observer = MultiPortChangeObserver::for_cmis(&[]).unwrap();
+        assert!(observer.handle_port_update_event(0).unwrap().is_empty());
+        let start = std::time::Instant::now();
+        assert!(observer.handle_port_update_event(10).unwrap().is_empty());
+        assert!(start.elapsed() >= Duration::from_millis(10));
+    }
+
     #[test]
     fn test_multi_observer_slice_paces_not_spins() {
         // CMIS default: 1000 ms split across the 3 DEFAULT_PORT_TBL_MAP tables ≈ 333 ms

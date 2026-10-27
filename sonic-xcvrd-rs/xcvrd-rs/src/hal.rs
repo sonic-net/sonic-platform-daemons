@@ -10,10 +10,6 @@
 //! No CMIS/SFF decode lives here: complex results are `serde_json::Value` straight
 //! from the bridge; scalars are typed.
 
-use std::sync::Arc;
-
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use serde_json::Value;
 
 use crate::error::{Result, XcvrdError};
@@ -84,156 +80,9 @@ pub trait SfpHandle {
     fn write_eeprom(&self, offset: usize, data: &[u8]) -> Result<bool>;
 }
 
-/// A daemon-owned `sonic_platform` chassis used ONLY for the DOM-threshold read.
-///
-/// The thick `platform-bridge` marshals every complex getter through
-/// `json.dumps(obj, default=str)` + `serde_json::from_str`. A DEFAULT (never-enriched)
-/// transceiver decodes its zero-power page-02h thresholds to Python `float('-inf')`,
-/// which `json.dumps` emits as the bare token `-Infinity` — NOT valid strict JSON, so
-/// `serde_json` rejects it and `get_transceiver_threshold_info()` fails outright.
-/// `TRANSCEIVER_DOM_THRESHOLD` is then never published for such a module (e.g. the
-/// spare admin-up logical port the port-lifecycle e2e exercises, which is never
-/// threshold-enriched), and — because recovery treats a threshold-missing port as
-/// un-baselined — it re-posts DOM/VDM thresholds for every such port each interval,
-/// flooding the PyO3 bridge and starving the DOM flag poll.
-///
-/// The bridge is a fixed dependency, so the daemon re-reads the thresholds itself via
-/// PyO3 and sanitizes the non-finite floats to their Python `str()` form
-/// (`"-inf"`/`"inf"`/`"nan"`) — exactly what the reference daemon posts — before
-/// parsing. Used for the threshold read only; every other getter and the change-event
-/// poll stay on the bridge unchanged, so this cannot regress those paths.
-struct ThrChassis {
-    chassis: Py<PyAny>,
-}
-
-impl ThrChassis {
-    fn new() -> Result<Self> {
-        Python::with_gil(|py| {
-            let module = py
-                .import_bound("sonic_platform.platform")
-                .map_err(|e| XcvrdError::Bridge(format!("import sonic_platform.platform: {e}")))?;
-            let platform = module
-                .getattr("Platform")
-                .and_then(|p| p.call0())
-                .map_err(|e| XcvrdError::Bridge(format!("Platform(): {e}")))?;
-            let chassis = platform
-                .call_method0("get_chassis")
-                .map_err(|e| XcvrdError::Bridge(format!("get_chassis(): {e}")))?;
-            Ok(ThrChassis {
-                chassis: chassis.unbind(),
-            })
-        })
-    }
-
-    /// Read the `TRANSCEIVER_DOM_THRESHOLD` source dict for physical `index`,
-    /// sanitizing non-finite floats so the result is strict JSON. `Value::Null` when
-    /// the slot is absent/None (the poster then no-ops, exactly as for an absent
-    /// module or an empty dict).
-    fn read_threshold_json(&self, index: usize) -> Result<Value> {
-        Python::with_gil(|py| {
-            let sfp = self
-                .chassis
-                .bind(py)
-                .call_method1("get_sfp", (index,))
-                .map_err(|e| XcvrdError::Bridge(format!("get_sfp({index}): {e}")))?;
-            if sfp.is_none() {
-                return Ok(Value::Null);
-            }
-            let raw = sfp
-                .call_method0("get_transceiver_threshold_info")
-                .map_err(|e| XcvrdError::Bridge(format!("get_transceiver_threshold_info: {e}")))?;
-            if raw.is_none() {
-                return Ok(Value::Null);
-            }
-            // Same shape as the bridge's `py_to_json` (json.dumps default=str), but the
-            // resulting string is sanitized before parsing so the `-Infinity`/`NaN`
-            // tokens a default module produces don't defeat `serde_json`.
-            let json = py
-                .import_bound("json")
-                .map_err(|e| XcvrdError::Bridge(format!("import json: {e}")))?;
-            let str_fn = py
-                .import_bound("builtins")
-                .and_then(|b| b.getattr("str"))
-                .map_err(|e| XcvrdError::Bridge(format!("builtins.str: {e}")))?;
-            let kwargs = PyDict::new_bound(py);
-            kwargs
-                .set_item("default", str_fn)
-                .map_err(|e| XcvrdError::Bridge(format!("set default kwarg: {e}")))?;
-            let dumped = json
-                .call_method("dumps", (raw,), Some(&kwargs))
-                .map_err(|e| XcvrdError::Bridge(format!("json.dumps: {e}")))?;
-            let s: String = dumped
-                .extract()
-                .map_err(|e| XcvrdError::Bridge(format!("extract dumped json: {e}")))?;
-            serde_json::from_str(&sanitize_nonfinite_json(&s))
-                .map_err(|e| XcvrdError::Bridge(format!("parse threshold json: {e}")))
-        })
-    }
-}
-
-/// Rewrite the non-finite JSON number literals Python's `json.dumps` emits
-/// (`-Infinity`/`Infinity`/`NaN`, all invalid in strict JSON) to their Python `str()`
-/// string form (`"-inf"`/`"inf"`/`"nan"`), leaving everything else — including any
-/// text that happens to contain those words INSIDE a JSON string — untouched. This
-/// lets `serde_json` parse a default transceiver's zero/`-inf` DOM thresholds, and the
-/// resulting strings render through `value_to_py_str` to the exact field text the
-/// Python daemon posts (`str(float('-inf')) == "-inf"`).
-fn sanitize_nonfinite_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_str = false;
-    let mut i = 0;
-    while i < s.len() {
-        let rest = &s[i..];
-        let ch = rest.chars().next().unwrap();
-        let ch_len = ch.len_utf8();
-        if in_str {
-            out.push(ch);
-            if ch == '\\' {
-                // Copy the escaped char verbatim so an escaped quote can't end the string.
-                if let Some(next) = rest[ch_len..].chars().next() {
-                    out.push(next);
-                    i += ch_len + next.len_utf8();
-                    continue;
-                }
-            } else if ch == '"' {
-                in_str = false;
-            }
-            i += ch_len;
-            continue;
-        }
-        if ch == '"' {
-            in_str = true;
-            out.push('"');
-            i += ch_len;
-            continue;
-        }
-        // Order matters: `-Infinity` must be tried before `Infinity`.
-        if rest.starts_with("-Infinity") {
-            out.push_str("\"-inf\"");
-            i += "-Infinity".len();
-            continue;
-        }
-        if rest.starts_with("Infinity") {
-            out.push_str("\"inf\"");
-            i += "Infinity".len();
-            continue;
-        }
-        if rest.starts_with("NaN") {
-            out.push_str("\"nan\"");
-            i += "NaN".len();
-            continue;
-        }
-        out.push(ch);
-        i += ch_len;
-    }
-    out
-}
-
-/// Real HAL: wraps `platform_bridge::Platform`, plus a daemon-owned side chassis for
-/// the inf-safe DOM-threshold read (see [`ThrChassis`]).
+/// Real HAL: all reads and change events share one platform chassis and its SFP caches.
 pub struct BridgeHal {
     platform: platform_bridge::Platform,
-    thr: Option<Arc<ThrChassis>>,
 }
 
 impl BridgeHal {
@@ -242,22 +91,9 @@ impl BridgeHal {
         Ok(Self::from_platform(platform_bridge::Platform::new()?))
     }
 
-    /// Adopt an already-constructed bridge `Platform` and build the side chassis used
-    /// for the inf-safe DOM-threshold read. If that side chassis can't be built, the
-    /// daemon degrades to the bridge's (inf-fragile) threshold read — never worse than
-    /// before — and logs once.
+    /// Adopt an already-constructed bridge `Platform`.
     pub fn from_platform(platform: platform_bridge::Platform) -> Self {
-        let thr = match ThrChassis::new() {
-            Ok(t) => Some(Arc::new(t)),
-            Err(e) => {
-                eprintln!(
-                    "xcvrd-rs: inf-safe DOM-threshold chassis unavailable ({e}); \
-                     DOM_THRESHOLD for default zero/-inf modules may not publish"
-                );
-                None
-            }
-        };
-        BridgeHal { platform, thr }
+        BridgeHal { platform }
     }
 }
 
@@ -269,8 +105,6 @@ impl Hal for BridgeHal {
     fn sfp(&self, index: usize) -> Result<Box<dyn SfpHandle>> {
         Ok(Box::new(BridgeSfp {
             sfp: self.platform.sfp(index)?,
-            thr: self.thr.clone(),
-            index,
         }))
     }
 
@@ -279,14 +113,9 @@ impl Hal for BridgeHal {
     }
 }
 
-/// Real SFP handle: wraps `platform_bridge::Sfp` (thin delegation). Holds the
-/// daemon-owned threshold chassis + physical index so the DOM-threshold read can go
-/// through the inf-safe path (see [`ThrChassis`]); every other getter delegates to
-/// the bridge unchanged.
+/// Real SFP handle: thin delegation to the shared platform's SFP.
 pub struct BridgeSfp {
     sfp: platform_bridge::Sfp,
-    thr: Option<Arc<ThrChassis>>,
-    index: usize,
 }
 
 impl SfpHandle for BridgeSfp {
@@ -315,23 +144,6 @@ impl SfpHandle for BridgeSfp {
         Ok(self.sfp.get_transceiver_status()?)
     }
     fn get_transceiver_threshold_info(&self) -> Result<Value> {
-        // Read via the daemon-owned chassis with non-finite sanitization so a default
-        // module's `-inf` zero-power thresholds still publish TRANSCEIVER_DOM_THRESHOLD
-        // (the thick bridge's serde_json marshal rejects the `-Infinity` token and
-        // fails the whole read). Fall back to the bridge on any error, so this is never
-        // worse than the bridge alone.
-        if let Some(thr) = &self.thr {
-            match thr.read_threshold_json(self.index) {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    eprintln!(
-                        "xcvrd-rs: inf-safe DOM-threshold read (index {}) failed ({e}); \
-                         falling back to bridge",
-                        self.index
-                    );
-                }
-            }
-        }
         Ok(self.sfp.get_transceiver_threshold_info()?)
     }
     fn get_lpmode(&self) -> Result<bool> {
@@ -359,81 +171,102 @@ impl SfpHandle for BridgeSfp {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_nonfinite_json;
+    use super::*;
     use crate::dom::utilities::db::value_to_py_str;
-    use serde_json::Value;
-
-    fn parse(s: &str) -> Value {
-        serde_json::from_str(&sanitize_nonfinite_json(s))
-            .unwrap_or_else(|e| panic!("sanitized json must parse: {e}\ninput: {s}"))
-    }
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+    use serde_json::json;
 
     #[test]
-    fn bare_nonfinite_tokens_become_quoted_python_str_form() {
-        // Exactly what Python `json.dumps({'temp': float('-inf'), ...}, default=str)`
-        // emits for a default module's zero-power thresholds.
-        let raw =
-            r#"{"temphighalarm": -Infinity, "vcchighalarm": Infinity, "txbiashighalarm": NaN}"#;
-        let v = parse(raw);
-        assert_eq!(v["temphighalarm"], Value::String("-inf".into()));
-        assert_eq!(v["vcchighalarm"], Value::String("inf".into()));
-        assert_eq!(v["txbiashighalarm"], Value::String("nan".into()));
-    }
+    fn thresholds_follow_the_shared_sfp_decoder_after_module_replacement() {
+        Python::with_gil(|py| {
+            let module = PyModule::from_code_bound(
+                py,
+                r#"
+class Decoder:
+    def __init__(self, generation):
+        self.generation = generation
+    def thresholds(self):
+        return {"temphighalarm": self.generation, "rxpowerlowalarm": float("-inf")}
 
-    #[test]
-    fn quoted_field_text_is_untouched() {
-        // The words must only be rewritten as bare number tokens, never inside strings.
-        let raw = r#"{"note": "value is -Infinity or NaN", "x": -Infinity}"#;
-        let v = parse(raw);
-        assert_eq!(v["note"], Value::String("value is -Infinity or NaN".into()));
-        assert_eq!(v["x"], Value::String("-inf".into()));
-    }
+class Sfp:
+    def __init__(self):
+        self.generation = 1
+        self._xcvr_api = None
+    def get_xcvr_api(self):
+        if self._xcvr_api is None:
+            self._xcvr_api = Decoder(self.generation)
+        return self._xcvr_api
+    def get_transceiver_threshold_info(self):
+        return self.get_xcvr_api().thresholds()
+    def get_transceiver_info(self):
+        return {"generation": self.get_xcvr_api().generation}
 
-    #[test]
-    fn escaped_quote_inside_string_does_not_end_it_early() {
-        let raw = r#"{"note": "a \"quoted -Infinity\" word", "x": Infinity}"#;
-        let v = parse(raw);
-        assert_eq!(
-            v["note"],
-            Value::String(r#"a "quoted -Infinity" word"#.into())
-        );
-        assert_eq!(v["x"], Value::String("inf".into()));
-    }
+class Chassis:
+    def __init__(self):
+        self.sfp = Sfp()
+    def get_sfp(self, index):
+        return self.sfp
+    def get_change_event(self, timeout):
+        self.sfp.generation += 1
+        self.sfp._xcvr_api = None
+        return True, {"sfp": {"0": "0"}}
 
-    #[test]
-    fn finite_and_ordinary_json_is_byte_identical() {
-        // Enriched / test-written thresholds are finite and must be preserved exactly.
-        let raw = r#"{"temphighalarm": 75.0, "temphighwarning": 70, "vendor": "ACME", "ok": true, "n": null}"#;
-        assert_eq!(sanitize_nonfinite_json(raw), raw);
-        let v = parse(raw);
-        assert_eq!(v["temphighalarm"], serde_json::json!(75.0));
-        assert_eq!(v["temphighwarning"], serde_json::json!(70));
-        assert_eq!(v["vendor"], Value::String("ACME".into()));
-    }
-
-    #[test]
-    fn negative_finite_numbers_are_not_confused_with_neg_infinity() {
-        let raw = r#"{"a": -40.0, "b": -Infinity}"#;
-        let v = parse(raw);
-        assert_eq!(v["a"], serde_json::json!(-40.0));
-        assert_eq!(v["b"], Value::String("-inf".into()));
-    }
-
-    #[test]
-    fn sanitized_nonfinite_renders_to_python_str_field_text() {
-        // The posted STATE_DB field text must match the Python daemon's `str(value)`.
-        let raw = r#"{"temphighalarm": -Infinity, "vcchighalarm": Infinity, "txpower": NaN}"#;
-        let v = parse(raw);
-        let obj = v.as_object().unwrap();
-        assert_eq!(value_to_py_str(&obj["temphighalarm"]), "-inf");
-        assert_eq!(value_to_py_str(&obj["vcchighalarm"]), "inf");
-        assert_eq!(value_to_py_str(&obj["txpower"]), "nan");
-    }
-
-    #[test]
-    fn empty_and_no_token_inputs_are_stable() {
-        assert_eq!(sanitize_nonfinite_json(""), "");
-        assert_eq!(sanitize_nonfinite_json("{}"), "{}");
-        assert_eq!(sanitize_nonfinite_json(r#"{"a": 1}"#), r#"{"a": 1}"#);
+class Platform:
+    instances = 0
+    def __init__(self):
+        Platform.instances += 1
+        self.chassis = Chassis()
+    def get_chassis(self):
+        return self.chassis
+"#,
+                "hal_test.py",
+                "sonic_platform.platform",
+            )
+            .unwrap();
+            let modules = py.import_bound("sys").unwrap().getattr("modules").unwrap();
+            let overrides = PyDict::new_bound(py);
+            overrides.set_item("sonic_platform", &module).unwrap();
+            overrides
+                .set_item("sonic_platform.platform", &module)
+                .unwrap();
+            let patch = py
+                .import_bound("unittest.mock")
+                .unwrap()
+                .getattr("patch")
+                .unwrap()
+                .call_method1("dict", (modules, overrides))
+                .unwrap();
+            patch.call_method0("__enter__").unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let hal = BridgeHal::new().unwrap();
+                let sfp = hal.sfp(0).unwrap();
+                let thresholds = sfp.get_transceiver_threshold_info().unwrap();
+                assert_eq!(thresholds["temphighalarm"], json!(1));
+                assert_eq!(value_to_py_str(&thresholds["rxpowerlowalarm"]), "-inf");
+                hal.get_change_event(1).unwrap();
+                assert_eq!(sfp.get_transceiver_info().unwrap()["generation"], json!(2));
+                assert_eq!(
+                    sfp.get_transceiver_threshold_info().unwrap()["temphighalarm"],
+                    json!(2)
+                );
+                assert_eq!(
+                    module
+                        .getattr("Platform")
+                        .unwrap()
+                        .getattr("instances")
+                        .unwrap()
+                        .extract::<usize>()
+                        .unwrap(),
+                    1
+                );
+            }));
+            patch
+                .call_method1("__exit__", (py.None(), py.None(), py.None()))
+                .unwrap();
+            if let Err(payload) = result {
+                std::panic::resume_unwind(payload);
+            }
+        });
     }
 }
