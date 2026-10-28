@@ -450,7 +450,8 @@ class SffManagerTask(threading.Thread):
                 # event, such as CONFIG_DB change other than admin_status field.
                 if ((not xcvr_inserted) and
                     (not host_tx_ready_changed) and
-                    (not admin_status_changed)):
+                    (not admin_status_changed) and
+                    (not data.get('notify_si_settings'))):
                     continue
                 self.log_notice(("{}: xcvr=present(inserted={}), "
                                  "host_tx_ready={}(changed={}), "
@@ -481,7 +482,9 @@ class SffManagerTask(threading.Thread):
                             media_settings_parser.notify_media_setting(
                                 lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
                         else:
-                            self.log_error("{}: failed to read transceiver info for SI settings notify".format(lport))
+                            # Transient read failure: keep notify pending so a later iteration retries.
+                            self.port_dict[lport]['notify_si_settings'] = True
+                            self.log_error("{}: failed to read transceiver info for SI settings notify, will retry".format(lport))
 
                 try:
                     # Skip if it's a copper cable
