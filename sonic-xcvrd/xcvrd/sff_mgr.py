@@ -467,6 +467,14 @@ class SffManagerTask(threading.Thread):
                     # retained value; a replayed TRANSCEIVER_INFO must not re-notify.
                     if asic_id is not None and self.xcvr_table_helper.is_si_settings_synced(lport, asic_id):
                         self.log_notice("{}: SI settings already synced (retained DB), skip re-notify".format(lport))
+                    elif asic_id is not None and \
+                            self.xcvr_table_helper.get_outstanding_si_notification_number(lport, asic_id) is not None:
+                        # Warm reboot can drop STATE_DB si_settings_ack while APPL_DB still holds our
+                        # last SI_SETTINGS_NOTIFIED:<N>. Re-publishing would bump to N+1 and, with the
+                        # MAC already up, make orchagent take the bring-down path (a real flap). Adopt
+                        # the outstanding notification and wait for OA's warm-restore ack instead.
+                        # Mirrors the CMIS adopt-outstanding path (cmis_manager_task.py).
+                        self.log_notice("{}: outstanding SI notification un-acked (warm restore), skip re-notify".format(lport))
                     else:
                         xcvr_info = sfp.get_transceiver_info()
                         if xcvr_info is not None:
