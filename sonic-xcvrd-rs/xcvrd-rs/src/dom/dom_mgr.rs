@@ -641,8 +641,8 @@ impl DomInfoUpdateTask {
     /// then unfreeze (RAII guard); (b) capture the *basic* real values, merge
     /// `{**basic, **statistic}` (statistic wins on conflict) and post
     /// `TRANSCEIVER_VDM_REAL_VALUE`; (c) post the COR `TRANSCEIVER_VDM_*_FLAG` tables
-    /// **last** so the latched snapshot is the freshest. A module that does not support VDM
-    /// posts nothing.
+    /// **last** so the latched snapshot is the freshest. Legacy PM-only APIs are polled
+    /// independently when the VDM capability probe is absent.
     ///
     /// Low-power gate: the freeze (and thus the statistic capture + `TRANSCEIVER_PM`
     /// refresh) is gated on `not is_transceiver_lpmode_on` (dom_mgr.py:386-387). An
@@ -663,6 +663,17 @@ impl DomInfoUpdateTask {
             return;
         };
         if !self.vdm_utils.is_transceiver_vdm_supported(&*sfp) {
+            // Older platforms publish PM independently of the newer VDM capability API.
+            if matches!(sfp.has_method("is_transceiver_vdm_supported"), Ok(false))
+                && matches!(sfp.has_method("get_transceiver_pm"), Ok(true))
+            {
+                self.post_port_pm_info_to_db(
+                    stop,
+                    logical_port_name,
+                    self.table_helper.get_pm_tbl(asic_index),
+                    None,
+                );
+            }
             return;
         }
 
@@ -3379,6 +3390,47 @@ mod tests {
 
         // Statistic observables unsupported → no freeze → TRANSCEIVER_PM stays empty.
         assert_eq!(task.table_helper.get_pm_tbl(0).get_size(), 0);
+    }
+
+    #[test]
+    fn legacy_pm_is_polled_without_vdm_capability_hooks() {
+        for lpmode in [false, true] {
+            let mut sfp =
+                dom_module().with_json("get_transceiver_pm", json!({"prefec_ber_avg": "0.001"}));
+            sfp.lpmode = lpmode;
+            let calls = sfp.call_log.clone();
+            let task = task_with(&[("Ethernet0", 0)], vec![sfp], true);
+            task.poll_once(&AtomicBool::new(false));
+            assert_eq!(
+                task.table_helper
+                    .get_pm_tbl(0)
+                    .hget("Ethernet0", "prefec_ber_avg"),
+                Some("0.001".to_string())
+            );
+            assert!(!calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|method| method == "freeze_vdm_stats" || method == "unfreeze_vdm_stats"));
+        }
+    }
+
+    #[test]
+    fn existing_vdm_probe_is_not_bypassed_for_pm() {
+        for supported in [json!(false), Value::Null] {
+            let sfp = dom_module()
+                .with_json("is_transceiver_vdm_supported", supported)
+                .with_json("get_transceiver_pm", json!({"prefec_ber_avg": "0.001"}));
+            let calls = sfp.call_log.clone();
+            let task = task_with(&[("Ethernet0", 0)], vec![sfp], true);
+            task.poll_once(&AtomicBool::new(false));
+            assert_eq!(task.table_helper.get_pm_tbl(0).get_size(), 0);
+            assert!(!calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|method| method == "get_transceiver_pm"));
+        }
     }
 
     // A VDM-supported module with statistic observables → poll_once freezes, captures the

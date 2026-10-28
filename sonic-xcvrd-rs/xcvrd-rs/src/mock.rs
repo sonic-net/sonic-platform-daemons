@@ -349,6 +349,9 @@ impl SfpHandle for MockSfp {
     fn reset(&self) -> Result<bool> {
         Ok(true)
     }
+    fn has_method(&self, method: &str) -> Result<bool> {
+        Ok(self.json_calls.contains_key(method))
+    }
     fn call_json(&self, method: &str) -> Result<Value> {
         self.call_log.lock().unwrap().push(method.to_string());
         self.json_calls

@@ -231,6 +231,11 @@ impl Sfp {
         self.index
     }
 
+    /// Discover optional API methods without calling the getter.
+    pub fn has_method(&self, method: &str) -> Result<bool> {
+        Python::with_gil(|py| Ok(self.obj.bind(py).hasattr(method)?))
+    }
+
     fn call_bool(&self, method: &str) -> Result<bool> {
         Python::with_gil(|py| Ok(self.obj.bind(py).call_method0(method)?.extract()?))
     }

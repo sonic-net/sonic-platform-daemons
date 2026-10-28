@@ -44,6 +44,10 @@ pub trait SfpHandle {
     fn get_lpmode(&self) -> Result<bool>;
     fn set_lpmode(&self, on: bool) -> Result<bool>;
     fn reset(&self) -> Result<bool>;
+    /// Optional API discovery; unavailable discovery does not enable legacy reads.
+    fn has_method(&self, _method: &str) -> Result<bool> {
+        Ok(false)
+    }
     /// Call any no-arg Python `Sfp` method, marshalling the result as JSON
     /// (`get_transceiver_status_flags`, `get_transceiver_dom_flags`,
     /// `get_temperature`, `get_transceiver_pm`, VDM getters, …).
@@ -154,6 +158,9 @@ impl SfpHandle for BridgeSfp {
     }
     fn reset(&self) -> Result<bool> {
         Ok(self.sfp.reset()?)
+    }
+    fn has_method(&self, method: &str) -> Result<bool> {
+        Ok(self.sfp.has_method(method)?)
     }
     fn call_json(&self, method: &str) -> Result<Value> {
         Ok(self.sfp.call_json(method, ())?)
