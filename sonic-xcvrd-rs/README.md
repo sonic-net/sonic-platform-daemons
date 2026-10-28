@@ -82,6 +82,15 @@ from SONiC's database configuration, with front-end ASIC namespaces discovered
 through `sonic_py_common.multi_asic`. `REDIS_SOCK` overrides the socket only for
 the default (single-ASIC) namespace.
 
+Older images store `status`, `error`, and `cmis_state` together with hardware
+status in `TRANSCEIVER_STATUS`. Set `XCVRD_LEGACY_STATUS_TABLE=1` for the Rust
+process on those images to preserve that schema. Leave it unset for images
+using the separate `TRANSCEIVER_STATUS_SW` table.
+
+The linked SWSS library must export the SWSS C API. Older C++-only libraries
+cannot be used directly; any compatibility runtime must remain private to the
+Rust process rather than replacing the platform's shared library.
+
 Use the existing `xcvrd` supervisor slot and its usual arguments when explicitly
 opting into the Rust daemon. Stop Python xcvrd first: never run both daemons
 against the same hardware and databases. Build/test containers alone do not

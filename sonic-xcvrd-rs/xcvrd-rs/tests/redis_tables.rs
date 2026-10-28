@@ -246,6 +246,43 @@ fn namespace_tables_atomic_rows_and_producer_delivery() {
     assert!(!row.set_checked("wrongtype", &[("field".into(), "new".into())]));
     assert_eq!(row.get_size_for_key_checked("wrongtype"), None);
 
+    std::env::set_var("XCVRD_LEGACY_STATUS_TABLE", "1");
+    let legacy_helper = XcvrTableHelper::new(&namespaces).unwrap();
+    std::env::remove_var("XCVRD_LEGACY_STATUS_TABLE");
+    let legacy_hw = legacy_helper.get_status_tbl(1);
+    let legacy_sw = legacy_helper.get_status_sw_tbl(1);
+    assert!(legacy_hw.set_checked(
+        "EthernetLegacy",
+        &[("module_state".into(), "ModuleReady".into())]
+    ));
+    assert!(legacy_sw.set_checked(
+        "EthernetLegacy",
+        &[
+            ("status".into(), "1".into()),
+            ("error".into(), "N/A".into()),
+            ("cmis_state".into(), "READY".into()),
+        ]
+    ));
+    assert_eq!(
+        legacy_hw.hget("EthernetLegacy", "status").as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        legacy_sw.hget("EthernetLegacy", "module_state").as_deref(),
+        Some("ModuleReady")
+    );
+    assert!(legacy_hw.set_checked("EthernetLegacy", &[("rx_los".into(), "false".into())]));
+    assert_eq!(
+        legacy_sw.hget("EthernetLegacy", "cmis_state").as_deref(),
+        Some("READY")
+    );
+    assert!(!fixture
+        .table("asic1", "STATE_DB", "TRANSCEIVER_STATUS_SW")
+        .get_keys()
+        .unwrap()
+        .iter()
+        .any(|key| key == "EthernetLegacy"));
+
     let appl1 = fixture.table("asic1", "APPL_DB", "PORT_TABLE");
     let appl3 = fixture.table("asic3", "APPL_DB", "PORT_TABLE");
     appl1.set("Ethernet0", [("flap_count", "1")]).unwrap();

@@ -163,7 +163,13 @@ impl XcvrTableHelper {
                 },
             );
         }
+        let legacy_status = std::env::var("XCVRD_LEGACY_STATUS_TABLE").ok().as_deref() == Some("1");
         Self::build(namespaces, |asic, db, name| {
+            let name = if legacy_status && name == TRANSCEIVER_STATUS_SW_TABLE {
+                TRANSCEIVER_STATUS_TABLE
+            } else {
+                name
+            };
             let c = &conns[&asic];
             let table = match db {
                 Db::State => RealDbTable::new(c.state.clone(), name)?,
