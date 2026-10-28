@@ -6,6 +6,7 @@
 """
 
 try:
+    import copy
     import threading
     import time
     import datetime
@@ -52,7 +53,7 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
-        self.port_mapping = port_mapping
+        self.port_mapping = copy.deepcopy(port_mapping)
         self.port_dict = {}
         for lport, asic_id in port_mapping.logical_to_asic.items():
             entry = {"asic_id": asic_id}
@@ -140,6 +141,13 @@ class CmisManagerTask(threading.Thread):
                                          "forced_tx_disabled": False}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
+            # Keep our port_mapping current so SI publication can resolve the ASIC / physical
+            # port for a port added by dynamic port breakout (notify_media_setting looks it up
+            # here; a stale snapshot would return asic=None and raise in get_cfg_port_tbl).
+            if pport >= 0 and not self.port_mapping.is_logical_port(lport):
+                self.port_mapping.handle_port_change_event(port_event_helper.PortChangeEvent(
+                    lport, pport, port_change_event.asic_id,
+                    port_event_helper.PortChangeEvent.PORT_ADD))
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
                 self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
             if 'lanes' in port_change_event.port_dict:
@@ -213,6 +221,12 @@ class CmisManagerTask(threading.Thread):
             if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
                 self.clear_decomm_pending(lport)
                 self.port_dict.pop(lport)
+                # Drop the breakout-removed port from our port_mapping so a later breakout that
+                # reuses the logical name re-registers with fresh ASIC / physical port.
+                if self.port_mapping.is_logical_port(lport):
+                    self.port_mapping.handle_port_change_event(port_event_helper.PortChangeEvent(
+                        lport, owner_pport, port_change_event.asic_id,
+                        port_event_helper.PortChangeEvent.PORT_REMOVE))
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000

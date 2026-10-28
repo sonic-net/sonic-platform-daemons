@@ -12,7 +12,7 @@ try:
 
     from swsscommon import swsscommon
 
-    from .xcvrd_utilities.port_event_helper import PortChangeObserver
+    from .xcvrd_utilities.port_event_helper import PortChangeObserver, PortChangeEvent
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from .xcvrd_utilities import common
     from .xcvrd_utilities import media_settings_parser
@@ -96,7 +96,7 @@ class SffManagerTask(threading.Thread):
         self.helper_logger = helper_logger
         self.logger_for_port_update_event = SffLoggerForPortUpdateEvent(helper_logger)
         self.platform_chassis = platform_chassis
-        self.port_mapping = port_mapping
+        self.port_mapping = copy.deepcopy(port_mapping)
         # port_dict holds data obtained from on_port_update_event per port entry
         # with logical_port_name as key.
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
@@ -177,6 +177,12 @@ class SffManagerTask(threading.Thread):
                 self.port_dict[lport] = {}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
+            # Keep our port_mapping current so SI publication can resolve the ASIC / physical
+            # port for a port added by dynamic port breakout (notify_media_setting looks it up
+            # here; a stale snapshot would return asic=None and raise in get_cfg_port_tbl).
+            if pport >= 0 and not self.port_mapping.is_logical_port(lport):
+                self.port_mapping.handle_port_change_event(PortChangeEvent(
+                    lport, pport, asic_id, PortChangeEvent.PORT_ADD))
 
             if self.SUBPORT in port_change_event.port_dict:
                 self.port_dict[lport][self.SUBPORT] = port_change_event.port_dict[self.SUBPORT]
@@ -203,6 +209,13 @@ class SffManagerTask(threading.Thread):
             # Only when port is removed from CONFIG, we consider this entry as deleted.
             if lport in self.port_dict:
                 del self.port_dict[lport]
+            # Drop the breakout-removed port from our port_mapping so a later breakout that
+            # reuses the logical name re-registers with fresh ASIC / physical port.
+            if self.port_mapping.is_logical_port(lport):
+                phys_list = self.port_mapping.get_logical_to_physical(lport)
+                phys = phys_list[0] if phys_list else pport
+                self.port_mapping.handle_port_change_event(PortChangeEvent(
+                    lport, phys, asic_id, PortChangeEvent.PORT_REMOVE))
         # STATE_DB TRANSCEIVER_INFO DEL case:
         elif port_change_event.table_name and \
                 port_change_event.table_name == 'TRANSCEIVER_INFO':
