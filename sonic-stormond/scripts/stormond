@@ -254,6 +254,14 @@ class DaemonStorage(daemon_base.DaemonBase):
         # that akin to an INIT state. 
 
 
+    # Fetch the last known-good value of an FSIO field from STATE_DB. This is used
+    # to retain the previous latest/total FSIO values (keeping cumulative totals
+    # monotonic) when the live /proc/diskstats counters cannot be read.
+    def _get_last_fsio_statedb_value(self, device, field):
+        value = self.state_db.hget('{}|{}'.format(STORAGE_DEVICE_TABLE, device), field)
+        return "0" if value is None else value
+
+
     def _reconcile_fsio_rw_values(self, fsio_dict, device):
 
         # If stormond is coming up for the first time, neither STATE_DB info nor JSON file would be present.
@@ -342,14 +350,33 @@ class DaemonStorage(daemon_base.DaemonBase):
                 dynamic_kvp_dict["firmware"] = storage_object.get_firmware()
                 dynamic_kvp_dict["health"] = storage_object.get_health()
                 dynamic_kvp_dict["temperature"] = storage_object.get_temperature()
-                dynamic_kvp_dict["latest_fsio_reads"] = storage_object.get_fs_io_reads()
-                dynamic_kvp_dict["latest_fsio_writes"] = storage_object.get_fs_io_writes()
+
+                latest_fsio_reads = storage_object.get_fs_io_reads()
+                latest_fsio_writes = storage_object.get_fs_io_writes()
+
                 dynamic_kvp_dict["disk_io_reads"] = storage_object.get_disk_io_reads()
                 dynamic_kvp_dict["disk_io_writes"] = storage_object.get_disk_io_writes()
                 dynamic_kvp_dict["reserved_blocks"] = storage_object.get_reserved_blocks()
                 dynamic_kvp_dict["last_sync_time"] = self.get_formatted_time(time.time())
 
-                dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
+                # get_fs_io_reads()/get_fs_io_writes() return 0 when the underlying
+                # /proc/diskstats counters cannot be read (e.g. the disk has gone
+                # read-only). For an actively used storage disk these cumulative
+                # counters are effectively never 0 during normal operation, so both
+                # being 0 is treated as a counter read failure. In that scenario we
+                # retain the last known-good latest and total values from STATE_DB so
+                # the cumulative totals stay monotonic, while surfacing 0 in the log to
+                # signal the counter read failure.
+                if latest_fsio_reads == 0 and latest_fsio_writes == 0:
+                    self.log.log_warning("FSIO counters unavailable for {}. Retaining last known-good FSIO values.".format(storage_device))
+                    dynamic_kvp_dict["latest_fsio_reads"] = self._get_last_fsio_statedb_value(storage_device, "latest_fsio_reads")
+                    dynamic_kvp_dict["latest_fsio_writes"] = self._get_last_fsio_statedb_value(storage_device, "latest_fsio_writes")
+                    dynamic_kvp_dict["total_fsio_reads"] = self._get_last_fsio_statedb_value(storage_device, "total_fsio_reads")
+                    dynamic_kvp_dict["total_fsio_writes"] = self._get_last_fsio_statedb_value(storage_device, "total_fsio_writes")
+                else:
+                    dynamic_kvp_dict["latest_fsio_reads"] = latest_fsio_reads
+                    dynamic_kvp_dict["latest_fsio_writes"] = latest_fsio_writes
+                    dynamic_kvp_dict["total_fsio_reads"], dynamic_kvp_dict["total_fsio_writes"] = self._reconcile_fsio_rw_values(dynamic_kvp_dict, storage_device)
 
                 # Update storage device statistics to STATE_DB
                 self.update_storage_info_status_db(storage_device, dynamic_kvp_dict)
@@ -357,7 +384,7 @@ class DaemonStorage(daemon_base.DaemonBase):
                 # Log to syslog
                 self.log.log_notice("Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, FS IO Reads: {}, FS IO Writes: {}".format(\
                 storage_device, dynamic_kvp_dict["firmware"], dynamic_kvp_dict["health"], dynamic_kvp_dict["temperature"], dynamic_kvp_dict["total_fsio_reads"],dynamic_kvp_dict["total_fsio_writes"]))
-                self.log.log_notice("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(dynamic_kvp_dict["latest_fsio_reads"], dynamic_kvp_dict["latest_fsio_writes"]))
+                self.log.log_notice("Latest FSIO Reads: {}, Latest FSIO Writes: {}".format(latest_fsio_reads, latest_fsio_writes))
                 self.log.log_notice("Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}".format(dynamic_kvp_dict["disk_io_reads"], dynamic_kvp_dict["disk_io_writes"], \
                 dynamic_kvp_dict["reserved_blocks"]))
                 self.log.log_notice("Last successful sync time to STATE_DB: {}".format(dynamic_kvp_dict["last_sync_time"]))
