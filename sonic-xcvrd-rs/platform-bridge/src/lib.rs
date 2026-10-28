@@ -272,9 +272,18 @@ impl Sfp {
         self.call_json("get_transceiver_info", ())
     }
 
-    /// Live DOM sensor readings (`TRANSCEIVER_DOM_SENSOR` source). [M2]
+    /// Live DOM readings, including older bulk-status-only platform APIs. [M2]
     pub fn get_transceiver_dom_real_value(&self) -> Result<Value> {
-        self.call_json("get_transceiver_dom_real_value", ())
+        Python::with_gil(|py| {
+            let sfp = self.obj.bind(py);
+            let method = if sfp.hasattr("get_transceiver_dom_real_value")? {
+                "get_transceiver_dom_real_value"
+            } else {
+                "get_transceiver_bulk_status"
+            };
+            let value = sfp.call_method0(method)?;
+            py_to_json(py, &value)
+        })
     }
 
     /// Module/datapath status (`TRANSCEIVER_STATUS` source, incl. cmis_state). [M3]
@@ -483,6 +492,82 @@ class Sfp:
                     })
                 );
             }
+        });
+    }
+
+    #[test]
+    fn legacy_bulk_status_remains_a_dom_sensor_source() {
+        Python::with_gil(|py| {
+            let module = PyModule::from_code_bound(
+                py,
+                r#"
+class Sfp:
+    def get_transceiver_bulk_status(self):
+        return {"temperature": 42.5, "voltage": 3.3, "rx1power": float("-inf")}
+"#,
+                "legacy_dom_test.py",
+                "legacy_dom_test",
+            )
+            .unwrap();
+            let sfp = Sfp {
+                obj: module.getattr("Sfp").unwrap().call0().unwrap().unbind(),
+                index: 0,
+            };
+            assert_eq!(
+                sfp.get_transceiver_dom_real_value().unwrap(),
+                json!({"temperature": 42.5, "voltage": 3.3, "rx1power": "-inf"})
+            );
+        });
+    }
+
+    #[test]
+    fn current_dom_getter_is_preferred_without_masking_empty_reads_or_errors() {
+        Python::with_gil(|py| {
+            let module = PyModule::from_code_bound(
+                py,
+                r#"
+class Sfp:
+    def get_transceiver_dom_real_value(self):
+        return {"temperature": 42.5}
+    def get_transceiver_bulk_status(self):
+        raise AssertionError("legacy getter must not run when the current API exists")
+
+class EmptySfp(Sfp):
+    def get_transceiver_dom_real_value(self):
+        return None
+
+class BrokenSfp(Sfp):
+    def get_transceiver_dom_real_value(self):
+        raise RuntimeError("current DOM read failed")
+"#,
+                "current_dom_test.py",
+                "current_dom_test",
+            )
+            .unwrap();
+            for (class, expected) in [
+                ("Sfp", json!({"temperature": 42.5})),
+                ("EmptySfp", Value::Null),
+            ] {
+                let sfp = Sfp {
+                    obj: module.getattr(class).unwrap().call0().unwrap().unbind(),
+                    index: 0,
+                };
+                assert_eq!(sfp.get_transceiver_dom_real_value().unwrap(), expected);
+            }
+            let broken = Sfp {
+                obj: module
+                    .getattr("BrokenSfp")
+                    .unwrap()
+                    .call0()
+                    .unwrap()
+                    .unbind(),
+                index: 0,
+            };
+            assert!(broken
+                .get_transceiver_dom_real_value()
+                .unwrap_err()
+                .to_string()
+                .contains("current DOM read failed"));
         });
     }
 
