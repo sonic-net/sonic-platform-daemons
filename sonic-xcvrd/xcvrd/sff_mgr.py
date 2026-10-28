@@ -235,6 +235,19 @@ class SffManagerTask(threading.Thread):
             host_tx_ready = value
         return host_tx_ready
 
+    def _si_retained_from_pre_pr_warmboot(self, lport, asic_id, host_tx_ready):
+        """True when this port's state looks like a pre-SI-sync image carried across a warm/fast
+        reboot: the MAC is already up (host_tx_ready retained) during a warm/fast start, and
+        APPL_DB has no si_settings_notification field. Re-notifying then would make OA reprogram
+        serdes on an up MAC (a flap), so the caller treats SI as already synced.
+        """
+        if host_tx_ready != 'true':
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_id)
+        if not (common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)):
+            return False
+        return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
+
     def get_admin_status(self, lport, asic_index):
         admin_status = 'down'
 
@@ -489,6 +502,12 @@ class SffManagerTask(threading.Thread):
                         # the outstanding notification and wait for OA's warm-restore ack instead.
                         # Mirrors the CMIS adopt-outstanding path (cmis_manager_task.py).
                         self.log_notice("{}: outstanding SI notification un-acked (warm restore), skip re-notify".format(lport))
+                    elif asic_id is not None and \
+                            self._si_retained_from_pre_pr_warmboot(lport, asic_id, data.get(self.HOST_TX_READY)):
+                        # Pre-SI-sync image upgraded via warm/fast reboot: serdes already programmed,
+                        # MAC up (host_tx_ready retained), no SI field. Publishing would make OA
+                        # reprogram serdes on an up MAC (a flap). Treat as synced; skip re-notify.
+                        self.log_notice("{}: pre-SI-sync warm-reboot state (serdes retained, MAC up), skip re-notify".format(lport))
                     else:
                         xcvr_info = sfp.get_transceiver_info()
                         if xcvr_info is not None:

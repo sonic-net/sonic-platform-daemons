@@ -306,6 +306,16 @@ class XcvrTableHelper:
         ntype, nnum = self._parse_si_value(dict(fvs).get('si_settings_notification'))
         return nnum if ntype == 'SI_SETTINGS_NOTIFIED' else None
 
+    def has_si_settings_notification(self, port_name, asic_id):
+        """
+        Return True if APPL_DB has the si_settings_notification field for this port (any value).
+        Used to distinguish a port whose SI field is entirely absent - e.g. an APPL_DB entry
+        retained from a pre-SI-sync image across warm/fast reboot - from one carrying DEFAULT or
+        NOTIFIED. The former must not be re-notified for an already-up MAC (would cause a flap).
+        """
+        found, fvs = self.app_port_read_tbl[asic_id].get(port_name)
+        return found and 'si_settings_notification' in dict(fvs)
+
     def is_si_settings_synced(self, port_name, asic_id):
         """
         Return True only when we last published SI_SETTINGS_NOTIFIED:<N> AND orchagent acked

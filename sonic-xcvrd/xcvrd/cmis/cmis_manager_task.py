@@ -758,6 +758,19 @@ class CmisManagerTask(threading.Thread):
         found, host_tx_ready = state_port_tbl.hget(lport, 'host_tx_ready')
         return host_tx_ready if found else 'false'
 
+    def _si_retained_from_pre_pr_warmboot(self, lport, asic_id):
+        """True when this port's state looks like a pre-SI-sync image carried across a warm/fast
+        reboot: the MAC is already up (host_tx_ready retained) during a warm/fast start, and
+        APPL_DB has no si_settings_notification field. In that case re-notifying would make OA
+        reprogram serdes on an up MAC (a flap), so the caller treats SI as already synced.
+        """
+        if self.get_host_tx_status(lport) != 'true':
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_id)
+        if not (common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)):
+            return False
+        return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
+
     def get_port_admin_status(self, lport):
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
@@ -1029,6 +1042,13 @@ class CmisManagerTask(threading.Thread):
                     # OA hasn't yet acked our last notification; adopt its number and wait for
                     # the ack instead of publishing a fresh one.
                     self.port_dict[lport]['si_notification_number'] = outstanding
+                    self.port_dict[lport]['notify_si_settings'] = False
+                elif self._si_retained_from_pre_pr_warmboot(lport, asic_id):
+                    # Pre-SI-sync image upgraded via warm/fast reboot: the old image already
+                    # programmed serdes and OA brought the MAC up (host_tx_ready retained), and
+                    # there is no SI notification field. Publishing one now would make OA reprogram
+                    # serdes on an up MAC (a flap). Treat SI as synced for this insertion.
+                    self.port_dict[lport]['si_settings_synced'] = True
                     self.port_dict[lport]['notify_si_settings'] = False
         elif self.check_si_sync_done_match(lport, self.check_si_settings_ack_status(lport), last_si_number):
             self.port_dict[lport]['si_settings_synced'] = True
