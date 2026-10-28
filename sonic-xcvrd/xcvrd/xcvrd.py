@@ -1127,8 +1127,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         else:
             self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
 
-        self.initialize_port_init_control_fields_in_port_table(port_mapping_data)
-
         # Remove the TRANSCEIVER_INFO table if the transceiver is absent.
         # This ensures stale entries are cleaned up when a transceiver is removed while xcvrd is not running.
         # Performed in the init() method to ensure the table is cleared before starting child threads.

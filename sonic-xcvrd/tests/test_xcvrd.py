@@ -858,7 +858,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw', MagicMock())
     @patch('xcvrd.xcvrd.SfpStateUpdateTask._mapping_event_from_change_event')
-    @patch('xcvrd.xcvrd._wrapper_get_transceiver_change_event')
+    @patch('xcvrd.xcvrd.SfpStateUpdateTask._get_port_change_event')
     def test_on_sfp_remove_event_resets_si_settings_notification(self, mock_change_event, mock_mapping_event, mock_xcvr_table_helper_cls):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
