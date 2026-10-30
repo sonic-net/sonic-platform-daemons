@@ -1,22 +1,22 @@
-//! HAL seam (analysis §3.6) — the mockable boundary in front of the thick
-//! `platform-bridge` (PyO3 → the real `sonic_platform` plugin).
-//!
-//! The daemon logic and posters are written against [`Hal`]/[`SfpHandle`] (as
-//! `&dyn`), so production wraps `platform-bridge` ([`BridgeHal`]) while unit tests
-//! inject canned values via `crate::mock::{MockHal, MockSfp}` — the Rust analogue
-//! of the Python tests' `@patch('..._wrapper_get_transceiver_info', MagicMock(...))`
-//! and `MagicMock()` SFP objects.
-//!
-//! No CMIS/SFF decode lives here: complex results are `serde_json::Value` straight
-//! from the bridge; scalars are typed.
+//! Mockable daemon HAL over sonic-platform-common's generated platform API.
+//! Platform access and Python marshalling belong to the shared provider; this
+//! adapter translates DeviceKeys and declared operations into the daemon seams.
 
+use std::collections::BTreeMap;
+
+use platform_api::{DeviceKey, PlatformApi};
+use platform_provider::Platform;
 use serde_json::Value;
 
 use crate::error::{Result, XcvrdError};
 
-/// One transceiver change-event poll, re-exported from the bridge so the daemon
-/// (and the mock) share one shape: `{sfp: {phys: code}, sfp_error: {phys: code}}`.
-pub use platform_bridge::ChangeEvent;
+/// The transceiver groups from a shared platform change-event batch.
+#[derive(Debug, Clone, Default)]
+pub struct ChangeEvent {
+    pub status: bool,
+    pub sfp: BTreeMap<String, String>,
+    pub sfp_error: BTreeMap<String, String>,
+}
 
 /// The transceiver plant: `chassis.get_num_sfps()/get_sfp(i)/get_change_event(t)`.
 pub trait Hal: Send + Sync {
@@ -28,9 +28,7 @@ pub trait Hal: Send + Sync {
     fn get_change_event(&self, timeout_ms: u64) -> Result<ChangeEvent>;
 }
 
-/// A single transceiver slot (`SfpOptoeBase` + emulator overrides). All the
-/// identity/DOM/status/VDM getters xcvrd calls, plus the `call_json` escape hatch
-/// for the no-arg methods without a typed bridge wrapper (analysis §3.5 table).
+/// A single transceiver slot, backed by a DeviceKey in the shared API.
 pub trait SfpHandle {
     fn get_presence(&self) -> Result<bool>;
     fn is_replaceable(&self) -> Result<bool>;
@@ -48,9 +46,7 @@ pub trait SfpHandle {
     fn has_method(&self, _method: &str) -> Result<bool> {
         Ok(false)
     }
-    /// Call any no-arg Python `Sfp` method, marshalling the result as JSON
-    /// (`get_transceiver_status_flags`, `get_transceiver_dom_flags`,
-    /// `get_temperature`, `get_transceiver_pm`, VDM getters, …).
+    /// Read one of the declared status/DOM/PM/VDM operations as JSON.
     fn call_json(&self, method: &str) -> Result<Value>;
     /// `SfpOptoeBase.read_eeprom(offset, num_bytes)` — read raw transceiver EEPROM at
     /// the flat linear `offset`. Returns `Ok(None)` on a plugin read miss. Used to
@@ -58,21 +54,8 @@ pub trait SfpHandle {
     /// byte — so the temperature and supply-voltage flags are always published together —
     /// and to read back the CMIS staged-control-set bytes during CMIS datapath bring-up.
     fn read_eeprom(&self, offset: usize, num_bytes: usize) -> Result<Option<Vec<u8>>>;
-    /// Call a no-arg method on this slot's **decode api object**
-    /// (`chassis.get_sfp(i).get_xcvr_api().<method>()`), marshalled as JSON.
-    ///
-    /// This is the cheap seam for the CMIS decode reads. The thick bridge only exposes
-    /// the *aggregate* getters (`get_transceiver_status()` / `get_transceiver_info()`),
-    /// so [`crate::cmis::cmis_api::BridgeCmisApi`] used to answer every single decode
-    /// read — `get_datapath_state`, `get_cmis_rev`, `is_coherent_module`, … — by
-    /// re-reading a whole module. Measured on `str43-7060x6-512-c17-u10`, that is
-    /// **36 ms** (`get_transceiver_status`) / **56 ms** (`get_transceiver_info`) per
-    /// call, against **0–4.5 ms** for the individual read each one stands in for, and it
-    /// is the entire reason CMIS bring-up took ~40 min where the Python daemon takes 80 s.
-    ///
-    /// The default implementation returns `Err`, so mocks (and any handle without a
-    /// live plugin) transparently fall back to the aggregate-derived answers and unit
-    /// tests keep exercising that path unchanged.
+    /// A declared direct decoder read, avoiding an expensive aggregate read.
+    /// Mocks without this seam retain the aggregate-derived fallback.
     fn xcvr_api_call_json(&self, _method: &str) -> Result<Value> {
         Err(XcvrdError::Bridge("xcvr api seam unavailable".to_string()))
     }
@@ -85,94 +68,205 @@ pub trait SfpHandle {
 }
 
 /// Real HAL: all reads and change events share one platform chassis and its SFP caches.
-pub struct BridgeHal {
-    platform: platform_bridge::Platform,
+pub struct PlatformHal {
+    platform: Platform,
 }
 
-impl BridgeHal {
+impl PlatformHal {
     /// Import the plugin + build the chassis (see `env::open_platform`).
     pub fn new() -> Result<Self> {
-        Ok(Self::from_platform(platform_bridge::Platform::new()?))
+        Ok(Self::from_platform(crate::env::open_platform()?))
     }
 
-    /// Adopt an already-constructed bridge `Platform`.
-    pub fn from_platform(platform: platform_bridge::Platform) -> Self {
-        BridgeHal { platform }
+    /// Adopt an already-opened shared platform provider.
+    pub fn from_platform(platform: Platform) -> Self {
+        Self { platform }
     }
 }
 
-impl Hal for BridgeHal {
+impl Hal for PlatformHal {
     fn num_sfps(&self) -> Result<usize> {
-        Ok(self.platform.num_sfps()?)
+        Ok(self.platform.clone().get_sfps()?.len())
     }
 
     fn sfp(&self, index: usize) -> Result<Box<dyn SfpHandle>> {
-        Ok(Box::new(BridgeSfp {
-            sfp: self.platform.sfp(index)?,
-        }))
+        let mut platform = self.platform.clone();
+        let key = platform
+            .get_sfps()?
+            .get(index)
+            .ok_or(XcvrdError::PhysicalPortNotExist)?
+            .key
+            .clone();
+        Ok(Box::new(PlatformSfp { platform, key }))
     }
 
     fn get_change_event(&self, timeout_ms: u64) -> Result<ChangeEvent> {
-        Ok(self.platform.get_change_event(timeout_ms)?)
+        let batch = self
+            .platform
+            .clone()
+            .get_change_event(api_integer(timeout_ms)?)?;
+        let mut result = ChangeEvent {
+            status: batch.ok,
+            ..ChangeEvent::default()
+        };
+        for event in batch.events {
+            match event.device_type.as_str() {
+                "sfp" => result.sfp.insert(event.device_id, event.status),
+                "sfp_error" => result.sfp_error.insert(event.device_id, event.status),
+                _ => None,
+            };
+        }
+        Ok(result)
     }
 }
 
 /// Real SFP handle: thin delegation to the shared platform's SFP.
-pub struct BridgeSfp {
-    sfp: platform_bridge::Sfp,
+pub struct PlatformSfp {
+    platform: Platform,
+    key: DeviceKey,
 }
 
-impl SfpHandle for BridgeSfp {
+fn api_integer(value: impl TryInto<i64>) -> Result<i64> {
+    value
+        .try_into()
+        .map_err(|_| XcvrdError::Other("platform API integer overflow".into()))
+}
+
+fn required_bool(value: Option<bool>) -> Result<bool> {
+    value.ok_or_else(|| XcvrdError::Bridge("platform returned no boolean value".into()))
+}
+
+fn json_value(value: String) -> Result<Value> {
+    serde_json::from_str(&value).map_err(|e| XcvrdError::Bridge(e.to_string()))
+}
+
+impl SfpHandle for PlatformSfp {
     fn get_presence(&self) -> Result<bool> {
-        Ok(self.sfp.get_presence()?)
+        required_bool(self.platform.clone().sfp_get_presence(&self.key)?)
     }
     fn is_replaceable(&self) -> Result<bool> {
-        Ok(self.sfp.is_replaceable()?)
+        required_bool(self.platform.clone().sfp_is_replaceable(&self.key)?)
     }
     fn get_reset_status(&self) -> Result<bool> {
-        Ok(self.sfp.get_reset_status()?)
+        required_bool(self.platform.clone().sfp_get_reset_status(&self.key)?)
     }
     fn sfp_type(&self) -> Result<String> {
-        Ok(self.sfp.sfp_type()?)
+        Ok(self.platform.clone().sfp_get_type(&self.key)?)
     }
     fn get_error_description(&self) -> Result<Option<String>> {
-        Ok(self.sfp.get_error_description()?)
+        Ok(self.platform.clone().sfp_get_error_description(&self.key)?)
     }
     fn get_transceiver_info(&self) -> Result<Value> {
-        Ok(self.sfp.get_transceiver_info()?)
+        json_value(self.platform.clone().sfp_get_transceiver_info(&self.key)?)
     }
     fn get_transceiver_dom_real_value(&self) -> Result<Value> {
-        Ok(self.sfp.get_transceiver_dom_real_value()?)
+        json_value(
+            self.platform
+                .clone()
+                .sfp_get_transceiver_dom_real_value(&self.key)?,
+        )
     }
     fn get_transceiver_status(&self) -> Result<Value> {
-        Ok(self.sfp.get_transceiver_status()?)
+        json_value(
+            self.platform
+                .clone()
+                .sfp_get_transceiver_status(&self.key)?,
+        )
     }
     fn get_transceiver_threshold_info(&self) -> Result<Value> {
-        Ok(self.sfp.get_transceiver_threshold_info()?)
+        json_value(
+            self.platform
+                .clone()
+                .sfp_get_transceiver_threshold_info(&self.key)?,
+        )
     }
     fn get_lpmode(&self) -> Result<bool> {
-        Ok(self.sfp.get_lpmode()?)
+        required_bool(self.platform.clone().sfp_get_lpmode(&self.key)?)
     }
     fn set_lpmode(&self, on: bool) -> Result<bool> {
-        Ok(self.sfp.set_lpmode(on)?)
+        required_bool(self.platform.clone().sfp_set_lpmode(&self.key, on)?)
     }
     fn reset(&self) -> Result<bool> {
-        Ok(self.sfp.reset()?)
+        required_bool(self.platform.clone().sfp_reset(&self.key)?)
     }
     fn has_method(&self, method: &str) -> Result<bool> {
-        Ok(self.sfp.has_method(method)?)
+        Ok(self.platform.clone().sfp_has_method(&self.key, method)?)
     }
     fn call_json(&self, method: &str) -> Result<Value> {
-        Ok(self.sfp.call_json(method, ())?)
+        let mut api = self.platform.clone();
+        let key = &self.key;
+        let value = match method {
+            "get_transceiver_info_firmware_versions" => {
+                api.sfp_get_transceiver_info_firmware_versions(key)?
+            }
+            "get_transceiver_status_flags" => api.sfp_get_transceiver_status_flags(key)?,
+            "get_transceiver_dom_flags" => api.sfp_get_transceiver_dom_flags(key)?,
+            "get_temperature" => api.sfp_get_temperature(key)?,
+            "get_transceiver_pm" => api.sfp_get_transceiver_pm(key)?,
+            "get_transceiver_vdm_real_value_basic" => {
+                api.sfp_get_transceiver_vdm_real_value_basic(key)?
+            }
+            "get_transceiver_vdm_real_value_statistic" => {
+                api.sfp_get_transceiver_vdm_real_value_statistic(key)?
+            }
+            "get_transceiver_vdm_flags" => api.sfp_get_transceiver_vdm_flags(key)?,
+            "get_transceiver_vdm_thresholds" => api.sfp_get_transceiver_vdm_thresholds(key)?,
+            "is_transceiver_vdm_supported" => {
+                return Ok(serde_json::json!(api.sfp_is_transceiver_vdm_supported(key)?))
+            }
+            "is_vdm_statistic_supported" => {
+                return Ok(serde_json::json!(api.sfp_is_vdm_statistic_supported(key)?))
+            }
+            "get_vdm_freeze_status" => {
+                return Ok(serde_json::json!(api.sfp_get_vdm_freeze_status(key)?))
+            }
+            "get_vdm_unfreeze_status" => {
+                return Ok(serde_json::json!(api.sfp_get_vdm_unfreeze_status(key)?))
+            }
+            "freeze_vdm_stats" => return Ok(serde_json::json!(api.sfp_freeze_vdm_stats(key)?)),
+            "unfreeze_vdm_stats" => return Ok(serde_json::json!(api.sfp_unfreeze_vdm_stats(key)?)),
+            "remove_xcvr_api" => {
+                api.sfp_remove_xcvr_api(key)?;
+                return Ok(Value::Null);
+            }
+            _ => return Err(XcvrdError::NotImplemented),
+        };
+        json_value(value)
     }
     fn xcvr_api_call_json(&self, method: &str) -> Result<Value> {
-        Ok(self.sfp.xcvr_api_call_json(method)?)
+        let mut api = self.platform.clone();
+        let key = &self.key;
+        let value = match method {
+            "is_flat_memory" => return Ok(serde_json::json!(api.sfp_is_flat_memory(key)?)),
+            "is_coherent_module" => return Ok(serde_json::json!(api.sfp_is_coherent_module(key)?)),
+            "get_module_type_abbreviation" => {
+                return Ok(serde_json::json!(api.sfp_get_module_type_abbreviation(key)?))
+            }
+            "get_module_state" => return Ok(serde_json::json!(api.sfp_get_module_state(key)?)),
+            "get_cmis_rev" => return Ok(serde_json::json!(api.sfp_get_cmis_rev(key)?)),
+            "get_application_advertisement" => api.sfp_get_application_advertisement(key)?,
+            "get_datapath_state" => api.sfp_get_datapath_state(key)?,
+            "get_config_datapath_hostlane_status" => {
+                api.sfp_get_config_datapath_hostlane_status(key)?
+            }
+            "get_dpinit_pending" => api.sfp_get_dpinit_pending(key)?,
+            _ => return Err(XcvrdError::NotImplemented),
+        };
+        json_value(value)
     }
     fn read_eeprom(&self, offset: usize, num_bytes: usize) -> Result<Option<Vec<u8>>> {
-        Ok(self.sfp.read_eeprom(offset, num_bytes)?)
+        Ok(self.platform.clone().sfp_read_eeprom(
+            &self.key,
+            api_integer(offset)?,
+            api_integer(num_bytes)?,
+        )?)
     }
     fn write_eeprom(&self, offset: usize, data: &[u8]) -> Result<bool> {
-        Ok(self.sfp.write_eeprom(offset, data)?)
+        required_bool(self.platform.clone().sfp_write_eeprom(
+            &self.key,
+            api_integer(offset)?,
+            data,
+        )?)
     }
 }
 
@@ -187,14 +281,17 @@ mod tests {
     #[test]
     fn thresholds_follow_the_shared_sfp_decoder_after_module_replacement() {
         Python::with_gil(|py| {
-            let module = PyModule::from_code_bound(
+            let module = PyModule::from_code(
                 py,
-                r#"
+                pyo3::ffi::c_str!(
+                    r#"
 class Decoder:
     def __init__(self, generation):
         self.generation = generation
     def thresholds(self):
         return {"temphighalarm": self.generation, "rxpowerlowalarm": float("-inf")}
+    def get_module_state(self):
+        return "generation %d" % self.generation
 
 class Sfp:
     def __init__(self):
@@ -208,16 +305,24 @@ class Sfp:
         return self.get_xcvr_api().thresholds()
     def get_transceiver_info(self):
         return {"generation": self.get_xcvr_api().generation}
+    def get_transceiver_dom_flags(self):
+        return {"temperature": True}
+    def get_transceiver_status_flags(self):
+        return {"txfault": False}
+    def freeze_vdm_stats(self):
+        return False
+    def remove_xcvr_api(self):
+        self._xcvr_api = None
 
 class Chassis:
     def __init__(self):
         self.sfp = Sfp()
-    def get_sfp(self, index):
-        return self.sfp
+    def get_all_sfps(self):
+        return [self.sfp]
     def get_change_event(self, timeout):
         self.sfp.generation += 1
         self.sfp._xcvr_api = None
-        return True, {"sfp": {"0": "0"}}
+        return False, {"sfp": {0: "0"}, "sfp_error": {0: "vendor error"}, "fan": {1: "1"}}
 
 class Platform:
     instances = 0
@@ -226,19 +331,20 @@ class Platform:
         self.chassis = Chassis()
     def get_chassis(self):
         return self.chassis
-"#,
-                "hal_test.py",
-                "sonic_platform.platform",
+"#
+                ),
+                pyo3::ffi::c_str!("hal_test.py"),
+                pyo3::ffi::c_str!("sonic_platform.platform"),
             )
             .unwrap();
-            let modules = py.import_bound("sys").unwrap().getattr("modules").unwrap();
-            let overrides = PyDict::new_bound(py);
+            let modules = py.import("sys").unwrap().getattr("modules").unwrap();
+            let overrides = PyDict::new(py);
             overrides.set_item("sonic_platform", &module).unwrap();
             overrides
                 .set_item("sonic_platform.platform", &module)
                 .unwrap();
             let patch = py
-                .import_bound("unittest.mock")
+                .import("unittest.mock")
                 .unwrap()
                 .getattr("patch")
                 .unwrap()
@@ -246,17 +352,43 @@ class Platform:
                 .unwrap();
             patch.call_method0("__enter__").unwrap();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let hal = BridgeHal::new().unwrap();
+                let hal = PlatformHal::new().unwrap();
+                assert_eq!(hal.num_sfps().unwrap(), 1);
+                assert!(matches!(hal.sfp(1), Err(XcvrdError::PhysicalPortNotExist)));
                 let sfp = hal.sfp(0).unwrap();
                 let thresholds = sfp.get_transceiver_threshold_info().unwrap();
                 assert_eq!(thresholds["temphighalarm"], json!(1));
                 assert_eq!(value_to_py_str(&thresholds["rxpowerlowalarm"]), "-inf");
-                hal.get_change_event(1).unwrap();
+                let events = hal.get_change_event(1).unwrap();
+                assert!(!events.status);
+                assert_eq!(events.sfp, BTreeMap::from([("0".into(), "0".into())]));
+                assert_eq!(
+                    events.sfp_error,
+                    BTreeMap::from([("0".into(), "vendor error".into())])
+                );
                 assert_eq!(sfp.get_transceiver_info().unwrap()["generation"], json!(2));
                 assert_eq!(
                     sfp.get_transceiver_threshold_info().unwrap()["temphighalarm"],
                     json!(2)
                 );
+                assert_eq!(
+                    sfp.xcvr_api_call_json("get_module_state").unwrap(),
+                    json!("generation 2")
+                );
+                assert_eq!(
+                    sfp.call_json("get_transceiver_dom_flags").unwrap(),
+                    json!({"temperature": true})
+                );
+                assert_eq!(
+                    sfp.call_json("get_transceiver_status_flags").unwrap(),
+                    json!({"txfault": false})
+                );
+                assert_eq!(sfp.call_json("freeze_vdm_stats").unwrap(), json!(false));
+                assert_eq!(sfp.call_json("remove_xcvr_api").unwrap(), Value::Null);
+                assert!(matches!(
+                    sfp.call_json("unlisted_method"),
+                    Err(XcvrdError::NotImplemented)
+                ));
                 assert_eq!(
                     module
                         .getattr("Platform")

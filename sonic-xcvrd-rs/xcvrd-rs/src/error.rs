@@ -1,4 +1,4 @@
-//! Crate error type — folds `platform-bridge` and STATE_DB failures into one enum
+//! Crate error type — folds shared platform API and STATE_DB failures into one enum
 //! and preserves the Python sentinels the posters branch on.
 //!
 //! Mirrors `xcvrd`'s error surface (analysis §3.5): `post_port_sfp_info_to_db`
@@ -15,7 +15,7 @@ pub type Result<T> = std::result::Result<T, XcvrdError>;
 /// Every fallible daemon operation surfaces one of these.
 #[derive(Debug)]
 pub enum XcvrdError {
-    /// A `platform-bridge` (PyO3 → `sonic_platform`) failure.
+    /// A shared platform API failure.
     Bridge(String),
     /// A STATE_DB / `swss-common` failure.
     Db(String),
@@ -32,7 +32,7 @@ pub enum XcvrdError {
 impl fmt::Display for XcvrdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            XcvrdError::Bridge(m) => write!(f, "platform-bridge error: {m}"),
+            XcvrdError::Bridge(m) => write!(f, "platform API error: {m}"),
             XcvrdError::Db(m) => write!(f, "state-db error: {m}"),
             XcvrdError::NotImplemented => {
                 write!(f, "functionality not implemented for this platform")
@@ -46,8 +46,8 @@ impl fmt::Display for XcvrdError {
 
 impl std::error::Error for XcvrdError {}
 
-impl From<platform_bridge::BridgeError> for XcvrdError {
-    fn from(e: platform_bridge::BridgeError) -> Self {
+impl From<platform_api::PlatformError> for XcvrdError {
+    fn from(e: platform_api::PlatformError) -> Self {
         XcvrdError::Bridge(e.to_string())
     }
 }

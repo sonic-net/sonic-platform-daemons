@@ -344,7 +344,7 @@ pub fn regex_fullmatch(pattern: &str, text: &str) -> bool {
 pub fn get_paths_to_platform_and_hwsku_dirs() -> Option<(String, String)> {
     use pyo3::prelude::*;
     Python::with_gil(|py| {
-        let di = py.import_bound("sonic_py_common.device_info").ok()?;
+        let di = py.import("sonic_py_common.device_info").ok()?;
         let tup = di
             .call_method0("get_paths_to_platform_and_hwsku_dirs")
             .ok()?;

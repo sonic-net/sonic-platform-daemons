@@ -1,5 +1,5 @@
 //! Example: the interop pattern the translation agents implement for real --
-//! read a transceiver through the HAL (`platform-bridge`) and publish it to
+//! read a transceiver through the shared platform API and publish it to
 //! STATE_DB (`swss-common`). This is `SfpStateUpdateTask` in miniature.
 //!
 //! Run inside pmon (xcvr-emu + STATE_DB live):
@@ -8,10 +8,11 @@
 
 use swss_common::CxxString;
 use xcvrd_rs::env;
+use xcvrd_rs::hal::{Hal, PlatformHal};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bootstrap both bindings from the shared env seed.
-    let platform = env::open_platform()?; // PyO3 -> sonic_platform -> gRPC to xcvr-emu
+    let platform = PlatformHal::from_platform(env::open_platform()?);
     let db = env::open_state_db()?; // swss-common -> libswsscommon -> STATE_DB
 
     println!("num_sfps = {}", platform.num_sfps()?);

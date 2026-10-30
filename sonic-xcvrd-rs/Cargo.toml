@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["xcvrd-rs", "platform-bridge"]
+members = ["xcvrd-rs"]
+
+# Coordinated local development until the transceiver API is published.
+# Then pin that commit below in xcvrd-rs/Cargo.toml and remove these overrides.
+[patch."https://github.com/sonic-net/sonic-platform-common"]
+platform-api = { path = "../../sonic-platform-common/crates/platform-api" }
+platform-provider = { path = "../../sonic-platform-common/crates/platform-provider" }
 
 [profile.release]
 opt-level = 2

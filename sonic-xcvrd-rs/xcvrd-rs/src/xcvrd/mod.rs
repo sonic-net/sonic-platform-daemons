@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::db::DbTable;
 use crate::error::Result;
-use crate::hal::{BridgeHal, Hal, SfpHandle};
+use crate::hal::{Hal, PlatformHal, SfpHandle};
 use crate::xcvrd_utilities::common::is_fast_reboot_enabled;
 use crate::xcvrd_utilities::port_event_helper::PortMapping;
 use crate::xcvrd_utilities::port_event_helper::{self, PortConfigGate};
@@ -115,7 +115,7 @@ impl DaemonXcvrd {
         self.stop_event.store(true, Ordering::SeqCst);
     }
 
-    /// Inject a HAL (production `init` otherwise builds [`BridgeHal`]).
+    /// Inject a HAL (production `init` otherwise builds [`PlatformHal`]).
     pub fn set_hal(&mut self, hal: Arc<dyn Hal>) {
         self.hal = Some(hal);
     }
@@ -209,7 +209,7 @@ impl DaemonXcvrd {
     /// and purge stale `TRANSCEIVER_INFO`.)
     pub fn init(&mut self) -> Result<()> {
         if self.hal.is_none() {
-            let hal: Arc<dyn Hal> = Arc::new(BridgeHal::new()?);
+            let hal: Arc<dyn Hal> = Arc::new(PlatformHal::new()?);
             self.hal = Some(hal);
         }
         if self.xcvr_table_helper.is_none() {

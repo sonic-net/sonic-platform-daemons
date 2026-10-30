@@ -2,7 +2,7 @@
 //!
 //! Two environment bindings are wired as dependencies so the daemon never
 //! re-solves interop:
-//!   - [`platform_bridge`] — the Python `sonic_platform` HAL (xcvr-emu) via PyO3.
+//!   - [`platform_provider`] — the shared SONiC platform API implementation.
 //!   - [`swss_common`] — STATE_DB (Redis) via the official sonic-net bindings.
 //!
 //! ## Layout (mirrors the Python `xcvrd` package)
@@ -10,7 +10,7 @@
 //! [`daemon`] is the process entry point (argument parsing, boot, the worker-thread
 //! supervisor and graceful shutdown); [`env`] holds the platform/DB connection seeds.
 //!
-//!   - [`hal`] / [`db`] — the two mockable trait seams (HAL over `platform-bridge`,
+//!   - [`hal`] / [`db`] — the two mockable trait seams (HAL over `platform-api`,
 //!     STATE_DB over `swss-common`); [`mock`] provides the test doubles (the Rust
 //!     analogue of `tests/mock_platform.py` / `tests/mock_swsscommon.py`).
 //!   - [`error`] — the crate `XcvrdError` + `Result` alias.

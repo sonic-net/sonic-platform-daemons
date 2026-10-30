@@ -15,7 +15,8 @@ name = "xcvrd-rs"
 path = "src/main.rs"
 
 [dependencies]
-platform-bridge = { path = "../platform-bridge" }
+platform-api = { git = "https://github.com/sonic-net/sonic-platform-common", rev = "608be693d782cfcaf25a6b4012a6b89389a14991" }
+platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common", rev = "608be693d782cfcaf25a6b4012a6b89389a14991" }
 # Keep in sync with SWSS_COMMON_REV in Dockerfile and Dockerfile.bookworm;
 # that checkout supplies the C API headers bindgen parses.
 swss-common = { git = "https://github.com/sonic-net/sonic-swss-common", rev = "7faca59cd30367692a8c5406ad5d7c0b5341c7ef" }
@@ -35,8 +36,6 @@ fancy-regex = "0.13"
 # the reference `Select` semantics (wake on ANY watched table). Already in the tree
 # transitively (pyo3 / swss-common); Cargo unifies to the resolved version.
 libc = "0.2"
-# Direct PyO3 access to the SAME embedded CPython interpreter platform-bridge starts
-# (kept in lock-step with platform-bridge's pin; Cargo unifies to one crate). Used only
-# by env::init_embedded_db_config to load the interpreter's swsscommon.SonicDBConfig so
-# the emulator Chassis can read the STATE_DB SFP-error injection hook — see that fn.
-pyo3 = { version = "0.22", features = ["auto-initialize"] }
+# Non-platform SONiC utilities (DB configuration, namespaces and device_info).
+# Keep aligned with platform-common's platform-pyo3 to share one interpreter.
+pyo3 = { version = "0.25", features = ["auto-initialize"] }

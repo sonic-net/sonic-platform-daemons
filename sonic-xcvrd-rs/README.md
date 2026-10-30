@@ -1,8 +1,9 @@
 # Rust xcvrd
 
 An opt-in Rust implementation of the SONiC transceiver daemon. The workspace
-contains `xcvrd-rs` (the daemon) and `platform-bridge` (PyO3 bindings to the
-existing Python `sonic_platform` HAL and transceiver decoders).
+contains only `xcvrd-rs`. Platform access uses the generated `platform-api` and
+`platform-provider` crates from `sonic-platform-common`; their shared PyO3
+implementation calls the existing Python HAL and transceiver decoders.
 
 The Python package in `../sonic-xcvrd`, its wheel packaging, and pmon's default
 supervisor configuration are unchanged. This workspace does not automatically
@@ -34,10 +35,19 @@ pkg-config, and SONiC's `libswsscommon` library and runtime dependencies.
 `7faca59cd30367692a8c5406ad5d7c0b5341c7ef`, matching the pinned Cargo dependency.
 Bindgen needs the C API headers, not the C++ headers:
 
+The transceiver API changes must also be present in a sibling
+`sonic-platform-common` checkout. The workspace temporarily patches the pinned
+git dependencies to that checkout's `crates/platform-api` and
+`crates/platform-provider`. After those changes are published, pin both git
+dependencies to the new commit, remove the workspace patches, and regenerate
+`Cargo.lock`. The currently pinned upstream revision alone does not include
+the transceiver API.
+
 ```sh
 cd sonic-xcvrd-rs
 export SWSS_COMMON_REPO=/absolute/path/to/sonic-swss-common
 export BINDGEN_EXTRA_CLANG_ARGS="-x c"
+export PYTHONPATH="$(realpath ../../sonic-platform-common)${PYTHONPATH:+:$PYTHONPATH}"
 cargo fmt --all -- --check
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets
@@ -46,6 +56,9 @@ cargo build --locked --release --bin xcvrd-rs
 
 Tests use mock HAL/DB implementations and need neither a switch nor Redis, but
 their executables still dynamically link CPython and `libswsscommon`.
+The shared-provider regression also imports `sonic_platform_api` from the
+matching common checkout. Shared API generation and bridge tests are run there
+with `generator/check.sh` after installing its `testing` extra.
 
 The optional Redis integration test starts isolated Unix-socket servers and also
 requires `redis-server` and SWSS's Lua scripts in `/usr/share/swss`:
@@ -62,7 +75,10 @@ Build against the same Debian release and Python ABI as the target container:
 docker build -t xcvrd-rs-build .
 export SWSSLIB=/absolute/path/to/staged/pmon-libraries
 docker run --rm --network host \
-    -v "$PWD":/src -v "$SWSSLIB":/swsslib -w /src \
+    -v "$PWD":/work/sonic-platform-daemons/sonic-xcvrd-rs \
+    -v "$(realpath ../../sonic-platform-common)":/work/sonic-platform-common \
+    -v "$SWSSLIB":/swsslib -w /work/sonic-platform-daemons/sonic-xcvrd-rs \
+    -e PYTHONPATH=/work/sonic-platform-common \
     -e RUSTFLAGS="-L native=/swsslib" \
     xcvrd-rs-build cargo test --locked --workspace
 ```
@@ -76,8 +92,10 @@ mount. For a release binary, replace the final command above with
 ## Runtime
 
 Run `target/release/xcvrd-rs` inside a matching SONiC pmon environment, with
-`sonic_platform`, `sonic_platform_base`, `sonic_py_common`, and `swsscommon`
-importable by the embedded interpreter. Database endpoints and separators come
+`sonic_platform`, `sonic_platform_base`, `sonic_platform_api`, `sonic_py_common`,
+and `swsscommon` importable by the embedded interpreter. Install the matching
+`sonic-platform-common` Python package as well as building its Rust crates.
+Database endpoints and separators come
 from SONiC's database configuration, with front-end ASIC namespaces discovered
 through `sonic_py_common.multi_asic`. `REDIS_SOCK` overrides the socket only for
 the default (single-ASIC) namespace.

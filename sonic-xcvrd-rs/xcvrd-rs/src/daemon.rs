@@ -19,11 +19,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use platform_api::PlatformApi;
+
 use crate::cmis::cmis_api::{BridgeCmisApi, CmisApi};
 use crate::cmis::cmis_manager_task::{CmisApiFactory, CmisManagerTask};
 use crate::dom::dom_mgr::{DomInfoUpdateTask, DomThermalInfoUpdateTask};
 use crate::env;
-use crate::hal::{BridgeHal, Hal};
+use crate::hal::{Hal, PlatformHal};
 use crate::sff_mgr::{BridgeSffApi, SffApi, SffApiFactory, SffManagerTask};
 use crate::xcvrd::deinit_transceiver_tables;
 use crate::xcvrd::remove_stale_transceiver_info;
@@ -319,7 +321,8 @@ pub fn run() -> ! {
 fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     let namespaces = env::front_end_namespaces()?;
 
-    let hal: Arc<dyn Hal> = Arc::new(BridgeHal::new()?); // PyO3 -> sonic_platform -> xcvr-emu
+    let mut platform = env::open_platform()?;
+    let hal: Arc<dyn Hal> = Arc::new(PlatformHal::from_platform(platform.clone()));
     let table_helper = Arc::new(XcvrTableHelper::new(&namespaces)?); // swss-common -> STATE_DB
 
     let num_sfps = hal.num_sfps()?;
@@ -356,12 +359,16 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     // `DaemonXcvrd.signal_handler` -> stop_event -> `deinit()`.
     install_signal_handlers();
     let sig_stop = stop.clone();
+    let mut shutdown_platform = platform.clone();
     let sig_watcher = std::thread::Builder::new()
         .name("shutdown-watcher".to_string())
         .spawn(move || {
             while !sig_stop.load(Ordering::Relaxed) {
                 if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
                     sig_stop.store(true, Ordering::SeqCst);
+                    // The shared provider captures vendor shutdown handlers;
+                    // notify them outside the signal handler to release waits.
+                    let _ = shutdown_platform.notify_shutdown();
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -554,6 +561,7 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     // unwound by the deadline is left running and reclaimed by process exit; the `shutdown-enforcer`
     // is the ultimate backstop if even this path (or the main loop above) is wedged.
     stop.store(true, Ordering::Relaxed);
+    let _ = platform.notify_shutdown();
     let join_deadline = Instant::now() + SHUTDOWN_JOIN_GRACE;
     if !join_before(dom_handle, join_deadline) {
         eprintln!("xcvrd-rs: DOM task did not stop within grace; leaving it for process exit");
@@ -577,6 +585,7 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
     }
     let _ = join_before(sig_watcher, join_deadline);
     deinit_transceiver_tables(table_helper.as_ref(), task.port_mapping());
+    platform.finalize();
 
     // The daemon RAN and is now torn down; the process must exit (the reference
     // `DaemonXcvrd.run` returns here and the process ends — it does NOT loop into a fresh

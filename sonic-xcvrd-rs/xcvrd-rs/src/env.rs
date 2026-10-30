@@ -4,7 +4,7 @@
 //! helpers, publish/subscribe loops, …) — start here rather than calling the raw
 //! bindings ad hoc.
 
-use platform_bridge::Platform;
+use platform_provider::{Platform, PlatformImpl};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use swss_common::DbConnector;
@@ -35,21 +35,18 @@ pub fn redis_sock() -> String {
 
 /// Open the transceiver HAL: PyO3 → `sonic_platform.Platform().get_chassis()`.
 ///
-/// Constructing the platform triggers the emulator `List()` RPC (falls back to
-/// `XCVR_EMU_NUM_SFPS` placeholders if the emulator isn't up yet — same as the
-/// Python daemon at start-up). Hand the returned [`Platform`] out and call
-/// `num_sfps()` / `sfp(i)` / `get_change_event(timeout_ms)`.
-pub fn open_platform() -> platform_bridge::Result<Platform> {
-    Platform::new()
+/// The shared provider owns vendor initialization and Python platform access.
+pub fn open_platform() -> Result<Platform> {
+    Ok(platform_provider::open("xcvrd", PlatformImpl::Pyo3)?)
 }
 
 /// Discover front-end namespaces and initialize multi-ASIC DB configuration.
 pub fn front_end_namespaces() -> Result<Vec<String>> {
     let (multi_asic, namespaces) = Python::with_gil(|py| -> PyResult<(bool, Vec<String>)> {
-        let multi = py.import_bound("sonic_py_common.multi_asic")?;
+        let multi = py.import("sonic_py_common.multi_asic")?;
         let is_multi = multi.call_method0("is_multi_asic")?.extract::<bool>()?;
         if is_multi {
-            py.import_bound("swsscommon.swsscommon")?
+            py.import("swsscommon.swsscommon")?
                 .getattr("SonicDBConfig")?
                 .call_method0("initializeGlobalConfig")?;
         }
@@ -58,7 +55,7 @@ pub fn front_end_namespaces() -> Result<Vec<String>> {
             multi.call_method0("get_front_end_namespaces")?.extract()?,
         ))
     })
-    .map_err(platform_bridge::BridgeError::from)?;
+    .map_err(|e| XcvrdError::Bridge(e.to_string()))?;
     if multi_asic {
         swss_common::sonic_db_config_initialize_global(GLOBAL_DB_CONFIG, false)?;
     }
@@ -161,14 +158,14 @@ pub fn init_embedded_db_config() -> bool {
     for attempt in 1..=attempts {
         let res = Python::with_gil(|py| -> PyResult<()> {
             // Same module the emulator imports: `from swsscommon.swsscommon import ...`.
-            let sc = py.import_bound("swsscommon.swsscommon")?;
+            let sc = py.import("swsscommon.swsscommon")?;
             // Best-effort: load the process-global `SonicDBConfig` singleton so by-name
             // resolution works. Swallowed inside; the probe below is the authority.
             load_embedded_sonic_db_config(&sc);
             // Authoritative go/no-go: reproduce the emulator's EXACT read path
             // (`chassis.py::_get_statedb` + `_read_injections`). If this succeeds here, the
             // emulator's own first call cannot fail-cache for the `SonicDBConfig` reason.
-            let kwargs = PyDict::new_bound(py);
+            let kwargs = PyDict::new(py);
             kwargs.set_item("use_unix_socket_path", true)?;
             let conn = sc.getattr("SonicV2Connector")?.call((), Some(&kwargs))?;
             conn.call_method1("connect", ("STATE_DB",))?;
@@ -243,7 +240,7 @@ fn load_embedded_sonic_db_config(sc: &Bound<'_, PyModule>) {
     // it exactly like the reference so single-ASIC takes the clean by-name lazy load below.
     let py = sc.py();
     let is_multi_asic = py
-        .import_bound("sonic_py_common.multi_asic")
+        .import("sonic_py_common.multi_asic")
         .and_then(|m| m.call_method0("is_multi_asic")?.extract::<bool>())
         .unwrap_or(false);
     if is_multi_asic {
@@ -288,7 +285,7 @@ fn load_embedded_sonic_db_config(sc: &Bound<'_, PyModule>) {
 /// Cheap: module-level attribute reads + one `os.path.exists`, no emulator RPC. Best-effort.
 pub fn log_emulator_delivery_preconditions() {
     let _ = Python::with_gil(|py| -> PyResult<()> {
-        let chassis_mod = py.import_bound("sonic_platform.chassis")?;
+        let chassis_mod = py.import("sonic_platform.chassis")?;
         let file: String = chassis_mod
             .getattr("__file__")
             .and_then(|f| f.extract())
@@ -298,14 +295,14 @@ pub fn log_emulator_delivery_preconditions() {
             .and_then(|m| m.extract())
             .unwrap_or_else(|_| "<unknown>".to_string());
         let marker_exists = py
-            .import_bound("os")
+            .import("os")
             .and_then(|os| {
                 os.getattr("path")?
                     .call_method1("exists", (&marker,))?
                     .extract()
             })
             .unwrap_or(false);
-        let swss_importable = py.import_bound("swsscommon.swsscommon").is_ok();
+        let swss_importable = py.import("swsscommon.swsscommon").is_ok();
         eprintln!(
             "xcvrd-rs: emulator SFP-error delivery preconditions — sonic_platform.chassis={file}, \
              test_hooks_marker={marker}, marker_exists={marker_exists} (false => injected errors \

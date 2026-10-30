@@ -1,6 +1,6 @@
 //! `sfp_status_helper.py` → error masks + `SfpBase.SFP_ERROR_BIT_TO_DESCRIPTION_DICT`.
 //!
-//! The bit→description table is NOT on the `platform-bridge`, so it is replicated
+//! The bit→description table is not on the shared platform API, so it is replicated
 //! here as a Rust const (analysis §3.4) — error decode must be byte-identical to the
 //! e2e assertions (`test_status_error.py`). The masks + decode helpers
 //! (`is_error_block_eeprom_reading`, `fetch_generic_error_description`,
