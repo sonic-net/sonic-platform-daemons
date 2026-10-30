@@ -242,6 +242,10 @@ class MockLiquidCooling(liquid_cooling_base.LiquidCoolingBase):
         if 0 <= sensor_index < len(self.leakage_sensors):
             self.leakage_sensors[sensor_index].set_leak(True)
 
+    def get_major_leak_num_min_sensors(self):
+        """MIN-N default for tests: two concurrent minor leaks aggregate to MAJOR."""
+        return 2
+
     def make_sensor_no_leak(self, sensor_index):
         """Helper method for testing - make a specific sensor report no leak"""
         if 0 <= sensor_index < len(self.leakage_sensors):
