@@ -242,6 +242,7 @@ POWER_DOWN_ACTIONS = (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF)
 
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
+POWER_ON_BLOCK_REASON = "POWER_DOWN_POLICY_CONFIGURED_EVENT_ACTIVE"
 DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION = ACTION_POWER_OFF
 DEFAULT_SYSTEM_MAJOR_LEAK_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_SYSTEM_MINOR_LEAK_ACTION = ACTION_SYSLOG_ONLY
@@ -985,9 +986,9 @@ class BmcEventHandler(EventLogger):
         if command == CMD_POWER_ON:
             if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
-                    "RACK_MGR_CMD FAILED: key={} command={} reason=CRITICAL_LEAK_PRESENT "
-                    "(active critical leak or alert)".format(key, command))
-                self._set_cmd_status(key, CMD_STATUS_FAILED, "CRITICAL_LEAK_PRESENT")
+                    "RACK_MGR_CMD FAILED: key={} command={} reason={} "
+                    "(active alert blocks power-on)".format(key, command, POWER_ON_BLOCK_REASON))
+                self._set_cmd_status(key, CMD_STATUS_FAILED, POWER_ON_BLOCK_REASON)
                 return
 
         elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
@@ -1042,7 +1043,7 @@ class BmcEventHandler(EventLogger):
             if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
                     "CHASSIS_MODULE admin_up: key={} BLOCKED "
-                    "(CRITICAL_LEAK_PRESENT: active critical leak or alert)".format(key))
+                    "({}: active alert blocks power-on)".format(key, POWER_ON_BLOCK_REASON))
                 return
             self.log_notice("CHASSIS_MODULE admin_up: powering ON Switch-Host")
             self.action_queue.put(ActionItem(ACTION_POWER_ON, "CHASSIS_MODULE:ADMIN_UP"))
@@ -1356,7 +1357,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             return
 
         if self.critical_event_checker.is_power_on_blocked():
-            self._event_log.log_warning("STARTUP: Critical leak or Rack Manager alert detected; NOT powering on Switch-Host")
+            self._event_log.log_warning(
+                "STARTUP: {}: active leak or Rack Manager alert; NOT powering on Switch-Host".format(
+                    POWER_ON_BLOCK_REASON))
             return
 
         oper_status = self.controller.get_oper_status()

@@ -643,8 +643,11 @@ class TestBmcEventHandlerRackMgrCommands:
 
     def test_power_on_command_blocked_by_critical_leak(self, event_handler):
         event_handler.critical_event_checker.is_power_on_blocked = MagicMock(return_value=True)
+        event_handler._set_cmd_status = MagicMock()
         event_handler._handle_rack_mgr_command("CMD_3", self._cmd_fvs(bmcctld.CMD_POWER_ON))
         assert event_handler.action_queue.empty()
+        event_handler._set_cmd_status.assert_called_with(
+            "CMD_3", bmcctld.CMD_STATUS_FAILED, "POWER_DOWN_POLICY_CONFIGURED_EVENT_ACTIVE")
 
     def test_power_cycle_command_enqueues_power_cycle(self, event_handler):
         event_handler._handle_rack_mgr_command("CMD_4", self._cmd_fvs(bmcctld.CMD_POWER_CYCLE))
