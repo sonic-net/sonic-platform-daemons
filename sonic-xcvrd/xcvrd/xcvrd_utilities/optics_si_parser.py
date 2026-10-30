@@ -11,6 +11,39 @@ g_optics_si_dict = {}
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
+MODULE_PRECODING_KEY = 'ModulePrecoding'
+
+
+def get_module_precoding_setting(optics_si_dict):
+    """
+    Get the module precoding block from fetched optics SI settings
+
+    Args:
+        optics_si_dict: Settings dictionary returned by fetch_optics_si_setting()
+
+    Returns:
+        The ModulePrecoding dictionary, or None if not configured
+    """
+    if not optics_si_dict:
+        return None
+    return optics_si_dict.get(MODULE_PRECODING_KEY)
+
+
+def has_custom_si_params(optics_si_dict):
+    """
+    Check whether fetched optics SI settings contain staged SI parameters,
+    i.e. anything other than the module precoding block
+
+    Args:
+        optics_si_dict: Settings dictionary returned by fetch_optics_si_setting()
+
+    Returns:
+        True if staged SI parameters are present, False otherwise
+    """
+    if not optics_si_dict:
+        return False
+    return any(key != MODULE_PRECODING_KEY for key in optics_si_dict)
+
 def _match_optics_si_key(dict_key, key, vendor_name_str):
     """
     Helper function to match optics SI key using regex patterns or string comparison
