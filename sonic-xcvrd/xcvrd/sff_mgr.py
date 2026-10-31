@@ -12,9 +12,10 @@ try:
 
     from swsscommon import swsscommon
 
-    from .xcvrd_utilities.port_event_helper import PortChangeObserver
+    from .xcvrd_utilities.port_event_helper import PortChangeObserver, PortChangeEvent
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from .xcvrd_utilities import common
+    from .xcvrd_utilities import media_settings_parser
     from sonic_platform_base.sonic_xcvr.api.public.sff8472 import Sff8472Api
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
@@ -86,7 +87,7 @@ class SffManagerTask(threading.Thread):
 
     SFF_LOGGER_PREFIX = "SFF-MAIN: "
 
-    def __init__(self, namespaces, main_thread_stop_event, platform_chassis, helper_logger):
+    def __init__(self, namespaces, port_mapping, main_thread_stop_event, platform_chassis, helper_logger):
         threading.Thread.__init__(self)
         self.name = "SffManagerTask"
         self.exc = None
@@ -95,6 +96,7 @@ class SffManagerTask(threading.Thread):
         self.helper_logger = helper_logger
         self.logger_for_port_update_event = SffLoggerForPortUpdateEvent(helper_logger)
         self.platform_chassis = platform_chassis
+        self.port_mapping = copy.deepcopy(port_mapping)
         # port_dict holds data obtained from on_port_update_event per port entry
         # with logical_port_name as key.
         # Its port entry will get deleted upon CONFIG_DB PORT_TABLE DEL.
@@ -175,6 +177,12 @@ class SffManagerTask(threading.Thread):
                 self.port_dict[lport] = {}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
+            # Keep our port_mapping current so SI publication can resolve the ASIC / physical
+            # port for a port added by dynamic port breakout (notify_media_setting looks it up
+            # here; a stale snapshot would return asic=None and raise in get_cfg_port_tbl).
+            if pport >= 0 and not self.port_mapping.is_logical_port(lport):
+                self.port_mapping.handle_port_change_event(PortChangeEvent(
+                    lport, pport, asic_id, PortChangeEvent.PORT_ADD))
 
             if self.SUBPORT in port_change_event.port_dict:
                 self.port_dict[lport][self.SUBPORT] = port_change_event.port_dict[self.SUBPORT]
@@ -193,6 +201,7 @@ class SffManagerTask(threading.Thread):
 
             if self.XCVR_TYPE in port_change_event.port_dict:
                 self.port_dict[lport][self.XCVR_TYPE] = port_change_event.port_dict[self.XCVR_TYPE]
+                self.port_dict[lport]['notify_si_settings'] = True
             self.port_dict[lport]['asic_id'] = asic_id
         # CONFIG_DB PORT_TABLE DEL case:
         elif port_change_event.db_name and \
@@ -200,6 +209,13 @@ class SffManagerTask(threading.Thread):
             # Only when port is removed from CONFIG, we consider this entry as deleted.
             if lport in self.port_dict:
                 del self.port_dict[lport]
+            # Drop the breakout-removed port from our port_mapping so a later breakout that
+            # reuses the logical name re-registers with fresh ASIC / physical port.
+            if self.port_mapping.is_logical_port(lport):
+                phys_list = self.port_mapping.get_logical_to_physical(lport)
+                phys = phys_list[0] if phys_list else pport
+                self.port_mapping.handle_port_change_event(PortChangeEvent(
+                    lport, phys, asic_id, PortChangeEvent.PORT_REMOVE))
         # STATE_DB TRANSCEIVER_INFO DEL case:
         elif port_change_event.table_name and \
                 port_change_event.table_name == 'TRANSCEIVER_INFO':
@@ -218,6 +234,19 @@ class SffManagerTask(threading.Thread):
         if found:
             host_tx_ready = value
         return host_tx_ready
+
+    def _si_retained_from_pre_pr_warmboot(self, lport, asic_id, host_tx_ready):
+        """True when this port's state looks like a pre-SI-sync image carried across a warm/fast
+        reboot: the MAC is already up (host_tx_ready retained) during a warm/fast start, and
+        APPL_DB has no si_settings_notification field. Re-notifying then would make OA reprogram
+        serdes on an up MAC (a flap), so the caller treats SI as already synced.
+        """
+        if host_tx_ready != 'true':
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_id)
+        if not (common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)):
+            return False
+        return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
 
     def get_admin_status(self, lport, asic_index):
         admin_status = 'down'
@@ -447,7 +476,8 @@ class SffManagerTask(threading.Thread):
                 # event, such as CONFIG_DB change other than admin_status field.
                 if ((not xcvr_inserted) and
                     (not host_tx_ready_changed) and
-                    (not admin_status_changed)):
+                    (not admin_status_changed) and
+                    (not data.get('notify_si_settings'))):
                     continue
                 self.log_notice(("{}: xcvr=present(inserted={}), "
                                  "host_tx_ready={}(changed={}), "
@@ -456,6 +486,37 @@ class SffManagerTask(threading.Thread):
                     xcvr_inserted,
                     data[self.HOST_TX_READY], host_tx_ready_changed,
                     data[self.ADMIN_STATUS], admin_status_changed))
+
+                if data.get('notify_si_settings'):
+                    self.port_dict[lport]['notify_si_settings'] = False
+                    asic_id = data.get('asic_id')
+                    # Skip re-publishing across an xcvrd restart when OA already synced the
+                    # retained value; a replayed TRANSCEIVER_INFO must not re-notify.
+                    if asic_id is not None and self.xcvr_table_helper.is_si_settings_synced(lport, asic_id):
+                        self.log_notice("{}: SI settings already synced (retained DB), skip re-notify".format(lport))
+                    elif asic_id is not None and \
+                            self.xcvr_table_helper.get_outstanding_si_notification_number(lport, asic_id) is not None:
+                        # Warm reboot can drop STATE_DB si_settings_ack while APPL_DB still holds our
+                        # last SI_SETTINGS_NOTIFIED:<N>. Re-publishing would bump to N+1 and, with the
+                        # MAC already up, make orchagent take the bring-down path (a real flap). Adopt
+                        # the outstanding notification and wait for OA's warm-restore ack instead.
+                        # Mirrors the CMIS adopt-outstanding path (cmis_manager_task.py).
+                        self.log_notice("{}: outstanding SI notification un-acked (warm restore), skip re-notify".format(lport))
+                    elif asic_id is not None and \
+                            self._si_retained_from_pre_pr_warmboot(lport, asic_id, data.get(self.HOST_TX_READY)):
+                        # Pre-SI-sync image upgraded via warm/fast reboot: serdes already programmed,
+                        # MAC up (host_tx_ready retained), no SI field. Publishing would make OA
+                        # reprogram serdes on an up MAC (a flap). Treat as synced; skip re-notify.
+                        self.log_notice("{}: pre-SI-sync warm-reboot state (serdes retained, MAC up), skip re-notify".format(lport))
+                    else:
+                        xcvr_info = sfp.get_transceiver_info()
+                        if xcvr_info is not None:
+                            media_settings_parser.notify_media_setting(
+                                lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+                        else:
+                            # Transient read failure: keep notify pending so a later iteration retries.
+                            self.port_dict[lport]['notify_si_settings'] = True
+                            self.log_error("{}: failed to read transceiver info for SI settings notify, will retry".format(lport))
 
                 try:
                     # Skip if it's a copper cable
