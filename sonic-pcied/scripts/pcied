@@ -103,7 +103,7 @@ class DaemonPcied(daemon_base.DaemonBase):
 
         # Connect to STATE_DB and create pcie device table
         try:
-            self.state_db = daemon_base.db_connect("STATE_DB")
+            self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
             self.device_table = swsscommon.Table(self.state_db, PCIE_DEVICE_TABLE_NAME)
             self.status_table = swsscommon.Table(self.state_db, PCIE_STATUS_TABLE_NAME)
             self.detach_info = swsscommon.Table(self.state_db, PCIE_DETACH_INFO_TABLE)

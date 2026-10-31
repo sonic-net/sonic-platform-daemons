@@ -131,7 +131,7 @@ class SensorUpdater(logger.Logger):
         super(SensorUpdater, self).__init__(SYSLOG_IDENTIFIER)
 
         self.chassis = chassis
-        state_db = daemon_base.db_connect("STATE_DB")
+        state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
         self.table = swsscommon.Table(state_db, table_name)
         self.phy_entity_table = swsscommon.Table(state_db, PHYSICAL_ENTITY_INFO_TABLE)
         self.chassis_table = None

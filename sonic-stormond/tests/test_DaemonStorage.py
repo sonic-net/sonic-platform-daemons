@@ -148,6 +148,8 @@ class TestDaemonStorage(object):
         
         # Verify db_connect was called twice (once for STATE_DB, once for CONFIG_DB)
         assert mock_db_connect.call_count == 2
+        mock_db_connect.assert_any_call("STATE_DB", use_tcp=False)
+        mock_db_connect.assert_any_call("CONFIG_DB", use_tcp=False)
         # Verify CONFIG_DB connection is stored
         assert stormon_daemon.config_db is not None
 
@@ -157,7 +159,8 @@ class TestDaemonStorage(object):
         mock_state_db = MagicMock()
         
         # First call returns STATE_DB successfully, second call fails for CONFIG_DB
-        def side_effect_fn(db_name):
+        def side_effect_fn(db_name, use_tcp=True):
+            assert use_tcp is False
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
@@ -179,7 +182,8 @@ class TestDaemonStorage(object):
         mock_state_db = MagicMock()
         
         # Only STATE_DB connection succeeds, CONFIG_DB fails
-        def side_effect_fn(db_name):
+        def side_effect_fn(db_name, use_tcp=True):
+            assert use_tcp is False
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
@@ -207,7 +211,8 @@ class TestDaemonStorage(object):
         mock_config_db = MagicMock()
         
         # Setup successful connection initially
-        def side_effect_fn(db_name):
+        def side_effect_fn(db_name, use_tcp=True):
+            assert use_tcp is False
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
