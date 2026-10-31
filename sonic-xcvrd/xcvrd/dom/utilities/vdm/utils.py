@@ -19,6 +19,9 @@ class VDMUtils:
             return self.sfp_obj_dict[physical_port].is_transceiver_vdm_supported()
         except (NotImplementedError):
             return False
+        except (KeyError):
+            self.logger.log_error(f"Failed to get VDM supported status for port {physical_port}")
+            return False
 
     def is_vdm_statistic_supported(self, physical_port):
         try:

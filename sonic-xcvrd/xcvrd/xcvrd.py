@@ -31,7 +31,7 @@ try:
     from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .cpo.cpo_manager_task import CpoManagerTask
-    from .cpo.dom_mgr import CpoDomInfoUpdateTask
+    from .cpo.dom_mgr import CpoDomInfoUpdateTask, CpoDomThermalInfoUpdateTask
     from .cpo.xcvr_table_helper import CpoXcvrTableHelper
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
@@ -105,10 +105,30 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 #
 # Helper functions =============================================================
 #
+def _wrapper_get_port_device(physical_port):
+    """The device at this physical port, CPO or pluggable.
+
+    get_sfp() answers for pluggable ports only, and a CPO port is not one, so
+    the wrappers below would see every CPO port as absent if they asked it
+    alone. Ordered like common.get_port_device(): a CPO port is served without
+    consulting get_sfp() at all.
+    """
+    try:
+        cpo = platform_chassis.get_cpo(physical_port)
+        if cpo is not None:
+            return cpo
+    except (NotImplementedError, AttributeError, IndexError):
+        pass
+    return platform_chassis.get_sfp(physical_port)
+
+
 def _wrapper_get_transceiver_info(physical_port):
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
+            device = _wrapper_get_port_device(physical_port)
+            if device is None:
+                return None
+            return device.get_transceiver_info()
         except NotImplementedError:
             pass
         except Exception as e:
@@ -135,7 +155,7 @@ def _wrapper_soak_sfp_insert_event(sfp_insert_events, port_dict):
 def _wrapper_get_sfp_type(physical_port):
     if platform_chassis:
         try:
-            sfp = platform_chassis.get_sfp(physical_port)
+            sfp = _wrapper_get_port_device(physical_port)
         except (NotImplementedError, AttributeError):
             return None
         try:
@@ -774,8 +794,8 @@ class SfpStateUpdateTask(threading.Thread):
                 the logical port exists, since the SFP status/error is recorded there.
         """
         tbl_to_del_list = [
-            *self.xcvr_table_helper.get_dom_tables(asic_index),
-            *self.xcvr_table_helper.get_vdm_tables(asic_index),
+            *self.xcvr_table_helper.get_dom_tables(asic_index, include_thresholds=True),
+            *self.xcvr_table_helper.get_vdm_tables(asic_index, include_thresholds=True),
             *self.xcvr_table_helper.get_status_tables(asic_index, include_sw=delete_status_sw_tbl),
         ]
         if delete_intf_tbl:
@@ -1137,8 +1157,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             # Skip deleting the info tables for avoiding OA to trigger Tx disable signal
             # due to TRANSCEIVER_INFO table deletion during xcvrd shutdown/crash
             common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping_data, [
-                                          *self.xcvr_table_helper.get_dom_tables(asic_index),
-                                          *self.xcvr_table_helper.get_vdm_tables(asic_index),
+                                          *self.xcvr_table_helper.get_dom_tables(asic_index, include_thresholds=True),
+                                          *self.xcvr_table_helper.get_vdm_tables(asic_index, include_thresholds=True),
                                           self.xcvr_table_helper.get_status_flag_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_change_count_tbl(asic_index),
                                           self.xcvr_table_helper.get_status_flag_set_time_tbl(asic_index),
@@ -1185,24 +1205,34 @@ class DaemonXcvrd(daemon_base.DaemonBase):
             self.threads.append(cpo_manager)
 
         # Start the dom sensor info update thread
-        dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
-        dom_info_update.start()
-        self.threads.append(dom_info_update)
+        dom_info_update = None
+        if self.sfp_obj_dict:
+            dom_info_update = DomInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event, self.skip_cmis_mgr, self.dom_update_interval)
+            dom_info_update.start()
+            self.threads.append(dom_info_update)
 
         # Start the CPO dom sensor info update thread
         cpo_dom_info_update = None
         if self.cpo_obj_dict:
-            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, False, self.dom_update_interval)
+            cpo_dom_info_update = CpoDomInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event, self.skip_cpo_mgr, self.dom_update_interval)
             cpo_dom_info_update.start()
             self.threads.append(cpo_dom_info_update)
 
         # Start the dom thermal sensor info update thread
         dom_thermal_info_update = None
-        if self.dom_temperature_poll_interval is not None:
+        if self.sfp_obj_dict and self.dom_temperature_poll_interval is not None:
             dom_thermal_info_update = DomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.sfp_obj_dict, self.stop_event,
                                                                self.dom_temperature_poll_interval)
             dom_thermal_info_update.start()
             self.threads.append(dom_thermal_info_update)
+
+        # Start the CPO dom thermal sensor info update thread
+        cpo_dom_thermal_info_update = None
+        if self.cpo_obj_dict and self.dom_temperature_poll_interval is not None:
+            cpo_dom_thermal_info_update = CpoDomThermalInfoUpdateTask(self.namespaces, port_mapping_data, self.cpo_obj_dict, self.stop_event,
+                                                                      self.dom_temperature_poll_interval)
+            cpo_dom_thermal_info_update.start()
+            self.threads.append(cpo_dom_thermal_info_update)
 
         # Start the sfp state info update thread
         sfp_state_update = None
@@ -1260,8 +1290,9 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 cpo_manager.join()
 
         # Stop the dom sensor info update thread
-        if dom_info_update.is_alive():
-            dom_info_update.join()
+        if dom_info_update is not None:
+            if dom_info_update.is_alive():
+                dom_info_update.join()
 
         # Stop the CPO dom sensor info update thread
         if cpo_dom_info_update is not None:
@@ -1272,6 +1303,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         if dom_thermal_info_update is not None:
             if dom_thermal_info_update.is_alive():
                 dom_thermal_info_update.join()
+
+        # Stop the CPO dom thermal sensor info update thread
+        if cpo_dom_thermal_info_update is not None:
+            if cpo_dom_thermal_info_update.is_alive():
+                cpo_dom_thermal_info_update.join()
 
         # Stop the sfp state info update thread
         if sfp_state_update is not None:
