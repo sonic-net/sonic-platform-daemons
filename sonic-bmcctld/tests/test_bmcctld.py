@@ -5,6 +5,7 @@
 """
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -358,7 +359,7 @@ class TestPolicyReader:
         return tbl
 
     def test_get_power_on_delay_default(self, policy_reader):
-        """When no CHASSIS_MODULE|SWITCH-HOST entry exists, power_on_delay defaults to 0."""
+        """Missing power_on_delay uses the default boot-relative delay."""
         with patch.object(bmcctld.swsscommon, 'Table', return_value=Table(None, "T")):
             assert policy_reader.get_power_on_delay() == bmcctld.DEFAULT_POWER_ON_DELAY_SECS
 
@@ -1257,8 +1258,10 @@ class TestBmcctldDaemonInitialSequence:
             daemon._initial_power_on_sequence()
         daemon.controller.power_on.assert_not_called()
 
-    def test_boot_delay_processes_queued_actions(self, chassis):
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    def test_boot_delay_processes_queued_actions(self, chassis, liquid_cooled):
         """Action items queued by the event thread during the boot delay are executed."""
+        chassis.set_liquid_cooled(liquid_cooled)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
         # Use a small non-zero delay so the queue-drain loop runs at least once
@@ -1396,6 +1399,77 @@ class TestBmcctldDaemonInitialSequence:
         daemon._initial_power_on_sequence()
         daemon.policy_reader.get_power_on_delay.assert_called_once()
 
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("change", [
+        "admin_down", "critical", "rack_manager", "online", "fault", "unavailable", "stop",
+    ])
+    def test_rechecks_conditions_after_boot_delay(self, chassis, liquid_cooled, change):
+        """Changes during the final wait must prevent automatic power-on."""
+        chassis.set_liquid_cooled(liquid_cooled)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay.return_value = 30
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon._rack_mgr_power_cmd_executed = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock()
+        daemon.controller.init_host_state = MagicMock()
+
+        def finish_wait(timeout):
+            daemon.controller.power_on.assert_not_called()
+            if change == "admin_down":
+                daemon.policy_reader.get_switch_host_admin_status.return_value = bmcctld.ADMIN_DOWN
+            elif change == "critical":
+                daemon.critical_event_checker.has_any_critical_event.return_value = True
+            elif change == "rack_manager":
+                daemon._rack_mgr_power_cmd_executed.return_value = True
+            elif change == "online":
+                chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+            elif change == "fault":
+                chassis.switch_host.set_oper_status("Fault")
+            elif change == "unavailable":
+                chassis.switch_host.set_oper_status(bmcctld.NOT_AVAILABLE)
+            elif change == "stop":
+                daemon.stop_event.set()
+            raise queue.Empty
+
+        daemon.action_queue.get = MagicMock(side_effect=finish_wait)
+        with patch('time.clock_gettime', return_value=10), \
+                patch('time.monotonic', side_effect=[100, 100, 120]):
+            daemon._initial_power_on_sequence()
+
+        daemon.action_queue.get.assert_called_once_with(timeout=1.0)
+        daemon.controller.power_on.assert_not_called()
+        if change == "online":
+            daemon.controller.init_host_state.assert_called_once()
+
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    def test_stop_with_no_remaining_delay_skips_power_on(self, chassis, liquid_cooled):
+        """Shutdown must prevent dispatch even when the wait loop is skipped."""
+        chassis.set_liquid_cooled(liquid_cooled)
+        daemon = self._make_daemon(chassis)
+        daemon.controller.power_on = MagicMock()
+        daemon.stop_event.set()
+        daemon._initial_power_on_sequence()
+        daemon.controller.power_on.assert_not_called()
+
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("entry", [{}, {bmcctld.FIELD_POWER_ON_DELAY: "0"}])
+    def test_missing_admin_status_uses_cooling_default(self, chassis, liquid_cooled, entry):
+        """Initialization and startup use the same cooling-specific default."""
+        chassis.set_liquid_cooled(liquid_cooled)
+        with patch('sonic_platform.platform.Platform') as platform, \
+                patch.object(bmcctld.PolicyReader, '_get_chassis_module_entry', return_value=entry):
+            platform.return_value.get_chassis.return_value = chassis
+            daemon = bmcctld.BmcctldDaemon(bmcctld.SYSLOG_IDENTIFIER)
+            daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
+            daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+            daemon.controller.power_on = MagicMock()
+            daemon._initial_power_on_sequence()
+
+        expected_admin = bmcctld.ADMIN_DOWN if liquid_cooled else bmcctld.ADMIN_UP
+        result = daemon.controller.chassis_module_info_table.get(bmcctld.SWITCH_HOST_MODULE_KEY)
+        assert dict(result[1])[bmcctld.CHASSIS_MODULE_INFO_ADMIN_STATUS_FIELD] == expected_admin
+        assert daemon.controller.power_on.call_count == (0 if liquid_cooled else 1)
+
 
 class TestBmcctldDaemonRun:
 
@@ -1407,21 +1481,25 @@ class TestBmcctldDaemonRun:
                 return_value=bmcctld.ADMIN_UP)
         return daemon
 
-    def test_run_not_liquid_cooled_powers_on_immediately(self, chassis):
-        """Non-liquid-cooled + admin up: power_on is called immediately."""
+    def test_run_not_liquid_cooled_zero_delay_powers_on(self, chassis):
+        """Air-cooled + admin up + zero delay: power_on is called without waiting."""
+        chassis.set_liquid_cooled(False)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=0)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        chassis.set_liquid_cooled(False)
         result = daemon.run()
         assert result is False
         daemon.controller.power_on.assert_called_once()
         daemon._run_action_loop.assert_called_once()
 
-    def test_run_not_liquid_cooled_skips_power_on_when_admin_down(self, chassis):
-        """Non-liquid-cooled + admin down: Switch-Host stays off at BMC reboot."""
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    def test_run_skips_power_on_when_admin_down(self, chassis, liquid_cooled):
+        """Either cooling type + admin down: Switch-Host stays off at BMC reboot."""
+        chassis.set_liquid_cooled(liquid_cooled)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.policy_reader.get_switch_host_admin_status = MagicMock(
@@ -1429,44 +1507,110 @@ class TestBmcctldDaemonRun:
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        chassis.set_liquid_cooled(False)
         daemon.run()
         daemon.controller.power_on.assert_not_called()
         daemon._run_action_loop.assert_called_once()
 
-    def test_run_not_liquid_cooled_skips_initial_sequence_but_starts_event_thread(self, chassis):
-        """Non-liquid-cooled: event thread starts (for CLI admin cmds), but no boot sequence."""
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    def test_run_offline_starts_event_thread_and_initial_sequence(self, chassis, liquid_cooled):
+        """Both cooling types start the event thread before the boot sequence."""
+        chassis.set_liquid_cooled(liquid_cooled)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
         daemon = self._make_daemon(chassis)
         daemon.controller.power_on = MagicMock(return_value=True)
         daemon._run_action_loop = MagicMock()
         daemon._initial_power_on_sequence = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        chassis.set_liquid_cooled(False)
         daemon.run()
-        daemon._initial_power_on_sequence.assert_not_called()
+        daemon._initial_power_on_sequence.assert_called_once()
         daemon.event_handler.run_event_loop.assert_called_once()
 
-    def test_run_daemon_restart_skips_boot_sequence(self, chassis):
-        """Daemon restart: Switch-Host already ONLINE — skip boot sequence entirely."""
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("admin_status", [bmcctld.ADMIN_UP, bmcctld.ADMIN_DOWN])
+    def test_run_online_skips_boot_sequence(self, chassis, liquid_cooled, admin_status):
+        """Already-ONLINE hosts remain running, including after BMC power loss."""
+        chassis.set_liquid_cooled(liquid_cooled)
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_switch_host_admin_status.return_value = admin_status
         daemon._initial_power_on_sequence = MagicMock()
         daemon.controller.power_on = MagicMock()
+        daemon.controller.power_off = MagicMock()
+        daemon.controller.power_cycle = MagicMock()
         daemon.controller.init_host_state = MagicMock()
         daemon._run_action_loop = MagicMock()
         daemon.event_handler.run_event_loop = MagicMock()
-        chassis.set_liquid_cooled(True)
-        result = daemon.run()
+        with patch.object(daemon._event_log, 'log_notice') as log_notice:
+            result = daemon.run()
+        log_notice.assert_any_call("STARTUP: Switch-Host already ONLINE; skipping boot sequence")
         assert result is False
         daemon._initial_power_on_sequence.assert_not_called()
         daemon.controller.power_on.assert_not_called()
+        daemon.controller.power_off.assert_not_called()
+        daemon.controller.power_cycle.assert_not_called()
         daemon.controller.init_host_state.assert_called_once()
         daemon._run_action_loop.assert_called_once()
 
-    def test_run_initializes_host_state_before_event_thread(self, chassis):
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("status", ["Fault", bmcctld.NOT_AVAILABLE])
+    def test_run_unknown_status_does_not_power_on(self, chassis, liquid_cooled, status):
+        chassis.set_liquid_cooled(liquid_cooled)
+        chassis.switch_host.set_oper_status(status)
+        daemon = self._make_daemon(chassis)
+        daemon._initial_power_on_sequence = MagicMock()
+        daemon.controller.power_on = MagicMock()
+        daemon._run_action_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock()
+        daemon.run()
+        daemon._initial_power_on_sequence.assert_not_called()
+        daemon.controller.power_on.assert_not_called()
+        daemon._run_action_loop.assert_called_once()
+
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("cold_boot,uptime,delay,expected_wait", [
+        (True, 10, 30, 20),
+        (True, 60, 30, 0),
+        (True, 0, 0, 0),
+        (False, 10, 30, 0),
+    ])
+    def test_run_uses_remaining_boot_delay(self, chassis, liquid_cooled, cold_boot,
+                                         uptime, delay, expected_wait):
+        """Only the remaining power-loss delay applies, regardless of cooling type."""
+        chassis.set_liquid_cooled(liquid_cooled)
+        if not cold_boot:
+            chassis.set_reboot_cause(chassis.REBOOT_CAUSE_NON_HARDWARE)
+        daemon = self._make_daemon(chassis)
+        daemon.policy_reader.get_power_on_delay = MagicMock(return_value=delay)
+        daemon.critical_event_checker.has_any_critical_event = MagicMock(return_value=False)
+        daemon.controller.power_on = MagicMock()
+        daemon._run_action_loop = MagicMock()
+        daemon.event_handler.run_event_loop = MagicMock()
+        now = [100]
+
+        def wait(timeout):
+            daemon.controller.power_on.assert_not_called()
+            now[0] += timeout
+            raise queue.Empty
+
+        daemon.action_queue.get = MagicMock(side_effect=wait)
+        with patch('time.clock_gettime', return_value=uptime), \
+                patch('time.monotonic', side_effect=lambda: now[0]):
+            assert daemon.run() is False
+
+        assert now[0] - 100 == expected_wait
+        assert daemon.action_queue.get.call_count == expected_wait
+        assert daemon.policy_reader.get_power_on_delay.call_count == int(cold_boot)
+        daemon.controller.power_on.assert_called_once()
+        daemon._run_action_loop.assert_called_once()
+
+    @pytest.mark.parametrize("liquid_cooled", [False, True])
+    @pytest.mark.parametrize("status", [
+        MockModule.MODULE_STATUS_ONLINE, MockModule.MODULE_STATUS_OFFLINE,
+    ])
+    def test_run_initializes_host_state_before_event_thread(self, chassis, liquid_cooled, status):
         """HOST_STATE sync and CONFIG dedup happen before the event thread starts."""
-        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        chassis.set_liquid_cooled(liquid_cooled)
+        chassis.switch_host.set_oper_status(status)
         daemon = self._make_daemon(chassis)
         call_order = []
 
@@ -1476,17 +1620,17 @@ class TestBmcctldDaemonRun:
         def track_seed():
             call_order.append("seed")
 
-        def track_event_loop():
-            call_order.append("event_loop")
-
         daemon.controller.init_host_state = MagicMock(side_effect=track_init)
         daemon.event_handler.seed_chassis_module_admin_status = MagicMock(side_effect=track_seed)
-        daemon.event_handler.run_event_loop = MagicMock(side_effect=track_event_loop)
+        daemon._initial_power_on_sequence = MagicMock(side_effect=lambda: call_order.append("initial_sequence"))
         daemon._run_action_loop = MagicMock()
-        chassis.set_liquid_cooled(True)
-        daemon.run()
-        assert call_order.index("init_host_state") < call_order.index("seed")
-        assert call_order.index("seed") < call_order.index("event_loop")
+        with patch('bmcctld.threading.Thread') as thread:
+            thread.return_value.start.side_effect = lambda: call_order.append("event_thread_start")
+            daemon.run()
+        expected = ["init_host_state", "seed", "event_thread_start"]
+        if status == MockModule.MODULE_STATUS_OFFLINE:
+            expected.append("initial_sequence")
+        assert call_order == expected
 
     def test_run_liquid_cooled_runs_full_sequence(self, chassis):
         """Liquid-cooled: event thread and initial power-on sequence are both invoked."""
