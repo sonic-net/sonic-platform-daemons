@@ -123,8 +123,7 @@ const SI_OUTPUT_EQ_POST_CURSOR_TARGET_RX_OFFSET: usize = 166; // 4 bits/lane (16
 const SI_OUTPUT_AMPLITUDE_TARGET_RX_OFFSET: usize = 170; // 4 bits/lane (170-173)
 
 // Page-01h Supported Signal-Integrity Controls Advertisement (CMIS §8.4.7). xcvrd only
-// stages a control the module advertises support for; the CDR support bits are the ones
-// the e2e drives (`SI_ADV_TX_CDR_OFFSET`/`SI_ADV_RX_CDR_OFFSET`, bit 0).
+// stages a control only when its advertised support bit is set.
 const SI_ADV_TX_CDR_OFFSET: usize = 161; // 01h:161 bit0 TXCDRSupported
 const SI_ADV_RX_CDR_OFFSET: usize = 162; // 01h:162 bit0 RxCDRSupported
 
@@ -350,10 +349,10 @@ impl BridgeCmisApi {
             .unwrap_or(false)
     }
 
-    /// Is a page-01h advertisement bit set (`byte & 0x01`)? Unreadable → not supported.
-    fn si_adv_bit0(&self, offset: usize) -> bool {
+    /// Whether any requested page-01h capability bit is set. Unreadable means unsupported.
+    fn si_control_supported(&self, offset: usize, mask: u8) -> bool {
         self.read_byte(cmis_linear(DURATIONS_PAGE, offset))
-            .map(|b| b & 0x01 != 0)
+            .map(|b| b & mask != 0)
             .unwrap_or(false)
     }
 
@@ -397,78 +396,36 @@ impl BridgeCmisApi {
     }
 
     /// `stage_rx_si_settings` for a single RX control — gated by the module's advertised
-    /// support. Unknown RX params return `false` (the reference `else: return False`).
+    /// support. Unknown RX params return `false`.
     fn stage_rx_si_param(&self, param: &str, host_lanes_mask: u32, sub: &Value) -> bool {
-        match param {
-            CDR_ENABLE_RX => {
-                if self.si_adv_bit0(SI_ADV_RX_CDR_OFFSET) {
-                    self.stage_si_param(SI_CDR_ENABLE_RX_OFFSET, 1, host_lanes_mask, sub, param)
-                } else {
-                    true
-                }
+        let (support, offset, bits_per_lane) = match param {
+            CDR_ENABLE_RX => (1 << 0, SI_CDR_ENABLE_RX_OFFSET, 1),
+            OUTPUT_EQ_PRE_CURSOR_TARGET_RX => (1 << 3, SI_OUTPUT_EQ_PRE_CURSOR_TARGET_RX_OFFSET, 4),
+            OUTPUT_EQ_POST_CURSOR_TARGET_RX => {
+                (1 << 4, SI_OUTPUT_EQ_POST_CURSOR_TARGET_RX_OFFSET, 4)
             }
-            // The emulator advertises only CDR support; the remaining RX controls
-            // (output EQ pre/post, amplitude) are applied when present. Their support
-            // advertisement offsets are not exercised by the DUT, so they are staged
-            // unconditionally here (documented deviation from the per-control gate).
-            OUTPUT_EQ_PRE_CURSOR_TARGET_RX => self.stage_si_param(
-                SI_OUTPUT_EQ_PRE_CURSOR_TARGET_RX_OFFSET,
-                4,
-                host_lanes_mask,
-                sub,
-                param,
-            ),
-            OUTPUT_EQ_POST_CURSOR_TARGET_RX => self.stage_si_param(
-                SI_OUTPUT_EQ_POST_CURSOR_TARGET_RX_OFFSET,
-                4,
-                host_lanes_mask,
-                sub,
-                param,
-            ),
-            OUTPUT_AMPLITUDE_TARGET_RX => self.stage_si_param(
-                SI_OUTPUT_AMPLITUDE_TARGET_RX_OFFSET,
-                4,
-                host_lanes_mask,
-                sub,
-                param,
-            ),
-            _ => false,
-        }
+            OUTPUT_AMPLITUDE_TARGET_RX => (1 << 2, SI_OUTPUT_AMPLITUDE_TARGET_RX_OFFSET, 4),
+            _ => return false,
+        };
+        !self.si_control_supported(SI_ADV_RX_CDR_OFFSET, support)
+            || self.stage_si_param(offset, bits_per_lane, host_lanes_mask, sub, param)
     }
 
-    /// `stage_tx_si_settings` for a single TX control — gated (CDR) / applied (others).
+    /// `stage_tx_si_settings` for a single advertised TX control.
     fn stage_tx_si_param(&self, param: &str, host_lanes_mask: u32, sub: &Value) -> bool {
-        match param {
-            CDR_ENABLE_TX => {
-                if self.si_adv_bit0(SI_ADV_TX_CDR_OFFSET) {
-                    self.stage_si_param(SI_CDR_ENABLE_TX_OFFSET, 1, host_lanes_mask, sub, param)
-                } else {
-                    true
-                }
-            }
-            FIXED_INPUT_EQ_TARGET_TX => self.stage_si_param(
-                SI_FIXED_INPUT_EQ_TARGET_TX_OFFSET,
-                4,
-                host_lanes_mask,
-                sub,
-                param,
-            ),
-            ADAPTIVE_INPUT_EQ_RECALLED_TX => self.stage_si_param(
+        let (support, offset, bits_per_lane) = match param {
+            CDR_ENABLE_TX => (1 << 0, SI_CDR_ENABLE_TX_OFFSET, 1),
+            FIXED_INPUT_EQ_TARGET_TX => (1 << 2, SI_FIXED_INPUT_EQ_TARGET_TX_OFFSET, 4),
+            ADAPTIVE_INPUT_EQ_RECALLED_TX => (
+                (1 << 5) | (1 << 6),
                 SI_ADAPTIVE_INPUT_EQ_RECALLED_TX_OFFSET,
                 2,
-                host_lanes_mask,
-                sub,
-                param,
             ),
-            ADAPTIVE_INPUT_EQ_ENABLE_TX => self.stage_si_param(
-                SI_ADAPTIVE_INPUT_EQ_ENABLE_TX_OFFSET,
-                1,
-                host_lanes_mask,
-                sub,
-                param,
-            ),
-            _ => false,
-        }
+            ADAPTIVE_INPUT_EQ_ENABLE_TX => (1 << 3, SI_ADAPTIVE_INPUT_EQ_ENABLE_TX_OFFSET, 1),
+            _ => return false,
+        };
+        !self.si_control_supported(SI_ADV_TX_CDR_OFFSET, support)
+            || self.stage_si_param(offset, bits_per_lane, host_lanes_mask, sub, param)
     }
 
     /// CMIS major revision (defaults to 5 — the emulator/testbed is CMIS 5.x — when the
@@ -1630,6 +1587,43 @@ mod tests {
             api.get_supported_freq_config(),
             (0, 0, 0, FREQ_BASE_GHZ, FREQ_BASE_GHZ)
         );
+    }
+
+    #[test]
+    fn bridge_stages_only_advertised_si_controls() {
+        use crate::mock::MockSfp;
+
+        for (param, advertisement, support, control) in [
+            ("CDREnableTx", 161, 0x01, 160),
+            ("CDREnableRx", 162, 0x01, 161),
+            ("FixedInputEqTargetTx", 161, 0x04, 156),
+            ("AdaptiveInputEqEnableTx", 161, 0x08, 153),
+            ("AdaptiveInputEqRecalledTx", 161, 0x20, 154),
+            ("AdaptiveInputEqRecalledTx", 161, 0x40, 154),
+            ("OutputAmplitudeTargetRx", 162, 0x04, 170),
+            ("OutputEqPreCursorTargetRx", 162, 0x08, 162),
+            ("OutputEqPostCursorTargetRx", 162, 0x10, 166),
+        ] {
+            for advertised in [None, Some(0), Some(0x80), Some(support)] {
+                let mut sfp = MockSfp::present();
+                if let Some(value) = advertised {
+                    sfp = sfp.with_eeprom(cmis_linear(0x01, advertisement), value);
+                }
+                let writes = sfp.clone();
+                let api = BridgeCmisApi::new(Box::new(sfp));
+                let settings = json!({ (param): { (format!("{param}1")): 1 } });
+                assert!(api.stage_custom_si_settings(1, &settings), "{param}");
+                if advertised == Some(support) {
+                    assert_eq!(
+                        writes.eeprom_writes(),
+                        vec![(cmis_linear(0x10, control), vec![1])],
+                        "{param}: {advertised:?}"
+                    );
+                } else {
+                    assert!(writes.eeprom_writes().is_empty(), "{param}: {advertised:?}");
+                }
+            }
+        }
     }
 
     #[test]

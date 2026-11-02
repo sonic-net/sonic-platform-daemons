@@ -176,14 +176,11 @@ impl DaemonXcvrd {
     /// APPL_DB signals `PortConfigDone`/`PortInitDone` before building the port mapping and
     /// starting the worker threads (`xcvrd.py:1062-1068`).
     ///
-    /// Delegates to the shared bounded gate
+    /// Delegates to the shared gate
     /// ([`port_event_helper::run_port_config_done_gate`]) over the real APPL_DB `PORT_TABLE`
     /// subscription, using this daemon's stop flag so a SIGTERM during boot ends the wait.
-    /// On the pre-populated pmon testbed (no portsyncd sentinel) it drains the snapshot once
-    /// and PROCEEDS immediately — a fast, non-blocking no-op that never hangs the daemon
-    /// (which would break the e2e gate). Returns the gate outcome for
-    /// logging/testing.
-    pub fn wait_for_port_config_done(&self, namespace: &str) -> PortConfigGate {
+    /// Subscription failures propagate without allowing startup to continue.
+    pub fn wait_for_port_config_done(&self, namespace: &str) -> Result<PortConfigGate> {
         let stop = self.stop_event.clone();
         let is_stopped = move || stop.load(Ordering::Relaxed);
         port_event_helper::run_port_config_done_gate(namespace, &is_stopped)
@@ -196,11 +193,10 @@ impl DaemonXcvrd {
     pub(crate) fn wait_for_port_config_done_with(
         &self,
         notifier: &mut dyn port_event_helper::PortConfigNotifier,
-        max_polls: usize,
     ) -> (PortConfigGate, usize) {
         let stop = self.stop_event.clone();
         let is_stopped = move || stop.load(Ordering::Relaxed);
-        port_event_helper::wait_for_port_config_done_gate(notifier, &is_stopped, max_polls)
+        port_event_helper::wait_for_port_config_done_gate(notifier, &is_stopped)
     }
 
     /// `DaemonXcvrd.init` — load the platform HAL + build the STATE_DB table registry.
@@ -660,7 +656,7 @@ mod tests {
     fn test_daemon_xcvrd_wait_for_port_config_done() {
         let d = DaemonXcvrd::new(false, false, None, None);
         let mut notifier = ScriptedNotifier::new(vec![vec!["Ethernet0"], vec!["PortConfigDone"]]);
-        let (outcome, polls) = d.wait_for_port_config_done_with(&mut notifier, 16);
+        let (outcome, polls) = d.wait_for_port_config_done_with(&mut notifier);
         assert_eq!(outcome, PortConfigGate::Done);
         assert_eq!(polls, 2, "Select.select is polled twice (call_count == 2)");
     }
@@ -672,7 +668,7 @@ mod tests {
         let d = DaemonXcvrd::new(false, false, None, None);
         d.request_stop();
         let mut notifier = ScriptedNotifier::new(vec![vec!["Ethernet0"]]);
-        let (outcome, polls) = d.wait_for_port_config_done_with(&mut notifier, 16);
+        let (outcome, polls) = d.wait_for_port_config_done_with(&mut notifier);
         assert_eq!(outcome, PortConfigGate::Stopped);
         assert_eq!(polls, 0);
     }

@@ -1132,11 +1132,6 @@ pub enum PortConfigGate {
     Done,
     /// The stop flag was set before the sentinel arrived (a shutdown during boot).
     Stopped,
-    /// The bounded poll budget elapsed before the sentinel arrived. On the emulated pmon
-    /// testbed no portsyncd ever writes the sentinel (CONFIG_DB is pre-populated instead),
-    /// so the daemon proceeds anyway — the gate is a bounded best-effort that must never
-    /// hang the daemon, which would break the e2e gate.
-    TimedOut,
 }
 
 /// `wait_for_port_config_done` loop (`xcvrd.py:916`, `cmis_manager_task.py:796`), abstracted
@@ -1146,26 +1141,19 @@ pub enum PortConfigGate {
 ///
 /// Polls `notifier` until a `PortConfigDone`/`PortInitDone` key is popped
 /// (→ [`PortConfigGate::Done`], the reference `break`), `stop()` becomes true
-/// (→ [`PortConfigGate::Stopped`], the reference `while not stop_event.is_set()`), or
-/// `max_polls` cycles elapse without the sentinel (→ [`PortConfigGate::TimedOut`]). The
-/// reference loop is unbounded because portsyncd always eventually signals; `max_polls`
-/// bounds it for the emulated testbed where no such signal exists, guaranteeing the daemon
-/// always proceeds to build the port mapping and start producers.
+/// (→ [`PortConfigGate::Stopped`], the reference `while not stop_event.is_set()`).
+/// Timeouts and ordinary port updates never satisfy the readiness barrier.
 ///
 /// Returns the outcome and the number of poll cycles performed — the analogue of the Python
 /// test's `swsscommon.Select.select.call_count`.
 pub fn wait_for_port_config_done_gate(
     notifier: &mut dyn PortConfigNotifier,
     stop: &dyn Fn() -> bool,
-    max_polls: usize,
 ) -> (PortConfigGate, usize) {
     let mut polls = 0usize;
     loop {
         if stop() {
             return (PortConfigGate::Stopped, polls);
-        }
-        if polls >= max_polls {
-            return (PortConfigGate::TimedOut, polls);
         }
         polls += 1;
         if let PortConfigPoll::Keys(keys) = notifier.poll() {
@@ -1218,7 +1206,7 @@ impl PortConfigDoneSubscriber {
 impl PortConfigNotifier for PortConfigDoneSubscriber {
     fn poll(&mut self) -> PortConfigPoll {
         // The first poll drains the boot snapshot directly (a pre-populated sentinel returns
-        // immediately — the "fast no-op on the pre-populated testbed"); subsequent polls
+        // immediately); subsequent polls
         // block for a live notification first, mirroring the reference select loop.
         if self.primed {
             match self
@@ -1246,50 +1234,19 @@ impl PortConfigNotifier for PortConfigDoneSubscriber {
     }
 }
 
-/// Default boot readiness gate budget: how many poll cycles to consult before proceeding.
-/// `1` makes the production gate a true FAST NO-OP on the pre-populated pmon testbed — the
-/// first poll drains the `PORT_TABLE` snapshot NON-BLOCKINGLY (so a pre-populated
-/// `PortConfigDone` opens the gate immediately) and, absent the sentinel, the gate proceeds
-/// at once WITHOUT a blocking `SELECT_TIMEOUT_MSECS` wait. This is deliberate: the sentinel
-/// never arrives on the testbed (no portsyncd — CONFIG_DB is pre-populated), and a blocking
-/// wait here would delay/stall the CMIS + main boot threads, pushing datapath bring-up past
-/// the DomInfoUpdateTask publish cadence and breaking the e2e gate. This can be
-/// widened via `XCVRD_PORT_CONFIG_GATE_MAX_POLLS` to actually wait for a
-/// live sentinel on real hardware; unit tests pass an explicit budget to exercise the loop.
-const DEFAULT_PORT_CONFIG_GATE_MAX_POLLS: usize = 1;
-
-/// The boot readiness gate poll budget, overridable via `XCVRD_PORT_CONFIG_GATE_MAX_POLLS`
-/// (overridable without a rebuild). See [`DEFAULT_PORT_CONFIG_GATE_MAX_POLLS`].
-pub fn port_config_gate_max_polls() -> usize {
-    std::env::var("XCVRD_PORT_CONFIG_GATE_MAX_POLLS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_PORT_CONFIG_GATE_MAX_POLLS)
-}
-
 /// Run the production boot readiness gate for one namespace: subscribe to APPL_DB
-/// `PORT_TABLE` and poll (bounded) for the `PortConfigDone`/`PortInitDone` sentinel, using
-/// `stop` so a SIGTERM during boot ends the wait. Best-effort — a subscribe failure, or the
-/// bounded timeout on the pre-populated testbed, PROCEEDS rather than hanging (the shared
-/// implementation behind [`crate::xcvrd::DaemonXcvrd::wait_for_port_config_done`],
-/// [`crate::daemon::serve`], and [`crate::cmis::cmis_manager_task::CmisManagerTask::wait_for_port_config_done`]).
-/// Returns the gate outcome for logging/gating.
-pub fn run_port_config_done_gate(namespace: &str, stop: &dyn Fn() -> bool) -> PortConfigGate {
+/// `PORT_TABLE` and wait for `PortConfigDone`/`PortInitDone` or shutdown.
+/// Connection/subscription failures propagate instead of opening the barrier.
+pub fn run_port_config_done_gate(
+    namespace: &str,
+    stop: &dyn Fn() -> bool,
+) -> Result<PortConfigGate> {
+    if stop() {
+        return Ok(PortConfigGate::Stopped);
+    }
     let mut notifier =
-        match PortConfigDoneSubscriber::for_appl_port_table(namespace, SELECT_TIMEOUT_MSECS) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!(
-                    "xcvrd-rs: PortConfigDone gate: could not subscribe APPL_DB PORT_TABLE for \
-                 namespace {namespace:?} ({e}); proceeding (CONFIG_DB is pre-populated on the \
-                 pmon testbed)"
-                );
-                return PortConfigGate::TimedOut;
-            }
-        };
-    let (outcome, polls) =
-        wait_for_port_config_done_gate(&mut notifier, stop, port_config_gate_max_polls());
+        PortConfigDoneSubscriber::for_appl_port_table(namespace, SELECT_TIMEOUT_MSECS)?;
+    let (outcome, polls) = wait_for_port_config_done_gate(&mut notifier, stop);
     match outcome {
         PortConfigGate::Done => eprintln!(
             "xcvrd-rs: PortConfigDone gate: port config done for namespace {namespace:?} after \
@@ -1299,12 +1256,8 @@ pub fn run_port_config_done_gate(namespace: &str, stop: &dyn Fn() -> bool) -> Po
             "xcvrd-rs: PortConfigDone gate: shutdown requested during boot (namespace \
              {namespace:?})"
         ),
-        PortConfigGate::TimedOut => eprintln!(
-            "xcvrd-rs: PortConfigDone gate: no PortConfigDone after {polls} poll(s) for namespace \
-             {namespace:?}; proceeding (the pre-populated pmon testbed has no portsyncd sentinel)"
-        ),
     }
-    outcome
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -2163,7 +2116,7 @@ mod tests {
     /// Scripted [`PortConfigNotifier`] — the Rust analogue of the Python test's
     /// `mock_selectable.pop` side_effect. Each `poll()` yields the next scripted batch
     /// (an empty batch models a `Select.TIMEOUT`); once exhausted it returns `Timeout`
-    /// forever so a gate that never sees the sentinel falls back to its bounded budget.
+    /// until shutdown or a sentinel.
     struct ScriptedNotifier {
         batches: std::collections::VecDeque<Vec<String>>,
         polls: usize,
@@ -2213,7 +2166,7 @@ mod tests {
     fn gate_returns_done_only_after_the_sentinel() {
         let mut n = ScriptedNotifier::new(vec![vec!["Ethernet0"], vec!["PortConfigDone"]]);
         let stop = never_stop();
-        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop, 16);
+        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop);
         assert_eq!(outcome, PortConfigGate::Done);
         assert_eq!(
             polls, 2,
@@ -2233,24 +2186,22 @@ mod tests {
             vec!["PortInitDone"],
         ]);
         let stop = never_stop();
-        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop, 16);
+        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop);
         assert_eq!(outcome, PortConfigGate::Done);
         assert_eq!(polls, 4);
     }
 
-    // On the pre-populated pmon testbed no portsyncd writes the sentinel, so the gate must
-    // fall back to its bounded budget and PROCEED (never hang the daemon). The budget caps
-    // the number of poll cycles.
     #[test]
-    fn gate_times_out_after_the_bounded_budget_when_sentinel_never_arrives() {
+    fn gate_waits_through_timeouts_until_shutdown_when_sentinel_never_arrives() {
         let mut n = ScriptedNotifier::new(vec![vec!["Ethernet0"]]); // then Timeout forever
-        let stop = never_stop();
-        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop, 3);
-        assert_eq!(outcome, PortConfigGate::TimedOut);
-        assert_eq!(
-            polls, 3,
-            "the loop stops at the poll budget, not spinning forever"
-        );
+        let checks = std::cell::Cell::new(0);
+        let stop = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 20
+        };
+        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop);
+        assert_eq!(outcome, PortConfigGate::Stopped);
+        assert_eq!(polls, 20);
     }
 
     // A SIGTERM during boot (stop flag) ends the wait immediately with Stopped — the
@@ -2259,18 +2210,18 @@ mod tests {
     fn gate_stops_when_stop_requested() {
         let mut n = ScriptedNotifier::new(vec![vec!["Ethernet0"]]);
         let stop = || true; // already shutting down
-        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop, 8);
+        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop);
         assert_eq!(outcome, PortConfigGate::Stopped);
         assert_eq!(polls, 0, "stop is checked before the first poll");
     }
 
     // A pre-populated sentinel in the very first (snapshot) poll returns immediately — the
-    // fast no-op required on the pre-populated testbed.
+    // without waiting for a duplicate notification.
     #[test]
     fn gate_is_a_fast_no_op_when_sentinel_is_already_present() {
         let mut n = ScriptedNotifier::new(vec![vec!["Ethernet0", "PortConfigDone", "Ethernet4"]]);
         let stop = never_stop();
-        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop, 4);
+        let (outcome, polls) = wait_for_port_config_done_gate(&mut n, &stop);
         assert_eq!(outcome, PortConfigGate::Done);
         assert_eq!(
             polls, 1,

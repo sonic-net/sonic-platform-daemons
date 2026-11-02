@@ -38,46 +38,8 @@ pub const CMIS_EXPIRATION_BUFFER_MS: u64 = 2;
 /// `CmisManagerTask.CMIS_MODULE_TYPES` — abbreviations that get the paged CMIS bring-up.
 pub const CMIS_MODULE_TYPES: &[&str] = &["QSFP-DD", "QSFP_DD", "OSFP", "OSFP-8X", "QSFP+C", "CPO"];
 
-/// The `PortChangeObserver` select timeout (ms) — production `task_worker` cadence and the
-/// upper bound of the deadline-aware select ([`CmisManagerTask::next_dwell_select_timeout_ms`]).
+/// The `PortChangeObserver` select timeout, matching Python's task-worker cadence.
 const PORT_UPDATE_SELECT_TIMEOUT_MS: u64 = 1000;
-
-/// Floor (ms) for the deadline-aware port-update select while a port is dwelling between
-/// datapath states (see [`CmisManagerTask::next_dwell_select_timeout_ms`]). Bounds how tight
-/// the loop can spin as a dwell nears expiry while still advancing the port within a small
-/// fraction of one `CMIS_INTER_STATE_DWELL_MS`.
-const CMIS_DWELL_SELECT_FLOOR_MS: u64 = 50;
-
-/// Minimum wall-clock time (ms) each *datapath bring-up* `cmis_state`
-/// (`DP_PRE_INIT_CHECK` → `DP_ACTIVATION`) is HELD in `TRANSCEIVER_STATUS_SW.cmis_state`
-/// before the machine advances to the next one — a **testbed-pacing adaptation**, not a
-/// reference field.
-///
-/// On real hardware each datapath phase dwells naturally: the reference
-/// `process_cmis_state_machine` publishes a state, drives the module, then *waits* (one
-/// transition per `task_worker` pass) for the module to report the next
-/// `DataPathInitialized`/`DataPathActivated` — a wait that takes real milliseconds-to-seconds
-/// per phase (the `MaxDurationDPInit` the module advertises). The xcvr **emulator**
-/// (`xcvr_emu/dpsm.py`) is *synchronous*: a datapath register write flips `DP{n}State` in the
-/// same call, so every `check_datapath_state`/`check_config_error` gate passes on the very
-/// next pass and the machine free-runs through the whole INSERTED→READY sequence between two
-/// consecutive 50 ms STATE_DB polls. `test_cmis_state_progression` (which re-plugs an admin-up
-/// port and rapid-polls `cmis_state`) then only ever samples the terminal `READY`, even though
-/// each intermediate state *was* published — they just aren't HELD long enough to observe.
-///
-/// So we reproduce the reference's per-phase dwell explicitly: on entry to each datapath state
-/// we arm [`PortInfo::dwell_until`] and hold that state (one transition per elapsed dwell)
-/// until it expires, mirroring the module-paced cadence the reference relies on. The dwell is
-/// armed at *transition* time ([`CmisManagerTask::arm_inter_state_dwell_on_entry`]) and the
-/// `task_worker` select is *deadline-aware* ([`CmisManagerTask::next_dwell_select_timeout_ms`]),
-/// so a port advances the instant its dwell elapses — one transition per ~`CMIS_INTER_STATE_DWELL_MS`,
-/// matching the reference's ~1 s-per-phase cadence — instead of wasting an extra full idle select
-/// between writing a state and re-reading it (which would double the observed per-state time).
-/// Kept short enough that the full bring-up (≈6 dwelled states) stays well inside the `T_FAST`=15 s
-/// READY budget, and the short-circuit `READY` paths (flat-memory / non-CMIS / admin-down /
-/// host-tx-not-ready) are NOT dwelled so they still reach `READY` promptly. Unit tests set the
-/// dwell to zero (see the `task_with` helper) to keep one-transition-per-`process_ports_once`.
-pub const CMIS_INTER_STATE_DWELL_MS: u64 = 1000;
 
 /// How many times a module must read absent before the CMIS manager believes it.
 ///
@@ -145,14 +107,6 @@ pub struct PortInfo {
     pub txoff_duration: f64,
     pub cmis_retries: u32,
     pub cmis_expired: Option<Instant>,
-    /// Inter-state pacing (testbed adaptation, see [`CMIS_INTER_STATE_DWELL_MS`]): the
-    /// wall-clock instant until which the CURRENT datapath bring-up `cmis_state` must be held
-    /// before [`CmisManagerTask::process_cmis_state_machine`] may advance it. `None` = not
-    /// currently dwelling.
-    pub dwell_until: Option<Instant>,
-    /// The datapath state the active [`Self::dwell_until`] was armed for — so the gate arms a
-    /// fresh dwell exactly once per state entry (and re-arms when the state changes).
-    pub dwelled_state: Option<String>,
 }
 
 /// `CmisManagerTask` — subscribes to CONFIG_DB/APPL_DB/STATE_DB PORT changes and runs
@@ -174,10 +128,6 @@ pub struct CmisManagerTask {
     /// (empty object when the platform ships no such file). Seeded once at daemon startup
     /// via [`CmisManagerTask::set_optics_si_settings`] and consulted during AP_CONF bring-up.
     optics_si_settings: Value,
-    /// Minimum time each datapath bring-up `cmis_state` is HELD before advancing — a
-    /// testbed-pacing adaptation (see [`CMIS_INTER_STATE_DWELL_MS`]). Production default is
-    /// [`CMIS_INTER_STATE_DWELL_MS`]; unit tests set it to zero for one-transition-per-pass.
-    inter_state_dwell: Duration,
     /// When the `REMOVED` rescan may next run (see `rescue_present_ports_stuck_removed`).
     next_removed_rescan: Option<Instant>,
 }
@@ -218,7 +168,6 @@ impl CmisManagerTask {
             _is_fast_reboot_enabled: None,
             api_factory,
             optics_si_settings: json!({}),
-            inter_state_dwell: Duration::from_millis(CMIS_INTER_STATE_DWELL_MS),
             next_removed_rescan: None,
         }
     }
@@ -368,42 +317,33 @@ impl CmisManagerTask {
         }
     }
 
-    /// `CmisManagerTask.wait_for_port_config_done` (`cmis_manager_task.py:796`, called from
-    /// `run` at :1359-1361) — the ONE-SHOT BOOT BARRIER: `run` calls this once before the
-    /// bring-up sweeps so the task starts only after CONFIG_DB/APPL_DB signals port config is
-    /// done. It also records `is_port_config_done` for parity with the reference's
-    /// `isPortConfigDone` (which `on_port_update_event` sets on the `PortConfigDone` key) — but
-    /// that flag is NOT a per-port gate (see [`Self::process_single_lport`]); the barrier is
-    /// purely this blocking wait in `run`.
-    ///
-    /// Fast + best-effort: on the pre-populated pmon testbed CONFIG_DB is already provisioned
-    /// (no portsyncd sentinel), so the gate drains the `PORT_TABLE` snapshot once and PROCEEDS
-    /// immediately rather than blocking — it must never delay or stall the CMIS thread, which
-    /// would push datapath bring-up past the DomInfoUpdateTask publish cadence and break the
-    /// e2e gate. Only a shutdown (`Stopped`) skips recording the flag — the
-    /// task is exiting anyway.
-    pub fn wait_for_port_config_done(&mut self, namespace: &str, stop: &dyn Fn() -> bool) {
-        let outcome = run_port_config_done_gate(namespace, stop);
-        if outcome != PortConfigGate::Stopped {
+    /// Wait for the namespace's port-configuration sentinel before starting CMIS.
+    pub fn wait_for_port_config_done(
+        &mut self,
+        namespace: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> crate::error::Result<PortConfigGate> {
+        let outcome = run_port_config_done_gate(namespace, stop)?;
+        if outcome == PortConfigGate::Done {
             self.is_port_config_done = true;
         }
+        Ok(outcome)
     }
 
     /// Testable seam for [`Self::wait_for_port_config_done`]: run the gate loop over an
     /// injected [`crate::xcvrd_utilities::port_event_helper::PortConfigNotifier`] (a scripted
-    /// mock in unit tests) and open `is_port_config_done` on the same non-`Stopped` outcomes.
+    /// mock in unit tests) and record readiness only after the sentinel.
     #[cfg(test)]
     pub(crate) fn wait_for_port_config_done_with(
         &mut self,
         notifier: &mut dyn crate::xcvrd_utilities::port_event_helper::PortConfigNotifier,
         stop: &dyn Fn() -> bool,
-        max_polls: usize,
     ) -> (PortConfigGate, usize) {
         let (outcome, polls) =
             crate::xcvrd_utilities::port_event_helper::wait_for_port_config_done_gate(
-                notifier, stop, max_polls,
+                notifier, stop,
             );
-        if outcome != PortConfigGate::Stopped {
+        if outcome == PortConfigGate::Done {
             self.is_port_config_done = true;
         }
         (outcome, polls)
@@ -415,9 +355,6 @@ impl CmisManagerTask {
         if let Some(p) = self.port_dict.get_mut(lport) {
             p.cmis_retries = retries;
             p.cmis_expired = None;
-            // Drop any inter-state dwell so the fresh bring-up re-arms it per state entry.
-            p.dwell_until = None;
-            p.dwelled_state = None;
         }
     }
 
@@ -1054,107 +991,6 @@ impl CmisManagerTask {
         exp <= now
     }
 
-    /// Is `state` a datapath bring-up state that is paced by the inter-state dwell
-    /// (see [`CMIS_INTER_STATE_DWELL_MS`])? The short-circuit `READY` paths (INSERTED alone,
-    /// flat-memory / non-CMIS / admin-down / host-tx-not-ready) and the terminal states are
-    /// deliberately NOT paced, so they still reach `READY`/`REMOVED`/`FAILED` promptly.
-    fn is_dwelled_state(state: &str) -> bool {
-        matches!(
-            state,
-            CMIS_STATE_DP_PRE_INIT_CHECK
-                | CMIS_STATE_DP_DEINIT
-                | CMIS_STATE_AP_CONF
-                | CMIS_STATE_DP_INIT
-                | CMIS_STATE_DP_TXON
-                | CMIS_STATE_DP_ACTIVATE
-        )
-    }
-
-    /// Inter-state pacing gate (testbed adaptation). Returns `true` when the machine should
-    /// HOLD (return without advancing) because the current datapath state has not yet been
-    /// published for its full [`Self::inter_state_dwell`].
-    ///
-    /// On the FIRST pass in a dwelled `state` it arms [`PortInfo::dwell_until`]; on later passes
-    /// it just checks whether that dwell has elapsed. A zero dwell (unit tests) arms an
-    /// already-expired instant, so the gate never holds and one transition happens per pass —
-    /// preserving the existing state-machine test cadence. A non-dwelled state clears the dwell
-    /// so the next datapath state re-arms cleanly.
-    fn inter_state_dwell_gate(&mut self, lport: &str, state: &str) -> bool {
-        if !Self::is_dwelled_state(state) {
-            if let Some(p) = self.port_dict.get_mut(lport) {
-                p.dwell_until = None;
-                p.dwelled_state = None;
-            }
-            return false;
-        }
-        let dwell = self.inter_state_dwell;
-        let now = Instant::now();
-        if let Some(p) = self.port_dict.get_mut(lport) {
-            if p.dwelled_state.as_deref() != Some(state) {
-                // Entered this datapath state — arm a fresh dwell for it.
-                p.dwelled_state = Some(state.to_string());
-                p.dwell_until = Some(now + dwell);
-            }
-            match p.dwell_until {
-                Some(until) => now < until,
-                None => false,
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Arm the inter-state dwell for a freshly-entered datapath `state` at **transition**
-    /// time — the companion to the on-read arming in [`Self::inter_state_dwell_gate`]. Called
-    /// at the tail of [`Self::process_cmis_state_machine`] once a handler has advanced the
-    /// port into `state`, so the deadline-aware select ([`Self::next_dwell_select_timeout_ms`])
-    /// can advance this port the moment the dwell elapses instead of after an extra full idle
-    /// select. The shared `dwelled_state != state` guard keeps it idempotent with the on-read
-    /// arming and a no-op when the state is unchanged (a handler still waiting on its own
-    /// precondition), and non-dwelled states are left untouched (the gate clears them on the
-    /// next read). A zero dwell (unit tests) arms an already-expired instant, so the machine
-    /// still advances one transition per `process_ports_once`.
-    fn arm_inter_state_dwell_on_entry(&mut self, lport: &str, state: &str) {
-        if !Self::is_dwelled_state(state) {
-            return;
-        }
-        let dwell = self.inter_state_dwell;
-        let now = Instant::now();
-        if let Some(p) = self.port_dict.get_mut(lport) {
-            if p.dwelled_state.as_deref() != Some(state) {
-                p.dwelled_state = Some(state.to_string());
-                p.dwell_until = Some(now + dwell);
-            }
-        }
-    }
-
-    /// Deadline-aware select cap (ms) for the `task_worker` port-update wait. While any port
-    /// is dwelling between datapath states, shrink the idle wait to the nearest dwell deadline
-    /// so that port advances the instant its dwell elapses instead of overshooting by a full
-    /// [`PORT_UPDATE_SELECT_TIMEOUT_MS`] — the same deadline-aware-select shape the DOM loop
-    /// uses for its periodic cadence. Returns the full timeout when no port is dwelling, and is
-    /// floored at [`CMIS_DWELL_SELECT_FLOOR_MS`] so a near-expiry dwell can't hot-spin the loop.
-    fn next_dwell_select_timeout_ms(&self) -> u64 {
-        let now = Instant::now();
-        let mut nearest: Option<Duration> = None;
-        for p in self.port_dict.values() {
-            if let Some(until) = p.dwell_until {
-                if until > now {
-                    let rem = until - now;
-                    nearest = Some(match nearest {
-                        Some(n) => n.min(rem),
-                        None => rem,
-                    });
-                }
-            }
-        }
-        match nearest {
-            Some(rem) => (rem.as_millis() as u64)
-                .clamp(CMIS_DWELL_SELECT_FLOOR_MS, PORT_UPDATE_SELECT_TIMEOUT_MS),
-            None => PORT_UPDATE_SELECT_TIMEOUT_MS,
-        }
-    }
-
     /// `handle_cmis_inserted_state` — app-select, lane masks, decommission, DEINIT gating.
     fn handle_cmis_inserted_state(&mut self, lport: &str, api: &dyn CmisApi) -> bool {
         let (host_lane_count, speed, subport) = {
@@ -1201,44 +1037,24 @@ impl CmisManagerTask {
             return false;
         }
 
-        // Bring-up precondition gate (cmis_manager_task.py:926), evaluated BEFORE decommission
-        // so a precondition-lost port takes the low-power path and is NEVER driven out of low
-        // power by a decommission cycle or a datapath bring-up. It reads the CACHED `port_dict`
-        // values that `on_port_update_event` maintains from the observer (CONFIG_DB
-        // `admin_status`, STATE_DB `PORT_TABLE`/`host_tx_ready`), reconciled from the DB only
-        // when absent — so a host_tx_ready flip is acted on with the exact value that triggered
-        // the CMIS re-init (the keeper race a fresh read would lose).
-        //
-        // DEVIATION FROM THE REFERENCE (documented for the Parity Verifier). The reference
-        // short-circuits to a forced-Tx-disabled, TERMINAL `READY` whenever `host_tx_ready !=
-        // "true"` OR `admin_status != "up"`, because on real hardware orchagent asserts
-        // host_tx_ready="true" once the host serdes Tx is good, and the module must not drive
-        // its media datapath before then. This KVM/emulator testbed has NO orchagent asserting
-        // host_tx_ready on a freshly-inserted / freshly-RE-plugged, not-yet-activated module:
-        // portsorch CLEARS host_tx_ready on every sfp event (an unplug or a re-plug), and the
-        // background keeper only re-asserts "true" every ~4 s, so a fresh read at this gate
-        // returns "false" for an admin-up port the golden nonetheless requires to reach
-        // DataPathActivated. A strict host_tx_ready=="true" gate therefore SHORT-CIRCUITS a
-        // freshly re-plugged admin-up port straight to a terminal READY before the keeper can
-        // re-assert — so e2e `test_cmis_state_progression` (which re-plugs Ethernet28 and rapid-
-        // polls `cmis_state`) only ever samples that premature READY (`seq=['READY']`) and never
-        // observes the datapath bring-up sequence. We relax the bring-up trigger to
-        // `admin_status`: an admin-up port whose datapath is NOT YET activated proceeds with the
-        // full bring-up even when host_tx_ready has not (yet) latched "true".
-        //
-        // The precondition-lost TEARDOWN is preserved for exactly the two cases the CMIS-edge tests
-        // assert AND that are observable on this testbed:
-        //   * `admin_status != "up"` -> forced Tx-disable / low power (test_cmis_forced_tx,
-        //     test_cmis_reconfig), and
-        //   * `host_tx_ready != "true"` on an ALREADY-ACTIVATED datapath -> tear the running
-        //     datapath down (test_host_tx_ready: host Tx dropped under an active datapath).
-        // The fast-reboot datapath-skip (preserve an already-active datapath across re-init)
-        // is unchanged. NOTE: when host_tx_ready genuinely is "true", this gate is byte-for-
-        // byte equivalent to the reference (the `datapath_activated` term is never consulted),
-        // so parity is preserved on any orchagent-backed system. DOM link-change re-reads are
-        // NOT lost while the port is mid-bring-up: the DOM task's `DeferredCmisInit` re-arms a
-        // flap's flag re-read until the port reaches a terminal cmis_state (see dom_mgr.rs),
-        // which is what keeps e2e test_link_change_flags green without this fast short-circuit.
+        // Decommission shared lanes before applying this logical port's readiness gate.
+        if self.is_decommission_required(api, lport) {
+            self.set_decomm_pending(lport);
+        }
+        if self.is_decomm_lead_lport(lport) {
+            let p = self.port_dict.get_mut(lport).unwrap();
+            p.appl = Some(0);
+            p.host_lanes_mask = p.max_host_lanes_mask;
+            p.media_lanes_mask = p.max_media_lanes_mask;
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT);
+            return false;
+        } else if self.is_decomm_pending(lport) {
+            if self.is_decomm_failed(lport) {
+                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED);
+            }
+            return false;
+        }
+
         let host_tx_ready = self.port_dict[lport]
             .host_tx_ready
             .as_deref()
@@ -1247,10 +1063,10 @@ impl CmisManagerTask {
             .admin_status
             .as_deref()
             .unwrap_or("down");
-        let datapath_activated =
-            self.check_datapath_state(api, host_lanes_mask, &["DataPathActivated"]);
-        if admin_status != "up" || (host_tx_ready != "true" && datapath_activated) {
-            if is_fast_reboot && datapath_activated {
+        if admin_status != "up" || host_tx_ready != "true" {
+            if is_fast_reboot
+                && self.check_datapath_state(api, host_lanes_mask, &["DataPathActivated"])
+            {
                 // Skip datapath re-init in fast-reboot (preserve the active datapath).
             } else {
                 api.set_datapath_deinit(host_lanes_mask);
@@ -1265,28 +1081,6 @@ impl CmisManagerTask {
                 self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, true);
             }
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY);
-            return false;
-        }
-
-        // Admin-up + host lanes ready: decommission first if a currently-active lane needs
-        // a different application code, then advance into the datapath bring-up.
-        if self.is_decommission_required(api, lport) {
-            self.set_decomm_pending(lport);
-        }
-
-        if self.is_decomm_lead_lport(lport) {
-            {
-                let p = self.port_dict.get_mut(lport).unwrap();
-                p.appl = Some(0);
-                p.host_lanes_mask = p.max_host_lanes_mask;
-                p.media_lanes_mask = p.max_media_lanes_mask;
-            }
-            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_DEINIT);
-            return false;
-        } else if self.is_decomm_pending(lport) {
-            if self.is_decomm_failed(lport) {
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED);
-            }
             return false;
         }
 
@@ -1399,16 +1193,6 @@ impl CmisManagerTask {
                 .get_status_sw_tbl(self.get_asic_id(lport)),
         );
 
-        // Inter-state pacing (testbed adaptation, see `CMIS_INTER_STATE_DWELL_MS`): HOLD each
-        // datapath bring-up state for its dwell before advancing, so the synchronous emulator
-        // does not free-run the whole INSERTED->READY sequence between two STATE_DB polls. The
-        // state is already published in `TRANSCEIVER_STATUS_SW.cmis_state`; we simply return
-        // without running its handler until the dwell elapses. A zero dwell (unit tests) never
-        // holds, preserving one transition per pass.
-        if self.inter_state_dwell_gate(lport, &state) {
-            return;
-        }
-
         let (expired, retries, host_lanes_mask, appl) = {
             let p = &self.port_dict[lport];
             (
@@ -1433,19 +1217,11 @@ impl CmisManagerTask {
         }
 
         if state == CMIS_STATE_INSERTED {
-            if !self.handle_cmis_inserted_state(lport, api) {
-                return;
-            }
-        }
-
-        if state == CMIS_STATE_DP_PRE_INIT_CHECK {
-            if !self.handle_cmis_dp_pre_init_check_state(lport, api) {
-                return;
-            }
+            self.handle_cmis_inserted_state(lport, api);
+        } else if state == CMIS_STATE_DP_PRE_INIT_CHECK {
+            self.handle_cmis_dp_pre_init_check_state(lport, api);
         } else if state == CMIS_STATE_DP_DEINIT {
-            if !self.handle_cmis_dp_deinit_state(lport, api) {
-                return;
-            }
+            self.handle_cmis_dp_deinit_state(lport, api);
         } else if state == CMIS_STATE_AP_CONF {
             // Explicit control bit to apply custom Host SI settings. Set to 1 and applied
             // via `set_application` only when custom optics SI settings are staged.
@@ -1533,25 +1309,16 @@ impl CmisManagerTask {
                 self.force_cmis_reinit(lport, retries + 1);
                 return;
             }
-            // Do NOT drive the datapath init while the port precondition is lost
-            // (cmis_manager_task.py:1198 — some CMIS modules auto-squelch). Uses the SAME
-            // cached `port_dict` values as the INSERTED gate.
-            //
-            // DEVIATION (see `handle_cmis_inserted_state`): the reference also requires
-            // `host_tx_ready == "true"` here, but on this orchagent-less-at-bring-up testbed
-            // host_tx_ready never latches "true" for a still-activating module (portsorch clears
-            // it on the re-plug and the keeper only re-asserts every ~4 s), so a strict gate
-            // would stall a port that passed the (relaxed) INSERTED gate right before
-            // `set_datapath_init` — leaving DPnState stuck and the golden's DataPathActivated
-            // unreachable. We gate on `admin_status` only; the emulator has no real host-Tx
-            // auto-squelch, so the datapath reaches DataPathActivated as the golden requires.
-            // On an orchagent-backed system host_tx_ready is "true" by the time a port reaches
-            // DP_INIT, so this is equivalent to the reference in practice.
+            // Some modules auto-squelch if initialized before the host signal is ready.
             let admin_status = self.port_dict[lport]
                 .admin_status
                 .as_deref()
                 .unwrap_or("down");
-            if admin_status != "up" {
+            let host_tx_ready = self.port_dict[lport]
+                .host_tx_ready
+                .as_deref()
+                .unwrap_or("false");
+            if admin_status != "up" || host_tx_ready != "true" {
                 return;
             }
             api.set_datapath_init(host_lanes_mask);
@@ -1581,19 +1348,6 @@ impl CmisManagerTask {
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY);
             self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, false);
         }
-
-        // Arm the freshly-entered datapath state's inter-state dwell now, at TRANSITION time,
-        // so `task_worker`'s deadline-aware select advances this port the instant its dwell
-        // elapses rather than after an extra full idle select (see `CMIS_INTER_STATE_DWELL_MS`).
-        // Reached only when the machine did NOT hold on the dwell gate above (that path early
-        // -returns); the `dwelled_state != state` guard in `arm_inter_state_dwell_on_entry`
-        // keeps it idempotent with the on-read arming and a no-op for a still-waiting handler.
-        let entered_state = common::get_cmis_state_from_state_db(
-            lport,
-            self.xcvr_table_helper
-                .get_status_sw_tbl(self.get_asic_id(lport)),
-        );
-        self.arm_inter_state_dwell_on_entry(lport, &entered_state);
     }
 
     /// `process_single_lport` — drive one logical port's CMIS state-machine advance.
@@ -1765,15 +1519,8 @@ impl CmisManagerTask {
         }
 
         while !stop.load(Ordering::Relaxed) {
-            // Deadline-aware select: while any port is dwelling between datapath states, shrink
-            // the idle port-update wait to the nearest dwell deadline so that port advances the
-            // moment its dwell elapses instead of overshooting by a full
-            // `PORT_UPDATE_SELECT_TIMEOUT_MS` — restoring the reference's ~1 s-per-phase datapath
-            // cadence (mirrors the DOM loop's deadline-aware select). Port-update events still
-            // wake the select immediately; only the idle timeout is shortened.
-            let select_ms = self.next_dwell_select_timeout_ms();
             if let Some(obs) = observer.as_mut() {
-                if let Ok(events) = obs.handle_port_update_event(select_ms) {
+                if let Ok(events) = obs.handle_port_update_event(PORT_UPDATE_SELECT_TIMEOUT_MS) {
                     for mut ev in events {
                         self.enrich_event(&mut ev);
                         self.on_port_update_event(&ev);
@@ -1802,19 +1549,18 @@ impl CmisManagerTask {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        // Boot readiness gate (cmis_manager_task.py:1359-1361): the ONE-SHOT BOOT BARRIER —
-        // wait for PortConfigDone BEFORE seeding cmis_state=UNKNOWN and running the bring-up
-        // loop, so the task starts only after port config is done. Fast + best-effort: a
-        // SIGTERM ends the wait, and the pre-populated testbed (no portsyncd sentinel) drains
-        // the snapshot once and proceeds without blocking. NOT a per-port gate — once the
-        // barrier passes, `task_worker`/`process_single_lport` sweep every port unconditionally
-        // (including re-processing on re-insert / fault-clear / speed-change).
+        // Wait for every namespace before publishing state or touching datapaths.
         let namespaces = self.namespaces.clone();
         for namespace in &namespaces {
             let s = stop.clone();
-            self.wait_for_port_config_done(namespace, &move || s.load(Ordering::Relaxed));
-            if stop.load(Ordering::Relaxed) {
-                return;
+            match self.wait_for_port_config_done(namespace, &move || s.load(Ordering::Relaxed)) {
+                Ok(PortConfigGate::Done) => {}
+                Ok(PortConfigGate::Stopped) => return,
+                Err(e) => {
+                    eprintln!("CmisManagerTask: port configuration barrier failed: {e}");
+                    stop.store(true, Ordering::SeqCst);
+                    return;
+                }
             }
         }
         let lports: Vec<String> = self.port_dict.keys().cloned().collect();
@@ -1923,9 +1669,6 @@ mod tests {
         // post-barrier state. It is NOT a per-port gate — `process_single_lport` runs
         // regardless (see the boot-barrier note there) — but keeping it set mirrors reality.
         task.is_port_config_done = true;
-        // Disable the inter-state pacing dwell (a production-only testbed adaptation) so the
-        // state-machine tests keep their one-transition-per-`process_ports_once` cadence.
-        task.inter_state_dwell = Duration::ZERO;
         task
     }
 
@@ -3028,7 +2771,7 @@ mod tests {
         // Ethernet0 then the PortConfigDone sentinel -> Done after exactly two polls; the
         // barrier resolves and records the flag.
         let mut notifier = ScriptedNotifier::new(vec![vec!["Ethernet0"], vec!["PortConfigDone"]]);
-        let (outcome, polls) = task.wait_for_port_config_done_with(&mut notifier, &|| false, 16);
+        let (outcome, polls) = task.wait_for_port_config_done_with(&mut notifier, &|| false);
         assert_eq!(outcome, PortConfigGate::Done);
         assert_eq!(
             polls, 2,
@@ -3041,21 +2784,21 @@ mod tests {
     }
 
     #[test]
-    fn test_cmis_manager_task_wait_for_port_config_done_timeout_still_opens_gate() {
+    fn test_cmis_manager_task_wait_for_port_config_done_timeouts_keep_gate_closed() {
         let th = helper();
         let mut task = empty_task(th.clone());
         task.is_port_config_done = false;
 
-        // No sentinel ever arrives (the emulated testbed has no portsyncd): the bounded budget
-        // elapses, yet the barrier MUST still resolve and record the flag so `run` proceeds to
-        // the bring-up sweeps rather than stalling.
         let mut notifier = ScriptedNotifier::new(vec![vec!["Ethernet0"]]);
-        let (outcome, _polls) = task.wait_for_port_config_done_with(&mut notifier, &|| false, 2);
-        assert_eq!(outcome, PortConfigGate::TimedOut);
-        assert!(
-            task.is_port_config_done,
-            "a bounded time-out must still record the flag so the testbed never stalls"
-        );
+        let checks = std::cell::Cell::new(0);
+        let stop = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 5
+        };
+        let (outcome, polls) = task.wait_for_port_config_done_with(&mut notifier, &stop);
+        assert_eq!(outcome, PortConfigGate::Stopped);
+        assert_eq!(polls, 5);
+        assert!(!task.is_port_config_done);
     }
 
     #[test]
@@ -3066,40 +2809,15 @@ mod tests {
 
         // A shutdown during boot leaves the gate closed (the task is exiting anyway).
         let mut notifier = ScriptedNotifier::new(vec![vec!["PortConfigDone"]]);
-        let (outcome, polls) = task.wait_for_port_config_done_with(&mut notifier, &|| true, 16);
+        let (outcome, polls) = task.wait_for_port_config_done_with(&mut notifier, &|| true);
         assert_eq!(outcome, PortConfigGate::Stopped);
         assert_eq!(polls, 0);
         assert!(!task.is_port_config_done);
     }
 
-    // ---- admin-status / host_tx_ready gate (cmis_manager_task.py:926/:1198) ----
-    //
-    // The gate reads the CACHED port_dict values (host_tx_ready via the STATE_DB PORT_TABLE
-    // observer, admin_status via CONFIG_DB), reconciled from the DB only when absent
-    // (defaulting to "false"/"down"). Testbed DEVIATION from the strict reference gate (see
-    // `handle_cmis_inserted_state`): the reference short-circuits on `host_tx_ready != "true"`
-    // OR `admin_status != "up"`, but this orchagent-less testbed clears host_tx_ready on every
-    // sfp event, so we relax the BRING-UP trigger to `admin_status` while preserving the
-    // precondition-lost TEARDOWN:
-    //   * an admin-DOWN port must stay in low power — it must NOT be decommissioned or
-    //     driven out of low power (ModuleLowPwr), regardless of host_tx_ready;
-    //   * an admin-UP port with host_tx_ready != "true" whose datapath is NOT YET activated
-    //     proceeds with the FULL datapath bring-up (it does NOT short-circuit) — so a freshly
-    //     re-plugged admin-up port traverses INSERTED -> ... -> DataPathActivated -> READY
-    //     rather than jumping to a premature READY (e2e test_cmis_state_progression: >=4
-    //     intermediate cmis_states + a late DP before READY);
-    //   * an admin-UP port with host_tx_ready != "true" on an ALREADY-ACTIVATED datapath tears
-    //     the running datapath down and shortcuts to a forced-Tx-disabled READY (test_host_tx_
-    //     ready: a running datapath that loses host Tx is torn down);
-    //   * an admin-UP port with host_tx_ready == "true" traverses the full datapath machine to
-    //     READY (test_cmis_datapath: DataPathActivated).
-
-    // Admin-down: one pass -> low-power shortcut straight to READY. Decommission is never
-    // consulted (get_active_apsel_hostlane == 0) and the module is never taken out of low
-    // power (set_lpmode == 0), even though a mismatched active AppSel would otherwise force
-    // a decommission cycle.
+    // Shared-lane decommission precedes the per-port readiness gate, as in Python.
     #[test]
-    fn test_admin_down_shortcuts_to_low_power_without_decommission() {
+    fn test_admin_down_decommissions_mismatched_application_before_readiness_gate() {
         let th = helper();
         th.get_cfg_port_tbl(0)
             .hset("Ethernet0", "admin_status", "down");
@@ -3115,18 +2833,12 @@ mod tests {
         assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_INSERTED);
 
         task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
-        assert_eq!(
-            api.call_count("set_lpmode"),
-            0,
-            "admin-down must not leave low power"
-        );
-        assert_eq!(
-            api.call_count("get_active_apsel_hostlane"),
-            0,
-            "no decommission when admin-down"
-        );
-        assert_eq!(api.call_count("set_datapath_deinit"), 1);
+        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_DEINIT);
+        assert!(task.is_decomm_lead_lport("Ethernet0"));
+        assert_eq!(task.port_dict["Ethernet0"].appl, Some(0));
+        assert!(api.call_count("get_active_apsel_hostlane") > 0);
+        assert_eq!(api.call_count("set_datapath_deinit"), 0);
+        assert!(!task.port_dict["Ethernet0"].forced_tx_disabled);
     }
 
     // (observer re-plug recovery — the daemon-level consequence of the
@@ -3327,71 +3039,40 @@ mod tests {
         assert_eq!(sfp.eeprom_writes().len(), 0);
     }
 
-    // host_tx_ready gate, bring-up half (testbed DEVIATION from cmis_manager_task.py:926): an
-    // admin-up port with host_tx_ready=="false" whose datapath is NOT yet activated does NOT
-    // short-circuit — it proceeds with the FULL datapath bring-up (INSERTED -> DP_PRE_INIT_CHECK
-    // -> ... -> DataPathActivated -> READY). The strict reference gate would jump straight to a
-    // forced-Tx-disabled READY here; the relaxed `admin_status` trigger traverses so a freshly
-    // re-plugged admin-up port reaches the activated datapath the golden (and e2e
-    // test_cmis_state_progression) require even before the keeper re-asserts host_tx_ready="true".
     #[test]
-    fn test_admin_up_host_tx_false_not_activated_brings_up() {
-        let th = helper();
-        th.get_cfg_port_tbl(0)
-            .hset("Ethernet0", "admin_status", "up");
-        th.get_state_port_tbl(0)
-            .hset("Ethernet0", "host_tx_ready", "false");
-        th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
-
-        // Default datapath is DataPathDeactivated (not activated) -> proceed with bring-up.
-        let api = m6_bringup_api();
-        let (mut task, stop) = m6_task(&th, &api);
-        m6_insert_e0(&mut task);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_INSERTED);
-
-        // First pass advances INSERTED -> DP_PRE_INIT_CHECK (no forced Tx-disable, no
-        // deinit shortcut) — the port is progressing, not latched in low power.
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-        assert_eq!(api.call_count("set_datapath_deinit"), 0);
-        assert!(!task.port_dict["Ethernet0"].forced_tx_disabled);
-
-        // It traverses the rest of the machine to READY (datapath settles as the emulator
-        // drives it) — the full bring-up the datapath/progression e2e tests require.
-        for _ in 0..3 {
+    fn test_admin_up_without_host_tx_ready_keeps_unactivated_datapath_disabled() {
+        for host_tx_ready in [None, Some("false")] {
+            let th = helper();
+            th.get_cfg_port_tbl(0)
+                .hset("Ethernet0", "admin_status", "up");
+            if let Some(value) = host_tx_ready {
+                th.get_state_port_tbl(0)
+                    .hset("Ethernet0", "host_tx_ready", value);
+            }
+            th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
+            let api = m6_bringup_api();
+            let (mut task, stop) = m6_task(&th, &api);
+            m6_insert_e0(&mut task);
             task.process_ports_once(&stop);
+            assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
+            assert!(task.port_dict["Ethernet0"].forced_tx_disabled);
+            assert_eq!(api.call_count("set_datapath_deinit"), 1);
+            assert_eq!(api.call_count("tx_disable_channel"), 1);
+            for _ in 0..3 {
+                task.process_ports_once(&stop);
+            }
+            assert_eq!(api.call_count("set_datapath_init"), 0);
+            assert_eq!(api.call_count("set_application"), 0);
+            assert_eq!(api.call_count("tx_disable_channel"), 1);
         }
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_INIT);
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_TXON);
-        assert_eq!(api.call_count("set_datapath_init"), 1);
-        api.set_datapath_state_value(dp_state("DataPathInitialized"));
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_ACTIVATE);
-        api.set_datapath_state_value(dp_state("DataPathActivated"));
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
-        assert!(!task.port_dict["Ethernet0"].forced_tx_disabled);
     }
 
-    // Direct unit guard for the e2e test_cmis_state_progression regression (REPAIR): a
-    // freshly RE-PLUGGED admin-up port whose host_tx_ready was CLEARED by portsorch on the sfp
-    // event (STATE_DB PORT_TABLE reads "false") and whose datapath is NOT yet activated must
-    // TRAVERSE the full datapath bring-up (INSERTED -> DP_PRE_INIT_CHECK -> DP_DEINIT ->
-    // AP_CONFIGURED -> DP_INIT -> DP_TXON -> DP_ACTIVATION -> READY) rather than SHORT-CIRCUITING
-    // to a premature terminal READY. A strict host_tx_ready=="true" gate jumps straight to READY
-    // here (the seq=['READY'] the rapid-polling e2e capture samples before the ~4 s keeper can
-    // re-assert "true"); the relaxed `admin_status` trigger traverses so the capture observes
-    // >=4 distinct intermediate cmis_states AND a late DP state (DP_TXON/DP_ACTIVATION) before
-    // READY. Mirrors the e2e capture: record ordered distinct cmis_states, break on the first
-    // READY, and assert the datapath was actually driven.
     #[test]
-    fn test_admin_up_replug_host_tx_cleared_traverses_full_machine() {
+    fn test_replug_waits_for_host_tx_ready_event_before_bringup() {
         let th = helper();
         th.get_cfg_port_tbl(0)
             .hset("Ethernet0", "admin_status", "up");
-        // portsorch cleared host_tx_ready on the unplug sfp event; the keeper has not yet
-        // re-asserted "true" when the re-plug lands (the ~4 s keeper race the e2e hits).
+        // Host readiness is cleared during removal.
         th.get_state_port_tbl(0)
             .hset("Ethernet0", "host_tx_ready", "false");
         th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
@@ -3418,8 +3099,26 @@ mod tests {
         m6_insert_e0(&mut task);
         assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_INSERTED);
 
-        // Drive the machine and record the ordered DISTINCT cmis_states, exactly as the e2e
-        // rapid-poll capture does (advance the synchronous emulator datapath, break on READY).
+        task.process_ports_once(&stop);
+        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
+        assert!(task.port_dict["Ethernet0"].forced_tx_disabled);
+        assert_eq!(api.call_count("set_datapath_init"), 0);
+
+        let mut ready = PortChangeEvent::new(
+            "Ethernet0".into(),
+            Some(1),
+            0,
+            PortChangeEventType::Set,
+            "STATE_DB".into(),
+            "PORT_TABLE".into(),
+        );
+        ready
+            .port_dict
+            .insert("host_tx_ready".into(), "true".into());
+        task.on_port_update_event(&ready);
+        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_INSERTED);
+
+        // An observer event, not elapsed time, re-arms the disabled READY port.
         let mut seq: Vec<String> = vec![cmis_state(&th, "Ethernet0")];
         for _ in 0..24 {
             if seq.last().map(String::as_str) == Some(CMIS_STATE_READY) {
@@ -3450,7 +3149,7 @@ mod tests {
             "media datapath never driven (short-circuited to READY): seq={seq:?}"
         );
 
-        // >=4 distinct INTERMEDIATE states + a late DP state before READY (the e2e assertions).
+        // Discrete unit-test passes observe the actual transitions, without wall-clock sleeps.
         let intermediate: Vec<&str> = seq
             .iter()
             .map(String::as_str)
@@ -3519,247 +3218,35 @@ mod tests {
         assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
     }
 
-    // ---- inter-state dwell pacing (test_cmis_state_progression parity) ----
-    // The xcvr emulator is synchronous: a datapath register write flips DP{n}State in the SAME
-    // call, so `check_datapath_state`/`check_config_error` pass instantly and the CMIS machine
-    // would free-run INSERTED -> READY between two 50 ms STATE_DB polls, letting a rapid poller
-    // observe only the terminal READY (the exact e2e failure: seq=['READY']). Real hardware
-    // spends real milliseconds-to-seconds per datapath phase; `CMIS_INTER_STATE_DWELL_MS`
-    // reproduces that pacing by HOLDING each datapath bring-up state for its dwell so the
-    // intermediate cmis_states are published long enough to be sampled. These tests pin the
-    // pacing contract: (a) a non-zero dwell HOLDS the machine mid-bring-up across arbitrarily
-    // fast sweeps, (b) the dwell elapsing advances exactly one state, and (c) the short-circuit
-    // READY paths are never dwelled (so admin-down / non-CMIS ports still settle promptly).
-
-    // A non-zero dwell freezes the FIRST datapath state: no matter how fast the sweep runs
-    // (the free-running loop the emulator provokes on the DUT), the machine stays on
-    // DP_PRE_INIT_CHECK and never jumps to READY, and the media datapath is never driven.
     #[test]
-    fn test_inter_state_dwell_holds_machine_mid_bringup() {
-        let th = helper();
-        th.get_cfg_port_tbl(0)
-            .hset("Ethernet0", "admin_status", "up");
-        th.get_state_port_tbl(0)
-            .hset("Ethernet0", "host_tx_ready", "true");
-        th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
+    fn test_dp_init_requires_admin_up_and_host_tx_ready() {
+        for (admin, host) in [("up", None), ("up", Some("false")), ("down", Some("true"))] {
+            let th = helper();
+            th.get_cfg_port_tbl(0)
+                .hset("Ethernet0", "admin_status", "up");
+            th.get_state_port_tbl(0)
+                .hset("Ethernet0", "host_tx_ready", "true");
+            let api = m6_bringup_api();
+            let (mut task, stop) = m6_task(&th, &api);
+            m6_insert_e0(&mut task);
+            for _ in 0..4 {
+                task.process_ports_once(&stop);
+            }
+            assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_INIT);
+            let port = task.port_dict.get_mut("Ethernet0").unwrap();
+            port.admin_status = Some(admin.into());
+            port.host_tx_ready = host.map(String::from);
+            task.process_cmis_state_machine("Ethernet0", &api);
+            assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_INIT);
+            assert_eq!(api.call_count("set_datapath_init"), 0);
 
-        let api = m6_bringup_api();
-        let (mut task, stop) = m6_task(&th, &api);
-        // A long dwell: once the machine reaches the first datapath state it must NOT advance.
-        task.inter_state_dwell = Duration::from_secs(3600);
-        m6_insert_e0(&mut task);
-
-        // INSERTED is NOT a dwelled state -> it advances to the first datapath state in one pass.
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-
-        // Many rapid sweeps HOLD DP_PRE_INIT_CHECK: the machine never leaves it and never
-        // reaches READY, and set_datapath_init is never called (no datapath driven yet).
-        for _ in 0..50 {
-            task.process_ports_once(&stop);
+            let port = task.port_dict.get_mut("Ethernet0").unwrap();
+            port.admin_status = Some("up".into());
+            port.host_tx_ready = Some("true".into());
+            task.process_cmis_state_machine("Ethernet0", &api);
+            assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_TXON);
+            assert_eq!(api.call_count("set_datapath_init"), 1);
         }
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-        assert_eq!(api.call_count("set_datapath_init"), 0);
-    }
-
-    // The dwell elapsing releases the state: an immediate re-sweep HOLDS (dwell not yet
-    // elapsed), but after the dwell passes exactly one transition happens.
-    #[test]
-    fn test_inter_state_dwell_elapsing_advances_one_state() {
-        let th = helper();
-        th.get_cfg_port_tbl(0)
-            .hset("Ethernet0", "admin_status", "up");
-        th.get_state_port_tbl(0)
-            .hset("Ethernet0", "host_tx_ready", "true");
-        th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
-
-        let api = m6_bringup_api();
-        let (mut task, stop) = m6_task(&th, &api);
-        let dwell = Duration::from_millis(40);
-        task.inter_state_dwell = dwell;
-        m6_insert_e0(&mut task);
-
-        task.process_ports_once(&stop); // INSERTED -> DP_PRE_INIT_CHECK (not dwelled)
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-
-        // Immediately re-sweeping HOLDS (the DP_PRE_INIT_CHECK dwell has not elapsed).
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-
-        // After the dwell elapses, exactly one transition happens.
-        std::thread::sleep(dwell + Duration::from_millis(25));
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_DEINIT);
-
-        // The freshly-entered DP_DEINIT re-arms its own dwell: a rapid re-sweep HOLDS it too,
-        // proving every datapath state is paced independently (not just the first).
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_DEINIT);
-    }
-
-    // Short-circuit READY paths are never dwelled: an admin-down port drops straight to a
-    // low-power terminal READY in a single pass even under an enormous dwell, because INSERTED
-    // (and the flat-memory / non-CMIS / admin-down / host-tx-not-ready shortcuts) are not
-    // dwelled states. This keeps admin-down / non-progression ports settling promptly.
-    #[test]
-    fn test_short_circuit_ready_is_not_dwelled() {
-        let th = helper();
-        th.get_cfg_port_tbl(0)
-            .hset("Ethernet0", "admin_status", "down");
-        th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
-
-        let api = m6_bringup_api();
-        let (mut task, stop) = m6_task(&th, &api);
-        task.inter_state_dwell = Duration::from_secs(3600);
-        m6_insert_e0(&mut task);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_INSERTED);
-
-        // One pass reaches the terminal READY despite the huge dwell.
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_READY);
-    }
-
-    // ---- bring-up cadence: transition-time dwell arming + deadline-aware select ----
-    // Restores the reference's ~1 s-per-phase datapath cadence (the CMIS-bring-up e2e margin
-    // faithfulness fix): the dwell is armed the instant a datapath state is entered (not on the
-    // next read), and `task_worker`'s port-update select is shrunk to the nearest dwell
-    // deadline, so a dwelled state advances one dwell after entry instead of also burning an
-    // extra full idle select.
-
-    // arm_inter_state_dwell_on_entry arms a dwelled state, is idempotent within a state, re-arms
-    // on a state change, and never arms a non-dwelled (short-circuit / terminal) state.
-    #[test]
-    fn test_arm_inter_state_dwell_on_entry_arms_and_is_idempotent() {
-        let mut task = empty_task(helper());
-        task.inter_state_dwell = Duration::from_secs(3600);
-        task.port_dict.insert(
-            "Ethernet0".to_string(),
-            PortInfo {
-                asic_id: 0,
-                ..Default::default()
-            },
-        );
-
-        // Non-dwelled states (INSERTED / READY) never arm a dwell.
-        task.arm_inter_state_dwell_on_entry("Ethernet0", CMIS_STATE_INSERTED);
-        assert!(task.port_dict["Ethernet0"].dwell_until.is_none());
-        task.arm_inter_state_dwell_on_entry("Ethernet0", CMIS_STATE_READY);
-        assert!(task.port_dict["Ethernet0"].dwell_until.is_none());
-
-        // Entering a dwelled state arms it.
-        task.arm_inter_state_dwell_on_entry("Ethernet0", CMIS_STATE_DP_PRE_INIT_CHECK);
-        let armed = task.port_dict["Ethernet0"].dwell_until;
-        assert!(armed.is_some());
-        assert_eq!(
-            task.port_dict["Ethernet0"].dwelled_state.as_deref(),
-            Some(CMIS_STATE_DP_PRE_INIT_CHECK)
-        );
-
-        // Re-arming the SAME state is idempotent — the on-read gate and this transition-time
-        // arm must not push the deadline out on a still-held state.
-        task.arm_inter_state_dwell_on_entry("Ethernet0", CMIS_STATE_DP_PRE_INIT_CHECK);
-        assert_eq!(task.port_dict["Ethernet0"].dwell_until, armed);
-
-        // A state change re-arms a fresh deadline for the new state.
-        task.arm_inter_state_dwell_on_entry("Ethernet0", CMIS_STATE_DP_DEINIT);
-        assert_eq!(
-            task.port_dict["Ethernet0"].dwelled_state.as_deref(),
-            Some(CMIS_STATE_DP_DEINIT)
-        );
-        assert_ne!(task.port_dict["Ethernet0"].dwell_until, armed);
-    }
-
-    // next_dwell_select_timeout_ms returns the full timeout when idle and the nearest pending
-    // dwell (clamped to [floor, full]) when ports are dwelling; an already-elapsed deadline is
-    // ignored.
-    #[test]
-    fn test_next_dwell_select_timeout_ms_caps_to_nearest_dwell() {
-        let mut task = empty_task(helper());
-
-        // No ports dwelling -> full select timeout.
-        assert_eq!(
-            task.next_dwell_select_timeout_ms(),
-            PORT_UPDATE_SELECT_TIMEOUT_MS
-        );
-
-        // One port dwelling with ~500 ms remaining -> capped well below the full timeout.
-        let now = Instant::now();
-        task.port_dict.insert(
-            "Ethernet0".to_string(),
-            PortInfo {
-                asic_id: 0,
-                dwell_until: Some(now + Duration::from_millis(500)),
-                ..Default::default()
-            },
-        );
-        let cap = task.next_dwell_select_timeout_ms();
-        assert!(
-            (CMIS_DWELL_SELECT_FLOOR_MS..=500).contains(&cap),
-            "cap={cap}"
-        );
-        assert!(cap < PORT_UPDATE_SELECT_TIMEOUT_MS);
-
-        // A second port with a NEARER (tiny) deadline wins the min and is floored.
-        task.port_dict.insert(
-            "Ethernet4".to_string(),
-            PortInfo {
-                asic_id: 0,
-                dwell_until: Some(now + Duration::from_millis(1)),
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            task.next_dwell_select_timeout_ms(),
-            CMIS_DWELL_SELECT_FLOOR_MS
-        );
-
-        // A port whose dwell already elapsed is ignored (not a pending deadline).
-        task.port_dict.clear();
-        task.port_dict.insert(
-            "Ethernet0".to_string(),
-            PortInfo {
-                asic_id: 0,
-                dwell_until: Some(now - Duration::from_millis(10)),
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            task.next_dwell_select_timeout_ms(),
-            PORT_UPDATE_SELECT_TIMEOUT_MS
-        );
-    }
-
-    // The dwell of a freshly-entered datapath state is armed in the SAME pass that enters it
-    // (transition-time arming), so the very next rapid sweep HOLDS it — proving no extra idle
-    // select is wasted between writing a state and pacing it (the wasted-select the fix removes).
-    #[test]
-    fn test_freshly_entered_state_is_armed_at_transition() {
-        let th = helper();
-        th.get_cfg_port_tbl(0)
-            .hset("Ethernet0", "admin_status", "up");
-        th.get_state_port_tbl(0)
-            .hset("Ethernet0", "host_tx_ready", "true");
-        th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
-
-        let api = m6_bringup_api();
-        let (mut task, stop) = m6_task(&th, &api);
-        task.inter_state_dwell = Duration::from_secs(3600);
-        m6_insert_e0(&mut task);
-
-        // INSERTED (not dwelled) advances to the first datapath state in one pass...
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
-        // ...and that datapath state's dwell is ALREADY armed at transition — no second pass /
-        // re-read was needed to start pacing it.
-        assert_eq!(
-            task.port_dict["Ethernet0"].dwelled_state.as_deref(),
-            Some(CMIS_STATE_DP_PRE_INIT_CHECK)
-        );
-        assert!(task.port_dict["Ethernet0"].dwell_until.is_some());
-
-        // Because it is already armed, a rapid re-sweep HOLDS it (does not advance).
-        task.process_ports_once(&stop);
-        assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
     }
 
     // ---- is_cmis_application_update_required (test_CmisManagerTask_is_cmis_application_update_required) ----
@@ -3847,9 +3334,7 @@ mod tests {
     //      already active (test_CmisManagerTask_task_worker_fastboot). Fast reboot is enabled
     //      but the module reports DataPathDeactivated, so the datapath-skip branch does NOT
     //      apply and the normal precondition-lost path (deinit + Tx-off + forced_tx_disabled)
-    //      executes. The precondition is lost via admin-down (an unconditional teardown
-    //      trigger): the host_tx_ready deviation only tears a running datapath down, so a
-    //      not-yet-activated port needs admin-down to exercise the no-skip teardown. ----
+    //      executes when admin status is down, even during fast reboot. ----
     #[test]
     fn test_task_worker_fastboot_forces_tx_when_not_activated() {
         let th = helper();

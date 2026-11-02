@@ -105,6 +105,13 @@ status in `TRANSCEIVER_STATUS`. Set `XCVRD_LEGACY_STATUS_TABLE=1` for the Rust
 process on those images to preserve that schema. Leave it unset for images
 using the separate `TRANSCEIVER_STATUS_SW` table.
 
+CMIS bring-up requires both admin-up and `host_tx_ready=true`, as in Python
+xcvrd. Startup waits for `PortConfigDone` or `PortInitDone` in each namespace's
+APPL_DB `PORT_TABLE`; timeouts do not open that barrier. Emulator test setups
+must supply these control-plane events. Intermediate CMIS states have no
+artificial minimum dwell time, so polling tests must not require every state
+to be observable.
+
 The linked SWSS library must export the SWSS C API. Older C++-only libraries
 cannot be used directly; any compatibility runtime must remain private to the
 Rust process rather than replacing the platform's shared library.

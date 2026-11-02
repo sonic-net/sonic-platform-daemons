@@ -327,17 +327,17 @@ fn serve(args: &Args) -> Result<ServeOutcome, Box<dyn Error>> {
 
     let num_sfps = hal.num_sfps()?;
 
-    // Boot readiness gate (xcvrd.py:1062-1068): consult CONFIG_DB/APPL_DB for PortConfigDone
-    // before building the port mapping and starting the producers — the reference's "start
-    // only after the ports are configured". Fast + best-effort: on the pre-populated pmon
-    // testbed no portsyncd writes the sentinel, so the gate drains the PORT_TABLE snapshot
-    // once and PROCEEDS immediately (a non-blocking no-op) rather than hanging or adding boot
-    // latency, which would break the e2e gate. A SIGTERM during the gate ends
-    // the wait via SHUTDOWN_REQUESTED.
+    // Do not build the port mapping or start producers before port configuration is ready.
     for namespace in &namespaces {
-        crate::xcvrd_utilities::port_event_helper::run_port_config_done_gate(namespace, &|| {
-            SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
-        });
+        let outcome = crate::xcvrd_utilities::port_event_helper::run_port_config_done_gate(
+            namespace,
+            &|| SHUTDOWN_REQUESTED.load(Ordering::SeqCst),
+        )?;
+        if outcome == crate::xcvrd_utilities::port_event_helper::PortConfigGate::Stopped {
+            let _ = platform.notify_shutdown();
+            platform.finalize();
+            return Ok(ServeOutcome::Shutdown);
+        }
     }
 
     let port_mapping = get_port_mapping(&namespaces, num_sfps)?;

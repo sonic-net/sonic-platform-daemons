@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use swss_common::{ConsumerStateTable, CxxString, DbConnector, KeyOperation, SelectResult, Table};
@@ -371,14 +371,21 @@ fn namespace_tables_atomic_rows_and_producer_delivery() {
         .iter()
         .any(|ev| ev.port_name == "Ethernet8" && ev.asic_id == 3));
     appl3.set("PortConfigDone", [("count", "1")]).unwrap();
+    let deadline = Instant::now() + Duration::from_millis(100);
     assert_eq!(
-        run_port_config_done_gate("asic1", &|| false),
-        PortConfigGate::TimedOut
+        run_port_config_done_gate("asic1", &|| Instant::now() >= deadline).unwrap(),
+        PortConfigGate::Stopped
     );
     assert_eq!(
-        run_port_config_done_gate("asic3", &|| false),
+        run_port_config_done_gate("asic3", &|| false).unwrap(),
         PortConfigGate::Done
     );
+
+    {
+        std::env::set_var("REDIS_SOCK", fixture.root.join("missing.sock"));
+        let _override = SocketOverride;
+        assert!(run_port_config_done_gate("", &|| false).is_err());
+    }
 
     std::env::set_var("REDIS_SOCK", fixture.socket("asic3"));
     let _override = SocketOverride;
