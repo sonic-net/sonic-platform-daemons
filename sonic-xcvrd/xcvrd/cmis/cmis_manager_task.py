@@ -815,6 +815,36 @@ class CmisManagerTask(threading.Thread):
         intf_tbl.set(lport, fvs)
         self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
 
+    def post_port_info_after_power_up_to_db(self, api, lport):
+        """
+        Read the TRANSCEIVER_INFO fields that are only reliable once the module
+        has powered up, and post those that changed. Must be called before the
+        port is moved to CMIS_STATE_READY, so the DOM threads do not poll the
+        module concurrently. Errors are logged and never fail the CMIS state machine.
+        """
+        try:
+            try:
+                info = api.get_transceiver_info_after_power_up()
+            except NotImplementedError:
+                return
+            if not info:
+                return
+
+            intf_tbl = self.xcvr_table_helper.get_intf_tbl(self.get_asic_id(lport))
+            if not intf_tbl:
+                return
+            found, fvs = intf_tbl.get(lport)
+            if not found:
+                return
+
+            current = dict(fvs)
+            changed = [(key, str(value)) for key, value in info.items() if current.get(key) != str(value)]
+            if changed:
+                intf_tbl.set(lport, swsscommon.FieldValuePairs(changed))
+                self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE after power up {}".format(lport, changed))
+        except Exception as e:
+            self.log_error("{}: failed to update TRANSCEIVER_INFO_TABLE after power up: {}".format(lport, e))
+
     def wait_for_port_config_done(self, namespace):
         # Connect to APPL_DB and subscribe to PORT table notifications
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
@@ -961,6 +991,7 @@ class CmisManagerTask(threading.Thread):
                 self.log_notice("{}: Tx turn off duration {} secs".format(lport, txoff_duration))
                 self.update_cmis_state_expiration_time(lport, txoff_duration)
                 self.post_port_active_apsel_to_db(api, lport, host_lanes_mask, reset_apsel=True)
+            self.post_port_info_after_power_up_to_db(api, lport)
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
             return False
         # Arm timer for CMIS_STATE_DP_PRE_INIT_CHECK state
@@ -1032,6 +1063,7 @@ class CmisManagerTask(threading.Thread):
             # active apsel fields are updated correctly in the DB since
             # the CMIS state remains unchanged during xcvrd restart
             self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
+            self.post_port_info_after_power_up_to_db(api, lport)
             self.log_notice("{}: no CMIS application update required...READY".format(lport))
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
             return False
@@ -1261,6 +1293,7 @@ class CmisManagerTask(threading.Thread):
                         self.force_cmis_reinit(lport, retries + 1)
                     return
 
+                self.post_port_info_after_power_up_to_db(api, lport)
                 self.log_notice("{}: READY".format(lport))
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                 self.post_port_active_apsel_to_db(api, lport, host_lanes_mask)
