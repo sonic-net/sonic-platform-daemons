@@ -46,16 +46,8 @@ impl StatusUtils {
     /// post). The module state / fault cause / per-host-lane datapath+config+tx/rx
     /// fields are all decoded by the platform's CMIS API — the daemon never touches
     /// the EEPROM itself, it just forwards the `sonic_platform` call.
-    ///
-    /// The one projection applied on top of the raw read is
-    /// [`project_config_state_by_datapath`]: `config_state_hostlane{n}` is gated on the
-    /// live `DP{n}State` so a host lane whose datapath is `DataPathDeactivated` reports
-    /// `ConfigUndefined` (see that helper for the rationale — the reference daemon's
-    /// real-hardware config-status projection vs. the e2e emulator's sticky register).
     pub fn get_transceiver_status(&self, sfp: &dyn SfpHandle) -> Option<Value> {
-        sfp.get_transceiver_status()
-            .ok()
-            .map(project_config_state_by_datapath)
+        sfp.get_transceiver_status().ok()
     }
 
     /// `get_transceiver_status_flags(physical_port)` — `sfp.get_transceiver_status_flags()`.
@@ -77,48 +69,6 @@ impl Default for StatusUtils {
     fn default() -> Self {
         StatusUtils::new()
     }
-}
-
-/// Gate `config_state_hostlane{n}` on the host lane's live datapath state: a lane whose
-/// `DP{n}State` is `DataPathDeactivated` reports `ConfigUndefined`.
-///
-/// The CMIS `ConfigStatusLane` register (00h/11h) records the result of the *last*
-/// `ApplyDPInit` staged for a host lane. On real hardware it is cleared to
-/// `ConfigUndefined` when the module is re-inserted / power-cycled, so a datapath that
-/// is currently deactivated — never brought up, or torn back down to low power — reads
-/// `ConfigUndefined`. That is what the reference (Python) daemon projects into
-/// `TRANSCEIVER_STATUS.config_state_hostlane{n}` and what every golden capture records
-/// (steady_state: all deactivated → all `ConfigUndefined`; activated_datapath: lanes
-/// 1..host_lane_count activated → `ConfigSuccess`, the unused lanes deactivated →
-/// `ConfigUndefined`).
-///
-/// The e2e emulator, however, keeps `ConfigStatusLane` **sticky**: its MemMap survives
-/// a module plugout→plugin, and no register write ever resets the lane back to
-/// `ConfigUndefined`. So a lane configured (`ApplyDPInit`) by an earlier scenario keeps
-/// a stale `ConfigSuccess` even after its datapath has returned to `DataPathDeactivated`
-/// on the next scenario's re-plug — a projection the cumulative full-suite run would
-/// otherwise diverge on (the isolated golden capture never accumulates that state).
-///
-/// Gating the published `config_state_hostlane{n}` on the lane's live `DP{n}State`
-/// restores the reference/real-hardware semantics — an inactive datapath lane has no
-/// live config result, so it reports `ConfigUndefined` — without touching active or
-/// mid-transition datapaths (only the clearly-deactivated `DataPathDeactivated` lanes
-/// are reset). All other status fields are forwarded verbatim.
-fn project_config_state_by_datapath(mut status: Value) -> Value {
-    let Some(map) = status.as_object_mut() else {
-        return status;
-    };
-    for lane in 1..=8 {
-        let deactivated = map.get(&format!("DP{lane}State")).and_then(Value::as_str)
-            == Some("DataPathDeactivated");
-        if deactivated {
-            let key = format!("config_state_hostlane{lane}");
-            if map.contains_key(&key) {
-                map.insert(key, Value::String("ConfigUndefined".to_string()));
-            }
-        }
-    }
-    status
 }
 
 /// `StatusDBUtils` — posts the status tables (subclass of [`DbUtils`]).
@@ -522,119 +472,31 @@ mod tests {
         assert_well_formed_last_update_time(&lut);
     }
 
-    /// A rich status row whose per-host-lane datapath is a mix of activated (1..4) and
-    /// deactivated (5..8) lanes, but whose `config_state_hostlane{n}` is `ConfigSuccess`
-    /// on ALL 8 lanes — the e2e-emulator "sticky ConfigStatusLane" shape (lanes 5..8 keep
-    /// a stale success from an earlier scenario's `ApplyDPInit`).
-    fn sticky_config_success_row() -> Value {
-        let mut m = Map::new();
-        m.insert("module_state".into(), json!("ModuleReady"));
-        for lane in 1..=8 {
-            let active = lane <= 4;
-            m.insert(
-                format!("DP{lane}State"),
-                json!(if active {
-                    "DataPathActivated"
-                } else {
-                    "DataPathDeactivated"
-                }),
-            );
-            m.insert(
-                format!("config_state_hostlane{lane}"),
-                json!("ConfigSuccess"),
-            );
-        }
-        Value::Object(m)
-    }
-
-    // config_state projection (test_golden.py::test_activated_datapath): an activated
-    // datapath keeps ConfigSuccess on its live lanes (1..4), while the deactivated unused
-    // lanes (5..8) report ConfigUndefined even though the emulator's ConfigStatusLane
-    // register is stuck at ConfigSuccess.
-    #[test]
-    fn config_state_gated_on_datapath_masks_inactive_lanes() {
-        let projected = project_config_state_by_datapath(sticky_config_success_row());
-        let m = projected.as_object().unwrap();
-        for lane in 1..=4 {
-            assert_eq!(
-                m.get(&format!("config_state_hostlane{lane}"))
-                    .and_then(Value::as_str),
-                Some("ConfigSuccess"),
-                "active lane {lane} must keep ConfigSuccess"
-            );
-        }
-        for lane in 5..=8 {
-            assert_eq!(
-                m.get(&format!("config_state_hostlane{lane}"))
-                    .and_then(Value::as_str),
-                Some("ConfigUndefined"),
-                "deactivated lane {lane} must be masked to ConfigUndefined"
-            );
-        }
-    }
-
-    // config_state projection (test_golden.py::test_steady_state): an admin-down module
-    // with every datapath DataPathDeactivated reports ConfigUndefined on all 8 host lanes
-    // regardless of the emulator's sticky ConfigStatusLane, and only config_state is
-    // rewritten (all other fields pass through verbatim).
-    #[test]
-    fn config_state_all_deactivated_masks_all_lanes() {
-        let mut row = Map::new();
-        row.insert("module_state".into(), json!("ModuleLowPwr"));
-        for lane in 1..=8 {
-            row.insert(format!("DP{lane}State"), json!("DataPathDeactivated"));
-            row.insert(
-                format!("config_state_hostlane{lane}"),
-                json!("ConfigSuccess"),
-            );
-        }
-        let projected = project_config_state_by_datapath(Value::Object(row));
-        let m = projected.as_object().unwrap();
-        assert_eq!(
-            m.get("module_state").and_then(Value::as_str),
-            Some("ModuleLowPwr")
-        );
-        for lane in 1..=8 {
-            assert_eq!(
-                m.get(&format!("config_state_hostlane{lane}"))
-                    .and_then(Value::as_str),
-                Some("ConfigUndefined")
-            );
-        }
-    }
-
-    // A host lane with no DP{n}State reported is left untouched (the projection only
-    // rewrites lanes it can prove are DataPathDeactivated) — a lane mid-transition
-    // (e.g. DataPathInitialized) keeps whatever config_state the module reported.
-    #[test]
-    fn config_state_untouched_when_datapath_absent_or_transitioning() {
-        let row = json!({
+    fn mixed_datapath_status() -> Value {
+        json!({
+            "module_state": "ModuleReady",
+            "DP1State": "DataPathDeactivated",
             "config_state_hostlane1": "ConfigSuccess",
-            "DP2State": "DataPathInitialized",
-            "config_state_hostlane2": "ConfigSuccess",
-        });
-        let projected = project_config_state_by_datapath(row);
-        let m = projected.as_object().unwrap();
-        // No DP1State at all → not masked.
-        assert_eq!(
-            m.get("config_state_hostlane1").and_then(Value::as_str),
-            Some("ConfigSuccess")
-        );
-        // DP2 is mid-transition (not DataPathDeactivated) → not masked.
-        assert_eq!(
-            m.get("config_state_hostlane2").and_then(Value::as_str),
-            Some("ConfigSuccess")
-        );
+            "DP2State": "DataPathDeactivated",
+            "config_state_hostlane2": "ConfigRejected",
+            "DP3State": "DataPathInitialized",
+            "config_state_hostlane3": "ConfigSuccess",
+            "config_state_hostlane4": "VendorStatus",
+            "DP5State": "DataPathDeactivated",
+        })
     }
 
-    // End-to-end through the poster: a module handle serving the sticky-success row must
-    // publish TRANSCEIVER_STATUS with the deactivated lanes projected to ConfigUndefined.
     #[test]
-    fn post_status_masks_sticky_config_success_on_deactivated_lanes() {
+    fn get_status_preserves_platform_configuration_regardless_of_datapath() {
+        let row = mixed_datapath_status();
+        let sfp = MockSfp::present().with_status(row.clone());
+        assert_eq!(StatusUtils::new().get_transceiver_status(&sfp), Some(row));
+    }
+
+    #[test]
+    fn post_status_preserves_platform_configuration_in_state_db() {
         let pm = mapping_with(&[("Ethernet0", 0)]);
-        let hal = MockHal::with_sfps(vec![
-            MockSfp::present().with_status(sticky_config_success_row())
-        ]);
+        let hal = MockHal::with_sfps(vec![MockSfp::present().with_status(mixed_datapath_status())]);
         let tbl = MockDbTable::new("TRANSCEIVER_STATUS");
         StatusDbUtils::new().post_port_transceiver_hw_status_to_db(
             &AtomicBool::new(false),
@@ -645,20 +507,19 @@ mod tests {
             None,
         );
         let row: HashMap<String, String> = tbl.get("Ethernet0").unwrap().into_iter().collect();
-        for lane in 1..=4 {
+        for (lane, expected) in [
+            (1, "ConfigSuccess"),
+            (2, "ConfigRejected"),
+            (3, "ConfigSuccess"),
+            (4, "VendorStatus"),
+        ] {
             assert_eq!(
                 row.get(&format!("config_state_hostlane{lane}"))
                     .map(String::as_str),
-                Some("ConfigSuccess")
+                Some(expected)
             );
         }
-        for lane in 5..=8 {
-            assert_eq!(
-                row.get(&format!("config_state_hostlane{lane}"))
-                    .map(String::as_str),
-                Some("ConfigUndefined")
-            );
-        }
+        assert!(!row.contains_key("config_state_hostlane5"));
     }
 
     /// The 11-field status-flags dict from `test_post_port_transceiver_hw_status_flags_to_db`

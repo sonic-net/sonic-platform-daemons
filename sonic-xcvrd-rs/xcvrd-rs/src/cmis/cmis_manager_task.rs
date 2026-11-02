@@ -658,6 +658,10 @@ impl CmisManagerTask {
 
     /// `is_decommission_required` — a currently-active lane needs a different app code.
     pub fn is_decommission_required(&self, api: &dyn CmisApi, lport: &str) -> bool {
+        // A rejected decommission can leave the active set unchanged after staging zero.
+        if (0..CMIS_MAX_HOST_LANES).all(|lane| api.get_application(lane) == 0) {
+            return false;
+        }
         let desired_map = self.get_desired_app_map(api, lport);
         let active_apsel = match api.get_active_apsel_hostlane() {
             Ok(v) => v,
@@ -1981,6 +1985,7 @@ mod tests {
         );
 
         let api = MockCmisApi::new();
+        api.set_application_by_lane(3);
         api.set_application_advertisement(json!({
             "3": {"host_electrical_interface_id": "400GAUI-8 C2M (Annex 120E)", "host_lane_count": 8, "host_lane_assignment_options": 255}
         }));
@@ -2011,6 +2016,24 @@ mod tests {
         assert!(task.is_decommission_required(&api, "Ethernet0"));
     }
 
+    #[test]
+    fn test_decommission_skips_zero_staged_apps_before_reading_active_set() {
+        let task = empty_task(helper());
+        let api = MockCmisApi::new();
+        api.set_active_apsel(all_lanes_apsel(2));
+        api.push_active_apsel_result(Err(crate::error::XcvrdError::Other(
+            "active AppSel unavailable".into(),
+        )));
+
+        assert!(!task.is_decommission_required(&api, "Ethernet0"));
+        assert_eq!(api.call_count("get_active_apsel_hostlane"), 0);
+
+        // Any nonzero staged lane, including the last, requires the normal active-set check.
+        api.set_application_for_lane(7, 1);
+        assert!(task.is_decommission_required(&api, "Ethernet0"));
+        assert_eq!(api.call_count("get_active_apsel_hostlane"), 1);
+    }
+
     // ← e2e test_app_select.py (idx14 / Ethernet56, provision_special_modules.sh). The
     // multi-application module advertises TWO 4-lane apps sharing the SAME host lanes —
     // app1 = XLAUI 40G (AppSel 1) and app2 = CAUI-4 100G (AppSel 2). This locks in the two
@@ -2038,6 +2061,7 @@ mod tests {
         );
 
         let api = MockCmisApi::new();
+        api.set_application_by_lane(1);
         api.set_application_advertisement(json!({
             "1": {"host_electrical_interface_id": "XLAUI", "host_lane_count": 4, "host_lane_assignment_options": 1},
             "2": {"host_electrical_interface_id": "CAUI-4 C2M (Annex 83E)", "host_lane_count": 4, "host_lane_assignment_options": 1}
@@ -2217,6 +2241,7 @@ mod tests {
 
         // ...and therefore the module must NOT look like it needs decommissioning.
         let api = MockCmisApi::new();
+        api.set_application_by_lane(1);
         api.set_application_advertisement(json!({
             "1": {"host_electrical_interface_id": "100GAUI-1", "host_lane_count": 1,
                   "host_lane_assignment_options": 255}
@@ -2257,6 +2282,7 @@ mod tests {
         }
 
         let api = MockCmisApi::new();
+        api.set_application_by_lane(1);
         // A 1-host-lane 100G application selectable on ANY of the eight host lanes.
         api.set_application_advertisement(json!({
             "1": {
@@ -2824,6 +2850,7 @@ mod tests {
         th.get_intf_tbl(0).set("Ethernet0", &row(&[("dummy", "x")]));
 
         let api = m6_bringup_api();
+        api.set_application_by_lane(2);
         let mut mixed = all_lanes_apsel(1);
         mixed["ActiveAppSelLane1"] = json!(2);
         api.set_active_apsel(mixed);
@@ -3566,8 +3593,8 @@ mod tests {
     // ---- decommission cycle (test_CmisManagerTask_task_worker_decommission) ----
     // A lane actively running a different app than desired forces a decommission: the lead
     // logical port drops all AppSel and drives DP_DEINIT → AP_CONF → DP_INIT; a ConfigSuccess
-    // there clears the decommission and re-inits at INSERTED. Once the module reports no
-    // stale AppSel, the normal bring-up resumes to DP_PRE_INIT_CHECK.
+    // there clears the decommission and re-inits at INSERTED. Zero staged AppSel permits
+    // normal bring-up even if the module still reports the old active application.
     #[test]
     fn test_task_worker_decommission() {
         let th = helper();
@@ -3585,6 +3612,7 @@ mod tests {
         let api = m6_bringup_api();
         // Module actively running app 2 while app 1 is desired → decommission required.
         api.set_active_apsel(all_lanes_apsel(2));
+        api.set_application_by_lane(2);
 
         let (mut task, stop) = m6_task(&th, &api);
         m6_insert_e0(&mut task);
@@ -3603,6 +3631,7 @@ mod tests {
         task.process_ports_once(&stop);
         assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_INIT);
         assert!(task.is_decomm_pending("Ethernet0"));
+        api.set_application_by_lane(0);
 
         // DP_INIT + ConfigSuccess: decommission complete → cleared + reinit → INSERTED.
         task.process_ports_once(&stop);
@@ -3610,10 +3639,10 @@ mod tests {
         assert!(!task.is_decomm_pending("Ethernet0"));
         assert!(!task.is_decomm_lead_lport("Ethernet0"));
 
-        // Module now reports no stale AppSel → no further decommission; bring-up resumes.
-        api.set_active_apsel(all_lanes_apsel(0));
+        // The active set still contains app 2, but staging zero must prevent another cycle.
         task.process_ports_once(&stop);
         assert_eq!(cmis_state(&th, "Ethernet0"), CMIS_STATE_DP_PRE_INIT_CHECK);
+        assert!(!task.is_decomm_pending("Ethernet0"));
     }
 
     // ---- AP_CONF stages per-vendor optics SI settings + sets ec=1 ----

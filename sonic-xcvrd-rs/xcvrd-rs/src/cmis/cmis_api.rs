@@ -54,7 +54,7 @@ pub trait CmisApi {
     fn get_dpinit_pending(&self) -> Value;
     /// `{ActiveAppSelLane{n}: <app>}`. `Err` mirrors the Python `NotImplementedError`.
     fn get_active_apsel_hostlane(&self) -> Result<Value>;
-    /// The application code currently applied to host `lane` (0-based).
+    /// The staged application code for host `lane` (0-based).
     fn get_application(&self, lane: u32) -> u32;
 
     // --- durations, milliseconds (caller divides by 1000 for seconds) ---
@@ -137,7 +137,7 @@ const FIXED_INPUT_EQ_TARGET_TX: &str = "FixedInputEqTargetTx";
 const ADAPTIVE_INPUT_EQ_RECALLED_TX: &str = "AdaptiveInputEqRecalledTx";
 const ADAPTIVE_INPUT_EQ_ENABLE_TX: &str = "AdaptiveInputEqEnableTx";
 
-// CMIS page-11h Active Control Set. `get_active_apsel_hostlane`/`get_application` read
+// CMIS page-11h Active Control Set. `get_active_apsel_hostlane` reads
 // the *provisioned* (active) DPConfigLane bytes (11h:206..213); the AppSelCode is the
 // upper nibble (bits 7:4) of each host lane's byte. These are read-only and reflect the
 // application the module actually applied (updated by ApplyDPInit), which is what
@@ -622,9 +622,10 @@ impl CmisApi for BridgeCmisApi {
     }
 
     fn get_application(&self, lane: u32) -> u32 {
-        // The app applied to host `lane` == the Active Control Set AppSelCode (upper nibble
-        // of page 11h:206+lane) — same source as `get_active_apsel_hostlane`.
-        let lin = cmis_linear(ACS_PAGE, ACS_DPCONFIG_BASE_OFFSET + lane as usize);
+        if lane >= CMIS_MAX_HOST_LANES_USIZE as u32 || self.is_flat_memory() {
+            return 0;
+        }
+        let lin = cmis_linear(SCS0_PAGE, DPCONFIG_BASE_OFFSET + lane as usize);
         self.read_byte(lin).map(|b| u32::from(b >> 4)).unwrap_or(0)
     }
 
@@ -1139,7 +1140,7 @@ impl MockCmisApi {
         self.inner.lock().unwrap().application_by_lane = appl;
     }
     /// Set the per-lane application code returned by `get_application(lane)`.
-    /// `is_cmis_application_update_required` inspects each host lane's currently-active
+    /// `is_cmis_application_update_required` inspects each host lane's staged
     /// application; this lets a test paint a distinct code per lane. When the map is
     /// empty, `get_application` falls back to the flat `application_by_lane` value so
     /// existing single-value tests are unaffected.
@@ -1404,9 +1405,39 @@ mod tests {
         // Unprovisioned lane -> 0 (never Null), so decommission math stays well-defined.
         assert_eq!(apsel["ActiveAppSelLane5"], json!(0));
         assert_eq!(apsel["ActiveAppSelLane8"], json!(0));
-        assert_eq!(api.get_application(0), 1);
-        assert_eq!(api.get_application(3), 1);
-        assert_eq!(api.get_application(4), 0);
+    }
+
+    #[test]
+    fn bridge_application_reads_staged_not_active_apsel() {
+        let mut sfp = MockSfp::present().with_eeprom(CMIS_FLAT_MEM_LINEAR, 0);
+        for lane in 0..8 {
+            sfp = sfp
+                .with_eeprom(
+                    cmis_linear(0x10, 145 + lane),
+                    ((lane + 1) as u8) << 4 | 0x0f,
+                )
+                .with_eeprom(cmis_linear(0x11, 206 + lane), ((8 - lane) as u8) << 4);
+        }
+        // The byte after the staged lane array is an SI control, not lane nine.
+        sfp = sfp.with_eeprom(cmis_linear(0x10, 153), 0xf0);
+        let api = BridgeCmisApi::new(Box::new(sfp));
+        let active = api.get_active_apsel_hostlane().unwrap();
+        for lane in 0..8 {
+            assert_eq!(api.get_application(lane), lane + 1);
+            assert_eq!(
+                active[format!("ActiveAppSelLane{}", lane + 1)],
+                json!(8 - lane)
+            );
+        }
+        assert_eq!(api.get_application(8), 0);
+        assert_eq!(api.get_application(u32::MAX), 0);
+
+        let flat = BridgeCmisApi::new(Box::new(
+            MockSfp::present()
+                .with_eeprom(CMIS_FLAT_MEM_LINEAR, CMIS_FLAT_MEM_BIT)
+                .with_eeprom(cmis_linear(0x10, 145), 0xa0),
+        ));
+        assert_eq!(flat.get_application(0), 0);
     }
 
     #[test]
