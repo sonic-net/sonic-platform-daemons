@@ -78,87 +78,110 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 continue
             cpo_obj, logical_port_name, asic_index = port_info
 
-            try:
-                oe_api = cpo_obj.oe.get_api()
-                elsfp_api = cpo_obj.elsfp.get_api()
-            except ValueError as e:
-                # get_api() lazily constructs the API and raises ValueError for an
-                # unrecognised OE or ELSFP ID. Skip this port rather than let one bad
-                # ELSFP stop DOM polling for every other port.
-                self.log_warning("Got exception {} while getting CPO API for port {}, ignored".format(repr(e), logical_port_name))
-                continue
-
-            # Module-scope (non-banked) OE data: read ONCE per OE. Non-banked
-            # registers are bank-independent, so the first sibling pport
-            # processed in this pass reads them through its own CmisApi and
-            # the remaining siblings re-use the snapshot.
-            oe_key = min(common.get_oe_sibling_pports(physical_port))
-            if oe_key not in oe_module_data:
-                oe_module_data[oe_key] = self._read_non_banked_oe_data(oe_api)
-
-            # ELSFP module-scope data: read ONCE per ELSFP for the same reason
-            # as above.
-            elsfp_key = min(common.get_elsfp_sibling_pports(physical_port))
-            if elsfp_key not in elsfp_module_data:
-                elsfp_module_data[elsfp_key] = self._read_non_banked_elsfp_data(elsfp_api)
-
-            # Lane-scope (banked) data: unique to this physical port, since
-            # the CPO object is bound to the bank covering this port's lanes
-            oe_lane_data = self._read_banked_oe_data(oe_api)
-            elsfp_lane_data = self._read_banked_elsfp_data(elsfp_api)
-
-            oe_module = oe_module_data[oe_key]
-            elsfp_module = elsfp_module_data[elsfp_key]
-
-            # Publish to the first subport's logical interface, matching the
-            # existing DomInfoUpdateTask convention for breakout groups. Each
-            # category merges the device sharing group's module-scope snapshot
-            # with this port's lane-scope values.
-            # Firmware info's dict is copied since publishing beautifies it in place,
-            # so subsequent publishes using this data would be affected. Other call-sites
-            # are unaffected by this since they implicitly create a copy through merging
-            # the banked and non-banked data into a single dict.
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
-                dict(oe_module['firmware_info']))
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_dom_tbl(asic_index),
-                {**oe_module['dom'], **oe_lane_data['dom']})
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**oe_module['dom_flags'], **oe_lane_data['dom_flags']},
-                self.xcvr_table_helper.get_dom_flag_tables(asic_index),
-                "DOM flags")
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index),
-                {**oe_module['status'], **oe_lane_data['status']})
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**oe_module['status_flags'], **oe_lane_data['status_flags']},
-                self.xcvr_table_helper.get_status_flag_tables(asic_index),
-                "Status flags")
-
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
-                dict(elsfp_module['firmware_info']))
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_els_dom_tbl(asic_index),
-                {**elsfp_module['dom'], **elsfp_lane_data['dom']})
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**elsfp_module['dom_flags'], **elsfp_lane_data['dom_flags']},
-                self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
-                "ELS DOM flags")
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                logical_port_name, self.xcvr_table_helper.get_els_status_tbl(asic_index),
-                {**elsfp_module['status'], **elsfp_lane_data['status']})
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**elsfp_module['status_flags'], **elsfp_lane_data['status_flags']},
-                self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
-                "ELS Status flags")
+            self._collect_and_publish_oe_data(physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data)
+            self._collect_and_publish_elsfp_data(physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data)
 
             # TODO: Add support for collecting and publishing VDM data.
+
+    def _collect_and_publish_oe_data(self, physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data):
+        """Read this port's OE data and publish it to the OE tables.
+
+        oe_module_data caches the module-scope snapshot of each OE for the
+        current polling pass, keyed by the OE's first physical port.
+        """
+        try:
+            oe_api = cpo_obj.oe.get_api()
+        except ValueError as e:
+            # get_api() lazily constructs the API and raises ValueError for an
+            # unrecognised OE ID; skip the OE rather than stop DOM polling for
+            # every other port.
+            self.log_warning("Got exception {} while getting OE API for port {}, ignored".format(repr(e), logical_port_name))
+            return
+
+        # Module-scope (non-banked) OE data: read ONCE per OE. Non-banked
+        # registers are bank-independent, so the first sibling pport
+        # processed in this pass reads them through its own CmisApi and
+        # the remaining siblings re-use the snapshot.
+        oe_key = min(common.get_oe_sibling_pports(physical_port))
+        if oe_key not in oe_module_data:
+            oe_module_data[oe_key] = self._read_non_banked_oe_data(oe_api)
+        oe_module = oe_module_data[oe_key]
+
+        # Lane-scope (banked) data: unique to this physical port, since
+        # the CPO object is bound to the bank covering this port's lanes
+        oe_lane_data = self._read_banked_oe_data(oe_api)
+
+        # Publish to the first subport's logical interface, matching the
+        # existing DomInfoUpdateTask convention for breakout groups. Each
+        # category merges the device sharing group's module-scope snapshot
+        # with this port's lane-scope values.
+        # Firmware info's dict is copied since publishing beautifies it in place,
+        # so subsequent publishes using this data would be affected. Other call-sites
+        # are unaffected by this since they implicitly create a copy through merging
+        # the banked and non-banked data into a single dict.
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
+            dict(oe_module['firmware_info']))
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_dom_tbl(asic_index),
+            {**oe_module['dom'], **oe_lane_data['dom']})
+        self.dom_db_utils.post_flag_values_from_dict_to_db(
+            logical_port_name,
+            {**oe_module['dom_flags'], **oe_lane_data['dom_flags']},
+            self.xcvr_table_helper.get_dom_flag_tables(asic_index),
+            "DOM flags")
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index),
+            {**oe_module['status'], **oe_lane_data['status']})
+        self.dom_db_utils.post_flag_values_from_dict_to_db(
+            logical_port_name,
+            {**oe_module['status_flags'], **oe_lane_data['status_flags']},
+            self.xcvr_table_helper.get_status_flag_tables(asic_index),
+            "Status flags")
+
+    def _collect_and_publish_elsfp_data(self, physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data):
+        """Read this port's ELSFP data and publish it to the ELS tables.
+
+        elsfp_module_data caches the module-scope snapshot of each ELSFP for
+        the current polling pass, keyed by the ELSFP's first physical port.
+        """
+        try:
+            elsfp_api = cpo_obj.elsfp.get_api()
+        except ValueError as e:
+            # get_api() lazily constructs the API and raises ValueError for an
+            # unrecognised ELSFP ID; skip the ELSFP rather than stop DOM polling
+            # for every other port.
+            self.log_warning("Got exception {} while getting ELSFP API for port {}, ignored".format(repr(e), logical_port_name))
+            return
+
+        # ELSFP module-scope data: read ONCE per ELSFP for the same reason
+        # as the OE.
+        elsfp_key = min(common.get_elsfp_sibling_pports(physical_port))
+        if elsfp_key not in elsfp_module_data:
+            elsfp_module_data[elsfp_key] = self._read_non_banked_elsfp_data(elsfp_api)
+        elsfp_module = elsfp_module_data[elsfp_key]
+
+        elsfp_lane_data = self._read_banked_elsfp_data(elsfp_api)
+
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
+            dict(elsfp_module['firmware_info']))
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_els_dom_tbl(asic_index),
+            {**elsfp_module['dom'], **elsfp_lane_data['dom']})
+        self.dom_db_utils.post_flag_values_from_dict_to_db(
+            logical_port_name,
+            {**elsfp_module['dom_flags'], **elsfp_lane_data['dom_flags']},
+            self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
+            "ELS DOM flags")
+        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+            logical_port_name, self.xcvr_table_helper.get_els_status_tbl(asic_index),
+            {**elsfp_module['status'], **elsfp_lane_data['status']})
+        self.dom_db_utils.post_flag_values_from_dict_to_db(
+            logical_port_name,
+            {**elsfp_module['status_flags'], **elsfp_lane_data['status_flags']},
+            self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
+            "ELS Status flags")
 
     def on_port_update_event(self, port_change_event):
         """Called when a port change event is received
