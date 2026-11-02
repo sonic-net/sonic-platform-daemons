@@ -78,8 +78,14 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 continue
             cpo_obj, logical_port_name, asic_index = port_info
 
-            self._collect_and_publish_oe_data(physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data)
-            self._collect_and_publish_elsfp_data(physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data)
+            try:
+                self._collect_and_publish_oe_data(physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing OE DOM data for port {}, ignored".format(repr(e), logical_port_name))
+            try:
+                self._collect_and_publish_elsfp_data(physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data)
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing ELSFP DOM data for port {}, ignored".format(repr(e), logical_port_name))
 
             # TODO: Add support for collecting and publishing VDM data.
 
@@ -239,24 +245,27 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 self.log_warning("Got exception {} while getting OE API of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
                 continue
 
-            if oe_module_flags is None:
-                oe_module_flags = {
-                    'dom_flags': oe_api.get_non_banked_transceiver_dom_flags() or {},
-                    'status_flags': oe_api.get_non_banked_transceiver_status_flags() or {},
-                }
-            banked_dom_flags = oe_api.get_banked_transceiver_dom_flags() or {}
-            banked_status_flags = oe_api.get_banked_transceiver_status_flags() or {}
+            try:
+                if oe_module_flags is None:
+                    oe_module_flags = {
+                        'dom_flags': oe_api.get_non_banked_transceiver_dom_flags() or {},
+                        'status_flags': oe_api.get_non_banked_transceiver_status_flags() or {},
+                    }
+                banked_dom_flags = oe_api.get_banked_transceiver_dom_flags() or {}
+                banked_status_flags = oe_api.get_banked_transceiver_status_flags() or {}
 
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**oe_module_flags['dom_flags'], **banked_dom_flags},
-                self.xcvr_table_helper.get_dom_flag_tables(asic_index),
-                "DOM flags")
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**oe_module_flags['status_flags'], **banked_status_flags},
-                self.xcvr_table_helper.get_status_flag_tables(asic_index),
-                "Status flags")
+                self.dom_db_utils.post_flag_values_from_dict_to_db(
+                    logical_port_name,
+                    {**oe_module_flags['dom_flags'], **banked_dom_flags},
+                    self.xcvr_table_helper.get_dom_flag_tables(asic_index),
+                    "DOM flags")
+                self.dom_db_utils.post_flag_values_from_dict_to_db(
+                    logical_port_name,
+                    {**oe_module_flags['status_flags'], **banked_status_flags},
+                    self.xcvr_table_helper.get_status_flag_tables(asic_index),
+                    "Status flags")
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing OE flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
 
     def _publish_elsfp_flags_for_device(self, device_id):
         """Read the ELSFP's latched flags and publish them for every port it drives.
@@ -279,21 +288,24 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 self.log_warning("Got exception {} while getting ELSFP API of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
                 continue
 
-            if elsfp_module_flags is None:
-                elsfp_module_flags = {
-                    'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags() or {},
-                    'status_flags': elsfp_api.get_non_banked_elsfp_status_flags() or {},
-                }
-            banked_dom_flags = elsfp_api.get_banked_elsfp_dom_flags() or {}
-            banked_status_flags = elsfp_api.get_banked_elsfp_status_flags() or {}
+            try:
+                if elsfp_module_flags is None:
+                    elsfp_module_flags = {
+                        'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags() or {},
+                        'status_flags': elsfp_api.get_non_banked_elsfp_status_flags() or {},
+                    }
+                banked_dom_flags = elsfp_api.get_banked_elsfp_dom_flags() or {}
+                banked_status_flags = elsfp_api.get_banked_elsfp_status_flags() or {}
 
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**elsfp_module_flags['dom_flags'], **banked_dom_flags},
-                self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
-                "ELS DOM flags")
-            self.dom_db_utils.post_flag_values_from_dict_to_db(
-                logical_port_name,
-                {**elsfp_module_flags['status_flags'], **banked_status_flags},
-                self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
-                "ELS Status flags")
+                self.dom_db_utils.post_flag_values_from_dict_to_db(
+                    logical_port_name,
+                    {**elsfp_module_flags['dom_flags'], **banked_dom_flags},
+                    self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
+                    "ELS DOM flags")
+                self.dom_db_utils.post_flag_values_from_dict_to_db(
+                    logical_port_name,
+                    {**elsfp_module_flags['status_flags'], **banked_status_flags},
+                    self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
+                    "ELS Status flags")
+            except (KeyError, TypeError) as e:
+                self.log_warning("Got exception {} while processing ELSFP flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
