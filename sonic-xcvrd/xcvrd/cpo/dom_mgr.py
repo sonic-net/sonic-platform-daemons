@@ -15,6 +15,10 @@ except ImportError as e:
 class CpoDomInfoUpdateTask(DomInfoUpdateTask):
     name = "CpoDomInfoUpdateTask"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pass_processed_pports = frozenset()
+
     def create_xcvr_table_helper(self, namespaces) -> CpoXcvrTableHelper:
         return CpoXcvrTableHelper(namespaces)
 
@@ -65,9 +69,11 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         # by the first physical port of the corresponding device sharing group
         oe_module_data = {}
         elsfp_module_data = {}
+        self.pass_processed_pports = set()
 
         for physical_port in sorted(self.port_obj_dict):
             self.check_port_update(port_change_observer, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS)
+            self.pass_processed_pports.add(physical_port)
 
             if self.task_stopping_event.is_set():
                 self.log_notice("Stop event generated during CPO DOM monitoring loop")
@@ -88,6 +94,28 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                 self.log_warning("Got exception {} while processing ELSFP DOM data for port {}, ignored".format(repr(e), logical_port_name))
 
             # TODO: Add support for collecting and publishing VDM data.
+
+        self.pass_processed_pports = frozenset()
+
+    def check_port_update(self, port_change_observer, timeout):
+        port_change_observer.handle_port_update_event(timeout)
+
+        for device_key in list(self.link_change_affected_ports.keys()):
+            if self.task_stopping_event.is_set():
+                self.log_notice("Stop event generated during CPO DOM link change event processing")
+                break
+            if self.link_change_affected_ports[device_key] > datetime.datetime.now():
+                continue
+            if self._is_device_mid_pass(device_key):
+                continue
+            self.log_notice(f"Updating port db diagnostics post link change for {device_key}")
+            self.update_port_db_diagnostics_on_link_change(device_key)
+            del self.link_change_affected_ports[device_key]
+
+    def _is_device_mid_pass(self, device_key):
+        device_pports = common.get_cpo_device_pports(*device_key)
+        processed = device_pports & self.pass_processed_pports
+        return bool(processed) and processed != device_pports
 
     def _collect_and_publish_oe_data(self, physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data):
         """Read this port's OE data and publish it to the OE tables.

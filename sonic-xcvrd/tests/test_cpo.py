@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import threading
 
 import pytest
@@ -817,6 +818,45 @@ class TestCpoDomInfoUpdateTask:
                 (common.CPO_DEVICE_TYPE_OE, 'OE2'),
                 (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1'),
             }
+
+    def run_check_port_update(self, task, link_change_affected_ports, pass_processed_pports):
+        task.update_port_db_diagnostics_on_link_change = MagicMock()
+        task.link_change_affected_ports = dict(link_change_affected_ports)
+        task.pass_processed_pports = pass_processed_pports
+        observer = MagicMock()
+        with patched_topology():
+            CpoDomInfoUpdateTask.check_port_update(task, observer, 10)
+        observer.handle_port_update_event.assert_called_once_with(10)
+        return [call_args.args[0] for call_args in task.update_port_db_diagnostics_on_link_change.call_args_list]
+
+    def test_check_port_update_defers_devices_mid_pass(self):
+        task = self.make_task({})
+        oe1 = (common.CPO_DEVICE_TYPE_OE, 'OE1')
+        oe2 = (common.CPO_DEVICE_TYPE_OE, 'OE2')
+        els1 = (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1')
+        due = datetime.datetime.min
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, {1})
+        assert handled == [oe2]
+        assert set(task.link_change_affected_ports) == {oe1, els1}
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, {1, 2})
+        assert handled == [oe1, oe2]
+        assert set(task.link_change_affected_ports) == {els1}
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, frozenset())
+        assert handled == [oe1, oe2, els1]
+        assert not task.link_change_affected_ports
+
+    def test_check_port_update_skips_entries_not_yet_due(self):
+        task = self.make_task({})
+        oe1 = (common.CPO_DEVICE_TYPE_OE, 'OE1')
+        oe2 = (common.CPO_DEVICE_TYPE_OE, 'OE2')
+
+        handled = self.run_check_port_update(task, {oe1: datetime.datetime.min, oe2: datetime.datetime.max},
+                                             frozenset())
+        assert handled == [oe1]
+        assert set(task.link_change_affected_ports) == {oe2}
 
     def test_link_change_publishes_oe_flags_per_device(self):
         devices = self.make_devices()
