@@ -151,17 +151,18 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             oe_bank_data[oe_bank_key] = self._read_banked_oe_data(oe_api)
         oe_lane_data = oe_bank_data[oe_bank_key]
 
-        # Publish to the first subport's logical interface, matching the
-        # existing DomInfoUpdateTask convention for breakout groups. Each
-        # category merges the device sharing group's module-scope snapshot
-        # with this port's lane-scope values.
+        # Publish firmware info to every subport's logical interface and the
+        # remaining categories to the first subport's, matching the existing
+        # DomInfoUpdateTask convention for breakout groups.
+        # TODO: update this logic to publish to all logical interfaces per the CPO xcvrd HLD.
         # Firmware info's dict is copied since publishing beautifies it in place,
         # so subsequent publishes using this data would be affected. Other call-sites
         # are unaffected by this since they implicitly create a copy through merging
         # the banked and non-banked data into a single dict.
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
-            dict(oe_module['firmware_info']))
+        for lport in self.port_mapping.get_physical_to_logical(physical_port):
+            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+                lport, self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
+                dict(oe_module['firmware_info']))
         self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
             logical_port_name, self.xcvr_table_helper.get_dom_tbl(asic_index),
             {**oe_module['dom'], **oe_lane_data['dom']})
@@ -207,9 +208,10 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             elsfp_bank_data[elsfp_bank_key] = self._read_banked_elsfp_data(elsfp_api)
         elsfp_lane_data = elsfp_bank_data[elsfp_bank_key]
 
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
-            dict(elsfp_module['firmware_info']))
+        for lport in self.port_mapping.get_physical_to_logical(physical_port):
+            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
+                lport, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
+                dict(elsfp_module['firmware_info']))
         self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
             logical_port_name, self.xcvr_table_helper.get_els_dom_tbl(asic_index),
             {**elsfp_module['dom'], **elsfp_lane_data['dom']})
