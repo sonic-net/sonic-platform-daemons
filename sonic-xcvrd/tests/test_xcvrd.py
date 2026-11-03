@@ -5291,6 +5291,20 @@ class TestXcvrdScript(object):
         task.task_worker()
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
+    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status')
+    def test_DomThermalInfoUpdateTask_skips_port_in_error_status(self, mock_detect_error):
+        port_mapping = PortMapping()
+        port_mapping.physical_to_logical = {1: ['Ethernet0'], 2: ['Ethernet4']}
+        port_mapping.logical_to_asic = {'Ethernet0': 0, 'Ethernet4': 0}
+        task = DomThermalInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock(), 2: MagicMock()}, threading.Event(), 10)
+        task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
+        task.dom_db_utils = MagicMock()
+        mock_detect_error.side_effect = lambda port, tbl: port == 'Ethernet0'
+        task.collect_and_publish_temperature_data()
+        task.dom_db_utils.post_port_dom_temperature_info_to_db.assert_called_once_with('Ethernet4')
+
+    @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
     def test_DomInfoUpdateTask_handle_port_change_event(self, mock_del_port_sfp_dom_info_from_db):
         port_mapping = PortMapping()
