@@ -31,7 +31,7 @@ try:
     from .dom.dom_mgr import DomThermalInfoUpdateTask, DomInfoUpdateTask
     from .cmis.cmis_manager_task import CmisManagerTask
     from .cpo.cpo_manager_task import CpoManagerTask
-    from .cpo.dom_mgr import CpoDomInfoUpdateTask
+    from .cpo.cpo_dom_mgr import CpoDomInfoUpdateTask
     from .cpo.xcvr_table_helper import CpoXcvrTableHelper
     from .xcvrd_utilities.xcvr_table_helper import *
     from .xcvrd_utilities import port_event_helper
