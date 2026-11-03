@@ -60,6 +60,7 @@ CHASSIS_MODULE_INFO_SERIAL_FIELD = 'serial'
 CHASSIS_MODULE_INFO_PRESENCE_FIELD = 'presence'
 CHASSIS_MODULE_INFO_MODEL_FIELD = 'model'
 CHASSIS_MODULE_INFO_REPLACEABLE_FIELD = 'is_replaceable'
+CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD = 'shutdown_allowed'
 
 CHASSIS_ASIC_INFO_TABLE = 'CHASSIS_ASIC_TABLE'
 CHASSIS_FABRIC_ASIC_INFO_TABLE = 'CHASSIS_FABRIC_ASIC_TABLE'
@@ -511,7 +512,8 @@ class ModuleUpdater(logger.Logger):
                                                   (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]),
                                                   (CHASSIS_MODULE_INFO_PRESENCE_FIELD, module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD]),
                                                   (CHASSIS_MODULE_INFO_REPLACEABLE_FIELD, module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_MODEL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD])])
+                                                  (CHASSIS_MODULE_INFO_MODEL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD]),
+                                                  (CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD])])
 
 
                 prev_status = self.get_module_current_status(key)
@@ -615,6 +617,7 @@ class ModuleUpdater(logger.Logger):
         presence = try_get(self.chassis.get_module(module_index).get_presence)
         replaceable = try_get(self.chassis.get_module(module_index).is_replaceable)
         model = try_get(self.chassis.get_module(module_index).get_model)
+        shutdown_allowed = try_get(self.chassis.get_module(module_index).is_shutdown_allowed, default=True)
 
         module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = name
         module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(desc)
@@ -625,6 +628,7 @@ class ModuleUpdater(logger.Logger):
         module_info_dict[CHASSIS_MODULE_INFO_PRESENCE_FIELD] = str(presence)
         module_info_dict[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD] = str(replaceable)
         module_info_dict[CHASSIS_MODULE_INFO_MODEL_FIELD] = str(model)
+        module_info_dict[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] = str(shutdown_allowed)
 
         return module_info_dict
 
@@ -995,7 +999,8 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
                 fvs = swsscommon.FieldValuePairs([(CHASSIS_MODULE_INFO_DESC_FIELD, module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD]),
                                                   (CHASSIS_MODULE_INFO_SLOT_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD]),
                                                   (CHASSIS_MODULE_INFO_OPERSTATUS_FIELD, module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]),
-                                                  (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD])])
+                                                  (CHASSIS_MODULE_INFO_SERIAL_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD]),
+                                                  (CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD, module_info_dict[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD])])
                 self.module_table.set(key, fvs)
 
     def _get_module_info(self, module_index):
@@ -1011,12 +1016,14 @@ class SmartSwitchModuleUpdater(ModuleUpdater):
         asics = try_get(self.chassis.get_module(module_index).get_all_asics,
                         default=[])
         serial = try_get(self.chassis.get_module(module_index).get_serial)
+        shutdown_allowed = try_get(self.chassis.get_module(module_index).is_shutdown_allowed, default=True)
 
         module_info_dict[CHASSIS_MODULE_INFO_NAME_FIELD] = name
         module_info_dict[CHASSIS_MODULE_INFO_DESC_FIELD] = str(desc)
         module_info_dict[CHASSIS_MODULE_INFO_SLOT_FIELD] = 'N/A'
         module_info_dict[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] = str(status)
         module_info_dict[CHASSIS_MODULE_INFO_SERIAL_FIELD] = str(serial)
+        module_info_dict[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] = str(shutdown_allowed)
 
         return module_info_dict
 
