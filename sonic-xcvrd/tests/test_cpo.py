@@ -799,6 +799,30 @@ class TestCpoDomInfoUpdateTask:
         assert published[('Ethernet16', task.xcvr_table_helper.get_els_status_flag_tbl(0))] == \
             {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'}
 
+    @pytest.mark.parametrize('failed_read', [
+        'get_non_banked_transceiver_dom_real_value',
+        'get_banked_transceiver_dom_real_value',
+    ])
+    def test_failed_oe_read_skips_category(self, failed_read):
+        """If either the banked or non-banked read fails, we should skip publishing for the category
+        entirely. Otherwise, the successful read's fields will be published and the last_update_time
+        would be updated to make the failed read's missing fields look current, even though they
+        are stale."""
+        devices = self.make_devices()
+        getattr(devices[1].oe.get_api.return_value, failed_read).return_value = None
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        dom_tbl = task.xcvr_table_helper.get_dom_tbl(0)
+        assert ('Ethernet0', dom_tbl) not in published
+        assert published[('Ethernet16', dom_tbl)] == {'temperature': 43.0, 'rx1power': 3.0}
+        assert published[('Ethernet0', task.xcvr_table_helper.get_status_tbl(0))] == \
+            {'module_state': 'module1', 'DP1State': 'lane1'}
+        if failed_read.startswith('get_non_banked'):
+            assert ('Ethernet8', dom_tbl) not in published
+        else:
+            assert published[('Ethernet8', dom_tbl)] == {'temperature': 41.0, 'rx1power': 2.0}
+
     def run_link_change_update(self, task, device_key):
         task.dom_db_utils = MagicMock()
         with patched_topology(), \
@@ -895,6 +919,24 @@ class TestCpoDomInfoUpdateTask:
 
         # Value tables are not republished on link change
         task.dom_db_utils.post_diagnostic_values_from_dict_to_db.assert_not_called()
+
+    def test_link_change_failed_oe_read_skips_category(self):
+        """If either the banked or non-banked read fails, we should skip publishing for the category
+        entirely. Otherwise, the successful read's fields will be published and the last_update_time
+        would be updated to make the failed read's missing fields look current, even though they
+        are stale."""
+        devices = self.make_devices()
+        devices[2].oe.get_api.return_value.get_banked_transceiver_dom_flags.return_value = None
+        task = self.make_task(devices)
+        published = self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_OE, 'OE1'))
+
+        dom_flag_tbl = task.xcvr_table_helper.get_dom_flag_tbl(0)
+        status_flag_tbl = task.xcvr_table_helper.get_status_flag_tbl(0)
+        assert published == {
+            ('Ethernet0', dom_flag_tbl): {'tempHAlarm': 'module1', 'rx1powerHAlarm': 'lane1'},
+            ('Ethernet0', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane1'},
+            ('Ethernet8', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane2'},
+        }
 
     def test_link_change_publishes_elsfp_flags_per_device(self):
         devices = self.make_devices()

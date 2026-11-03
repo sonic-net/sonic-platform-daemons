@@ -29,40 +29,63 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
     def _read_non_banked_oe_data(self, oe_api):
         """Read the module-scope (non-banked) OE diagnostic data, grouped by category."""
         return {
-            'firmware_info': oe_api.get_transceiver_info_firmware_versions() or {},
-            'dom': oe_api.get_non_banked_transceiver_dom_real_value() or {},
-            'dom_flags': oe_api.get_non_banked_transceiver_dom_flags() or {},
-            'status': oe_api.get_non_banked_transceiver_status() or {},
-            'status_flags': oe_api.get_non_banked_transceiver_status_flags() or {},
+            'firmware_info': oe_api.get_transceiver_info_firmware_versions(),
+            'dom': oe_api.get_non_banked_transceiver_dom_real_value(),
+            'dom_flags': oe_api.get_non_banked_transceiver_dom_flags(),
+            'status': oe_api.get_non_banked_transceiver_status(),
+            'status_flags': oe_api.get_non_banked_transceiver_status_flags(),
         }
 
     def _read_banked_oe_data(self, oe_api):
         """Read the lane-scope (banked) OE diagnostic data, grouped by category."""
         return {
-            'dom': oe_api.get_banked_transceiver_dom_real_value() or {},
-            'dom_flags': oe_api.get_banked_transceiver_dom_flags() or {},
-            'status': oe_api.get_banked_transceiver_status() or {},
-            'status_flags': oe_api.get_banked_transceiver_status_flags() or {},
+            'dom': oe_api.get_banked_transceiver_dom_real_value(),
+            'dom_flags': oe_api.get_banked_transceiver_dom_flags(),
+            'status': oe_api.get_banked_transceiver_status(),
+            'status_flags': oe_api.get_banked_transceiver_status_flags(),
         }
 
     def _read_non_banked_elsfp_data(self, elsfp_api):
         """Read the module-scope (non-banked) ELSFP diagnostic data, grouped by category."""
         return {
-            'firmware_info': elsfp_api.get_elsfp_info_firmware_versions() or {},
-            'dom': elsfp_api.get_non_banked_elsfp_dom_real_value() or {},
-            'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags() or {},
-            'status': elsfp_api.get_non_banked_elsfp_status() or {},
-            'status_flags': elsfp_api.get_non_banked_elsfp_status_flags() or {},
+            'firmware_info': elsfp_api.get_elsfp_info_firmware_versions(),
+            'dom': elsfp_api.get_non_banked_elsfp_dom_real_value(),
+            'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags(),
+            'status': elsfp_api.get_non_banked_elsfp_status(),
+            'status_flags': elsfp_api.get_non_banked_elsfp_status_flags(),
         }
 
     def _read_banked_elsfp_data(self, elsfp_api):
         """Read the lane-scope (banked) ELSFP diagnostic data, grouped by category."""
         return {
-            'dom': elsfp_api.get_banked_elsfp_dom_real_value() or {},
-            'dom_flags': elsfp_api.get_banked_elsfp_dom_flags() or {},
-            'status': elsfp_api.get_banked_elsfp_status() or {},
-            'status_flags': elsfp_api.get_banked_elsfp_status_flags() or {},
+            'dom': elsfp_api.get_banked_elsfp_dom_real_value(),
+            'dom_flags': elsfp_api.get_banked_elsfp_dom_flags(),
+            'status': elsfp_api.get_banked_elsfp_status(),
+            'status_flags': elsfp_api.get_banked_elsfp_status_flags(),
         }
+
+    def _merge_banked_and_non_banked(self, logical_port_name, log_context, non_banked, banked):
+        if non_banked is None or banked is None:
+            self.log_warning("Failed to read {} for port {}, skipping publish".format(log_context, logical_port_name))
+            return None
+        return {**non_banked, **banked}
+
+    def _publish_values(self, logical_port_name, table, log_context, non_banked, banked):
+        values = self._merge_banked_and_non_banked(logical_port_name, log_context, non_banked, banked)
+        if values is not None:
+            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(logical_port_name, table, values)
+
+    def _publish_flags(self, logical_port_name, flag_tables, log_context, non_banked, banked):
+        flags = self._merge_banked_and_non_banked(logical_port_name, log_context, non_banked, banked)
+        if flags is not None:
+            self.dom_db_utils.post_flag_values_from_dict_to_db(logical_port_name, flags, flag_tables, log_context)
+
+    def _publish_firmware_info(self, physical_port, logical_port_name, table, log_context, firmware_info):
+        if firmware_info is None:
+            self.log_warning("Failed to read {} for port {}, skipping publish".format(log_context, logical_port_name))
+            return
+        for lport in self.port_mapping.get_physical_to_logical(physical_port):
+            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(lport, table, dict(firmware_info))
 
     def collect_and_publish_data(self, port_change_observer):
         # Module-scope (non-banked) data read so far in this polling pass, keyed
@@ -159,26 +182,17 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         # so subsequent publishes using this data would be affected. Other call-sites
         # are unaffected by this since they implicitly create a copy through merging
         # the banked and non-banked data into a single dict.
-        for lport in self.port_mapping.get_physical_to_logical(physical_port):
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                lport, self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
-                dict(oe_module['firmware_info']))
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_dom_tbl(asic_index),
-            {**oe_module['dom'], **oe_lane_data['dom']})
-        self.dom_db_utils.post_flag_values_from_dict_to_db(
-            logical_port_name,
-            {**oe_module['dom_flags'], **oe_lane_data['dom_flags']},
-            self.xcvr_table_helper.get_dom_flag_tables(asic_index),
-            "DOM flags")
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index),
-            {**oe_module['status'], **oe_lane_data['status']})
-        self.dom_db_utils.post_flag_values_from_dict_to_db(
-            logical_port_name,
-            {**oe_module['status_flags'], **oe_lane_data['status_flags']},
-            self.xcvr_table_helper.get_status_flag_tables(asic_index),
-            "Status flags")
+        self._publish_firmware_info(physical_port, logical_port_name,
+                                    self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
+                                    "Firmware info", oe_module['firmware_info'])
+        self._publish_values(logical_port_name, self.xcvr_table_helper.get_dom_tbl(asic_index),
+                             "DOM", oe_module['dom'], oe_lane_data['dom'])
+        self._publish_flags(logical_port_name, self.xcvr_table_helper.get_dom_flag_tables(asic_index),
+                            "DOM flags", oe_module['dom_flags'], oe_lane_data['dom_flags'])
+        self._publish_values(logical_port_name, self.xcvr_table_helper.get_status_tbl(asic_index),
+                             "Status", oe_module['status'], oe_lane_data['status'])
+        self._publish_flags(logical_port_name, self.xcvr_table_helper.get_status_flag_tables(asic_index),
+                            "Status flags", oe_module['status_flags'], oe_lane_data['status_flags'])
 
     def _collect_and_publish_elsfp_data(self, physical_port, cpo_obj, logical_port_name, asic_index,
                                         elsfp_module_data, elsfp_bank_data):
@@ -208,26 +222,17 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             elsfp_bank_data[elsfp_bank_key] = self._read_banked_elsfp_data(elsfp_api)
         elsfp_lane_data = elsfp_bank_data[elsfp_bank_key]
 
-        for lport in self.port_mapping.get_physical_to_logical(physical_port):
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-                lport, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
-                dict(elsfp_module['firmware_info']))
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_els_dom_tbl(asic_index),
-            {**elsfp_module['dom'], **elsfp_lane_data['dom']})
-        self.dom_db_utils.post_flag_values_from_dict_to_db(
-            logical_port_name,
-            {**elsfp_module['dom_flags'], **elsfp_lane_data['dom_flags']},
-            self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
-            "ELS DOM flags")
-        self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
-            logical_port_name, self.xcvr_table_helper.get_els_status_tbl(asic_index),
-            {**elsfp_module['status'], **elsfp_lane_data['status']})
-        self.dom_db_utils.post_flag_values_from_dict_to_db(
-            logical_port_name,
-            {**elsfp_module['status_flags'], **elsfp_lane_data['status_flags']},
-            self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
-            "ELS Status flags")
+        self._publish_firmware_info(physical_port, logical_port_name,
+                                    self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
+                                    "ELS firmware info", elsfp_module['firmware_info'])
+        self._publish_values(logical_port_name, self.xcvr_table_helper.get_els_dom_tbl(asic_index),
+                             "ELS DOM", elsfp_module['dom'], elsfp_lane_data['dom'])
+        self._publish_flags(logical_port_name, self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
+                            "ELS DOM flags", elsfp_module['dom_flags'], elsfp_lane_data['dom_flags'])
+        self._publish_values(logical_port_name, self.xcvr_table_helper.get_els_status_tbl(asic_index),
+                             "ELS Status", elsfp_module['status'], elsfp_lane_data['status'])
+        self._publish_flags(logical_port_name, self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
+                            "ELS Status flags", elsfp_module['status_flags'], elsfp_lane_data['status_flags'])
 
     def on_port_update_event(self, port_change_event):
         """Called when a port change event is received
@@ -289,28 +294,21 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             try:
                 if oe_module_flags is None:
                     oe_module_flags = {
-                        'dom_flags': oe_api.get_non_banked_transceiver_dom_flags() or {},
-                        'status_flags': oe_api.get_non_banked_transceiver_status_flags() or {},
+                        'dom_flags': oe_api.get_non_banked_transceiver_dom_flags(),
+                        'status_flags': oe_api.get_non_banked_transceiver_status_flags(),
                     }
                 bank_key = min(common.get_oe_bank_sibling_pports(physical_port))
                 if bank_key not in oe_bank_flags:
                     oe_bank_flags[bank_key] = {
-                        'dom_flags': oe_api.get_banked_transceiver_dom_flags() or {},
-                        'status_flags': oe_api.get_banked_transceiver_status_flags() or {},
+                        'dom_flags': oe_api.get_banked_transceiver_dom_flags(),
+                        'status_flags': oe_api.get_banked_transceiver_status_flags(),
                     }
-                banked_dom_flags = oe_bank_flags[bank_key]['dom_flags']
-                banked_status_flags = oe_bank_flags[bank_key]['status_flags']
-
-                self.dom_db_utils.post_flag_values_from_dict_to_db(
-                    logical_port_name,
-                    {**oe_module_flags['dom_flags'], **banked_dom_flags},
-                    self.xcvr_table_helper.get_dom_flag_tables(asic_index),
-                    "DOM flags")
-                self.dom_db_utils.post_flag_values_from_dict_to_db(
-                    logical_port_name,
-                    {**oe_module_flags['status_flags'], **banked_status_flags},
-                    self.xcvr_table_helper.get_status_flag_tables(asic_index),
-                    "Status flags")
+                self._publish_flags(logical_port_name, self.xcvr_table_helper.get_dom_flag_tables(asic_index),
+                                    "DOM flags", oe_module_flags['dom_flags'],
+                                    oe_bank_flags[bank_key]['dom_flags'])
+                self._publish_flags(logical_port_name, self.xcvr_table_helper.get_status_flag_tables(asic_index),
+                                    "Status flags", oe_module_flags['status_flags'],
+                                    oe_bank_flags[bank_key]['status_flags'])
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing OE flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
 
@@ -339,27 +337,20 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             try:
                 if elsfp_module_flags is None:
                     elsfp_module_flags = {
-                        'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags() or {},
-                        'status_flags': elsfp_api.get_non_banked_elsfp_status_flags() or {},
+                        'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags(),
+                        'status_flags': elsfp_api.get_non_banked_elsfp_status_flags(),
                     }
                 bank_key = min(common.get_elsfp_bank_sibling_pports(physical_port))
                 if bank_key not in elsfp_bank_flags:
                     elsfp_bank_flags[bank_key] = {
-                        'dom_flags': elsfp_api.get_banked_elsfp_dom_flags() or {},
-                        'status_flags': elsfp_api.get_banked_elsfp_status_flags() or {},
+                        'dom_flags': elsfp_api.get_banked_elsfp_dom_flags(),
+                        'status_flags': elsfp_api.get_banked_elsfp_status_flags(),
                     }
-                banked_dom_flags = elsfp_bank_flags[bank_key]['dom_flags']
-                banked_status_flags = elsfp_bank_flags[bank_key]['status_flags']
-
-                self.dom_db_utils.post_flag_values_from_dict_to_db(
-                    logical_port_name,
-                    {**elsfp_module_flags['dom_flags'], **banked_dom_flags},
-                    self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
-                    "ELS DOM flags")
-                self.dom_db_utils.post_flag_values_from_dict_to_db(
-                    logical_port_name,
-                    {**elsfp_module_flags['status_flags'], **banked_status_flags},
-                    self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
-                    "ELS Status flags")
+                self._publish_flags(logical_port_name, self.xcvr_table_helper.get_els_dom_flag_tables(asic_index),
+                                    "ELS DOM flags", elsfp_module_flags['dom_flags'],
+                                    elsfp_bank_flags[bank_key]['dom_flags'])
+                self._publish_flags(logical_port_name, self.xcvr_table_helper.get_els_status_flag_tables(asic_index),
+                                    "ELS Status flags", elsfp_module_flags['status_flags'],
+                                    elsfp_bank_flags[bank_key]['status_flags'])
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing ELSFP flags of {} for port {}, ignored".format(repr(e), device_id, logical_port_name))
