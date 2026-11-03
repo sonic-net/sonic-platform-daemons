@@ -140,14 +140,13 @@ class CpoXcvrTableHelper(XcvrTableHelper):
             tables.extend(self.get_els_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES)
         return tables
 
-    def get_status_tables(self, asic_id, include_sw):
-        return super().get_status_tables(asic_id, include_sw) + [
-            self.get_els_status_tbl(asic_id),
-            self.get_els_status_flag_tbl(asic_id),
-            self.get_els_status_flag_change_count_tbl(asic_id),
-            self.get_els_status_flag_set_time_tbl(asic_id),
-            self.get_els_status_flag_clear_time_tbl(asic_id),
-        ]
+    def get_status_tables(self, asic_id, include_sw, include_status_tbl=True, include_flags=True):
+        tables = super().get_status_tables(asic_id, include_sw, include_status_tbl, include_flags)
+        if include_status_tbl:
+            tables.append(self.get_els_status_tbl(asic_id))
+        if include_flags:
+            tables.extend(self.get_els_status_flag_tables(asic_id))
+        return tables
 
     def get_info_tables(self, asic_id):
         return super().get_info_tables(asic_id) + [self.get_els_info_tbl(asic_id)]

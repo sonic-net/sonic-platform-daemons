@@ -241,21 +241,22 @@ class XcvrTableHelper:
             tables.extend(self.get_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES)
         return tables
 
-    def get_status_tables(self, asic_id, include_sw):
+    def get_status_tables(self, asic_id, include_sw, include_status_tbl=True, include_flags=True):
         """Returns the tables holding transceiver status data.
 
         Args:
             asic_id (int): the asic index to get the tables for
             include_sw (bool): also include TRANSCEIVER_STATUS_SW, which holds the
                 SW-driven status/error fields.
+            include_status_tbl (bool): also include TRANSCEIVER_STATUS.
+            include_flags (bool): also include TRANSCEIVER_STATUS_FLAG and its metadata tables.
         """
-        tables = [
-            self.get_status_tbl(asic_id),
-            self.get_status_flag_tbl(asic_id),
-            self.get_status_flag_change_count_tbl(asic_id),
-            self.get_status_flag_set_time_tbl(asic_id),
-            self.get_status_flag_clear_time_tbl(asic_id),
-        ]
+        assert include_sw or include_status_tbl or include_flags
+        tables = []
+        if include_status_tbl:
+            tables.append(self.get_status_tbl(asic_id))
+        if include_flags:
+            tables.extend(self.get_status_flag_tables(asic_id))
         if include_sw:
             tables.append(self.get_status_sw_tbl(asic_id))
         return tables
