@@ -69,6 +69,8 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         # by the first physical port of the corresponding device sharing group
         oe_module_data = {}
         elsfp_module_data = {}
+        oe_bank_data = {}
+        elsfp_bank_data = {}
         self.pass_processed_pports = set()
 
         for physical_port in sorted(self.port_obj_dict):
@@ -85,11 +87,13 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             cpo_obj, logical_port_name, asic_index = port_info
 
             try:
-                self._collect_and_publish_oe_data(physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data)
+                self._collect_and_publish_oe_data(physical_port, cpo_obj, logical_port_name, asic_index,
+                                                  oe_module_data, oe_bank_data)
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing OE DOM data for port {}, ignored".format(repr(e), logical_port_name))
             try:
-                self._collect_and_publish_elsfp_data(physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data)
+                self._collect_and_publish_elsfp_data(physical_port, cpo_obj, logical_port_name, asic_index,
+                                                     elsfp_module_data, elsfp_bank_data)
             except (KeyError, TypeError) as e:
                 self.log_warning("Got exception {} while processing ELSFP DOM data for port {}, ignored".format(repr(e), logical_port_name))
 
@@ -117,7 +121,8 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         processed = device_pports & self.pass_processed_pports
         return bool(processed) and processed != device_pports
 
-    def _collect_and_publish_oe_data(self, physical_port, cpo_obj, logical_port_name, asic_index, oe_module_data):
+    def _collect_and_publish_oe_data(self, physical_port, cpo_obj, logical_port_name, asic_index,
+                                     oe_module_data, oe_bank_data):
         """Read this port's OE data and publish it to the OE tables.
 
         oe_module_data caches the module-scope snapshot of each OE for the
@@ -141,9 +146,10 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             oe_module_data[oe_key] = self._read_non_banked_oe_data(oe_api)
         oe_module = oe_module_data[oe_key]
 
-        # Lane-scope (banked) data: unique to this physical port, since
-        # the CPO object is bound to the bank covering this port's lanes
-        oe_lane_data = self._read_banked_oe_data(oe_api)
+        oe_bank_key = min(common.get_oe_bank_sibling_pports(physical_port))
+        if oe_bank_key not in oe_bank_data:
+            oe_bank_data[oe_bank_key] = self._read_banked_oe_data(oe_api)
+        oe_lane_data = oe_bank_data[oe_bank_key]
 
         # Publish to the first subport's logical interface, matching the
         # existing DomInfoUpdateTask convention for breakout groups. Each
@@ -173,7 +179,8 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             self.xcvr_table_helper.get_status_flag_tables(asic_index),
             "Status flags")
 
-    def _collect_and_publish_elsfp_data(self, physical_port, cpo_obj, logical_port_name, asic_index, elsfp_module_data):
+    def _collect_and_publish_elsfp_data(self, physical_port, cpo_obj, logical_port_name, asic_index,
+                                        elsfp_module_data, elsfp_bank_data):
         """Read this port's ELSFP data and publish it to the ELS tables.
 
         elsfp_module_data caches the module-scope snapshot of each ELSFP for
@@ -195,7 +202,10 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
             elsfp_module_data[elsfp_key] = self._read_non_banked_elsfp_data(elsfp_api)
         elsfp_module = elsfp_module_data[elsfp_key]
 
-        elsfp_lane_data = self._read_banked_elsfp_data(elsfp_api)
+        elsfp_bank_key = min(common.get_elsfp_bank_sibling_pports(physical_port))
+        if elsfp_bank_key not in elsfp_bank_data:
+            elsfp_bank_data[elsfp_bank_key] = self._read_banked_elsfp_data(elsfp_api)
+        elsfp_lane_data = elsfp_bank_data[elsfp_bank_key]
 
         self.dom_db_utils.post_diagnostic_values_from_dict_to_db(
             logical_port_name, self.xcvr_table_helper.get_els_firmware_info_tbl(asic_index),
@@ -257,9 +267,10 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
 
         Module-scope flags are clear-on-read for the whole device, so they are
         read once, through the first pollable member port's API, and the snapshot
-        is published for every member. Banked flags are read per member port.
+        is published for every member.
         """
         oe_module_flags = None
+        oe_bank_flags = {}
         for physical_port in sorted(common.get_cpo_device_pports(common.CPO_DEVICE_TYPE_OE, device_id)):
             port_info = self._validate_and_resolve_port(physical_port)
             if port_info is None:
@@ -279,8 +290,14 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                         'dom_flags': oe_api.get_non_banked_transceiver_dom_flags() or {},
                         'status_flags': oe_api.get_non_banked_transceiver_status_flags() or {},
                     }
-                banked_dom_flags = oe_api.get_banked_transceiver_dom_flags() or {}
-                banked_status_flags = oe_api.get_banked_transceiver_status_flags() or {}
+                bank_key = min(common.get_oe_bank_sibling_pports(physical_port))
+                if bank_key not in oe_bank_flags:
+                    oe_bank_flags[bank_key] = {
+                        'dom_flags': oe_api.get_banked_transceiver_dom_flags() or {},
+                        'status_flags': oe_api.get_banked_transceiver_status_flags() or {},
+                    }
+                banked_dom_flags = oe_bank_flags[bank_key]['dom_flags']
+                banked_status_flags = oe_bank_flags[bank_key]['status_flags']
 
                 self.dom_db_utils.post_flag_values_from_dict_to_db(
                     logical_port_name,
@@ -300,9 +317,10 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
 
         Module-scope flags are clear-on-read for the whole device, so they are
         read once, through the first pollable member port's API, and the snapshot
-        is published for every member. Banked flags are read per member port.
+        is published for every member.
         """
         elsfp_module_flags = None
+        elsfp_bank_flags = {}
         for physical_port in sorted(common.get_cpo_device_pports(common.CPO_DEVICE_TYPE_ELSFP, device_id)):
             port_info = self._validate_and_resolve_port(physical_port)
             if port_info is None:
@@ -322,8 +340,14 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
                         'dom_flags': elsfp_api.get_non_banked_elsfp_dom_flags() or {},
                         'status_flags': elsfp_api.get_non_banked_elsfp_status_flags() or {},
                     }
-                banked_dom_flags = elsfp_api.get_banked_elsfp_dom_flags() or {}
-                banked_status_flags = elsfp_api.get_banked_elsfp_status_flags() or {}
+                bank_key = min(common.get_elsfp_bank_sibling_pports(physical_port))
+                if bank_key not in elsfp_bank_flags:
+                    elsfp_bank_flags[bank_key] = {
+                        'dom_flags': elsfp_api.get_banked_elsfp_dom_flags() or {},
+                        'status_flags': elsfp_api.get_banked_elsfp_status_flags() or {},
+                    }
+                banked_dom_flags = elsfp_bank_flags[bank_key]['dom_flags']
+                banked_status_flags = elsfp_bank_flags[bank_key]['status_flags']
 
                 self.dom_db_utils.post_flag_values_from_dict_to_db(
                     logical_port_name,
