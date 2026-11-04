@@ -223,9 +223,14 @@ class CmisManagerTask(threading.Thread):
                 self.port_dict.pop(lport)
                 # Drop the breakout-removed port from our port_mapping so a later breakout that
                 # reuses the logical name re-registers with fresh ASIC / physical port.
+                # Read the physical index from our own port_mapping (not owner_pport, which comes
+                # from the event/port_dict): PortMapping._handle_port_remove() indexes by it and
+                # raises if it does not match what was registered at PORT_ADD, killing this task.
                 if self.port_mapping.is_logical_port(lport):
+                    phys_list = self.port_mapping.get_logical_to_physical(lport)
+                    phys = phys_list[0] if phys_list else owner_pport
                     self.port_mapping.handle_port_change_event(port_event_helper.PortChangeEvent(
-                        lport, owner_pport, port_change_event.asic_id,
+                        lport, phys, port_change_event.asic_id,
                         port_event_helper.PortChangeEvent.PORT_REMOVE))
 
     def get_cmis_dp_init_duration_secs(self, api):
