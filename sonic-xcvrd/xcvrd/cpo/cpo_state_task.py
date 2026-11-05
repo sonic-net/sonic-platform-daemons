@@ -17,10 +17,12 @@ platform_chassis = None
 
 class CpoStateUpdateTask(SfpStateUpdateTask):
     SYSLOG_IDENTIFIER = "CpoStateUpdateTask"
+    PUBLISHER_NAME = "CpoStateUpdateTask"
 
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event):
-        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event)
-        self.name = "CpoStateUpdateTask"
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,
+                 asic_readiness=None):
+        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,
+                         asic_readiness=asic_readiness)
 
     def create_xcvr_table_helper(self, namespaces) -> CpoXcvrTableHelper:
         return CpoXcvrTableHelper(namespaces)

@@ -10,10 +10,11 @@ try:
     import time
     import datetime
     from swsscommon import swsscommon
-    from sonic_py_common import syslogger, daemon_base
+    from sonic_py_common import syslogger
     from sonic_platform_base.sonic_xcvr.api.public.c_cmis import CmisApi
 
     from ..xcvrd_utilities import common
+    from ..xcvrd_utilities.asic_readiness import AsicReadiness, log_first_deferral
     from ..xcvrd_utilities.common import (
         CMIS_STATE_UNKNOWN, CMIS_STATE_INSERTED, CMIS_STATE_DP_PRE_INIT_CHECK,
         CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_DP_ACTIVATE,
@@ -21,7 +22,6 @@ try:
         CMIS_STATE_REMOVED, CMIS_STATE_FAILED, CMIS_TERMINAL_STATES
     )
     from ..xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
-    from ..xcvrd_utilities import port_event_helper
     from ..xcvrd_utilities.port_event_helper import PortChangeObserver
     from ..xcvrd_utilities import media_settings_parser
     from ..xcvrd_utilities import optics_si_parser
@@ -46,7 +46,8 @@ class CmisManagerTask(threading.Thread):
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
 
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False,
+                 asic_readiness=None):
         threading.Thread.__init__(self)
         self.name = "CmisManagerTask"
         self.exc = None
@@ -69,6 +70,13 @@ class CmisManagerTask(threading.Thread):
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()
+        # Per-namespace admission: the state machine of a port runs only once the publishing workers have
+        # published its namespace; a namespace ready at their construction is exempt, with today's concurrent
+        # start. None = all admitted.
+        self.asic_readiness = asic_readiness if asic_readiness is not None \
+                              else AsicReadiness.all_ready_registry(namespaces)
+        self._deferred_logged = set()       # namespaces for which PORTS_DEFERRED was logged
+        self._admitted_snapshot = None      # admitted namespaces sampled before this iteration's gearbox cache
 
     def initialize_fast_reboot_status(self):
         fast_reboot_status = {}
@@ -815,27 +823,6 @@ class CmisManagerTask(threading.Thread):
         intf_tbl.set(lport, fvs)
         self.log_notice("{}: updated TRANSCEIVER_INFO_TABLE {}".format(lport, tuple_list))
 
-    def wait_for_port_config_done(self, namespace):
-        # Connect to APPL_DB and subscribe to PORT table notifications
-        appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
-
-        sel = swsscommon.Select()
-        port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
-        sel.addSelectable(port_tbl)
-
-        # Make sure this daemon started after all port configured
-        while not self.task_stopping_event.is_set():
-            (state, c) = sel.select(port_event_helper.SELECT_TIMEOUT_MSECS)
-            if state == swsscommon.Select.TIMEOUT:
-                continue
-            if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
-                continue
-
-            (key, op, fvp) = port_tbl.pop()
-            if key in ["PortConfigDone", "PortInitDone"]:
-                break
-
     def update_cmis_state_expiration_time(self, lport, duration_seconds):
         """
         Set the CMIS expiration time for the given logical port
@@ -1271,6 +1258,12 @@ class CmisManagerTask(threading.Thread):
             self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_FAILED)
 
     def process_single_lport(self, lport, info):
+        if not self.asic_readiness.is_asic_admitted(info.get('asic_id'), self._admitted_snapshot):
+            # Namespace not admitted yet: no DB read, no module access, no state change until its publishing
+            # workers have run their start-up pass over it
+            log_first_deferral(self.asic_readiness, self._deferred_logged, info.get('asic_id'), self.name, lport, self.log_notice)
+            return
+
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
         if state in CMIS_TERMINAL_STATES or state == CMIS_STATE_UNKNOWN:
             if state != CMIS_STATE_READY:
@@ -1294,6 +1287,16 @@ class CmisManagerTask(threading.Thread):
             return
 
         if pport not in self.port_obj_dict:
+            return
+
+        # A module behind a blocking error (the status row its error event wrote) is left to the error's end: a
+        # presence or API read behind the error would park the port in a terminal state, and the identical
+        # TRANSCEIVER_INFO row posted when the error ends is no event that could start it again. An initialisation
+        # the error interrupted restarts from INSERTED when the error has ended, its timer not charged as a retry
+        if sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))):
+            if state != CMIS_STATE_INSERTED:
+                self.log_notice("{}: initialisation interrupted by a blocking error, restarts when it has ended".format(lport))
+                self.force_cmis_reinit(lport, self.port_dict[lport].get('cmis_retries', 0))
             return
 
         host_lane_count = self.get_host_lane_count(lport, lanes)
@@ -1360,6 +1363,9 @@ class CmisManagerTask(threading.Thread):
             # Handle port change event from main thread
             port_change_observer.handle_port_update_event()
 
+            # Admission is sampled before the gearbox cache: a namespace admitted after the cache was read
+            # is processed in the next iteration, with a cache that includes its gearbox entries
+            self._admitted_snapshot = self.asic_readiness.admitted_namespaces()
             # Cache gearbox line lanes dictionary once per iteration over all ports
             self._gearbox_lanes_dict = self.xcvr_table_helper.get_gearbox_line_lanes_dict()
 
@@ -1384,11 +1390,6 @@ class CmisManagerTask(threading.Thread):
             return
 
         try:
-
-            self.log_notice("Waiting for PortConfigDone...")
-            for namespace in self.namespaces:
-                self.wait_for_port_config_done(namespace)
-
             for lport in self.port_dict.keys():
                 if self.port_dict[lport].get('index') in self.port_obj_dict:
                     self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_UNKNOWN)
