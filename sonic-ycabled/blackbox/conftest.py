@@ -83,7 +83,8 @@ def bb_env(request):
     if not ENABLED:
         pytest.skip("set BB_ENABLE=1 to run the black-box tests, in a throwaway container (see README.md)")
     from harness.env import BlackboxEnv
-    workdir = request.config.getoption("--bb-workdir")
+    # Absolute: ycabled runs from /, and /dev/log points into the workdir.
+    workdir = os.path.abspath(request.config.getoption("--bb-workdir"))
     env = BlackboxEnv(workdir, BASE_ENV, _coverage_target(request.config, workdir))
     try:
         env.start()

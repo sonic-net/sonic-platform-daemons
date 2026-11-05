@@ -72,6 +72,9 @@ class Dut(object):
         self.topo = None
         self.proc = None
         self.procs = []
+        # Return codes of the instances that had exited on their own when the
+        # test stopped them.
+        self.early_exits = []
         self.socs = {}
         self.blackholes = []
         self.simulators = []
@@ -161,6 +164,8 @@ class Dut(object):
 
     def stop(self, sigterm_timeout=3.0):
         """SIGTERM as supervisord sends it; SIGKILL after `sigterm_timeout`."""
+        if not self.proc.running():
+            self.early_exits.append(self.proc.returncode())
         self.stopped = True
         result = self.proc.stop(sigterm_timeout)
         self._settle_recorders()
@@ -279,6 +284,9 @@ class Dut(object):
             return []
         self.torn_down = True
         problems = []
+        if self.early_exits and not self.allow_exit:
+            problems.append("ycabled exited unexpectedly with {} before the test stopped it".format(
+                ", ".join(str(rc) for rc in self.early_exits)))
         if self.proc is not None:
             if not self.proc.running() and not self.stopped and not self.allow_exit:
                 problems.append("ycabled exited unexpectedly with {}".format(self.proc.returncode()))
