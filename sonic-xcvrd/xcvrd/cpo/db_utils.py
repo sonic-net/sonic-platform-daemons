@@ -3,6 +3,7 @@
 try:
     from ..dom.utilities.db.utils import DBUtils
     from ..dom.utilities.dom_sensor.beautify import DOMBeautifyMixin
+    from ..dom.utilities.vdm.db_utils import VDMDBUtils
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
 
@@ -43,16 +44,12 @@ class CPODOMDBUtils(DOMBeautifyMixin, DBUtils):
                                                     beautify_func=self._beautify_dom_info_dict)
 
 
-class CPOVDMDBUtils(DBUtils):
+class CPOVDMDBUtils(VDMDBUtils):
     """
     This class provides utility functions for managing DB operations
     related to VDM on CPO (co-packaged optics) modules.
+
+    The OE and the ELSFP share one VDM block (joint mode), banked like the OE
+    lanes and read through each port's bank-bound OE API, so it is published to
+    the standard TRANSCEIVER_VDM_* tables of the bank's first logical port.
     """
-
-    def __init__(self, port_obj_dict, port_mapping, xcvr_table_helper, task_stopping_event, logger):
-        super().__init__(port_obj_dict, port_mapping, task_stopping_event, logger)
-        self.xcvr_table_helper = xcvr_table_helper
-        self.logger = logger
-
-    def post_port_vdm_thresholds_to_db(self, logical_port_name, db_cache=None):
-        pass
