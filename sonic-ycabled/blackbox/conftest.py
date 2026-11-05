@@ -85,10 +85,13 @@ def bb_env(request):
     from harness.env import BlackboxEnv
     workdir = request.config.getoption("--bb-workdir")
     env = BlackboxEnv(workdir, BASE_ENV, _coverage_target(request.config, workdir))
-    env.start()
-    _ENV["env"] = env
-    yield env
-    env.stop()
+    try:
+        env.start()
+        _ENV["env"] = env
+        yield env
+    finally:
+        # Also after a failed start: redis-server may be running.
+        env.stop()
 
 
 def _coverage_target(config, workdir):
@@ -142,16 +145,24 @@ def pytest_sessionfinish(session, exitstatus):
     env = _ENV.get("env")
     if env is None or env.monitor is None:
         return
-    from harness import contract
     report_dir = session.config.getoption("--bb-report-dir") or os.path.join(env.workdir, "report")
     os.makedirs(report_dir, exist_ok=True)
-    accesses = env.monitor.accesses(0)
-    text, missing = contract.coverage_report(accesses)
+    tr = session.config.pluginmanager.get_plugin("terminalreporter")
+    if env.monitor.error is None:
+        _contract_report(session, env, report_dir, tr)
+    elif tr is not None:
+        tr.write_line("DB contract: no report, redis MONITOR stopped recording: {!r}".format(env.monitor.error))
+    if env.coverage is not None and env.coverage.own_report:
+        _coverage_report(env, report_dir, tr)
+
+
+def _contract_report(session, env, report_dir, tr):
+    from harness import contract
+    text, missing = contract.coverage_report(env.monitor.accesses(0) + env.extra_accesses)
     with open(os.path.join(report_dir, "db-contract-coverage.md"), "w") as f:
         f.write(text)
     with open(os.path.join(report_dir, "db-contract-missing.json"), "w") as f:
         json.dump([e._asdict() for e in missing], f, indent=1)
-    tr = session.config.pluginmanager.get_plugin("terminalreporter")
     if tr is not None:
         tr.write_line("DB contract: {} of {} entries exercised; report in {}".format(
             len(contract.CONTRACT) - len(missing), len(contract.CONTRACT), report_dir))
@@ -160,8 +171,6 @@ def pytest_sessionfinish(session, exitstatus):
             for e in missing:
                 tr.write_line("  not exercised: {} {} {} {}".format(e.db, e.table, e.kind, e.field or ""))
         session.exitstatus = 1
-    if env.coverage is not None and env.coverage.own_report:
-        _coverage_report(env, report_dir, tr)
 
 
 def _coverage_report(env, report_dir, tr):

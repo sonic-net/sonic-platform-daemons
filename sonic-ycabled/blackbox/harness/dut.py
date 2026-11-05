@@ -283,7 +283,9 @@ class Dut(object):
                 for m in self.syslog.messages(self.log_mark):
                     if any(marker in m.text for marker in CRASH_MARKERS):
                         problems.append("ycabled logged a crash: {}".format(m.text[:2000]))
-        if not self.allow_contract_violations:
+        if self.monitor.error is not None:
+            problems.append("redis MONITOR stopped recording: {!r}".format(self.monitor.error))
+        elif not self.allow_contract_violations:
             for v in contract.violations(self.monitor.accesses(self.test_mark)):
                 problems.append("DB contract: " + v)
         for soc in self.socs.values():

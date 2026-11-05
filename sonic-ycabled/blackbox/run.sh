@@ -28,6 +28,8 @@ fi
 
 docker build -q --build-arg BASE_IMAGE="$base" -t "$image" "$here" >/dev/null
 mkdir -p "$report"
+# Absolute: docker takes a bare name for a named volume.
+report=$(cd "$report" && pwd)
 
 extra=()
 if [ -n "${BB_YCABLED_CMD:-}" ]; then

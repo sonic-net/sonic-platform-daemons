@@ -11,7 +11,7 @@ import threading
 import time
 from collections import namedtuple
 
-from .redisdb import HARNESS_ADDRESS, harness_client
+from .redisdb import HARNESS_ADDRESS, TCP_PORT, harness_client
 from .util import DB_NAMES, SEPARATORS, wait_until
 
 _LINE_RE = re.compile(r'^(\d+\.\d+) \[(\d+) ([^\]]+)\] (.*)$', re.S)
@@ -116,7 +116,11 @@ def accesses(op):
 
 
 class Monitor(object):
-    def __init__(self):
+    def __init__(self, port=TCP_PORT):
+        self.port = port
+        # Why the reader stopped, when it failed. Observations then raise rather
+        # than answer from a record that no longer grows.
+        self.error = None
         self._ops = []
         self._lines = 0
         self._stop = False
@@ -126,14 +130,14 @@ class Monitor(object):
 
     def start(self):
         # Keep the client: when it is collected, its pool closes the MONITOR connection.
-        self._client = harness_client(decode_responses=False)
+        self._client = harness_client(decode_responses=False, port=self.port)
         self._mon = self._client.monitor()
         self._mon.__enter__()
         self._conn = self._mon.connection
         self._thread = threading.Thread(target=self._run, name="redis-monitor", daemon=True)
         self._thread.start()
         # MONITOR shows this marker once it is active.
-        probe = harness_client()
+        probe = harness_client(port=self.port)
         wait_until(lambda: probe.echo("bb-monitor-ready") and self._lines > 0, 5, 0.02,
                    "redis MONITOR did not start")
 
@@ -142,10 +146,10 @@ class Monitor(object):
         while not self._stop:
             try:
                 raw = self._conn.read_response()
-            except Exception:
-                if self._stop:
-                    return
-                raise
+            except Exception as e:
+                if not self._stop:
+                    self.error = e
+                return
             line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
             self._lines += 1
             op = parse_line(seq, line)
@@ -162,10 +166,16 @@ class Monitor(object):
 
     # Access for tests -------------------------------------------------------
 
+    def check(self):
+        if self.error is not None:
+            raise RuntimeError("redis MONITOR stopped recording: {!r}".format(self.error)) from self.error
+
     def mark(self):
+        self.check()
         return len(self._ops)
 
     def ops(self, since=0, clients=("tcp", "unix", "lua")):
+        self.check()
         return [op for op in self._ops[since:] if op.client in clients]
 
     def accesses(self, since=0, kind=None, db=None, table=None, key=None, field=None):

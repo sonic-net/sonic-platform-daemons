@@ -86,6 +86,9 @@ class BlackboxEnv(object):
         self.redis = RedisServer(workdir)
         self.dbs = None
         self.monitor = None
+        # What other recorders saw ycabled do, such as the multi-ASIC test's
+        # in its namespace databases; part of the contract coverage report.
+        self.extra_accesses = []
         self.syslog = None
         self.hw = None
 

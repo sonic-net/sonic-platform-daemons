@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from harness import contract
+from harness.monitor import Monitor
 from harness.redisdb import Dbs, RedisServer
 from harness.topology import CONTAINER_PLATFORM_DIR, HWSKU, PLATFORM, Topology, transceiver_info_row
 from harness.util import wait_until
@@ -41,6 +43,8 @@ def _database_config(base, port, unix_socket):
 def multi_asic(dut):
     """Two front-end ASICs, one mux port each."""
     servers = {}
+    monitors = {}
+    problems = []
     try:
         topo = Topology()
         topo.active_standby("Ethernet0", "Ethernet4")
@@ -60,6 +64,9 @@ def multi_asic(dut):
                                  port=tcp_port)
             servers[ns] = server
             server.start()
+            # What the daemon does in the namespace, for the DB contract.
+            monitors[ns] = Monitor(port=tcp_port)
+            monitors[ns].start()
             dbs = Dbs(server)
             dbs.config.r.set("CONFIG_DB_INITIALIZED", "1")
             dbs.config.set("DEVICE_METADATA", "localhost", dict(topo.device_metadata, sub_role="FrontEnd",
@@ -84,6 +91,15 @@ def multi_asic(dut):
         if dut.proc is not None and dut.proc.running():
             dut.stopped = True
             dut.proc.kill()
+        for ns, monitor in monitors.items():
+            if monitor.error is not None:
+                problems.append("{}: redis MONITOR stopped recording: {!r}".format(ns, monitor.error))
+            else:
+                accesses = monitor.accesses(0)
+                dut.env.extra_accesses.extend(accesses)
+                if not dut.allow_contract_violations:
+                    problems += ["DB contract, {}: {}".format(ns, v) for v in contract.violations(accesses)]
+            monitor.stop()
         for server in servers.values():
             server.stop()
         for path in (os.path.join(SONIC_DB_DIR, "database_global.json"),
@@ -93,6 +109,8 @@ def multi_asic(dut):
         for n in ("0", "1"):
             # The directories are the suite's (env.SYSTEM_DIRS); their content is the test's.
             shutil.rmtree("/var/run/redis{}/sonic-db".format(n), ignore_errors=True)
+    if problems:
+        pytest.fail("\n".join(problems), pytrace=False)
 
 
 def test_multi_asic_environment(dut, multi_asic):
