@@ -339,8 +339,8 @@ class SwitchHostController(EventLogger):
         super(SwitchHostController, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
         self.chassis = chassis
         self._switch_host_module = None
-        self.state_db = daemon_base.db_connect("STATE_DB")
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
+        self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
+        self.config_db = daemon_base.db_connect("CONFIG_DB", use_tcp=False)
         self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
         self.chassis_module_info_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
         self.chassis_module_config_table = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
@@ -578,7 +578,7 @@ class PolicyReader(EventLogger):
 
     def __init__(self):
         super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER)
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
+        self.config_db = daemon_base.db_connect("CONFIG_DB", use_tcp=False)
 
     def _get_chassis_module_entry(self):
         """Return the CHASSIS_MODULE|SWITCH-HOST entry as a dict (empty dict if missing)."""
@@ -654,7 +654,7 @@ class CriticalEventChecker(logger.Logger):
 
     def __init__(self, policy_reader):
         super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER)
-        self.state_db = daemon_base.db_connect("STATE_DB")
+        self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
         self.policy_reader = policy_reader
 
     def has_critical_system_leak(self):
@@ -839,8 +839,8 @@ class BmcEventHandler(EventLogger):
         self.stop_event = stop_event
         self.controller = controller
 
-        self.state_db = daemon_base.db_connect("STATE_DB")
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
+        self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
+        self.config_db = daemon_base.db_connect("CONFIG_DB", use_tcp=False)
 
         # Act on RACK_MANAGER_ALERT severity changes only.
         # Rack Manager (redfish docker) may republish identical rows each cycle.

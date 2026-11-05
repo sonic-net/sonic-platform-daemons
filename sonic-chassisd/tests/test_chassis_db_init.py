@@ -44,7 +44,7 @@ def test_provision_db():
 
     daemon_base.db_connect.reset_mock()
     chassis_table = provision_db(chassis, log)
-    daemon_base.db_connect.assert_called_once_with("STATE_DB", use_tcp=False)
+    daemon_base.db_connect.assert_called_once_with("STATE_DB", use_tcp=False, authenticate=True)
 
     fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     if isinstance(fvs, list):
@@ -61,7 +61,7 @@ def test_provision_db_bmc():
 
     daemon_base.db_connect.reset_mock()
     chassis_table = provision_db(chassis, log)
-    daemon_base.db_connect.assert_called_once_with("STATE_DB", use_tcp=False)
+    daemon_base.db_connect.assert_called_once_with("STATE_DB", use_tcp=False, authenticate=True)
 
     fvs = chassis_table.get(CHASSIS_INFO_KEY_TEMPLATE.format(1))
     if isinstance(fvs, list):

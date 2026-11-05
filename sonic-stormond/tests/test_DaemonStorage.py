@@ -148,7 +148,7 @@ class TestDaemonStorage(object):
         
         # Verify db_connect was called twice (once for STATE_DB, once for CONFIG_DB)
         assert mock_db_connect.call_count == 2
-        mock_db_connect.assert_any_call("STATE_DB", use_tcp=False)
+        mock_db_connect.assert_any_call("STATE_DB", use_tcp=False, authenticate=True)
         mock_db_connect.assert_any_call("CONFIG_DB", use_tcp=False)
         # Verify CONFIG_DB connection is stored
         assert stormon_daemon.config_db is not None

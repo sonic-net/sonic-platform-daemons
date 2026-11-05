@@ -1387,7 +1387,7 @@ class ThermalMonitor(ThreadTaskBase):
     def _init_switch_host_thermal_monitor(self):
         """Open BMC's TEMPERATURE_INFO table for periodic CRITICAL checks."""
         try:
-            state_db = daemon_base.db_connect("STATE_DB")
+            state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
             self._switch_host_thermal_table = swsscommon.Table(
                 state_db, TemperatureUpdater.TEMPER_INFO_TABLE_NAME)
             self._sw_host_thermal_event_logger = EventLogger(

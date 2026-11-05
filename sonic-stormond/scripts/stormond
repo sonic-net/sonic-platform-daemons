@@ -108,7 +108,7 @@ class DaemonStorage(daemon_base.DaemonBase):
         self.statedb_json_sync_fields = self.dynamic_fields[3:7]
 
         # Connect to STATE_DB and create Storage device table
-        self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False)
+        self.state_db = daemon_base.db_connect("STATE_DB", use_tcp=False, authenticate=True)
         self.device_table = swsscommon.Table(self.state_db, STORAGE_DEVICE_TABLE)
         
         # Load the FSIO RW values from state_db and JSON file and reconcile latest information
