@@ -158,8 +158,11 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
-    # How often to reconcile direct-owned SI notifications against APPL_DB (seconds)
-    SI_RECONCILE_INTERVAL = 60
+    # How often to reconcile direct-owned SI notifications against APPL_DB (seconds). Unlike the
+    # CMIS/SFF managers, this task gets no STATE_DB PORT_TABLE DEL event to trigger a prompt
+    # re-publish on a cold swss/syncd restart (its direct-owned ports replay unchanged CONFIG_DB
+    # entries, not a new port-add), so it polls to recover those ports.
+    SI_RECONCILE_INTERVAL = 30
     SYSLOG_IDENTIFIER = SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,

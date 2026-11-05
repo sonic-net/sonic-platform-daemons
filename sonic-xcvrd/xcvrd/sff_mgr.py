@@ -222,6 +222,14 @@ class SffManagerTask(threading.Thread):
                 phys = phys_list[0] if phys_list else pport
                 self.port_mapping.handle_port_change_event(PortChangeEvent(
                     lport, phys, asic_id, PortChangeEvent.PORT_REMOVE))
+        # STATE_DB PORT_TABLE DEL case: a cold swss/syncd restart cleared PORT_TABLE under a
+        # still-running xcvrd, so OA lost our si_settings_notification. Re-arm SI publication; the
+        # task_worker consumer re-publishes (NOTIFIED, or UNAVAIL on a no-settings SKU) in this
+        # same loop iteration, so the gate releases promptly instead of waiting on the reconcile.
+        elif port_change_event.db_name == 'STATE_DB' and \
+                port_change_event.table_name == 'PORT_TABLE':
+            if lport in self.port_dict:
+                self.port_dict[lport]['notify_si_settings'] = True
         # STATE_DB TRANSCEIVER_INFO DEL case:
         elif port_change_event.table_name and \
                 port_change_event.table_name == 'TRANSCEIVER_INFO':

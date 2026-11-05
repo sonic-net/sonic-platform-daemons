@@ -221,6 +221,13 @@ class CmisManagerTask(threading.Thread):
                 # cleared - NOT on TRANSCEIVER_INFO self-writes.
                 self.port_dict[lport]['si_settings_synced'] = False
                 self.port_dict[lport].pop('si_notification_number', None)
+                # A STATE_DB PORT_TABLE DEL with the port still configured (no CONFIG_DB removal)
+                # is the cold swss/syncd restart signal: APPL_DB/STATE_DB PORT_TABLE were cleared
+                # under a still-running xcvrd, so OA lost our notification. Poke the reconcile to
+                # re-publish this iteration instead of waiting out its interval, so the gate
+                # releases promptly.
+                if port_change_event.db_name == 'STATE_DB' and port_change_event.table_name == 'PORT_TABLE':
+                    self.last_si_reconcile_time = 0
 
             if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
                 self.clear_decomm_pending(lport)
