@@ -6,6 +6,7 @@ states, script per-RPC delays, error codes or malformed replies, and read
 the log of every RPC ycabled made.
 """
 
+import socket
 import threading
 import time
 from collections import namedtuple
@@ -222,7 +223,6 @@ class Blackhole(object):
     gRPC server hangs."""
 
     def __init__(self, ip):
-        import socket
         self.ip = ip
         family = socket.AF_INET6 if ":" in ip else socket.AF_INET
         self._sock = socket.socket(family, socket.SOCK_STREAM)
@@ -231,7 +231,8 @@ class Blackhole(object):
         self._sock.listen(64)
         self._conns = []
         self._stop = False
-        threading.Thread(target=self._accept, daemon=True).start()
+        self._thread = threading.Thread(target=self._accept, daemon=True)
+        self._thread.start()
 
     def _accept(self):
         while not self._stop:
@@ -243,6 +244,13 @@ class Blackhole(object):
 
     def stop(self):
         self._stop = True
+        try:
+            # close() alone does not wake the thread blocked in accept(), and the
+            # address would stay bound.
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self._thread.join(5)
         self._sock.close()
         for conn in self._conns:
             conn.close()

@@ -20,7 +20,7 @@ from . import contract
 from .mux_simulator import MuxSimulator, UPPER_TOR
 from .soc import Blackhole, Soc
 from .topology import transceiver_info_row
-from .util import clear_dir, wait_until
+from .util import WaitTimeout, clear_dir, wait_until
 from .ycabled import YcabledProcess, implementation
 
 # Tables ycabled subscribes to once it has found a mux cable.
@@ -156,7 +156,8 @@ class Dut(object):
             return expected <= self.subscriptions()
         wait_until(ready, timeout, message=lambda: "ycabled did not subscribe to {} within {}s".format(
             sorted(expected - self.subscriptions()), timeout))
-        self.monitor.wait_settled(quiet=0.3, timeout=timeout)
+        if not self.monitor.wait_settled(quiet=0.3, timeout=timeout):
+            raise WaitTimeout("ycabled did not go quiet for 0.3 s within {}s of subscribing".format(timeout))
 
     def stop(self, sigterm_timeout=3.0):
         """SIGTERM as supervisord sends it; SIGKILL after `sigterm_timeout`."""
