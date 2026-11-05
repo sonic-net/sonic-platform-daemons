@@ -821,6 +821,86 @@ class TestXcvrdScript(object):
         assert 'Ethernet0' in task.retry_eeprom_set
         mock_sfp.get_transceiver_info.side_effect = None
 
+    @patch('xcvrd.xcvrd.common.get_namespace_from_asic_id', MagicMock(return_value=''))
+    @patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete')
+    def test_warm_retained_up(self, mock_warm_restore):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), threading.Event(), threading.Event())
+        task.xcvr_table_helper = MagicMock()
+        mock_state_tbl = MagicMock()
+        task.xcvr_table_helper.get_state_port_tbl.return_value = mock_state_tbl
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+
+        # host_tx_ready not 'true' (MAC down) → not the retained-up case
+        mock_warm_restore.return_value = True
+        mock_state_tbl.hget.return_value = (True, 'false')
+        assert task._warm_retained_up('Ethernet0', 0) is False
+
+        # warm restore + host_tx_ready 'true' + no SI field → retained-up
+        mock_state_tbl.hget.return_value = (True, 'true')
+        assert task._warm_retained_up('Ethernet0', 0) is True
+
+        # fast reboot (not a warm restore): host_tx_ready is retained 'true' but the MAC is really
+        # down, so this is NOT the retained-up case and a real NOTIFIED must be published.
+        mock_warm_restore.return_value = False
+        assert task._warm_retained_up('Ethernet0', 0) is False
+
+        # warm restore but the SI field is already present → nothing to restore
+        mock_warm_restore.return_value = True
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        assert task._warm_retained_up('Ethernet0', 0) is False
+
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.xcvrd.common.is_cmis_api', MagicMock(return_value=False))
+    @patch('xcvrd.xcvrd.common._wrapper_get_presence', MagicMock(return_value=True))
+    @patch('xcvrd.xcvrd.media_settings_parser.notify_si_settings_unavailable')
+    @patch('xcvrd.xcvrd.media_settings_parser.notify_media_setting')
+    def test_notify_media_setting_on_insert_warm_retained_publishes_unavail(self, mock_notify, mock_unavail, mock_chassis):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), threading.Event(), threading.Event())
+        task.enable_sff_mgr = False
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.is_si_settings_synced.return_value = False
+        mock_sfp = MagicMock()
+        mock_sfp.get_xcvr_api.return_value = MagicMock()
+        mock_chassis.get_sfp.return_value = mock_sfp
+
+        # Warm-restored pre-SI-sync port, MAC up → publish counterless UNAVAIL, not a NOTIFIED
+        # (which would reprogram serdes on an up MAC).
+        task._warm_retained_up = MagicMock(return_value=True)
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_unavail.assert_called_once()
+        mock_notify.assert_not_called()
+
+        # Not the retained-up case → normal NOTIFIED publish.
+        mock_unavail.reset_mock()
+        task._warm_retained_up = MagicMock(return_value=False)
+        mock_sfp.get_transceiver_info.return_value = {'foo': 'bar'}
+        task.notify_media_setting_on_insert('Ethernet0', 0)
+        mock_notify.assert_called_once()
+        mock_unavail.assert_not_called()
+
+    def test_reconcile_si_notifications_republishes_when_field_missing(self):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), threading.Event(), threading.Event())
+        task.xcvr_table_helper = MagicMock()
+        task.notify_media_setting_on_insert = MagicMock()
+        task.last_si_reconcile_time = 0
+
+        # Field present in APPL_DB → nothing to do.
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        task.reconcile_si_notifications()
+        task.notify_media_setting_on_insert.assert_not_called()
+
+        # Field missing (e.g. cold swss/syncd restart cleared it) → re-publish.
+        task.last_si_reconcile_time = 0
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+        task.reconcile_si_notifications()
+        task.notify_media_setting_on_insert.assert_called_once_with('Ethernet0', 0)
+
     def test_CmisManagerTask_arms_notify_si_settings_only_on_transceiver_info(self):
         port_mapping = PortMapping()
         stop_event = threading.Event()
@@ -862,7 +942,10 @@ class TestXcvrdScript(object):
     def test_on_sfp_remove_event_resets_si_settings_notification(self, mock_change_event, mock_mapping_event, mock_xcvr_table_helper_cls):
         port_mapping = PortMapping()
         port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
-        mock_sfp_obj_dict = MagicMock()
+        # Physical port 1 must be present in port_obj_dict, otherwise task_worker() treats the
+        # removal event as "not owned by SfpStateUpdateTask" and drops it, so the reset path under
+        # test would never run.
+        mock_sfp_obj_dict = {1: MagicMock()}
         stop_event = threading.Event()
         sfp_error_event = threading.Event()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
@@ -3147,6 +3230,55 @@ class TestXcvrdScript(object):
         task.on_port_update_event(port_change_event)
         assert len(task.port_dict) == 0
 
+    @patch('xcvrd.xcvrd.common.get_namespace_from_asic_id', MagicMock(return_value=''))
+    @patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete')
+    def test_SffManagerTask_si_retained_from_pre_pr_warmboot(self, mock_warm_restore):
+        task = SffManagerTask(DEFAULT_NAMESPACE, MagicMock(), threading.Event(), MagicMock(), helper_logger)
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+
+        mock_warm_restore.return_value = True
+        # MAC down → not the retained-up case
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0, 'false') is False
+        # warm restore + MAC up + no SI field → retained-up
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0, 'true') is True
+        # fast reboot (not a warm restore): MAC really down → must publish NOTIFIED, guard is False
+        mock_warm_restore.return_value = False
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0, 'true') is False
+        # warm restore but SI field already present → nothing to restore
+        mock_warm_restore.return_value = True
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0, 'true') is False
+
+    def test_SffManagerTask_reconcile_si_notifications(self):
+        task = SffManagerTask(DEFAULT_NAMESPACE, MagicMock(), threading.Event(), MagicMock(), helper_logger)
+        task.xcvr_table_helper = MagicMock()
+        task.port_dict['Ethernet0'] = {'asic_id': 0, 'type': 'QSFP28', 'index': '1'}
+
+        # Field present in APPL_DB → no re-arm.
+        task.last_si_reconcile_time = 0
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        task.reconcile_si_notifications()
+        assert task.port_dict['Ethernet0'].get('notify_si_settings') is not True
+
+        # Field missing (cold restart cleared it) → re-arm; the consumer re-publishes.
+        task.last_si_reconcile_time = 0
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+        task.reconcile_si_notifications()
+        assert task.port_dict['Ethernet0']['notify_si_settings'] is True
+
+    def test_SffManagerTask_cold_restart_rearms_notify(self):
+        task = SffManagerTask(DEFAULT_NAMESPACE, MagicMock(), threading.Event(), MagicMock(), helper_logger)
+        # Track a port (XCVR_TYPE present); the SET already arms notify, so clear it first.
+        task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                                  {'type': 'QSFP28', 'subport': '0', 'host_tx_ready': 'false'}))
+        task.port_dict['Ethernet0']['notify_si_settings'] = False
+
+        # STATE_DB PORT_TABLE DEL = cold swss/syncd restart signal → re-arm SI publication.
+        task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL, {},
+                                                  'STATE_DB', 'PORT_TABLE'))
+        assert task.port_dict['Ethernet0']['notify_si_settings'] is True
+
     def test_SffManagerTask_get_active_lanes_for_lport(self):
         sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  MagicMock(),
@@ -3816,6 +3948,98 @@ class TestXcvrdScript(object):
             task.handle_cmis_inserted_state('Ethernet0')
             assert task.port_dict['Ethernet0']['si_notification_number'] == 7
             assert task.port_dict['Ethernet0']['notify_si_settings'] is False
+
+    @patch('xcvrd.xcvrd.common.get_namespace_from_asic_id', MagicMock(return_value=''))
+    @patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete')
+    def test_CmisManagerTask_si_retained_from_pre_pr_warmboot(self, mock_warm_restore):
+        port_mapping = PortMapping()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, threading.Event())
+        task.get_host_tx_status = MagicMock(return_value='true')
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+
+        # MAC down → not the retained-up case
+        mock_warm_restore.return_value = True
+        task.get_host_tx_status.return_value = 'false'
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0) is False
+
+        # warm restore + MAC up + no SI field → retained-up
+        task.get_host_tx_status.return_value = 'true'
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0) is True
+
+        # fast reboot (not a warm restore): host_tx_ready is retained but the MAC is really down,
+        # so a real NOTIFIED must be published - the guard must be False.
+        mock_warm_restore.return_value = False
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0) is False
+
+        # warm restore but SI field already present → nothing to restore
+        mock_warm_restore.return_value = True
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        assert task._si_retained_from_pre_pr_warmboot('Ethernet0', 0) is False
+
+    @patch('xcvrd.xcvrd.media_settings_parser.notify_si_settings_unavailable')
+    @patch('xcvrd.xcvrd.media_settings_parser.notify_media_setting')
+    def test_CmisManagerTask_reconcile_si_notifications(self, mock_notify, mock_unavail):
+        port_mapping = PortMapping()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, threading.Event())
+        task.xcvr_table_helper = MagicMock()
+        task.force_cmis_reinit = MagicMock()
+        task._si_retained_from_pre_pr_warmboot = MagicMock(return_value=False)
+        mock_api = MagicMock()
+        mock_api.get_transceiver_info.return_value = {'foo': 'bar'}
+        task.port_dict['Ethernet0'] = {'asic_id': 0, 'api': mock_api, 'pport': 1, 'si_settings_synced': True}
+
+        # Field present in APPL_DB → nothing to do.
+        task.last_si_reconcile_time = 0
+        task.xcvr_table_helper.has_si_settings_notification.return_value = True
+        task.reconcile_si_notifications()
+        mock_notify.assert_not_called()
+
+        # Field missing (cold restart cleared it) → re-emit NOTIFIED via notify_media_setting with
+        # NO datapath reinit.
+        task.last_si_reconcile_time = 0
+        task.xcvr_table_helper.has_si_settings_notification.return_value = False
+        task.reconcile_si_notifications()
+        mock_notify.assert_called_once()
+        task.force_cmis_reinit.assert_not_called()
+
+        # Field missing + warm-retained-up → publish UNAVAIL, not a NOTIFIED (would flap up MAC).
+        task.last_si_reconcile_time = 0
+        mock_notify.reset_mock()
+        task._si_retained_from_pre_pr_warmboot.return_value = True
+        task.reconcile_si_notifications()
+        mock_unavail.assert_called_once()
+        mock_notify.assert_not_called()
+
+        # A port with no cached api (not CMIS-owned) is skipped - not our responsibility.
+        task.last_si_reconcile_time = 0
+        mock_unavail.reset_mock()
+        task._si_retained_from_pre_pr_warmboot.return_value = False
+        task.port_dict['Ethernet0']['api'] = None
+        task.reconcile_si_notifications()
+        mock_notify.assert_not_called()
+        mock_unavail.assert_not_called()
+
+    def test_CmisManagerTask_cold_restart_pokes_reconcile(self):
+        port_mapping = PortMapping()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, threading.Event())
+        task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
+        task.port_dict['Ethernet0'] = {'asic_id': 0, 'index': 1,
+                                       'si_settings_synced': True, 'si_notification_number': 5}
+
+        # STATE_DB PORT_TABLE DEL with the port still configured = cold swss/syncd restart signal:
+        # clear synced and poke the reconcile (reset its throttle) so it re-publishes promptly.
+        task.last_si_reconcile_time = 12345.0
+        task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL,
+                                                  {}, db_name='STATE_DB', table_name='PORT_TABLE'))
+        assert task.last_si_reconcile_time == 0
+        assert task.port_dict['Ethernet0']['si_settings_synced'] is False
+
+        # A transceiver plug-out (TRANSCEIVER_INFO DEL) must NOT poke the reconcile.
+        task.last_si_reconcile_time = 12345.0
+        task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_DEL,
+                                                  {}, db_name='STATE_DB', table_name='TRANSCEIVER_INFO'))
+        assert task.last_si_reconcile_time == 12345.0
 
     def test_CmisManagerTask_handle_cmis_si_settings_wait_state(self):
         port_mapping = PortMapping()
