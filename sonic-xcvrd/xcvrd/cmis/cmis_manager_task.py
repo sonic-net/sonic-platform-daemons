@@ -70,8 +70,9 @@ class CmisManagerTask(threading.Thread):
         self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
-        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
-        self.last_si_reconcile_time = 0
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart). Start from "now"
+        # so the first periodic reconcile is one interval out, not on the very first worker loop.
+        self.last_si_reconcile_time = time.time()
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()

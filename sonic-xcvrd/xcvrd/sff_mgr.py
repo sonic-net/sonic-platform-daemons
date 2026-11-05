@@ -109,8 +109,9 @@ class SffManagerTask(threading.Thread):
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.namespaces = namespaces
         # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
-        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
-        self.last_si_reconcile_time = 0
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart). Start from "now"
+        # so the first periodic reconcile is one interval out, not on the very first worker loop.
+        self.last_si_reconcile_time = time.time()
 
     def log_notice(self, message):
         self.helper_logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))

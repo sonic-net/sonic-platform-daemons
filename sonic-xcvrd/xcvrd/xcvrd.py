@@ -184,8 +184,9 @@ class SfpStateUpdateTask(threading.Thread):
         # To avoid retry EEPROM read too fast, record the last EEPROM read timestamp in this member
         self.last_retry_eeprom_time = 0
         # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
-        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
-        self.last_si_reconcile_time = 0
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart). Start from "now"
+        # so the first periodic reconcile is one interval out, not on the very first worker loop.
+        self.last_si_reconcile_time = time.time()
         # A dict to hold SFP error event, for SFP insert/remove event, it is not necessary to cache them
         # because _wrapper_get_presence returns the SFP presence status
         self.sfp_error_dict = {}

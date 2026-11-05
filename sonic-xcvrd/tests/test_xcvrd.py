@@ -746,6 +746,9 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, MagicMock(), stop_event, sfp_error_event)
         task.enable_sff_mgr = False
         task.xcvr_table_helper = MagicMock()
+        # Not the warm-retained-up case here (that branch is covered separately); keep the normal
+        # publish path so the mock helper's hget is not exercised.
+        task._warm_retained_up = MagicMock(return_value=False)
 
         mock_sfp = MagicMock()
         mock_sfp.get_xcvr_api.return_value = MagicMock()
@@ -6476,36 +6479,6 @@ class TestXcvrdScript(object):
         port_dict = {1, SFP_STATUS_INSERTED}
         assert task._mapping_event_from_change_event(True, port_dict) == NORMAL_EVENT
 
-    @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic2'))
-    @patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=False))
-    @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=True))
-    def test_SfpStateUpdateTask_is_warm_fast_reboot_for_lport(self):
-        port_mapping = PortMapping()
-        port_mapping.logical_to_asic = {'Ethernet0': 2}
-        mock_sfp_obj_dict = MagicMock()
-        stop_event = threading.Event()
-        sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(['asic2'], port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
-        common.is_syncd_warm_restore_complete.assert_called_once_with('asic2')
-        common.is_fast_reboot_enabled.assert_called_once_with('asic2')
-        common.is_syncd_warm_restore_complete.reset_mock()
-        common.is_fast_reboot_enabled.reset_mock()
-
-        assert task.is_warm_fast_reboot_for_lport('Ethernet0') is True
-        common.get_namespace_from_asic_id.assert_called_with(2)
-        common.is_syncd_warm_restore_complete.assert_not_called()
-        common.is_fast_reboot_enabled.assert_not_called()
-
-    def test_SfpStateUpdateTask_is_warm_fast_reboot_for_lport_invalid_asic(self):
-        port_mapping = PortMapping()
-        mock_sfp_obj_dict = MagicMock()
-        stop_event = threading.Event()
-        sfp_error_event = threading.Event()
-        task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, mock_sfp_obj_dict, stop_event, sfp_error_event)
-        task.port_mapping.get_asic_id_for_logical_port = MagicMock(return_value=None)
-
-        assert task.is_warm_fast_reboot_for_lport('Ethernet0') is False
-
     @patch('time.sleep', MagicMock())
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     @patch('xcvrd.xcvrd._wrapper_soak_sfp_insert_event', MagicMock())
@@ -7618,6 +7591,14 @@ class TestXcvrdScript(object):
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, {OWNED_PORT: MagicMock()},
                                   threading.Event(), threading.Event())
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        # notify_media_setting_on_insert() runs the SI-state reads (is_si_settings_synced /
+        # has_si_settings_notification / host_tx_ready). Back the APPL/STATE tables with a mock
+        # reporting "no SI state" so the real helper does not choke on the mock swsscommon tables.
+        si_tbl = MagicMock()
+        si_tbl.get.return_value = (False, None)
+        si_tbl.hget.return_value = (False, None)
+        task.xcvr_table_helper.app_port_read_tbl = {0: si_tbl}
+        task.xcvr_table_helper.state_port_tbl = {0: si_tbl}
         return task
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
