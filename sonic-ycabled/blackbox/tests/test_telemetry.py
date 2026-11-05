@@ -58,7 +58,11 @@ def run(module_dut):
         raise
     result.pop("gate").set()
     result["problems"] = dut.teardown()
-    return result
+    yield result
+    # test_no_problems reports them; in a run without it (-k), the fixture does.
+    # pytest.fail: an AssertionError would pass as a known issue's xfail.
+    if result["problems"] and not result.get("checked"):
+        pytest.fail("ycabled problems in the telemetry pass:\n" + "\n".join(result["problems"]), pytrace=False)
 
 
 def _telemetry_pass(dut):
@@ -121,6 +125,7 @@ def _telemetry_pass(dut):
 
 
 def test_no_problems(run):
+    run["checked"] = True
     assert not run["problems"], run["problems"]
 
 

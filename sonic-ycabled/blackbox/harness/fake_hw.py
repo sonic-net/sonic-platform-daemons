@@ -325,14 +325,15 @@ class FakeHardware(object):
                     if script.times < 0:
                         model.scripts.pop(method, None)
                         script = None
+                if script is not None and script.gate is not None and method == "download_firmware":
+                    # Together with the call record: a test that sees the call
+                    # sees the download in progress.
+                    model.download_firmware_status = FIRMWARE_DOWNLOAD_STATUS_INPROGRESS
         try:
             if script is not None:
                 if script.delay:
                     time.sleep(script.delay)
                 if script.gate is not None:
-                    if method == "download_firmware":
-                        with self._lock:
-                            model.download_firmware_status = FIRMWARE_DOWNLOAD_STATUS_INPROGRESS
                     script.gate.wait(120)
                 if script.raises:
                     name, _, msg = script.raises.partition(":")

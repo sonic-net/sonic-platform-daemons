@@ -92,10 +92,12 @@ def multi_asic(dut):
             dut.stopped = True
             dut.proc.kill()
         for ns, monitor in monitors.items():
-            if monitor.error is not None:
-                problems.append("{}: redis MONITOR stopped recording: {!r}".format(ns, monitor.error))
-            else:
+            try:
+                monitor.barrier()
                 accesses = monitor.accesses(0)
+            except Exception as e:
+                problems.append("{}: {}".format(ns, e))
+            else:
                 dut.env.extra_accesses.extend(accesses)
                 if not dut.allow_contract_violations:
                     problems += ["DB contract, {}: {}".format(ns, v) for v in contract.violations(accesses)]

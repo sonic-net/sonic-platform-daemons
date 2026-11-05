@@ -161,7 +161,16 @@ class Dut(object):
     def stop(self, sigterm_timeout=3.0):
         """SIGTERM as supervisord sends it; SIGKILL after `sigterm_timeout`."""
         self.stopped = True
-        return self.proc.stop(sigterm_timeout)
+        result = self.proc.stop(sigterm_timeout)
+        self._settle_recorders()
+        return result
+
+    def _settle_recorders(self):
+        """Once ycabled has stopped: wait until what it sent to redis and syslog
+        is recorded, so that none of it is missed or taken for the next test's."""
+        if self.monitor.error is None:
+            self.monitor.barrier()
+        self.syslog.barrier()
 
     # orchagent, linkmgrd, xcvrd ---------------------------------------------
 
@@ -273,6 +282,10 @@ class Dut(object):
             if not self.proc.running() and not self.stopped and not self.allow_exit:
                 problems.append("ycabled exited unexpectedly with {}".format(self.proc.returncode()))
             self.proc.kill()
+            try:
+                self._settle_recorders()
+            except RuntimeError as e:
+                problems.append(str(e))
             if not self.allow_crash:
                 for p in self.procs:
                     out = p.output()

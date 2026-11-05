@@ -6,13 +6,14 @@ commands are turned into table-level accesses (reads, writes, deletes,
 subscriptions), which the tests and the DB contract check work with.
 """
 
+import itertools
 import re
 import threading
 import time
 from collections import namedtuple
 
 from .redisdb import HARNESS_ADDRESS, TCP_PORT, harness_client
-from .util import DB_NAMES, SEPARATORS, wait_until
+from .util import DB_NAMES, SEPARATORS, WaitTimeout, wait_until
 
 _LINE_RE = re.compile(r'^(\d+\.\d+) \[(\d+) ([^\]]+)\] (.*)$', re.S)
 _ARG_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
@@ -121,6 +122,8 @@ class Monitor(object):
         # Why the reader stopped, when it failed. Observations then raise rather
         # than answer from a record that no longer grows.
         self.error = None
+        self._barriers = itertools.count(1)
+        self._probe = None
         self._ops = []
         self._lines = 0
         self._stop = False
@@ -137,8 +140,8 @@ class Monitor(object):
         self._thread = threading.Thread(target=self._run, name="redis-monitor", daemon=True)
         self._thread.start()
         # MONITOR shows this marker once it is active.
-        probe = harness_client(port=self.port)
-        wait_until(lambda: probe.echo("bb-monitor-ready") and self._lines > 0, 5, 0.02,
+        self._probe = harness_client(port=self.port)
+        wait_until(lambda: self._probe.echo("bb-monitor-ready") and self._lines > 0, 5, 0.02,
                    "redis MONITOR did not start")
 
     def _run(self):
@@ -165,6 +168,25 @@ class Monitor(object):
             pass
 
     # Access for tests -------------------------------------------------------
+
+    def barrier(self, timeout=5):
+        """Waits until the reader has consumed every command redis executed
+        before the call, such as the last ones of a daemon that just stopped."""
+        # Redis has executed what was readable when it executed the first ECHO,
+        # so the second comes after all of it in the stream.
+        self._probe.echo("bb-barrier")
+        token = "bb-barrier-{}".format(next(self._barriers))
+        start = len(self._ops)
+        self._probe.echo(token)
+        try:
+            wait_until(lambda: self._shows(token, start), timeout, 0.01)
+        except WaitTimeout:
+            # Not an AssertionError: a known-issue xfail must not take it.
+            raise RuntimeError("redis MONITOR did not show the barrier within {}s".format(timeout))
+
+    def _shows(self, token, start):
+        self.check()
+        return any(op.cmd == "ECHO" and op.args == [token] for op in self._ops[start:])
 
     def check(self):
         if self.error is not None:
