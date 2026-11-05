@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import threading
 
 import pytest
@@ -12,8 +13,11 @@ from xcvrd.cmis.cmis_manager_task import CmisManagerTask
 from xcvrd.cpo import cpo_state_task
 from xcvrd.cpo.cpo_manager_task import CpoManagerTask
 from xcvrd.cpo.cpo_state_task import CpoStateUpdateTask
+from xcvrd.cpo.db_utils import CPODOMDBUtils, CPOVDMDBUtils
+from xcvrd.cpo.cpo_dom_mgr import CpoDomInfoUpdateTask
+from xcvrd.cpo.xcvr_table_helper import CpoXcvrTableHelper
 from xcvrd.xcvrd import PHYSICAL_PORT_NOT_EXIST, SFP_EEPROM_NOT_READY
-from xcvrd.xcvrd_utilities import common
+from xcvrd.xcvrd_utilities import common, sfp_status_helper
 from xcvrd.xcvrd_utilities.port_event_helper import PortChangeEvent, PortMapping
 
 DEFAULT_NAMESPACE = ['']
@@ -123,15 +127,15 @@ CPO_DATA = {
     'devices': {
         'OE1': {'device_type': 'optical_engine', 'max_banks': 2},
         'OE2': {'device_type': 'optical_engine', 'max_banks': 1},
-        'ELS1': {'device_type': 'external_laser_source', 'max_banks': 3, 'lasers': 8},
+        'ELS1': {'device_type': 'external_laser_source', 'max_banks': 1, 'lasers': 8},
     },
     'interfaces': {
         'Ethernet0': {'associated_devices': [{'device_id': 'OE1', 'bank': 0},
                                              {'device_id': 'ELS1', 'bank': 0}]},
         'Ethernet8': {'associated_devices': [{'device_id': 'OE1', 'bank': 1},
-                                             {'device_id': 'ELS1', 'bank': 1}]},
+                                             {'device_id': 'ELS1', 'bank': 0}]},
         'Ethernet16': {'associated_devices': [{'device_id': 'OE2', 'bank': 0},
-                                              {'device_id': 'ELS1', 'bank': 2}]},
+                                              {'device_id': 'ELS1', 'bank': 0}]},
     },
 }
 
@@ -203,6 +207,18 @@ class TestCpoTopology:
         with patched_topology(cpo_data=None):
             assert common.get_oe_sibling_pports(1) == {1}
             assert common.get_elsfp_sibling_pports(1) == {1}
+            assert common.get_oe_bank_sibling_pports(1) == {1}
+            assert common.get_elsfp_bank_sibling_pports(1) == {1}
+
+    def test_banks_are_recorded(self):
+        with patched_topology():
+            assert common._build_cpo_topology().banks_by_pport[2] == {'OE1': 1, 'ELS1': 0}
+
+    def test_bank_sibling_pports(self):
+        with patched_topology():
+            for pport in (1, 2, 3):
+                assert common.get_oe_bank_sibling_pports(pport) == {pport}
+                assert common.get_elsfp_bank_sibling_pports(pport) == {1, 2, 3}
 
 
 class TestCpoManager:
@@ -631,3 +647,325 @@ class TestCpoStateUpdateTask:
         assert [call.args[0] for call in task.dom_db_utils.post_port_dom_thresholds_to_db.call_args_list] == ['Ethernet0']
         assert [call.args[0] for call in mock_update_status.call_args_list] == ['Ethernet0']
         assert not task._is_owned_physical_port(PLUGGABLE_PORT)
+
+
+class TestCpoDomInfoUpdateTask:
+    @contextlib.contextmanager
+    def mocked_db_tables(self):
+        def new_table(*args, **kwargs):
+            return MagicMock()
+
+        with patch.object(daemon_base, 'db_connect', MagicMock()), \
+             patch.object(swsscommon, 'Table', MagicMock(side_effect=new_table)), \
+             patch.object(swsscommon, 'ProducerStateTable', MagicMock(side_effect=new_table)):
+            yield
+
+    def make_port_mapping(self):
+        # Matches CPO_DATA: pports 1 and 2 share OE1, ELS1 is shared by pports 1-3
+        port_mapping = PortMapping()
+        for logical_port, physical_port in CPO_PORTS:
+            port_mapping.handle_port_change_event(
+                PortChangeEvent(logical_port, physical_port, 0, PortChangeEvent.PORT_ADD))
+        return port_mapping
+
+    def make_cpo_device(self, p):
+        """Mock CPO device whose module-scope data is tagged 'module<p>' and
+        lane-scope data 'lane<p>', so published values reveal which device
+        performed each read."""
+        device = MagicMock()
+        oe_api = device.oe.get_api.return_value
+        oe_api.get_transceiver_info_firmware_versions.return_value = {'active_firmware': 'module{}'.format(p)}
+        oe_api.get_non_banked_transceiver_dom_real_value.return_value = {'temperature': 40.0 + p}
+        oe_api.get_banked_transceiver_dom_real_value.return_value = {'rx1power': float(p)}
+        oe_api.get_non_banked_transceiver_dom_flags.return_value = {'tempHAlarm': 'module{}'.format(p)}
+        oe_api.get_banked_transceiver_dom_flags.return_value = {'rx1powerHAlarm': 'lane{}'.format(p)}
+        oe_api.get_non_banked_transceiver_status.return_value = {'module_state': 'module{}'.format(p)}
+        oe_api.get_banked_transceiver_status.return_value = {'DP1State': 'lane{}'.format(p)}
+        oe_api.get_non_banked_transceiver_status_flags.return_value = {'module_state_changed': 'module{}'.format(p)}
+        oe_api.get_banked_transceiver_status_flags.return_value = {'rx1los': 'lane{}'.format(p)}
+        elsfp_api = device.elsfp.get_api.return_value
+        elsfp_api.get_elsfp_info_firmware_versions.return_value = {'active_firmware': 'els_module{}'.format(p)}
+        elsfp_api.get_non_banked_elsfp_dom_real_value.return_value = {'temperature': 50.0 + p}
+        elsfp_api.get_banked_elsfp_dom_real_value.return_value = {'laser_bias_current_lane1': float(p)}
+        elsfp_api.get_non_banked_elsfp_dom_flags.return_value = {'temperature_alarm_high': 'els_module{}'.format(p)}
+        elsfp_api.get_banked_elsfp_dom_flags.return_value = {'laser_bias_alarm_high_lane1': 'els_lane{}'.format(p)}
+        elsfp_api.get_non_banked_elsfp_status.return_value = {'module_state': 'els_module{}'.format(p)}
+        elsfp_api.get_banked_elsfp_status.return_value = {'state_lane1': 'els_lane{}'.format(p)}
+        elsfp_api.get_non_banked_elsfp_status_flags.return_value = {'lane_summary_fault': 'els_module{}'.format(p)}
+        elsfp_api.get_banked_elsfp_status_flags.return_value = {'fault_flag_lane1': 'els_lane{}'.format(p)}
+        return device
+
+    def make_devices(self):
+        return {p: self.make_cpo_device(p) for p in (1, 2, 3)}
+
+    def make_task(self, port_obj_dict):
+        with self.mocked_db_tables():
+            task = CpoDomInfoUpdateTask(DEFAULT_NAMESPACE, self.make_port_mapping(), port_obj_dict,
+                                        threading.Event(), True)
+        task.check_port_update = MagicMock()
+        task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
+        return task
+
+    def run_collect_and_publish(self, task):
+        task.dom_db_utils = MagicMock()
+        with patched_topology(), \
+             patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(sfp_status_helper, 'detect_port_in_error_status', return_value=False):
+            task.collect_and_publish_data(MagicMock())
+
+        # Map (logical port, table) -> published values dict
+        published = {}
+        for call_args in task.dom_db_utils.post_diagnostic_values_from_dict_to_db.call_args_list:
+            logical_port, table, values = call_args.args
+            published[(logical_port, table)] = values
+        for call_args in task.dom_db_utils.post_flag_values_from_dict_to_db.call_args_list:
+            logical_port, values, flag_tables = call_args.args[:3]
+            published[(logical_port, flag_tables.flag_tbl)] = values
+        return published
+
+    def test_collect_and_publish_data(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        # Non-banked data is read once per device: OE1 and ELS1 through pport 1
+        # (the first sibling processed), OE2 through pport 3
+        devices[1].oe.get_api.return_value.get_non_banked_transceiver_dom_real_value.assert_called_once()
+        devices[2].oe.get_api.return_value.get_non_banked_transceiver_dom_real_value.assert_not_called()
+        devices[3].oe.get_api.return_value.get_non_banked_transceiver_dom_real_value.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_non_banked_elsfp_dom_real_value.assert_called_once()
+        devices[2].elsfp.get_api.return_value.get_non_banked_elsfp_dom_real_value.assert_not_called()
+        devices[3].elsfp.get_api.return_value.get_non_banked_elsfp_dom_real_value.assert_not_called()
+
+        # Banked data is read once per bank
+        for device in devices.values():
+            device.oe.get_api.return_value.get_banked_transceiver_dom_real_value.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_banked_elsfp_dom_real_value.assert_called_once()
+        devices[2].elsfp.get_api.return_value.get_banked_elsfp_dom_real_value.assert_not_called()
+        devices[3].elsfp.get_api.return_value.get_banked_elsfp_dom_real_value.assert_not_called()
+
+        # Every interface gets the module-scope values of its device sharing group
+        # merged with its own lane-scope values
+        dom_tbl = task.xcvr_table_helper.get_dom_tbl(0)
+        els_dom_tbl = task.xcvr_table_helper.get_els_dom_tbl(0)
+        assert published[('Ethernet0', dom_tbl)] == {'temperature': 41.0, 'rx1power': 1.0}
+        assert published[('Ethernet8', dom_tbl)] == {'temperature': 41.0, 'rx1power': 2.0}
+        assert published[('Ethernet16', dom_tbl)] == {'temperature': 43.0, 'rx1power': 3.0}
+        assert published[('Ethernet0', els_dom_tbl)] == {'temperature': 51.0, 'laser_bias_current_lane1': 1.0}
+        assert published[('Ethernet8', els_dom_tbl)] == {'temperature': 51.0, 'laser_bias_current_lane1': 1.0}
+        assert published[('Ethernet16', els_dom_tbl)] == {'temperature': 51.0, 'laser_bias_current_lane1': 1.0}
+
+    def test_collect_and_publish_flags_and_status(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        # Non-banked flag/status reads are deduplicated per device like the DOM values
+        devices[1].oe.get_api.return_value.get_non_banked_transceiver_status_flags.assert_called_once()
+        devices[2].oe.get_api.return_value.get_non_banked_transceiver_status_flags.assert_not_called()
+        devices[2].oe.get_api.return_value.get_banked_transceiver_status_flags.assert_called_once()
+
+        # Ethernet8 publishes OE1's module-scope snapshot (read via pport 1) merged
+        # with its own lane-scope values
+        assert published[('Ethernet8', task.xcvr_table_helper.get_dom_flag_tbl(0))] == \
+            {'tempHAlarm': 'module1', 'rx1powerHAlarm': 'lane2'}
+        assert published[('Ethernet8', task.xcvr_table_helper.get_status_tbl(0))] == \
+            {'module_state': 'module1', 'DP1State': 'lane2'}
+        assert published[('Ethernet8', task.xcvr_table_helper.get_status_flag_tbl(0))] == \
+            {'module_state_changed': 'module1', 'rx1los': 'lane2'}
+        assert published[('Ethernet16', task.xcvr_table_helper.get_status_flag_tbl(0))] == \
+            {'module_state_changed': 'module3', 'rx1los': 'lane3'}
+
+        # Firmware info is module-scope only: every sibling publishes its device
+        # sharing group's snapshot
+        devices[2].oe.get_api.return_value.get_transceiver_info_firmware_versions.assert_not_called()
+        assert published[('Ethernet8', task.xcvr_table_helper.get_firmware_info_tbl(0))] == \
+            {'active_firmware': 'module1'}
+        assert published[('Ethernet16', task.xcvr_table_helper.get_firmware_info_tbl(0))] == \
+            {'active_firmware': 'module3'}
+
+        # ELS1 drives all three ports through its single bank, so every interface
+        # publishes ELS1's module-scope and lane-scope snapshots (read via pport 1)
+        devices[2].elsfp.get_api.return_value.get_non_banked_elsfp_dom_flags.assert_not_called()
+        devices[2].elsfp.get_api.return_value.get_non_banked_elsfp_status_flags.assert_not_called()
+        devices[2].elsfp.get_api.return_value.get_banked_elsfp_dom_flags.assert_not_called()
+        devices[2].elsfp.get_api.return_value.get_banked_elsfp_status_flags.assert_not_called()
+        assert published[('Ethernet8', task.xcvr_table_helper.get_els_firmware_info_tbl(0))] == \
+            {'active_firmware': 'els_module1'}
+        assert published[('Ethernet8', task.xcvr_table_helper.get_els_dom_flag_tbl(0))] == \
+            {'temperature_alarm_high': 'els_module1', 'laser_bias_alarm_high_lane1': 'els_lane1'}
+        assert published[('Ethernet8', task.xcvr_table_helper.get_els_status_tbl(0))] == \
+            {'module_state': 'els_module1', 'state_lane1': 'els_lane1'}
+        assert published[('Ethernet16', task.xcvr_table_helper.get_els_status_flag_tbl(0))] == \
+            {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'}
+
+    @pytest.mark.parametrize('failed_read', [
+        'get_non_banked_transceiver_dom_real_value',
+        'get_banked_transceiver_dom_real_value',
+    ])
+    def test_failed_oe_read_skips_category(self, failed_read):
+        """If either the banked or non-banked read fails, we should skip publishing for the category
+        entirely. Otherwise, the successful read's fields will be published and the last_update_time
+        would be updated to make the failed read's missing fields look current, even though they
+        are stale."""
+        devices = self.make_devices()
+        getattr(devices[1].oe.get_api.return_value, failed_read).return_value = None
+        task = self.make_task(devices)
+        published = self.run_collect_and_publish(task)
+
+        dom_tbl = task.xcvr_table_helper.get_dom_tbl(0)
+        assert ('Ethernet0', dom_tbl) not in published
+        assert published[('Ethernet16', dom_tbl)] == {'temperature': 43.0, 'rx1power': 3.0}
+        assert published[('Ethernet0', task.xcvr_table_helper.get_status_tbl(0))] == \
+            {'module_state': 'module1', 'DP1State': 'lane1'}
+        if failed_read.startswith('get_non_banked'):
+            assert ('Ethernet8', dom_tbl) not in published
+        else:
+            assert published[('Ethernet8', dom_tbl)] == {'temperature': 41.0, 'rx1power': 2.0}
+
+    def run_link_change_update(self, task, device_key):
+        task.dom_db_utils = MagicMock()
+        with patched_topology(), \
+             patch.object(common, '_wrapper_get_presence', return_value=True), \
+             patch.object(sfp_status_helper, 'detect_port_in_error_status', return_value=False):
+            task.update_port_db_diagnostics_on_link_change(device_key)
+
+        published = {}
+        for call_args in task.dom_db_utils.post_flag_values_from_dict_to_db.call_args_list:
+            logical_port, values, flag_tables = call_args.args[:3]
+            published[(logical_port, flag_tables.flag_tbl)] = values
+        return published
+
+    def test_on_port_update_event_queues_device_keys(self):
+        task = self.make_task({})
+        with patched_topology():
+            task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET,
+                                                      {}, 'APPL_DB', 'PORT_TABLE'))
+            assert set(task.link_change_affected_ports) == {
+                (common.CPO_DEVICE_TYPE_OE, 'OE1'),
+                (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1'),
+            }
+
+            # A sibling flap coalesces into the same entries, a flap on another
+            # OE adds only that OE's entry
+            task.on_port_update_event(PortChangeEvent('Ethernet16', 3, 0, PortChangeEvent.PORT_SET,
+                                                      {}, 'APPL_DB', 'PORT_TABLE'))
+            assert set(task.link_change_affected_ports) == {
+                (common.CPO_DEVICE_TYPE_OE, 'OE1'),
+                (common.CPO_DEVICE_TYPE_OE, 'OE2'),
+                (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1'),
+            }
+
+    def run_check_port_update(self, task, link_change_affected_ports, pass_processed_pports):
+        task.update_port_db_diagnostics_on_link_change = MagicMock()
+        task.link_change_affected_ports = dict(link_change_affected_ports)
+        task.pass_processed_pports = pass_processed_pports
+        observer = MagicMock()
+        with patched_topology():
+            CpoDomInfoUpdateTask.check_port_update(task, observer, 10)
+        observer.handle_port_update_event.assert_called_once_with(10)
+        return [call_args.args[0] for call_args in task.update_port_db_diagnostics_on_link_change.call_args_list]
+
+    def test_check_port_update_defers_devices_mid_pass(self):
+        task = self.make_task({})
+        oe1 = (common.CPO_DEVICE_TYPE_OE, 'OE1')
+        oe2 = (common.CPO_DEVICE_TYPE_OE, 'OE2')
+        els1 = (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1')
+        due = datetime.datetime.min
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, {1})
+        assert handled == [oe2]
+        assert set(task.link_change_affected_ports) == {oe1, els1}
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, {1, 2})
+        assert handled == [oe1, oe2]
+        assert set(task.link_change_affected_ports) == {els1}
+
+        handled = self.run_check_port_update(task, {oe1: due, oe2: due, els1: due}, frozenset())
+        assert handled == [oe1, oe2, els1]
+        assert not task.link_change_affected_ports
+
+    def test_check_port_update_skips_entries_not_yet_due(self):
+        task = self.make_task({})
+        oe1 = (common.CPO_DEVICE_TYPE_OE, 'OE1')
+        oe2 = (common.CPO_DEVICE_TYPE_OE, 'OE2')
+
+        handled = self.run_check_port_update(task, {oe1: datetime.datetime.min, oe2: datetime.datetime.max},
+                                             frozenset())
+        assert handled == [oe1]
+        assert set(task.link_change_affected_ports) == {oe2}
+
+    def test_link_change_publishes_oe_flags_per_device(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_OE, 'OE1'))
+
+        # Module-scope flags are read once, through the first member port's API;
+        # banked flags are read per member
+        devices[1].oe.get_api.return_value.get_non_banked_transceiver_dom_flags.assert_called_once()
+        devices[2].oe.get_api.return_value.get_non_banked_transceiver_dom_flags.assert_not_called()
+        devices[2].oe.get_api.return_value.get_banked_transceiver_dom_flags.assert_called_once()
+
+        # Every member port publishes the module snapshot merged with its own
+        # lane flags; only OE1's members and only the OE flag tables are touched
+        dom_flag_tbl = task.xcvr_table_helper.get_dom_flag_tbl(0)
+        status_flag_tbl = task.xcvr_table_helper.get_status_flag_tbl(0)
+        assert published == {
+            ('Ethernet0', dom_flag_tbl): {'tempHAlarm': 'module1', 'rx1powerHAlarm': 'lane1'},
+            ('Ethernet8', dom_flag_tbl): {'tempHAlarm': 'module1', 'rx1powerHAlarm': 'lane2'},
+            ('Ethernet0', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane1'},
+            ('Ethernet8', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane2'},
+        }
+
+        # Value tables are not republished on link change
+        task.dom_db_utils.post_diagnostic_values_from_dict_to_db.assert_not_called()
+
+    def test_link_change_failed_oe_read_skips_category(self):
+        """If either the banked or non-banked read fails, we should skip publishing for the category
+        entirely. Otherwise, the successful read's fields will be published and the last_update_time
+        would be updated to make the failed read's missing fields look current, even though they
+        are stale."""
+        devices = self.make_devices()
+        devices[2].oe.get_api.return_value.get_banked_transceiver_dom_flags.return_value = None
+        task = self.make_task(devices)
+        published = self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_OE, 'OE1'))
+
+        dom_flag_tbl = task.xcvr_table_helper.get_dom_flag_tbl(0)
+        status_flag_tbl = task.xcvr_table_helper.get_status_flag_tbl(0)
+        assert published == {
+            ('Ethernet0', dom_flag_tbl): {'tempHAlarm': 'module1', 'rx1powerHAlarm': 'lane1'},
+            ('Ethernet0', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane1'},
+            ('Ethernet8', status_flag_tbl): {'module_state_changed': 'module1', 'rx1los': 'lane2'},
+        }
+
+    def test_link_change_publishes_elsfp_flags_per_device(self):
+        devices = self.make_devices()
+        task = self.make_task(devices)
+        published = self.run_link_change_update(task, (common.CPO_DEVICE_TYPE_ELSFP, 'ELS1'))
+
+        # Module-scope and banked flags are read once, through the first member
+        # port's API, since all members share ELS1's single bank
+        devices[1].elsfp.get_api.return_value.get_non_banked_elsfp_dom_flags.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_non_banked_elsfp_status_flags.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_banked_elsfp_dom_flags.assert_called_once()
+        devices[1].elsfp.get_api.return_value.get_banked_elsfp_status_flags.assert_called_once()
+        for p in (2, 3):
+            devices[p].elsfp.get_api.return_value.get_non_banked_elsfp_dom_flags.assert_not_called()
+            devices[p].elsfp.get_api.return_value.get_non_banked_elsfp_status_flags.assert_not_called()
+            devices[p].elsfp.get_api.return_value.get_banked_elsfp_dom_flags.assert_not_called()
+            devices[p].elsfp.get_api.return_value.get_banked_elsfp_status_flags.assert_not_called()
+
+        # All of ELS1's member ports publish the module and bank snapshots;
+        # the OE flag tables are untouched
+        els_dom_flag_tbl = task.xcvr_table_helper.get_els_dom_flag_tbl(0)
+        els_status_flag_tbl = task.xcvr_table_helper.get_els_status_flag_tbl(0)
+        assert published == {
+            ('Ethernet0', els_dom_flag_tbl): {'temperature_alarm_high': 'els_module1', 'laser_bias_alarm_high_lane1': 'els_lane1'},
+            ('Ethernet8', els_dom_flag_tbl): {'temperature_alarm_high': 'els_module1', 'laser_bias_alarm_high_lane1': 'els_lane1'},
+            ('Ethernet16', els_dom_flag_tbl): {'temperature_alarm_high': 'els_module1', 'laser_bias_alarm_high_lane1': 'els_lane1'},
+            ('Ethernet0', els_status_flag_tbl): {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'},
+            ('Ethernet8', els_status_flag_tbl): {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'},
+            ('Ethernet16', els_status_flag_tbl): {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'},
+        }
+        for device in devices.values():
+            device.oe.get_api.return_value.get_non_banked_transceiver_dom_flags.assert_not_called()

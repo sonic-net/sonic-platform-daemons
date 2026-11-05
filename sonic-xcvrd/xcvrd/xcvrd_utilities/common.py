@@ -193,6 +193,7 @@ class CpoTopology:
     """
     pports_by_device: Mapping[str, Mapping[str, FrozenSet[int]]]
     devices_by_pport: Mapping[int, FrozenSet[str]]
+    banks_by_pport: Mapping[int, Mapping[str, int]]
 
 @functools.cache
 def _build_cpo_topology() -> CpoTopology:
@@ -208,7 +209,8 @@ def _build_cpo_topology() -> CpoTopology:
         CpoTopology: The platform topology, empty if cpo.json is not available.
     """
     def freeze_topology(pports_by_device: Dict[str, Dict[str, Set[int]]],
-                        devices_by_pport: Dict[int, Set[str]]) -> CpoTopology:
+                        devices_by_pport: Dict[int, Set[str]],
+                        banks_by_pport: Dict[int, Dict[str, int]]) -> CpoTopology:
         """Convert the mutable topology accumulators into an immutable CpoTopology."""
         frozen_pports_by_device = {}
         for device_type, devices_of_type in pports_by_device.items():
@@ -218,16 +220,20 @@ def _build_cpo_topology() -> CpoTopology:
 
         frozen_devices_by_pport = {pport: frozenset(device_ids)
                                    for pport, device_ids in devices_by_pport.items()}
+        frozen_banks_by_pport = {pport: MappingProxyType(dict(banks))
+                                 for pport, banks in banks_by_pport.items()}
         return CpoTopology(MappingProxyType(frozen_pports_by_device),
-                           MappingProxyType(frozen_devices_by_pport))
+                           MappingProxyType(frozen_devices_by_pport),
+                           MappingProxyType(frozen_banks_by_pport))
 
     cpo_data = device_info.get_cpo_data()
     if not cpo_data:
         helper_logger.log_notice("CPO TOPOLOGY: no cpo.json data available")
-        return freeze_topology({}, {})
+        return freeze_topology({}, {}, {})
 
     pports_by_device = {}
     devices_by_pport = {}
+    banks_by_pport = {}
 
     platform_interfaces = (device_info.get_platform_json_data() or {}).get('interfaces', {})
     devices = cpo_data.get('devices') or {}
@@ -240,8 +246,9 @@ def _build_cpo_topology() -> CpoTopology:
             pports = pports_by_device.setdefault(devices[device_id]['device_type'], {})
             pports.setdefault(device_id, set()).add(pport)
             devices_by_pport.setdefault(pport, set()).add(device_id)
+            banks_by_pport.setdefault(pport, {})[device_id] = int(associated_device['bank'])
 
-    return freeze_topology(pports_by_device, devices_by_pport)
+    return freeze_topology(pports_by_device, devices_by_pport, banks_by_pport)
 
 def get_cpo_devices_of_pport(physical_port: int, device_type: str) -> Dict[str, FrozenSet[int]]:
     """
@@ -261,6 +268,22 @@ def get_cpo_devices_of_pport(physical_port: int, device_type: str) -> Dict[str, 
     return {device_id: pports_by_device[device_id]
             for device_id in topology.devices_by_pport.get(physical_port, ())
             if device_id in pports_by_device}
+
+def get_cpo_device_pports(device_type: str, device_id: str) -> FrozenSet[int]:
+    """
+    Get all physical ports driven by the given CPO device.
+
+    Args:
+        device_type (str): cpo.json device type
+        device_id (str): cpo.json device id
+
+    Returns:
+        FrozenSet[int]: Physical port indexes, taken straight from the immutable
+        platform topology. Empty if the topology is not available or no such
+        device exists.
+    """
+    topology = _build_cpo_topology()
+    return (topology.pports_by_device.get(device_type) or {}).get(device_id, frozenset())
 
 def _get_sibling_pports(physical_port: int, device_type: str) -> FrozenSet[int]:
     """
@@ -292,6 +315,27 @@ def get_elsfp_sibling_pports(physical_port: int) -> FrozenSet[int]:
     physical_port itself.
     """
     return _get_sibling_pports(physical_port, CPO_DEVICE_TYPE_ELSFP)
+
+def _get_bank_sibling_pports(physical_port: int, device_type: str) -> FrozenSet[int]:
+    topology = _build_cpo_topology()
+    # {device id: bank} for every device our physical port is bound to
+    associated_banks = topology.banks_by_pport.get(physical_port) or {}
+    siblings = {physical_port}
+    # iterate over all devices of the requested type driving our physical port
+    # and all ports the device drives
+    for device_id, pports in get_cpo_devices_of_pport(physical_port, device_type).items():
+        # get the bank of this device our physical port is using
+        associated_bank = associated_banks[device_id]
+        # add every port using the same bank our physical port is using
+        siblings.update(pport for pport in pports
+                        if topology.banks_by_pport[pport][device_id] == associated_bank)
+    return frozenset(siblings)
+
+def get_oe_bank_sibling_pports(physical_port: int) -> FrozenSet[int]:
+    return _get_bank_sibling_pports(physical_port, CPO_DEVICE_TYPE_OE)
+
+def get_elsfp_bank_sibling_pports(physical_port: int) -> FrozenSet[int]:
+    return _get_bank_sibling_pports(physical_port, CPO_DEVICE_TYPE_ELSFP)
 
 def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
