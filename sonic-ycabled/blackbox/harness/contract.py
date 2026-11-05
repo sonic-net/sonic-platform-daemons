@@ -5,7 +5,8 @@ ycabled writes or deletes something the contract does not allow, or writes a
 value outside the field's domain. At the end of a run, `coverage_report`
 shows which entries the suite exercised.
 
-Field names may be exact, "*" (any field), or "re:<regex>".
+Field names may be exact, "*" (any field), or "re:<regex>". Tables are
+hashes, so a string value (SET) matches no entry.
 """
 
 import re
@@ -165,7 +166,7 @@ def _field_matches(pattern, field):
     if pattern is None or pattern == "*":
         return True
     if pattern.startswith("re:"):
-        return field is not None and re.match(pattern[3:], field) is not None
+        return field is not None and re.fullmatch(pattern[3:], field) is not None
     return pattern == field
 
 
@@ -189,7 +190,8 @@ def violations(accesses):
         if a.kind.startswith("other:"):
             out.append("unexpected command {} on {} {}".format(a.kind[6:], a.db, a.table))
             continue
-        if a.kind not in ("write", "delete", "hdel"):
+        # "set": a string value where SONiC keeps hashes; no entry allows one.
+        if a.kind not in ("write", "set", "delete", "hdel"):
             continue
         entries = match(a)
         if not entries:
@@ -197,7 +199,8 @@ def violations(accesses):
                 a.kind, a.db, a.table, a.key, a.field, a.value))
             continue
         domain = entries[0].values
-        if a.kind == "write" and domain is not None and (a.value is None or not re.match(domain, a.value)):
+        # fullmatch: with re.match, "$" also matches before a final newline.
+        if a.kind == "write" and domain is not None and (a.value is None or not re.fullmatch(domain, a.value)):
             out.append("{} {}|{} {}={!r} is outside {}".format(a.db, a.table, a.key, a.field, a.value, domain))
     return out
 

@@ -94,7 +94,8 @@ def accesses(op):
         for k in args:
             yield acc("delete", k)
     elif cmd in ("SET", "SETNX"):
-        yield acc("write", args[0], None, args[1] if len(args) > 1 else None)
+        # A string value: not a "write", which is a field of a table's hash.
+        yield acc("set", args[0], None, args[1] if len(args) > 1 else None)
     elif cmd == "KEYS":
         yield acc("read", args[0].rstrip("*"), None)
     elif cmd in ("HGET", "HEXISTS"):
