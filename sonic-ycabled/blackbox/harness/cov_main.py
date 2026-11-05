@@ -41,6 +41,9 @@ def _save_at_exit():
 signal.signal(signal.SIGUSR1, _save)
 # Startup failures end in sys.exit().
 atexit.register(_save_at_exit)
+# The suite sends SIGUSR1 only once this exists: until the handler is in
+# place, the signal would kill the process.
+open(os.path.join(os.environ["BB_COV_SAVED_DIR"], "{}.ready".format(os.getpid())), "w").close()
 
 sys.argv = ["/usr/local/bin/ycabled"]
 from ycable.ycable import main  # noqa: E402

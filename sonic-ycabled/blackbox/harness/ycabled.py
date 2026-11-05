@@ -80,10 +80,16 @@ class YcabledProcess(object):
             threading.Thread(target=self._save_periodically, daemon=True).start()
         return self
 
+    def _coverage_ready(self):
+        """cov_main.py has its SIGUSR1 handler in place."""
+        return os.path.exists(os.path.join(self.env.coverage_saved_dir, "{}.ready".format(self.proc.pid)))
+
     def _save_periodically(self):
         proc = self.proc
         while proc.poll() is None:
             time.sleep(COVERAGE_SAVE_PERIOD)
+            if not self._coverage_ready():
+                continue
             try:
                 os.kill(proc.pid, signal.SIGUSR1)
             except ProcessLookupError:
@@ -113,6 +119,10 @@ class YcabledProcess(object):
 
     def save_coverage(self, timeout=5):
         if not (self.coverage is not None and self.running() and implementation() == "python"):
+            return
+        if not self._coverage_ready():
+            # Still starting, so nothing of ycabled measured yet; and SIGUSR1
+            # would kill it.
             return
         marker = os.path.join(self.env.coverage_saved_dir, str(self.proc.pid))
         if os.path.exists(marker):
