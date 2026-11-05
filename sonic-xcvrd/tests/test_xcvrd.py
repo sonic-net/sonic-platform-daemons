@@ -7553,6 +7553,14 @@ class TestXcvrdScript(object):
         sfp_error_event = threading.Event()
         task = SfpStateUpdateTask(DEFAULT_NAMESPACE, port_mapping, {OWNED_PORT: MagicMock()}, stop_event, sfp_error_event)
         task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        # notify_media_setting_on_insert() runs the SI-state reads (is_si_settings_synced .get /
+        # _warm_retained_up host_tx_ready .hget). Back the APPL/STATE tables with a mock reporting
+        # "no SI state" so the real helper does not choke on the mock swsscommon tables.
+        si_tbl = MagicMock()
+        si_tbl.get.return_value = (False, None)
+        si_tbl.hget.return_value = (False, None)
+        task.xcvr_table_helper.app_port_read_tbl = {0: si_tbl}
+        task.xcvr_table_helper.state_port_tbl = {0: si_tbl}
         task.dom_db_utils.post_port_dom_thresholds_to_db = MagicMock()
         task.vdm_db_utils.post_port_vdm_thresholds_to_db = MagicMock()
         mock_post_sfp_info.return_value = None
