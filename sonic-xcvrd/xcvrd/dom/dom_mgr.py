@@ -24,6 +24,7 @@ try:
     from xcvrd.xcvrd_utilities.xcvr_table_helper import *
     from xcvrd.xcvrd_utilities import port_event_helper
     from xcvrd.xcvrd_utilities import common
+    from xcvrd.xcvrd_utilities.asic_readiness import AsicReadiness, log_first_deferral
     from xcvrd.dom.utilities.dom_sensor.db_utils import DOMDBUtils
     from xcvrd.dom.utilities.vdm.utils import VDMUtils
     from xcvrd.dom.utilities.vdm.db_utils import VDMDBUtils
@@ -40,7 +41,7 @@ class DomInfoUpdateBase(threading.Thread):
 
     name = ''
 
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, asic_readiness=None):
         threading.Thread.__init__(self)
         self.exc = None
         self.task_stopping_event = threading.Event()
@@ -49,6 +50,11 @@ class DomInfoUpdateBase(threading.Thread):
         self.port_mapping = copy.deepcopy(port_mapping)
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
+        # Per-namespace readiness, consulted in _validate_and_resolve_port(). None = all ready, which is what
+        # the thermal task gets: it is not gated.
+        self.asic_readiness = asic_readiness if asic_readiness is not None \
+                              else AsicReadiness.all_ready_registry(namespaces)
+        self._deferred_logged = set()       # namespaces for which PORTS_DEFERRED was logged
 
     def log_debug(self, message):
         self.helper_logger.log_debug("{}".format(message))
@@ -143,6 +149,12 @@ class DomInfoUpdateBase(threading.Thread):
             self.log_warning("Got invalid asic index for {}, ignored".format(logical_port_name))
             return None
 
+        # Namespace not ready (readiness marker not observed yet): no DB or module access for this port. A link
+        # event that ends here is consumed; the periodic poll covers the port after readiness
+        if not self.asic_readiness.is_asic_ready(asic_index):
+            log_first_deferral(self.asic_readiness, self._deferred_logged, asic_index, self.name, logical_port_name, self.log_notice)
+            return None
+
         if self.is_port_dom_monitoring_disabled(logical_port_name):
             return None
 
@@ -189,8 +201,9 @@ class DomInfoUpdateTask(DomInfoUpdateBase):
         {'APPL_DB': 'PORT_TABLE', 'FILTER': ['flap_count']},
     ]
 
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None):
-        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event)
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr, dom_update_interval=None,
+                 asic_readiness=None):
+        super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event, asic_readiness=asic_readiness)
         self.skip_cmis_mgr = skip_cmis_mgr
         self.link_change_affected_ports = {}
         self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)

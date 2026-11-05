@@ -8,9 +8,10 @@ except ImportError as e:
 
 
 class CpoManagerTask(CmisManagerTask):
-    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cpo_mgr=False):
+    def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cpo_mgr=False,
+                 asic_readiness=None):
         super().__init__(namespaces, port_mapping, port_obj_dict, main_thread_stop_event,
-                         skip_cmis_mgr=skip_cpo_mgr)
+                         skip_cmis_mgr=skip_cpo_mgr, asic_readiness=asic_readiness)
         self.name = "CpoManagerTask"
 
     def log_debug(self, message):
