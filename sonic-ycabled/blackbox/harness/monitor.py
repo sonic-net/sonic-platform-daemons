@@ -29,22 +29,24 @@ IGNORED_CMDS = {"SELECT", "PING", "CLIENT", "HELLO", "INFO", "AUTH", "COMMAND", 
 
 
 def _unescape(s):
-    out = []
+    """An argument as MONITOR shows it (redis's sdscatrepr). Bytes outside
+    printable ASCII come as \\xHH, so collect bytes and decode them as UTF-8."""
+    out = bytearray()
     i = 0
     while i < len(s):
         c = s[i]
         if c == "\\" and i + 1 < len(s):
             n = s[i + 1]
             if n == "x" and i + 3 < len(s):
-                out.append(chr(int(s[i + 2:i + 4], 16)))
+                out.append(int(s[i + 2:i + 4], 16))
                 i += 4
                 continue
-            out.append(_ESCAPES.get(n, n))
+            out += _ESCAPES.get(n, n).encode()
             i += 2
             continue
-        out.append(c)
+        out += c.encode()
         i += 1
-    return "".join(out)
+    return out.decode("utf-8", "replace")
 
 
 def parse_line(seq, line):

@@ -393,20 +393,27 @@ def test_graceful_restart_for_every_soc_address(dut):
 @pytest.mark.known_issue("N1", "one thread serves every port: a SoC that does not answer delays the "
                                 "toggles of the other ports by up to 0.5 s each")
 def test_slow_soc_does_not_delay_other_ports(dut):
-    topo = Topology().active_active("Ethernet0", soc_ipv4=SOC + "/32").active_active("Ethernet4", soc_ipv4=SOC2 + "/32")
+    """Every port's SoC hangs, so the order the ports are served in does not
+    matter: in parallel, all toggles end at the 0.5 s deadline; one after
+    another, the last ends after 2 s."""
+    ports = ["Ethernet{}".format(4 * i) for i in range(4)]
+    topo = Topology()
+    for i, port in enumerate(ports):
+        topo.active_active(port, soc_ipv4="127.0.2.{}/32".format(i + 1))
     dut.configure(topo)
-    slow = dut.soc(SOC)
-    dut.soc(SOC2)
+    socs = [dut.soc("127.0.2.{}".format(i + 1)) for i in range(len(ports))]
     dut.start()
-    slow.script("SetAdminForwardingPortState", delay=3)
+    for soc in socs:
+        soc.script("SetAdminForwardingPortState", delay=3)
     mark = dut.monitor.mark()
     t0 = time.monotonic()
     with dut.appl.r.pipeline(transaction=True) as p:
-        p.hset("HW_MUX_CABLE_TABLE:Ethernet0", "state", "standby")
-        p.hset("HW_MUX_CABLE_TABLE:Ethernet4", "state", "standby")
+        for port in ports:
+            p.hset("HW_MUX_CABLE_TABLE:" + port, "state", "standby")
         p.execute()
-    dut.monitor.wait_access(mark, 5, kind="write", db="STATE_DB", table="HW_MUX_CABLE_TABLE", key="Ethernet4")
-    assert time.monotonic() - t0 < 0.3
+    for port in ports:
+        dut.monitor.wait_access(mark, 10, kind="write", db="STATE_DB", table="HW_MUX_CABLE_TABLE", key=port)
+    assert time.monotonic() - t0 < 1.2
 
 
 @pytest.mark.known_issue("N3", "ports are initialized one after another; every unreachable SoC adds 0.5 s")
