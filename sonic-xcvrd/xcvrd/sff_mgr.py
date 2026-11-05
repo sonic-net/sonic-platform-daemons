@@ -8,6 +8,7 @@ try:
     import copy
     import sys
     import threading
+    import time
     import traceback
 
     from swsscommon import swsscommon
@@ -66,6 +67,8 @@ class SffManagerTask(threading.Thread):
     # STATE_DB PORT_TABLE fields:
 
     HOST_TX_READY = 'host_tx_ready'
+    # How often to reconcile SI notifications against APPL_DB (seconds)
+    SI_RECONCILE_INTERVAL = 60
 
     # Default number of lanes per physical port for QSFP28/QSFP+ transceiver
     DEFAULT_NUM_LANES_PER_PPORT = 4
@@ -105,6 +108,9 @@ class SffManagerTask(threading.Thread):
         self.port_dict_prev = {}
         self.xcvr_table_helper = XcvrTableHelper(namespaces)
         self.namespaces = namespaces
+        # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
+        self.last_si_reconcile_time = 0
 
     def log_notice(self, message):
         self.helper_logger.log_notice("{}{}".format(self.SFF_LOGGER_PREFIX, message))
@@ -236,15 +242,20 @@ class SffManagerTask(threading.Thread):
         return host_tx_ready
 
     def _si_retained_from_pre_pr_warmboot(self, lport, asic_id, host_tx_ready):
-        """True when this port's state looks like a pre-SI-sync image carried across a warm/fast
-        reboot: the MAC is already up (host_tx_ready retained) during a warm/fast start, and
-        APPL_DB has no si_settings_notification field. Re-notifying then would make OA reprogram
-        serdes on an up MAC (a flap), so the caller treats SI as already synced.
+        """True when this port's state looks like a pre-SI-sync image carried across a WARM
+        reboot: the MAC is already up (host_tx_ready retained) during a warm start, and APPL_DB
+        has no si_settings_notification field. Re-notifying then would make OA reprogram serdes
+        on an up MAC (a flap), so the caller publishes a gate-releasing UNAVAIL instead.
+
+        Warm reboot only, deliberately NOT fast reboot: fast reboot re-initializes the ASIC, so
+        the MAC is actually down even though backup_database() keeps host_tx_ready=true in
+        STATE_DB. Suppressing the notify there would strand OA's gate; fast reboot must fall
+        through to a real NOTIFIED publish (which, with the MAC down, causes no flap).
         """
         if host_tx_ready != 'true':
             return False
         namespace = common.get_namespace_from_asic_id(asic_id)
-        if not (common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)):
+        if not common.is_syncd_warm_restore_complete(namespace):
             return False
         return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
 
@@ -354,6 +365,27 @@ class SffManagerTask(threading.Thread):
         except (AttributeError, NotImplementedError):
             pass
 
+    def reconcile_si_notifications(self):
+        """Re-arm SI publication for tracked ports whose APPL_DB si_settings_notification went
+        missing while this xcvrd kept running - e.g. a cold swss/syncd restart cleared PORT_TABLE
+        but did not restart xcvrd. Such ports get no insertion event, so without this the OA admin
+        gate waits forever. We only set notify_si_settings here and let the normal task_worker
+        consumer re-publish, so its ownership / synced / warm-retained->UNAVAIL handling (and the
+        allocation of a single notification number) stay the one source of truth.
+        """
+        now = time.time()
+        if now - self.last_si_reconcile_time < self.SI_RECONCILE_INTERVAL:
+            return
+        self.last_si_reconcile_time = now
+        for lport, data in self.port_dict.items():
+            asic_id = data.get('asic_id')
+            # Only ports with an inserted transceiver we track (XCVR_TYPE set from TRANSCEIVER_INFO)
+            if asic_id is None or self.XCVR_TYPE not in data:
+                continue
+            if self.xcvr_table_helper.has_si_settings_notification(lport, asic_id):
+                continue
+            data['notify_si_settings'] = True
+
     def task_worker(self):
         '''
         The main goal of sff_mgr is to make sure SFF compliant modules are
@@ -383,6 +415,11 @@ class SffManagerTask(threading.Thread):
         # PortConfigDone events, as xcvrd main thread waits on them before
         # spawrning this thread.
         while not self.task_stopping_event.is_set():
+            # Re-publish SI notifications cleared under a still-running xcvrd (cold swss/syncd
+            # restart). Runs every cycle (throttled) since the event loop below short-circuits
+            # when there is no port update.
+            self.reconcile_si_notifications()
+
             # Internally, handle_port_update_event will block for up to
             # SELECT_TIMEOUT_MSECS until a message is received(in select
             # function). A message is received when there is a Redis SET/DEL
@@ -504,10 +541,15 @@ class SffManagerTask(threading.Thread):
                         self.log_notice("{}: outstanding SI notification un-acked (warm restore), skip re-notify".format(lport))
                     elif asic_id is not None and \
                             self._si_retained_from_pre_pr_warmboot(lport, asic_id, data.get(self.HOST_TX_READY)):
-                        # Pre-SI-sync image upgraded via warm/fast reboot: serdes already programmed,
-                        # MAC up (host_tx_ready retained), no SI field. Publishing would make OA
-                        # reprogram serdes on an up MAC (a flap). Treat as synced; skip re-notify.
-                        self.log_notice("{}: pre-SI-sync warm-reboot state (serdes retained, MAC up), skip re-notify".format(lport))
+                        # Pre-SI-sync image upgraded via WARM reboot: serdes already programmed,
+                        # MAC up (host_tx_ready retained), no SI field. A NOTIFIED here would make
+                        # OA reprogram serdes on an up MAC (a flap). Publish counterless UNAVAIL:
+                        # it releases OA's gate without a MAC-down, gives OA a terminal value it
+                        # records (so a later shutdown/startup does not strand the port), and is
+                        # idempotent across an xcvrd restart (field present -> no re-notify).
+                        media_settings_parser.notify_si_settings_unavailable(
+                            lport, self.xcvr_table_helper, self.port_mapping)
+                        self.log_notice("{}: pre-SI-sync warm-reboot state (serdes retained, MAC up), published UNAVAIL".format(lport))
                     else:
                         xcvr_info = sfp.get_transceiver_info()
                         if xcvr_info is not None:

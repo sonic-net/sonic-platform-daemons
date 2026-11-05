@@ -46,6 +46,7 @@ class CmisManagerTask(threading.Thread):
     CMIS_SI_SETTINGS_WAIT_TIMEOUT = 10 # seconds, timeout for waiting SI settings to be applied on ASIC
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
+    SI_RECONCILE_INTERVAL = 60 # seconds, how often to reconcile SI notifications against APPL_DB
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -68,6 +69,9 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
+        self.last_si_reconcile_time = 0
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()
@@ -764,15 +768,20 @@ class CmisManagerTask(threading.Thread):
         return host_tx_ready if found else 'false'
 
     def _si_retained_from_pre_pr_warmboot(self, lport, asic_id):
-        """True when this port's state looks like a pre-SI-sync image carried across a warm/fast
-        reboot: the MAC is already up (host_tx_ready retained) during a warm/fast start, and
-        APPL_DB has no si_settings_notification field. In that case re-notifying would make OA
-        reprogram serdes on an up MAC (a flap), so the caller treats SI as already synced.
+        """True when this port's state looks like a pre-SI-sync image carried across a WARM
+        reboot: the MAC is already up (host_tx_ready retained) during a warm start, and APPL_DB
+        has no si_settings_notification field. In that case re-notifying would make OA reprogram
+        serdes on an up MAC (a flap), so the caller publishes a gate-releasing UNAVAIL instead.
+
+        Warm reboot only, deliberately NOT fast reboot: fast reboot re-initializes the ASIC, so
+        the MAC is actually down even though backup_database() keeps host_tx_ready=true in
+        STATE_DB. Suppressing the notify there would strand OA's gate; fast reboot must fall
+        through to a real NOTIFIED publish (which, with the MAC down, causes no flap).
         """
         if self.get_host_tx_status(lport) != 'true':
             return False
         namespace = common.get_namespace_from_asic_id(asic_id)
-        if not (common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace)):
+        if not common.is_syncd_warm_restore_complete(namespace):
             return False
         return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
 
@@ -1049,10 +1058,15 @@ class CmisManagerTask(threading.Thread):
                     self.port_dict[lport]['si_notification_number'] = outstanding
                     self.port_dict[lport]['notify_si_settings'] = False
                 elif self._si_retained_from_pre_pr_warmboot(lport, asic_id):
-                    # Pre-SI-sync image upgraded via warm/fast reboot: the old image already
-                    # programmed serdes and OA brought the MAC up (host_tx_ready retained), and
-                    # there is no SI notification field. Publishing one now would make OA reprogram
-                    # serdes on an up MAC (a flap). Treat SI as synced for this insertion.
+                    # Pre-SI-sync image upgraded via WARM reboot: the old image already programmed
+                    # serdes and OA brought the MAC up (host_tx_ready retained), and there is no SI
+                    # notification field. A NOTIFIED here would make OA reprogram serdes on an up
+                    # MAC (a flap). Publish counterless UNAVAIL instead: it releases OA's gate
+                    # without a MAC-down, gives OA a terminal value it records (so a later
+                    # shutdown/startup does not strand the port), and is idempotent across an
+                    # xcvrd restart (field present -> no re-notify).
+                    media_settings_parser.notify_si_settings_unavailable(
+                        lport, self.xcvr_table_helper, self.port_mapping)
                     self.port_dict[lport]['si_settings_synced'] = True
                     self.port_dict[lport]['notify_si_settings'] = False
         elif self.check_si_sync_done_match(lport, self.check_si_settings_ack_status(lport), last_si_number):
@@ -1583,6 +1597,53 @@ class CmisManagerTask(threading.Thread):
 
         self.process_cmis_state_machine(lport)
 
+    def reconcile_si_notifications(self):
+        """Re-publish SI notifications for CMIS-owned ports whose APPL_DB si_settings_notification
+        went missing while this xcvrd kept running - e.g. a cold swss/syncd restart cleared
+        APPL_DB/STATE_DB PORT_TABLE but did not restart xcvrd. The optics stay READY, so re-emit
+        the notification WITHOUT a datapath reinit: only OA's ASIC-side serdes needs reprogramming,
+        and a force_cmis_reinit would needlessly bounce the optical line. A warm-retained-up port
+        gets a gate-releasing UNAVAIL instead of a NOTIFIED (which would flap an up MAC).
+
+        In steady state every owned port already has the field, so this is a few cheap APPL_DB
+        reads per interval; the EEPROM read happens only for a port that is actually missing one.
+        """
+        now = time.time()
+        if now - self.last_si_reconcile_time < self.SI_RECONCILE_INTERVAL:
+            return
+        self.last_si_reconcile_time = now
+        for lport, info in self.port_dict.items():
+            asic_id = info.get('asic_id', -1)
+            if asic_id is None or asic_id < 0:
+                continue
+            if self.xcvr_table_helper.has_si_settings_notification(lport, asic_id):
+                continue
+            # api / pport are cached by process_single_lport once the module reached the state
+            # machine; without them we cannot re-emit, so wait for the normal path.
+            api = info.get('api')
+            pport = info.get('pport')
+            if api is None or pport is None:
+                continue
+            if self._si_retained_from_pre_pr_warmboot(lport, asic_id):
+                media_settings_parser.notify_si_settings_unavailable(
+                    lport, self.xcvr_table_helper, self.port_mapping)
+                info['si_settings_synced'] = True
+                info['notify_si_settings'] = False
+                continue
+            try:
+                xcvr_info = api.get_transceiver_info()
+            except (NotImplementedError, AttributeError):
+                xcvr_info = None
+            if xcvr_info is None:
+                # Transient read failure (or module gone): leave it for the next reconcile.
+                continue
+            notification_number = media_settings_parser.notify_media_setting(
+                lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+            if notification_number is not None:
+                info['si_notification_number'] = notification_number
+            # Wait for OA's fresh ack before treating it synced again.
+            info['si_settings_synced'] = False
+
     def task_worker(self):
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
@@ -1604,6 +1665,10 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 self.process_single_lport(lport, info)
+
+            # Re-publish SI notifications cleared under a still-running xcvrd (cold swss/syncd
+            # restart). Runs every cycle regardless of events, throttled internally.
+            self.reconcile_si_notifications()
 
         self.log_notice("Stopped")
 

@@ -158,6 +158,8 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
+    # How often to reconcile direct-owned SI notifications against APPL_DB (seconds)
+    SI_RECONCILE_INTERVAL = 60
     SYSLOG_IDENTIFIER = SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,
@@ -178,6 +180,9 @@ class SfpStateUpdateTask(threading.Thread):
         self.retry_eeprom_set = set()
         # To avoid retry EEPROM read too fast, record the last EEPROM read timestamp in this member
         self.last_retry_eeprom_time = 0
+        # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart)
+        self.last_si_reconcile_time = 0
         # A dict to hold SFP error event, for SFP insert/remove event, it is not necessary to cache them
         # because _wrapper_get_presence returns the SFP presence status
         self.sfp_error_dict = {}
@@ -557,6 +562,11 @@ class SfpStateUpdateTask(threading.Thread):
 
             # Retry those logical ports whose EEPROM reading failed or timeout when the SFP is inserted
             self.retry_eeprom_reading()
+
+            # Re-publish SI notifications for direct-owned ports whose APPL_DB field was cleared
+            # under a still-running xcvrd (e.g. a cold swss/syncd restart); without this the OA
+            # admin gate waits forever as no insert/SFP-change event re-fires.
+            self.reconcile_si_notifications()
             next_state = state
             time_start = time.time()
             # Ensure not to block for any event if sfp insert event is pending
@@ -908,6 +918,50 @@ class SfpStateUpdateTask(threading.Thread):
         # Update retry EEPROM set
         self.retry_eeprom_set -= retry_success_set
 
+    def _warm_retained_up(self, logical_port, asic_index):
+        """True when a direct-owned port looks like a pre-SI-sync image carried across a WARM
+        reboot: the MAC is already up (STATE_DB host_tx_ready retained) during a warm start and
+        APPL_DB has no si_settings_notification. Re-notifying then would reprogram serdes on an up
+        MAC (a flap), so the caller publishes a gate-releasing UNAVAIL instead.
+
+        Warm reboot only, deliberately NOT fast reboot: fast reboot re-initializes the ASIC, so
+        the MAC is actually down even though backup_database() keeps host_tx_ready=true. Fast
+        reboot must fall through to a real NOTIFIED publish (no flap, MAC is down).
+        """
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(asic_index)
+        if state_port_tbl is None:
+            return False
+        found, host_tx_ready = state_port_tbl.hget(logical_port, 'host_tx_ready')
+        if not found or host_tx_ready != 'true':
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_index)
+        if not common.is_syncd_warm_restore_complete(namespace):
+            return False
+        return not self.xcvr_table_helper.has_si_settings_notification(logical_port, asic_index)
+
+    def reconcile_si_notifications(self):
+        """Re-publish SI notifications for direct-owned ports whose APPL_DB si_settings_notification
+        went missing while this xcvrd kept running - e.g. a cold swss/syncd restart cleared
+        APPL_DB/STATE_DB PORT_TABLE but did not restart xcvrd. Such ports get no insert / SFP-change
+        event, so without this the OA admin gate waits forever for a notification no one re-sends.
+
+        notify_media_setting_on_insert()'s own guards (ownership, presence, is_si_settings_synced,
+        warm-retained->UNAVAIL) keep this to the direct-owned, present, needy ports and pick the
+        right terminal value. In steady state every owned port already has the field, so this is a
+        handful of cheap APPL_DB reads per interval and nothing else.
+        """
+        now = time.time()
+        if now - self.last_si_reconcile_time < self.SI_RECONCILE_INTERVAL:
+            return
+        self.last_si_reconcile_time = now
+        for logical_port in self.port_mapping.logical_port_list:
+            asic_index = self.port_mapping.get_asic_id_for_logical_port(logical_port)
+            if asic_index is None:
+                continue
+            if self.xcvr_table_helper.has_si_settings_notification(logical_port, asic_index):
+                continue
+            self.notify_media_setting_on_insert(logical_port, asic_index)
+
     def notify_media_setting_on_insert(self, logical_port, asic_index):
         """Publish SI settings for a newly ready transceiver on the insert path.
 
@@ -948,6 +1002,14 @@ class SfpStateUpdateTask(threading.Thread):
         # Skip re-publishing across an xcvrd restart when OA already synced the retained value;
         # a replayed / boot-scan insert must not re-notify an already-applied module.
         if self.xcvr_table_helper.is_si_settings_synced(logical_port, asic_index):
+            return
+        if self._warm_retained_up(logical_port, asic_index):
+            # Warm-restored pre-SI-sync port, MAC already up (host_tx_ready retained), no SI field.
+            # A NOTIFIED here would make OA reprogram serdes on an up MAC (a flap). Publish
+            # counterless UNAVAIL: releases OA's gate without a MAC-down, gives OA a terminal value
+            # it records, and is idempotent across an xcvrd restart.
+            media_settings_parser.notify_si_settings_unavailable(
+                logical_port, self.xcvr_table_helper, self.port_mapping)
             return
         try:
             xcvr_info = platform_chassis.get_sfp(physical_port).get_transceiver_info()
