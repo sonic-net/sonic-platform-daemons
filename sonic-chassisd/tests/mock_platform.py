@@ -64,6 +64,9 @@ class MockModule(MockDevice):
     def get_admin_state(self):
         return self.admin_state
 
+    def is_shutdown_allowed(self):
+        return True
+
     def get_midplane_ip(self):
         if "DPU" in self.get_name():
             self.midplane_ip = '169.254.200.0'
