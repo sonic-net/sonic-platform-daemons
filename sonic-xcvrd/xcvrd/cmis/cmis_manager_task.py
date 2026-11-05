@@ -45,6 +45,19 @@ class CmisManagerTask(threading.Thread):
     CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C', 'CPO']
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
+    # A delivered TRANSCEIVER_INFO SET always reprovisions the
+    # port, so the subscription is filtered to module identity fields. The
+    # observer dedups value-identical events, which keeps xcvrd's own writes
+    # to this table (active_apsel_hostlane* updates from
+    # post_port_active_apsel_to_db) from coming back around as fresh insertion
+    # events and re-triggering provisioning.
+    PORT_TBL_MAP = [
+        {'CONFIG_DB': swsscommon.CFG_PORT_TABLE_NAME},
+        {'STATE_DB': 'TRANSCEIVER_INFO',
+         'FILTER': ['type', 'hardware_rev', 'serial', 'manufacturer', 'model',
+                    'vendor_date', 'vendor_oui']},
+        {'STATE_DB': 'PORT_TABLE', 'FILTER': ['host_tx_ready']},
+    ]
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -1351,10 +1364,12 @@ class CmisManagerTask(threading.Thread):
         self.process_cmis_state_machine(lport)
 
     def task_worker(self):
-        # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
+        # CONFIG_DB for config updates, and STATE_DB for insertion/removal
+        # and host_tx_ready (see PORT_TBL_MAP for the field filtering)
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
                                                   self.task_stopping_event,
-                                                  self.on_port_update_event)
+                                                  self.on_port_update_event,
+                                                  port_tbl_map=self.PORT_TBL_MAP)
 
         while not self.task_stopping_event.is_set():
             # Handle port change event from main thread
