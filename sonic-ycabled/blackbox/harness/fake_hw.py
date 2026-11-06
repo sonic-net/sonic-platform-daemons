@@ -319,16 +319,18 @@ class FakeHardware(object):
         with self._lock:
             running = self._running.setdefault(port, [])
             if running:
-                self._overlaps.append(Overlap(len(self._calls), time.time(), port, method, tuple(running)))
-            running.append(method)
+                self._overlaps.append(Overlap(len(self._calls), time.time(), port, method,
+                                              tuple(m for _, m in running)))
+            entry = (object(), method)
+            running.append(entry)
         try:
             return self._serve(req)
         finally:
             with self._lock:
-                running = self._running.get(port)
-                # reset() may have dropped it while a released call finished.
-                if running and method in running:
-                    running.remove(method)
+                # The list this call joined: a call that ends after reset() must
+                # not touch the next test's calls.
+                if entry in running:
+                    running.remove(entry)
 
     def _serve(self, req):
         op, port, method, args = req["op"], req.get("port"), req.get("method"), req.get("args") or []
