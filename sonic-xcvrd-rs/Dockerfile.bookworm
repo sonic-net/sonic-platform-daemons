@@ -1,0 +1,37 @@
+# Reproducible build environment for xcvrd-rs targeting a Debian-12 (bookworm) pmon.
+#
+# Mirrors Dockerfile, but for switches whose pmon container is still
+# bookworm (Python 3.11, glibc 2.36) rather than trixie (Python 3.13, glibc 2.41)
+# -- e.g. the Arista 7060x6 testbed. Building in the matching base is what makes
+# the binary's glibc symbol versions and its libpython3.11 SONAME resolve at
+# runtime inside that pmon; a trixie-built binary aborts there with
+# "GLIBC_2.38 not found" / "libpython3.13.so.1.0: cannot open shared object file".
+#
+# Everything else is identical to the trixie image: clang/libclang for the
+# swss-common build.rs bindgen pass, the pinned sonic-swss-common clone that
+# supplies the C-API headers, and bindgen forced to C mode. The link library
+# libswsscommon.so is NOT baked in (it is pmon-specific) -- it is mounted at
+# build time from a directory of matching pmon libraries (see README.md).
+FROM rust:bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-dev \
+        libpython3.11-dev \
+        pkg-config \
+        clang \
+        libclang-dev \
+        git \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# C-API headers for the swss-common bindgen build, pinned to match the crate's
+# swss-common git rev. Keep these two in sync.
+ARG SWSS_COMMON_REV=7faca59cd30367692a8c5406ad5d7c0b5341c7ef
+RUN git clone https://github.com/sonic-net/sonic-swss-common /opt/sonic-swss-common \
+    && git -C /opt/sonic-swss-common checkout "${SWSS_COMMON_REV}"
+ENV SWSS_COMMON_REPO=/opt/sonic-swss-common
+ENV BINDGEN_EXTRA_CLANG_ARGS="-x c"
+
+RUN rustup component add rustfmt clippy
+
+WORKDIR /src
