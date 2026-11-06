@@ -3953,11 +3953,27 @@ class TestXcvrdScript(object):
                    return_value={'ModulePrecoding': {'TP1': False}}):
             assert not task.is_module_precoding_update_required('Ethernet0')
 
-    @pytest.mark.parametrize("precoding_update_required, expected_state", [
-        (False, CMIS_STATE_READY),
-        (True, CMIS_STATE_DP_DEINIT),
+    def test_CmisManagerTask_is_module_precoding_update_required_unsupported_api(self):
+        mock_xcvr_api = MagicMock(spec=['is_coherent_module'])
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.log_error = MagicMock()
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0, 'api': mock_xcvr_api, 'pport': 1,
+                                       'sfp': MagicMock(), 'speed': 800000, 'host_lane_count': 4}
+        with patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present', return_value=True), \
+             patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting',
+                   return_value={'ModulePrecoding': {'TP1': False}}):
+            assert not task.is_module_precoding_update_required('Ethernet0')
+        task.log_error.assert_not_called()
+
+    @pytest.mark.parametrize("warm_restart, precoding_update_required, expected_state", [
+        (False, False, CMIS_STATE_READY),
+        (False, True, CMIS_STATE_DP_DEINIT),
+        (True, True, CMIS_STATE_READY),
     ])
-    def test_CmisManagerTask_dp_pre_init_check_module_precoding(self, precoding_update_required, expected_state):
+    def test_CmisManagerTask_dp_pre_init_check_module_precoding(self, warm_restart, precoding_update_required,
+                                                                expected_state):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
         port_mapping = PortMapping()
@@ -3966,12 +3982,57 @@ class TestXcvrdScript(object):
         task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0, 'api': mock_xcvr_api,
                                        'appl': 1, 'host_lanes_mask': 0xff}
         task.is_cmis_application_update_required = MagicMock(return_value=False)
+        task.is_warm_restart_for_lport = MagicMock(return_value=warm_restart)
         task.is_module_precoding_update_required = MagicMock(return_value=precoding_update_required)
         task.post_port_active_apsel_to_db = MagicMock()
         task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
 
-        assert task.handle_cmis_dp_pre_init_check_state('Ethernet0') == precoding_update_required
+        assert task.handle_cmis_dp_pre_init_check_state('Ethernet0') == (expected_state == CMIS_STATE_DP_DEINIT)
         task.update_port_transceiver_status_table_sw_cmis_state.assert_called_once_with('Ethernet0', expected_state)
+        if warm_restart:
+            task.is_module_precoding_update_required.assert_not_called()
+
+    @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic1'))
+    @patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=True))
+    def test_CmisManagerTask_is_warm_restart_for_lport(self):
+        port_mapping = PortMapping()
+        port_mapping.logical_to_asic = {'Ethernet0': 1}
+        stop_event = threading.Event()
+        task = CmisManagerTask(['asic1'], port_mapping, {1: MagicMock()}, stop_event)
+        common.is_syncd_warm_restore_complete.assert_called_once_with('asic1')
+        common.is_syncd_warm_restore_complete.reset_mock()
+
+        assert task.is_warm_restart_for_lport('Ethernet0') is True
+        assert task.is_warm_restart_for_lport('Ethernet999') is False
+        common.is_syncd_warm_restore_complete.assert_not_called()
+
+    def test_CmisManagerTask_ap_conf_module_precoding_unsupported_api(self):
+        mock_xcvr_api = MagicMock(spec=['is_coherent_module', 'get_module_state', 'get_datapath_state',
+                                        'stage_custom_si_settings', 'scs_apply_datapath_init',
+                                        'set_application', 'get_manufacturer', 'get_model'])
+        mock_xcvr_api.is_coherent_module.return_value = False
+        mock_xcvr_api.get_module_state.return_value = 'ModuleReady'
+        mock_xcvr_api.get_datapath_state.return_value = {
+            'DP{}State'.format(lane): 'DataPathDeactivated' for lane in range(1, 9)}
+        mock_xcvr_api.stage_custom_si_settings.return_value = True
+        mock_xcvr_api.scs_apply_datapath_init.return_value = True
+        port_mapping = PortMapping()
+        stop_event = threading.Event()
+        task = CmisManagerTask(DEFAULT_NAMESPACE, port_mapping, {1: MagicMock()}, stop_event)
+        task.xcvr_table_helper = MagicMock()
+        task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
+        task.log_error = MagicMock()
+        task.port_dict['Ethernet0'] = {'index': 1, 'asic_id': 0, 'api': mock_xcvr_api, 'speed': 800000,
+                                       'host_lane_count': 4, 'subport': 0, 'pport': 1, 'sfp': MagicMock(),
+                                       'appl': 1, 'host_lanes_mask': 0x0f, 'cmis_retries': 0}
+        with patch('xcvrd.xcvrd_utilities.common.get_cmis_state_from_state_db', return_value=CMIS_STATE_AP_CONF), \
+             patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present', return_value=True), \
+             patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting',
+                   return_value={'ModulePrecoding': {'TP1': False}}):
+            task.process_cmis_state_machine('Ethernet0')
+
+        assert any('not supported' in str(c) for c in task.log_error.call_args_list)
+        mock_xcvr_api.set_application.assert_called_once_with(0x0f, 1, 0)
 
     @pytest.mark.parametrize("optics_si_dict, expected_ec", [
         ({'ModulePrecoding': {'TP1': False, 'TP4': True}}, 0),
