@@ -69,12 +69,19 @@ class CmisManagerTask(threading.Thread):
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()
+        self.warm_restart_status = self.initialize_warm_restart_status()
 
     def initialize_fast_reboot_status(self):
         fast_reboot_status = {}
         for namespace in self.namespaces:
             fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
         return fast_reboot_status
+
+    def initialize_warm_restart_status(self):
+        warm_restart_status = {}
+        for namespace in self.namespaces:
+            warm_restart_status[namespace] = bool(common.is_syncd_warm_restore_complete(namespace))
+        return warm_restart_status
 
     def log_debug(self, message):
         helper_logger.log_debug(message)
@@ -92,6 +99,11 @@ class CmisManagerTask(threading.Thread):
         asic_id = self.get_asic_id(lport)
         namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
         return self.fast_reboot_status.get(namespace, False)
+
+    def is_warm_restart_for_lport(self, lport):
+        asic_id = self.get_asic_id(lport)
+        namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
+        return self.warm_restart_status.get(namespace, False)
 
     def update_port_transceiver_status_table_sw_cmis_state(self, lport, cmis_state_to_set):
         status_table = self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))
@@ -597,6 +609,44 @@ class CmisManagerTask(threading.Thread):
             return (not skip)
         return True
 
+    def is_module_precoding_update_required(self, lport):
+        """
+        Check if the module precoding configured in optics_si_settings.json
+        differs from the value currently programmed in the module
+
+        Args:
+            lport:
+                String, logical port name
+
+        Returns:
+            Boolean, true if the module precoding needs to be re-applied
+        """
+        if not optics_si_parser.optics_si_present():
+            return False
+
+        port_info = self.port_dict[lport]
+        api = port_info.get('api')
+        try:
+            lane_speed = int(port_info['speed'] / 1000) // port_info['host_lane_count']
+            optics_si_dict = optics_si_parser.fetch_optics_si_setting(port_info['pport'], lane_speed,
+                                                                      port_info['sfp'])
+            desired = optics_si_parser.get_module_precoding_setting(optics_si_dict)
+            if not desired or not hasattr(api, 'get_module_precoding'):
+                return False
+            current = api.get_module_precoding()
+        except Exception as e:
+            self.log_error("{}: unable to check module precoding: {}".format(lport, e))
+            return False
+
+        if current is None:
+            self.log_notice("{}: unable to read module precoding, skip check".format(lport))
+            return False
+
+        if any(current.get(key) != bool(value) for key, value in desired.items()):
+            self.log_notice("{}: module precoding {} differs from configured {}".format(lport, current, desired))
+            return True
+        return False
+
     def force_cmis_reinit(self, lport, retries=0):
         """
         Try to force the restart of CMIS state machine
@@ -1024,6 +1074,12 @@ class CmisManagerTask(threading.Thread):
                     # clear setting of invalid frequency config
                     self.port_dict[lport]['laser_freq'] = 0
 
+        # Module precoding is module-wide and may be lost on module reset, so
+        # re-initialize when it differs from the configured value (not during warm restart)
+        if not need_update and not self.is_warm_restart_for_lport(lport) and \
+                self.is_module_precoding_update_required(lport):
+            need_update = True
+
         if not need_update:
             # No application updates
             # As part of xcvrd restart, the TRANSCEIVER_INFO table is deleted and
@@ -1178,8 +1234,19 @@ class CmisManagerTask(threading.Thread):
                                 self.force_cmis_reinit(lport, retries + 1)
                                 return
 
-                            # Set Explicit control bit to apply Custom Host SI settings
-                            ec = 1
+                            module_precoding = optics_si_parser.get_module_precoding_setting(optics_si_dict)
+                            if module_precoding is not None:
+                                if not hasattr(api, 'set_module_precoding'):
+                                    self.log_error("{}: module precoding {} configured but not supported "
+                                                   "by the xcvr API".format(lport, module_precoding))
+                                else:
+                                    self.log_notice("{}: requested module precoding settings {}".format(
+                                        lport, module_precoding))
+
+                            # Set Explicit control bit to apply Custom Host SI settings.
+                            # Module precoding is not a staged control, so it alone does not need it.
+                            if optics_si_parser.has_custom_si_params(optics_si_dict):
+                                ec = 1
 
                 # D.1.3 Software Configuration and Initialization
                 api.set_application(host_lanes_mask, appl, ec)
