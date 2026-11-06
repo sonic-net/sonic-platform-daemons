@@ -14,6 +14,8 @@ from concurrent import futures
 
 import grpc
 
+from .util import WaitTimeout
+
 GRPC_PORT = 50075
 
 Rpc = namedtuple("Rpc", "ts name request")
@@ -140,7 +142,7 @@ class Soc(object):
             if len(got) >= count:
                 return got
             time.sleep(0.02)
-        raise AssertionError("SoC {} got {} {} RPCs, expected {} within {}s".format(
+        raise WaitTimeout("SoC {} got {} {} RPCs, expected {} within {}s".format(
             self.ip, len(self.rpcs(name, since)), name, count, timeout))
 
     # Serving ----------------------------------------------------------------
@@ -176,6 +178,9 @@ class _DualToRActive(object):
     def SetAdminForwardingPortState(self, request, context):
         def default():
             ids = list(request.portid)
+            if any(i not in (0, 1) for i in ids):
+                # Not an index into admin: [-1] would set the peer's side.
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "invalid port id {}".format(ids))
             for i, state in zip(ids, request.state):
                 self.soc.admin[i] = bool(state)
             return self.pb2.AdminReply(portid=ids, state=[self.soc.admin[i] for i in ids])

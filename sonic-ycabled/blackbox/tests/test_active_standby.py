@@ -2,7 +2,6 @@
 3.4.2, 3.5.2; F2)."""
 
 import re
-import time
 
 import pytest
 
@@ -10,7 +9,7 @@ from harness import expect
 from harness.fake_hw import MODEL, TARGET_TOR_A, TARGET_TOR_B
 from harness.mux_simulator import LOWER_TOR, UPPER_TOR
 from harness.topology import VS_PLATFORM, Topology
-from harness.util import TIMESTAMP_RE, stays_true, wait_until
+from harness.util import TIMESTAMP_RE, eventually, stays_true
 
 UNKNOWN_ROW = {"state": "unknown", "read_side": "-1", "active_side": "-1"}
 
@@ -84,11 +83,17 @@ def test_toggle_read_side_still_unreadable(dut, script):
     assert [c.method for c in dut.hw.calls(mark, port=1)] == ["get_read_side"]
 
 
-def test_startup_read_side_nic(dut):
-    """A cable read from the NIC side (0): Python publishes it as standby."""
+@pytest.mark.known_issue("3.8-31", "a cable read from the NIC side (read side 0) is published and probed as "
+                                    "standby, while a toggle treats that read side as invalid and writes unknown")
+def test_read_side_nic(dut):
+    """A ToR never reads a Y-cable from the NIC side, so read side 0 means
+    the read side is not known: the port is unknown, as Python's toggle
+    already reports it."""
     two_cables(dut, read_side=0)
     dut.start()
-    assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == {"state": "standby", "read_side": "0", "active_side": "1"}
+    assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "unknown"
+    assert dut.probe("Ethernet0") == "unknown"
+    assert dut.toggle("Ethernet0", "standby")["state"] == "unknown"
 
 
 @pytest.mark.parametrize("script,row", [
@@ -111,6 +116,8 @@ def test_toggle_request_without_state_is_ignored(dut):
     dut.appl.set("HW_MUX_CABLE_TABLE", "Ethernet0", {"mode": "auto"})
     assert stays_true(lambda: not dut.writes(since=mark, key="Ethernet0"), 1.5)
     assert not dut.hw.calls(hw_mark, port=1)
+    # The toggle thread is still serving.
+    assert dut.toggle("Ethernet0", "standby")["state"] == "standby"
 
 
 def test_toggle_cable_gone(dut):
@@ -136,8 +143,10 @@ def test_toggle_to_other_state_is_ignored(dut):
     dut.tolerate_python_failure(crash=True)
     mark = dut.monitor.mark()
     dut.appl.set("HW_MUX_CABLE_TABLE", "Ethernet0", {"state": "init"})
-    time.sleep(1)
-    assert dut.toggle("Ethernet4", "standby", timeout=3)["state"] == "standby"
+    # A toggle sent after it shows whether the toggle thread is still serving.
+    dut.toggle("Ethernet4", "standby", wait=False)
+    assert dut.answered("toggle", "Ethernet4", mark), "the toggle of Ethernet4 was not answered"
+    assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet4", "state") == "standby"
     assert not dut.monitor.accesses(mark, kind="write", key="Ethernet0")
     assert not dut.crash_evidence()
 
@@ -235,14 +244,20 @@ def test_no_usable_driver(dut, info, vendor):
 
 
 @pytest.mark.known_issue("3.8-24", "a get_vendor() exception deadlocks startup: the port lock is taken again "
-                                    "while held, so no port is ever published or served")
+                                    "while held, so no port is ever published or served. The unknown row "
+                                    "expected is a choice: with a reentrant lock, Python's own fallback would "
+                                    "read the cable through the unverified driver and publish active")
 def test_get_vendor_failure(dut):
-    """The cable is reported unknown, like the other driver-load failures, and
-    the other cables are served."""
+    """The cable is reported unknown, like a cable whose get_vendor() names
+    another vendor, and the other cables are served. Reporting it unknown is
+    a choice: Python falls back to create_tables_and_insert_mux_unknown_entries,
+    which reads the cable through the driver that just failed the check, so
+    with a reentrant lock it would publish the direction that driver reads
+    (active here)."""
     cable = two_cables(dut)
     cable.script("get_vendor", raises="OSError: EEPROM busy")
     dut.start(ready=False)
-    wait_until(lambda: len(dut.state.keys("HW_MUX_CABLE_TABLE")) == 2, 5)
+    assert eventually(lambda: len(dut.state.keys("HW_MUX_CABLE_TABLE")) == 2, 5), "startup did not publish both ports"
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == UNKNOWN_ROW
     dut.wait_ready()
     assert dut.toggle("Ethernet4", "standby")["state"] == "standby"
@@ -255,8 +270,8 @@ def test_driver_constructor_failure(dut):
     cable.script("__init__", raises="OSError: EEPROM unreadable")
     dut.tolerate_python_failure(crash=True, exit=True)
     dut.start(ready=False)
-    time.sleep(3)
-    assert dut.proc.running()
+    eventually(lambda: not dut.proc.running() or len(dut.state.keys("HW_MUX_CABLE_TABLE")) == 2, 10)
+    assert dut.proc.running(), dut.proc.output()[-2000:]
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == UNKNOWN_ROW
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet4")["state"] == "active"
 

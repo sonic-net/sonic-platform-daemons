@@ -62,6 +62,9 @@ class Topology(object):
         self.config_db_initialized = True
         self.port_table = True
 
+    def cable_types(self):
+        return {name: port.cable_type for name, port in self.mux.items()}
+
     def index(self, name):
         return dict(self.ports)[name]
 

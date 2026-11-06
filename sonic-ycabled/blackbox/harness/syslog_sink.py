@@ -9,7 +9,7 @@ import threading
 import time
 from collections import namedtuple
 
-from .util import WaitTimeout, wait_until
+from .util import eventually, wait_until
 
 DEV_LOG = "/dev/log"
 # Datagrams of barrier(); syslog lines start with "<".
@@ -70,10 +70,8 @@ class SyslogSink(object):
         token = "{}{}".format(_BARRIER, next(self._barriers))
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
             s.sendto(token.encode(), self.path)
-        try:
-            wait_until(lambda: token in self._barriers_seen, timeout, 0.01)
-        except WaitTimeout:
-            raise RuntimeError("the syslog sink did not get the barrier within {}s".format(timeout))
+        wait_until(lambda: token in self._barriers_seen, timeout, 0.01,
+                   "the syslog sink did not get the barrier within {}s".format(timeout))
 
     def mark(self):
         return len(self._msgs)
@@ -90,6 +88,11 @@ class SyslogSink(object):
                 continue
             out.append(m)
         return out
+
+    def eventually(self, since=0, timeout=10, **match):
+        """The matching messages once there are any, or an empty list after
+        `timeout`. For checks: `assert syslog.eventually(...)`."""
+        return eventually(lambda: self.messages(since, **match), timeout) or []
 
     def wait_for(self, since=0, timeout=10, **match):
         return wait_until(lambda: self.messages(since, **match), timeout,

@@ -6,7 +6,13 @@ value outside the field's domain. At the end of a run, `coverage_report`
 shows which entries the suite exercised.
 
 Field names may be exact, "*" (any field), or "re:<regex>". Tables are
-hashes, so a string value (SET) matches no entry.
+hashes, so a string value (SET) matches no entry. A field's values may
+depend on the port's cable type: pairs (cable type, pattern).
+
+Stopping ycabled deletes nothing (HLD C7). This departs on purpose from what
+Python's deinit() intends: it would delete the HW_MUX_CABLE_TABLE,
+MUX_CABLE_STATIC_INFO and MUX_CABLE_INFO rows and the GRPCCLIENT keys it
+copied, but it never runs, because SIGTERM never completes (HLD 3.8 issue 1).
 """
 
 import re
@@ -18,8 +24,13 @@ Entry = namedtuple("Entry", "db table kind field values note")
 
 ANY = None
 STATE = r"^(active|standby|unknown)$"
-SIDE = r"^(-1|0|1|2)$"
-ACTIVE_SIDE = r"^(-1|0|1|2|active|standby|unknown)$"
+# HW_MUX_CABLE_TABLE and HW_MUX_CABLE_TABLE_PEER. An active-standby port has
+# the cable's sides: ToR A 1, ToR B 2, the NIC 0, or -1. An active-active port
+# has this ToR's index in the SoC's lists (0 or 1, -1 without Loopback3) and
+# the SoC's states. A removal writes active_side -1 for both.
+# Pairs, not a dict: entries are hashable.
+READ_SIDE = (("active-standby", r"^(-1|0|1|2)$"), ("active-active", r"^(-1|0|1)$"))
+ACTIVE_SIDE = (("active-standby", r"^(-1|0|1|2)$"), ("active-active", r"^(-1|active|standby|unknown)$"))
 UP_DOWN = r"^(up|down|unknown)$"
 # Driver values are written with Python's str(), so a driver's None is "None".
 NUM_OR_NA = r"^(-?\d+(\.\d+)?(e-?\d+)?|N/A|None)$"
@@ -119,7 +130,7 @@ def _entries():
     add("STATE_DB", "HW_MUX_CABLE_TABLE_PEER", "read", note="read_side for peer toggles")
     for table in ("HW_MUX_CABLE_TABLE", "HW_MUX_CABLE_TABLE_PEER"):
         add("STATE_DB", table, "write", "state", STATE)
-        add("STATE_DB", table, "write", "read_side", SIDE)
+        add("STATE_DB", table, "write", "read_side", READ_SIDE)
         add("STATE_DB", table, "write", "active_side", ACTIVE_SIDE)
     add("STATE_DB", "MUX_CABLE_INFO", "read", note="last known firmware versions during a download")
     for field, values in MUX_CABLE_INFO_ACTIVE_STANDBY.items():
@@ -182,9 +193,21 @@ def match(access):
     return out
 
 
-def violations(accesses):
+def _domain(values, cable_type):
+    if not isinstance(values, tuple):
+        return values
+    by_type = dict(values)
+    if cable_type in by_type:
+        return by_type[cable_type]
+    # A port the test did not configure: any cable type's values.
+    return "|".join("(?:{})".format(v) for v in by_type.values())
+
+
+def violations(accesses, cable_types=None):
     """Writes, deletes and field removals the contract does not allow, and
-    written values outside their domain."""
+    written values outside their domain. `cable_types`: port name to cable
+    type, for the fields whose values depend on it."""
+    cable_types = cable_types or {}
     out = []
     for a in accesses:
         if a.kind.startswith("other:"):
@@ -198,7 +221,7 @@ def violations(accesses):
             out.append("{} {} {} key={!r} field={!r} value={!r} is not in the contract".format(
                 a.kind, a.db, a.table, a.key, a.field, a.value))
             continue
-        domain = entries[0].values
+        domain = _domain(entries[0].values, cable_types.get(a.key))
         # fullmatch: with re.match, "$" also matches before a final newline.
         if a.kind == "write" and domain is not None and (a.value is None or not re.fullmatch(domain, a.value)):
             out.append("{} {}|{} {}={!r} is outside {}".format(a.db, a.table, a.key, a.field, a.value, domain))

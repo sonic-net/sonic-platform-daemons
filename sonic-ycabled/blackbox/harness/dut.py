@@ -19,8 +19,8 @@ from collections import namedtuple
 from . import contract
 from .mux_simulator import MuxSimulator, UPPER_TOR
 from .soc import Blackhole, Soc
-from .topology import transceiver_info_row
-from .util import WaitTimeout, clear_dir, wait_until
+from .topology import CONTAINER_PLATFORM_DIR, transceiver_info_row
+from .util import HarnessError, WaitTimeout, clear_dir, wait_until
 from .ycabled import YcabledProcess, implementation
 
 # Tables ycabled subscribes to once it has found a mux cable.
@@ -154,7 +154,7 @@ class Dut(object):
 
         def ready():
             if not self.proc.running():
-                raise AssertionError("ycabled exited with {} during startup:\n{}".format(
+                raise HarnessError("ycabled exited with {} during startup:\n{}".format(
                     self.proc.returncode(), self.proc.output()[-3000:]))
             return expected <= self.subscriptions()
         wait_until(ready, timeout, message=lambda: "ycabled did not subscribe to {} within {}s".format(
@@ -188,6 +188,23 @@ class Dut(object):
         self.monitor.wait_access(mark, timeout, kind="write", db=wait_db, table=wait_table, key=port,
                                  field=wait_field)
         return mark
+
+    # Where each request is answered: (DB, table, field).
+    ANSWERS = {
+        "toggle": ("STATE_DB", "HW_MUX_CABLE_TABLE", "state"),
+        "peer_toggle": ("STATE_DB", "HW_MUX_CABLE_TABLE_PEER", "state"),
+        "probe": ("APPL_DB", "MUX_CABLE_RESPONSE_TABLE", "response"),
+        "fwd_probe": ("APPL_DB", "FORWARDING_STATE_RESPONSE", "response_peer"),
+    }
+
+    def answered(self, request, port, since, timeout=5):
+        """Whether ycabled answered `request` ("toggle", "probe", ...) for
+        `port` after `since`, within `timeout`. The request helpers wait for
+        the answer and raise WaitTimeout if there is none; a known-issue test
+        whose issue is a missing answer sends with wait=False and asserts
+        this instead."""
+        db, table, field = self.ANSWERS[request]
+        return bool(self.monitor.eventually(since, timeout, kind="write", db=db, table=table, key=port, field=field))
 
     def toggle(self, port, state, timeout=5, wait=True):
         """orchagent: APPL_DB HW_MUX_CABLE_TABLE. Returns STATE_DB HW_MUX_CABLE_TABLE."""
@@ -308,7 +325,8 @@ class Dut(object):
         if self.monitor.error is not None:
             problems.append("redis MONITOR stopped recording: {!r}".format(self.monitor.error))
         elif not self.allow_contract_violations:
-            for v in contract.violations(self.monitor.accesses(self.test_mark)):
+            cable_types = self.topo.cable_types() if self.topo else None
+            for v in contract.violations(self.monitor.accesses(self.test_mark), cable_types):
                 problems.append("DB contract: " + v)
         for soc in self.socs.values():
             soc.stop()
@@ -324,4 +342,5 @@ class Dut(object):
             elif os.path.exists(path):
                 os.unlink(path)
         clear_dir(FIRMWARE_DIR)
+        clear_dir(CONTAINER_PLATFORM_DIR)
         return problems

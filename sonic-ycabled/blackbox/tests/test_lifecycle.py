@@ -10,7 +10,7 @@ import pytest
 from harness import expect
 from harness.fake_hw import TARGET_TOR_B
 from harness.topology import CONTAINER_PLATFORM_DIR, Topology
-from harness.util import TIMESTAMP_RE, wait_until
+from harness.util import TIMESTAMP_RE, eventually, wait_until
 
 AS_ROW_KEYS = ("HW_MUX_CABLE_TABLE", "MUX_CABLE_INFO", "MUX_CABLE_STATIC_INFO")
 
@@ -96,12 +96,31 @@ def test_startup_waits_for_config_db_initialized(dut):
     topo.config_db_initialized = False
     dut.configure(topo)
     dut.start(ready=False)
-    time.sleep(2)
+    # ycabled is waiting once it has looked at the flag and gone quiet.
+    dut.monitor.wait_access(dut.start_mark, 15, db="CONFIG_DB", table="CONFIG_DB_INITIALIZED")
+    dut.monitor.wait_settled()
     assert dut.proc.running()
     assert not dut.state.exists("HW_MUX_CABLE_TABLE", "Ethernet0")
     dut.config.r.set("CONFIG_DB_INITIALIZED", "1")
     dut.wait_ready()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["state"] == "active"
+
+
+@pytest.mark.known_issue("3.8-32", "a MUX_CABLE state outside the YANG enum makes check_mux_cable_port_type "
+                                    "return None; the caller dies unpacking it, so ycabled exits at startup")
+def test_mux_cable_state_outside_yang_enum(dut):
+    """sonic-mux-cable.yang allows auto, manual, detach, active and standby. A
+    port with another state is skipped, and the other ports are served."""
+    topo = Topology().active_standby("Ethernet0", "Ethernet4")
+    topo.mux["Ethernet0"].state = "bogus"
+    dut.configure(topo)
+    dut.tolerate_python_failure(crash=True, exit=True)
+    dut.start(ready=False)
+    eventually(lambda: not dut.proc.running() or dut.state.exists("HW_MUX_CABLE_TABLE", "Ethernet4"), 15)
+    assert dut.proc.running(), dut.proc.output()[-2000:]
+    dut.wait_ready()
+    assert not dut.state.exists("HW_MUX_CABLE_TABLE", "Ethernet0")
+    assert dut.toggle("Ethernet4", "standby")["state"] == "standby"
 
 
 def test_startup_platform_api_failure_exits(dut):
@@ -133,16 +152,27 @@ def test_startup_port_map_from_port_config_file(dut):
 
 @pytest.mark.python_only
 def test_startup_without_port_map_exits(dut):
+    """No CONFIG_DB PORT and no port_config.ini: Python exits, so that
+    supervisord starts it again. The code is 1, from SfpUtilHelper's own
+    sys.exit, not ycabled's PORT_CONFIG_LOAD_ERROR (2); only that it is not 0
+    matters to supervisord (autorestart=unexpected)."""
     topo = Topology().active_standby("Ethernet0")
     topo.port_table = False
     dut.configure(topo)
     os.unlink(os.path.join(CONTAINER_PLATFORM_DIR, dut.topo.hwsku, "port_config.ini"))
     dut.allow_exit = True
     dut.start(ready=False)
-    assert dut.proc.wait_exit(20) == 1
+    assert dut.proc.wait_exit(20) not in (None, 0)
 
 
 def test_stop_keeps_tables(dut):
+    """Stopping ycabled leaves its tables in place, so the last state stays
+    visible to orchagent, linkmgrd and `show muxcable` across a restart (HLD
+    C7). This departs on purpose from what Python intends: its deinit()
+    would delete the HW_MUX_CABLE_TABLE, MUX_CABLE_STATIC_INFO and
+    MUX_CABLE_INFO rows, and the GRPCCLIENT keys it copied from
+    grpc_secrets.json, but it never runs, because SIGTERM never completes
+    (3.8-1). A Python fix for 3.8-1 has to keep the tables to pass."""
     topo = Topology().active_standby("Ethernet0").active_active("Ethernet4", soc_ipv4="127.0.0.2/32")
     dut.configure(topo)
     dut.soc("127.0.0.2")
@@ -153,7 +183,7 @@ def test_stop_keeps_tables(dut):
     for key in before:
         if key.split("|")[0] in AS_ROW_KEYS + ("HW_MUX_CABLE_TABLE_PEER",):
             assert after.get(key) == before[key], key
-    deletes = dut.monitor.accesses(dut.start_mark, kind="delete", db="STATE_DB")
+    deletes = [a for a in dut.monitor.accesses(dut.start_mark, kind="delete") if a.db in ("STATE_DB", "CONFIG_DB")]
     assert not deletes, deletes
 
 
@@ -170,9 +200,8 @@ def test_sighup_is_ignored(dut):
     dut.configure(Topology().active_standby("Ethernet0"))
     dut.start()
     os.kill(dut.proc.pid, signal.SIGHUP)
-    time.sleep(1)
-    assert dut.proc.running()
     assert dut.probe("Ethernet0") == "active"
+    assert dut.proc.running()
 
 
 def test_restart_reads_cable_then_replays_last_request(dut):

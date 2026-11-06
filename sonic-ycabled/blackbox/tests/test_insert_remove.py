@@ -1,12 +1,10 @@
 """Cable insertion and removal, from STATE_DB TRANSCEIVER_INFO (HLD 3.4.7)."""
 
-import time
-
 import pytest
 
 from harness import expect
 from harness.topology import Topology
-from harness.util import stays_true, wait_until
+from harness.util import eventually, wait_until
 
 SOC = "127.0.0.2"
 
@@ -14,6 +12,16 @@ SOC = "127.0.0.2"
 def two_cables(dut):
     dut.configure(Topology().active_standby("Ethernet0", "Ethernet4"))
     return dut.hw.port(1)
+
+
+def remove_ethernet4(dut):
+    """Remove Ethernet4 and wait until ycabled has handled it. Python handles
+    TRANSCEIVER_INFO events one at a time, in order, so the events written
+    before it have been handled too: a barrier for checks that something did
+    not happen."""
+    mark = dut.monitor.mark()
+    dut.remove("Ethernet4")
+    dut.monitor.wait_access(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet4")
 
 
 def test_remove_active_standby(dut):
@@ -60,7 +68,8 @@ def test_update_for_initialized_cable_is_ignored(dut):
     hw_mark = dut.hw.mark()
     mark = dut.monitor.mark()
     dut.state.set("TRANSCEIVER_INFO", "Ethernet0", {"serial": "BB-NEW"})
-    assert stays_true(lambda: not dut.writes(since=mark, key="Ethernet0"), 1.5)
+    remove_ethernet4(dut)
+    assert not dut.writes(since=mark, key="Ethernet0")
     assert not dut.hw.calls(hw_mark, port=1, op=None)
 
 
@@ -79,7 +88,7 @@ def test_update_for_uninitialized_driver_loads_it_again(dut):
     # Loaded and initialized now: the next update is ignored.
     hw_mark = dut.hw.mark()
     dut.state.set("TRANSCEIVER_INFO", "Ethernet0", {"serial": "BB-NEWER"})
-    time.sleep(1)
+    remove_ethernet4(dut)
     assert not dut.hw.calls(hw_mark, port=1, op="init")
 
 
@@ -111,7 +120,31 @@ def test_first_cable_inserted_after_startup(dut):
     dut.insert("Ethernet0")
     dut.monitor.wait_access(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0")
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["state"] == "active"
-    assert dut.toggle("Ethernet0", "standby", timeout=3)["state"] == "standby"
+    mark = dut.monitor.mark()
+    dut.toggle("Ethernet0", "standby", wait=False)
+    assert dut.answered("toggle", "Ethernet0", mark), "the toggle was not answered"
+    assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "standby"
+
+
+@pytest.mark.known_issue("3.8-5", "the toggle thread reads the ports' HW_MUX_CABLE_TABLE keys once, at its "
+                                   "start, so a port that gets its entry later is never toggled or probed")
+def test_port_initialized_after_startup_is_served(dut):
+    """Ethernet0's MUX_CABLE entry has no state at startup, so Python skips
+    it (YANG defaults the state to auto). Once the state is set, the next
+    insertion initializes the port, and its toggles and probes must then be
+    served."""
+    topo = Topology().active_standby("Ethernet0", "Ethernet4")
+    topo.mux["Ethernet0"].state = None
+    dut.configure(topo)
+    dut.start()
+    dut.config.set("MUX_CABLE", "Ethernet0", {"state": "auto"})
+    dut.insert("Ethernet0")
+    wait_until(lambda: dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "active", 5)
+    mark = dut.monitor.mark()
+    dut.toggle("Ethernet0", "standby", wait=False)
+    assert dut.answered("toggle", "Ethernet0", mark), "the toggle was not answered"
+    assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "standby"
+    assert dut.probe("Ethernet0") == "standby"
 
 
 @pytest.mark.known_issue("3.8-15", "an update without fields (a DEL, or a SET whose row is already gone) "
@@ -127,7 +160,8 @@ def test_first_transceiver_event_without_fields(dut):
         p.delete("TRANSCEIVER_INFO|Ethernet0")
         p.execute()
     dut.hw.port(1).present = False
-    dut.monitor.wait_access(mark, 3, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0")
+    assert dut.monitor.eventually(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0"), \
+        "the removal was not handled"
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["active_side"] == "-1"
     assert not dut.crash_evidence()
 
@@ -154,20 +188,24 @@ def test_reinsert_active_active_refreshes_state(dut):
     mark = dut.monitor.mark()
     dut.remove("Ethernet0")
     dut.monitor.wait_access(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0")
-    mark = dut.monitor.mark()
     dut.insert("Ethernet0")
-    wait_until(lambda: dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "active", 3)
+    assert eventually(lambda: dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "active", 5)
 
 
 @pytest.mark.known_issue("3.8-22", "removing a port that has no HW_MUX_CABLE_TABLE row creates one with "
                                     "read_side 'None'")
 def test_remove_port_without_state(dut):
+    """Ethernet4 (active-active, no SoC address) has no HW_MUX_CABLE_TABLE
+    row; its removal creates none."""
     topo = Topology().active_standby("Ethernet0").active_active("Ethernet4")
     dut.configure(topo)
     dut.start()
     dut.tolerate_python_failure(contract=True)
+    assert not dut.state.exists("HW_MUX_CABLE_TABLE", "Ethernet4")
     mark = dut.monitor.mark()
     dut.remove("Ethernet4")
-    time.sleep(1.5)
-    bad = [a for a in dut.writes(since=mark, key="Ethernet4") if a.field == "read_side" and a.value == "None"]
-    assert not bad
+    # Barrier: Ethernet0's removal is handled after Ethernet4's.
+    dut.remove("Ethernet0")
+    dut.monitor.wait_access(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0")
+    assert not dut.writes(since=mark, key="Ethernet4")
+    assert not dut.state.exists("HW_MUX_CABLE_TABLE", "Ethernet4")

@@ -109,7 +109,7 @@ def _telemetry_pass(dut):
     passed = time.time()
     # The pass goes through the ports in order; Ethernet28 is the last one.
     dut.monitor.wait_access(mark, 10, kind="write", table="MUX_CABLE_INFO", key="Ethernet28")
-    time.sleep(1)
+    dut.monitor.wait_settled()
     return {
         "gate": gate,
         "init": init_info,
@@ -275,6 +275,8 @@ def test_active_active_port_without_soc_address(dut):
     dut.start()
     dut.tolerate_python_failure(crash=True, exit=True)
     mark = dut.monitor.mark()
-    dut.monitor.wait_access(mark, PASS_TIMEOUT, kind="write", table="MUX_CABLE_INFO", key="Ethernet4")
-    time.sleep(1)
+    # Ethernet4 comes after Ethernet0 in the pass.
+    assert dut.monitor.eventually(mark, PASS_TIMEOUT, kind="write", table="MUX_CABLE_INFO", key="Ethernet4"), \
+        "the telemetry pass did not reach Ethernet4"
+    dut.syslog.barrier()
     assert not dut.crash_evidence()

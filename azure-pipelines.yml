@@ -129,8 +129,8 @@ jobs:
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
         sudo apt-get update
-        # redis-server: ycabled's black-box tests
-        sudo apt-get install -y diff-cover redis-server
+        # redis-server, python3-pytest-timeout: ycabled's black-box tests
+        sudo apt-get install -y diff-cover redis-server python3-pytest-timeout
       workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/trixie/
       displayName: 'Install Debian dependencies'
 

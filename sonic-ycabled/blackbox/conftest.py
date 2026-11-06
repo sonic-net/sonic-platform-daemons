@@ -43,12 +43,18 @@ def pytest_addoption(parser):
                     help="measure Python ycabled's code coverage under the suite")
     group.addoption("--bb-require-full-contract", action="store_true",
                     help="fail the run if a DB contract entry was not exercised")
+    group.addoption("--bb-test-timeout", type=float, default=300,
+                    help="seconds a black-box test may take, fixtures included (pytest-timeout); 0: no limit")
 
 
 def pytest_configure(config):
     if ENABLED:
         from harness.env import check_prerequisites
         problem = check_prerequisites()
+        # Several known issues are hangs: no run goes without a time limit.
+        if not problem and config.getoption("--bb-test-timeout") > 0 and not config.pluginmanager.hasplugin("timeout"):
+            problem = "pytest-timeout is not installed (pip install pytest-timeout, or the python3-pytest-timeout " \
+                      "package), and --bb-test-timeout is not 0"
         if problem:
             raise pytest.UsageError("BB_ENABLE=1, but " + problem)
     config.addinivalue_line("markers", "slow: waits for one of ycabled's 60 s timers")
@@ -62,6 +68,13 @@ def pytest_collection_modifyitems(config, items):
     items = [item for item in items if str(item.path).startswith(TESTS_DIR + os.sep)]
     if not items:
         return
+    # A marker, not the timeout ini option: it applies whichever pytest.ini
+    # the run uses, sonic-ycabled's included.
+    timeout = config.getoption("--bb-test-timeout")
+    if timeout > 0 and config.pluginmanager.hasplugin("timeout"):
+        for item in items:
+            if item.get_closest_marker("timeout") is None:
+                item.add_marker(pytest.mark.timeout(timeout))
     from harness.ycabled import implementation
     if implementation() != "python":
         for item in items:
@@ -73,7 +86,8 @@ def pytest_collection_modifyitems(config, items):
         if mark is not None:
             ref = mark.args[0] if mark.args else ""
             reason = mark.args[1] if len(mark.args) > 1 else mark.kwargs.get("reason", "")
-            # AssertionError only: a harness error must not pass as the known issue.
+            # AssertionError only: a harness error (harness.util.HarnessError) or
+            # a timeout must not pass as the known issue.
             item.add_marker(pytest.mark.xfail(strict=True, raises=AssertionError,
                                               reason="known issue {}: {}".format(ref, reason)))
 

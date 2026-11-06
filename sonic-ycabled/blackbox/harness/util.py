@@ -16,7 +16,14 @@ SEPARATORS = {APPL_DB: ":", CONFIG_DB: "|", STATE_DB: "|"}
 TIMESTAMP_RE = r"^\d{4}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}$"
 
 
-class WaitTimeout(AssertionError):
+class HarnessError(RuntimeError):
+    """The harness could not do what a test asked of it. Not an
+    AssertionError: known-issue tests are xfails that take only
+    AssertionError, so that a timeout or an error in the harness cannot pass
+    as the known issue. Tests check the daemon's behavior with `assert`."""
+
+
+class WaitTimeout(HarnessError):
     pass
 
 
@@ -33,6 +40,15 @@ def wait_until(predicate, timeout, interval=0.05, message=None):
                 message = message()
             raise WaitTimeout(message or "condition not met within {}s".format(timeout))
         time.sleep(interval)
+
+
+def eventually(predicate, timeout, interval=0.05):
+    """Like wait_until, but returns None at the timeout instead of raising,
+    for checks of the daemon's behavior: `assert eventually(...)`."""
+    try:
+        return wait_until(predicate, timeout, interval)
+    except WaitTimeout:
+        return None
 
 
 def stays_true(predicate, duration, interval=0.05):

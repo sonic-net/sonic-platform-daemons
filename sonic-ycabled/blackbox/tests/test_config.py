@@ -2,8 +2,6 @@
 XCVRD_LOG, the VS platform, and syslog compatibility (HLD 3.4.10, 3.5.1; C5,
 N5)."""
 
-import time
-
 import pytest
 
 from harness.certs import SOC_NAME, Pki
@@ -11,6 +9,7 @@ from harness.dut import GRPC_SECRETS
 from harness.redisdb import HARNESS_ADDRESS
 from harness.topology import (LOOPBACK3_LOWER, LOOPBACK3_LOWER_NIC, LOOPBACK3_UPPER, LOOPBACK3_UPPER_NIC,
                               VS_PLATFORM, Topology)
+from harness.util import eventually
 
 SOC = "127.0.0.2"
 CERT_DIR = "/etc/sonic/bbcerts"
@@ -102,24 +101,32 @@ def test_grpc_secrets_without_active_active_ports(dut, pki):
     assert dut.config.get("GRPCCLIENT", "certs") == secrets(pki)["GRPCCLIENT"]["certs"]
 
 
+def set_log_verbosity(dut, key, level):
+    """Set XCVRD_LOG|<key> log_verbosity, then wait until ycabled has read
+    the entry, if it reads it at all, and has gone quiet."""
+    mark = dut.monitor.mark()
+    dut.config.set("XCVRD_LOG", key, {"log_verbosity": level})
+    eventually(lambda: dut.monitor.accesses(mark, kind="read", db="CONFIG_DB", table="XCVRD_LOG", key=key), 3)
+    dut.monitor.wait_settled()
+
+
+def probe_logs_debug(dut):
+    """Whether a probe logs at DEBUG. ycabled logs the probe before it
+    answers, and the syslog barrier makes sure those lines have arrived."""
+    mark = dut.syslog.mark()
+    dut.probe("Ethernet0")
+    dut.syslog.barrier()
+    return [m.text for m in dut.syslog.messages(mark, severity="DEBUG")]
+
+
 def test_log_verbosity(dut):
     dut.configure(Topology().active_standby("Ethernet0"))
     dut.start()
-    mark = dut.syslog.mark()
-    dut.probe("Ethernet0")
-    time.sleep(0.5)
-    assert not dut.syslog.messages(mark, severity="DEBUG")
-    dut.config.set("XCVRD_LOG", "Y_CABLE", {"log_verbosity": "debug"})
-    time.sleep(1)
-    mark = dut.syslog.mark()
-    dut.probe("Ethernet0")
-    dut.syslog.wait_for(mark, 5, severity="DEBUG", contains="received a probe for port status Ethernet0")
-    dut.config.set("XCVRD_LOG", "Y_CABLE", {"log_verbosity": "notice"})
-    time.sleep(1)
-    mark = dut.syslog.mark()
-    dut.probe("Ethernet0")
-    time.sleep(0.5)
-    assert not dut.syslog.messages(mark, severity="DEBUG")
+    assert not probe_logs_debug(dut)
+    set_log_verbosity(dut, "Y_CABLE", "debug")
+    assert any("received a probe for port status Ethernet0" in t for t in probe_logs_debug(dut))
+    set_log_verbosity(dut, "Y_CABLE", "notice")
+    assert not probe_logs_debug(dut)
 
 
 @pytest.mark.known_issue("3.8-25", "the fields of any XCVRD_LOG key, not only Y_CABLE, set the log level and "
@@ -127,12 +134,8 @@ def test_log_verbosity(dut):
 def test_log_verbosity_other_key_is_ignored(dut):
     dut.configure(Topology().active_standby("Ethernet0"))
     dut.start()
-    dut.config.set("XCVRD_LOG", "OTHER", {"log_verbosity": "debug"})
-    time.sleep(1)
-    mark = dut.syslog.mark()
-    dut.probe("Ethernet0")
-    time.sleep(0.5)
-    assert not dut.syslog.messages(mark, severity="DEBUG")
+    set_log_verbosity(dut, "OTHER", "debug")
+    assert not probe_logs_debug(dut)
 
 
 def test_active_active_on_vs(dut):

@@ -11,7 +11,7 @@ import pytest
 
 from harness.fake_hw import TARGET_TOR_A, TARGET_TOR_B
 from harness.topology import Topology
-from harness.util import WaitTimeout, wait_until
+from harness.util import eventually, wait_until
 
 # How long the daemon gets to act on the second request while the first call
 # is held. A daemon that queues it behind the held call does nothing until the
@@ -27,10 +27,7 @@ def cable(dut):
 
 
 def maybe(predicate, timeout=HELD):
-    try:
-        return wait_until(predicate, timeout)
-    except WaitTimeout:
-        return None
+    return eventually(predicate, timeout)
 
 
 def state_writes(dut, since):

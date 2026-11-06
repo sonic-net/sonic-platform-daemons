@@ -121,6 +121,8 @@ def test_toggle_ignores_other_states(dut):
     dut.appl.set("HW_MUX_CABLE_TABLE", "Ethernet0", {"state": "init"})
     assert stays_true(lambda: not dut.writes(since=mark, table="HW_MUX_CABLE_TABLE"), 1.5)
     assert not soc.rpcs("SetAdminForwardingPortState", soc_mark)
+    # The toggle thread is still serving.
+    assert dut.toggle("Ethernet0", "standby")["state"] == "standby"
 
 
 @pytest.mark.parametrize("loopback3,read_side", READ_SIDES)
@@ -158,11 +160,20 @@ def test_forwarding_state_probe_ignores_other_commands(dut):
     mark = dut.monitor.mark()
     dut.appl.set("FORWARDING_STATE_COMMAND", "Ethernet0", {"command": "reset"})
     assert stays_true(lambda: not dut.writes(since=mark, table="FORWARDING_STATE_RESPONSE"), 1.5)
+    # The probe thread is still serving.
+    assert dut.fwd_probe("Ethernet0")["response"] == "active"
 
 
 def test_probes_of_other_cable_types_do_not_block(dut):
     """A forwarding probe or peer toggle for an active-standby port is
-    skipped, and the active-active requests queued with it still run."""
+    skipped, and the active-active requests queued with it still run.
+
+    Python stops reading the table at the first such port (`break`, not
+    `continue`: HLD 3.8 issue 6) and leaves the entries after it in the
+    subscriber's buffer. They still run, one more pass of its loop later: a
+    subscriber that swsscommon's Select returns with more than one entry
+    pending stays in Select's ready set (SubscriberStateTable::hasCachedData),
+    and the next select() returns it without waiting."""
     topo = Topology().active_standby("Ethernet0").active_active("Ethernet4", soc_ipv4=SOC + "/32")
     dut.configure(topo)
     dut.soc(SOC)
@@ -180,6 +191,8 @@ def test_probes_of_other_cable_types_do_not_block(dut):
 
 
 def test_port_without_soc_address(dut):
+    """An active-active port without a SoC address is not served: it gets no
+    HW_MUX_CABLE_TABLE entry, and its requests are ignored."""
     topo = Topology().active_standby("Ethernet0").active_active("Ethernet4")
     dut.configure(topo)
     dut.start()
@@ -189,6 +202,8 @@ def test_port_without_soc_address(dut):
     dut.appl.set("HW_MUX_CABLE_TABLE", "Ethernet4", {"state": "standby"})
     dut.appl.set("FORWARDING_STATE_COMMAND", "Ethernet4", {"command": "probe"})
     assert stays_true(lambda: not dut.writes(since=mark, key="Ethernet4"), 1.5)
+    # The toggle thread is still serving.
+    assert dut.toggle("Ethernet0", "standby")["state"] == "standby"
 
 
 def test_cable_absent_at_startup(dut):
@@ -309,6 +324,14 @@ def test_tls_misconfiguration(dut, pki, case):
         "xcvrd_switch_self_unknown_start", "xcvrd_switch_self_unknown_end"}
     assert dut.fwd_probe("Ethernet0") == {"response": "unknown", "response_peer": "unknown"}
     assert not soc.rpcs()
+    # Each request sets the channel up again from CONFIG_DB: with a usable
+    # configuration, the next toggle goes through.
+    dut.config.set("GRPCCLIENT", "config", {"type": "secure", "auth_level": "server"})
+    dut.config.set("GRPCCLIENT", "certs", {"ca_crt": pki.paths["ca.crt"], "grpc_ssl_credential": SOC_NAME,
+                                           "client_crt": pki.paths["client.crt"],
+                                           "client_key": pki.paths["client.key"]})
+    assert dut.toggle("Ethernet0", "standby")["state"] == "standby"
+    assert soc.admin[0] is False
 
 
 @pytest.mark.slow
@@ -325,6 +348,8 @@ def test_tls_misconfiguration_keeps_running(dut, pki):
 @pytest.mark.known_issue("3.8-7", "auth_level 'client' (the YANG value) is not recognized; only 'mutual' "
                                    "enables mutual TLS")
 def test_tls_auth_level_client(dut, pki):
+    """sonic-grpcclient.yang allows auth_level server or client:
+    https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-yang-models/yang-models/sonic-grpcclient.yang"""
     aa(dut, soc=False)
     tls_config(dut, pki, "client")
     dut.soc(SOC, tls=pki.server_tls(require_client_auth=True))
@@ -333,10 +358,12 @@ def test_tls_auth_level_client(dut, pki):
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["state"] == "active"
 
 
-def test_tls_type_insecure_and_missing(dut):
+@pytest.mark.parametrize("config", [{"auth_level": "server"}, {"type": "insecure", "auth_level": "server"}],
+                         ids=["no-type", "insecure"])
+def test_tls_type_insecure_and_missing(dut, config):
     """GRPCCLIENT config without type, or type insecure: plaintext."""
-    soc = aa(dut, soc=False)
-    dut.topo.grpcclient = {"config": {"auth_level": "server"}}
+    aa(dut, soc=False)
+    dut.topo.grpcclient = {"config": config}
     dut.configure(dut.topo)
     soc = dut.soc(SOC)
     dut.start()
@@ -416,6 +443,19 @@ def test_slow_soc_does_not_delay_other_ports(dut):
     assert time.monotonic() - t0 < 1.2
 
 
+@pytest.mark.known_issue("3.8-30", "without a usable Loopback3 address read_side is -1, and toggles still go to "
+                                    "the SoC, with portid [-1] for this ToR and [2] for the peer")
+def test_no_toggle_without_read_side(dut):
+    """Without Loopback3, ycabled does not know which ToR it is: it toggles
+    neither side on the SoC, and answers unknown."""
+    soc = aa(dut, loopback3=None)
+    dut.start()
+    soc_mark = soc.mark()
+    assert dut.toggle("Ethernet0", "standby")["state"] == "unknown"
+    assert dut.peer_toggle("Ethernet0", "standby")["state"] == "unknown"
+    assert not soc.rpcs("SetAdminForwardingPortState", soc_mark)
+
+
 @pytest.mark.known_issue("N3", "ports are initialized one after another; every unreachable SoC adds 0.5 s")
 def test_parallel_startup_with_unreachable_socs(dut):
     topo = Topology()
@@ -424,7 +464,15 @@ def test_parallel_startup_with_unreachable_socs(dut):
     dut.configure(topo)
     for i in range(4):
         dut.blackhole("127.0.1.{}".format(i + 1))
-    t0 = time.monotonic()
     dut.start(ready=False)
-    wait_until(lambda: len(dut.state.keys("HW_MUX_CABLE_TABLE")) == 4, 15)
-    assert time.monotonic() - t0 < 1.5
+    # From ycabled's first DB access (redis's clock), so that the
+    # interpreter's start does not count, to its last port's first state.
+    first = wait_until(lambda: dut.monitor.ops(dut.start_mark), 15)[0]
+
+    def published():
+        firsts = {}
+        for a in dut.writes(since=dut.start_mark, table="HW_MUX_CABLE_TABLE", field="state"):
+            firsts.setdefault(a.key, a)
+        return firsts if len(firsts) == 4 else None
+    elapsed = max(a.ts for a in wait_until(published, 15).values()) - first.ts
+    assert elapsed < 1.5, elapsed

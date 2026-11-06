@@ -366,7 +366,11 @@ def test_rollback_firmware_without_driver(dut, cable):
     dut.start()
     dut.tolerate_python_failure(crash=True)
     assert dut.cli("XCVRD_ROLL_FW_CMD", "null", "Ethernet0").rsp == {"status": "False"}
-    assert dut.cli("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", "Ethernet4", timeout=3).rsp == {"state": "auto"}
+    # A command sent after it shows whether the CLI thread is still serving.
+    mark = dut.cli("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", "Ethernet4", wait=False)
+    assert dut.monitor.eventually(mark, 5, kind="write", db="STATE_DB", table="XCVRD_SHOW_HWMODE_SWMODE_RSP",
+                                  key="Ethernet4", field="state"), "the next command was not answered"
+    assert dut.state.get("XCVRD_SHOW_HWMODE_SWMODE_RSP", "Ethernet4") == {"state": "auto"}
 
 
 # config muxcable prbs/reset/anlt/fec, loopback ----------------------------------
@@ -594,6 +598,8 @@ def test_show_mux_direction_wrong_field_is_ignored(dut, cable):
     mark = dut.monitor.mark()
     dut.appl.set("XCVRD_SHOW_HWMODE_DIR_CMD", "Ethernet0", {"bogus": "probe"})
     assert stays_true(lambda: not dut.writes(since=mark, table="XCVRD_SHOW_HWMODE_DIR_RSP"), 1.5)
+    # The CLI thread is still serving.
+    assert dut.cli("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", "Ethernet0").rsp == {"state": "auto"}
 
 
 def test_commands_for_several_ports(dut):

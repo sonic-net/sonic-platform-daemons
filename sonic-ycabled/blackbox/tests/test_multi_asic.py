@@ -12,7 +12,7 @@ from harness import contract
 from harness.monitor import Monitor
 from harness.redisdb import Dbs, RedisServer
 from harness.topology import CONTAINER_PLATFORM_DIR, HWSKU, PLATFORM, Topology, transceiver_info_row
-from harness.util import wait_until
+from harness.util import eventually
 from harness.ycabled import YcabledProcess
 
 # What a daemon that supports multi-ASIC does first, in ycabled's environment.
@@ -100,7 +100,8 @@ def multi_asic(dut):
             else:
                 dut.env.extra_accesses.extend(accesses)
                 if not dut.allow_contract_violations:
-                    problems += ["DB contract, {}: {}".format(ns, v) for v in contract.violations(accesses)]
+                    cable_types = {port_name: "active-standby" for port_name, _, _ in NAMESPACES.values()}
+                    problems += ["DB contract, {}: {}".format(ns, v) for v in contract.violations(accesses, cable_types)]
             monitor.stop()
         for server in servers.values():
             server.stop()
@@ -135,7 +136,8 @@ def test_multi_asic(dut, multi_asic):
         assert dut.proc.running(), dut.proc.output()[-2000:]
         return all(dbs.state.exists("HW_MUX_CABLE_TABLE", NAMESPACES[ns][0]) for ns, dbs in namespaces.items())
 
-    wait_until(initialized, 15)
+    assert eventually(initialized, 15), "the ports of both namespaces were not initialized"
     assert namespaces["asic1"].state.get("HW_MUX_CABLE_TABLE", "Ethernet4")["state"] == "active"
     namespaces["asic1"].appl.set("HW_MUX_CABLE_TABLE", "Ethernet4", {"state": "standby"})
-    wait_until(lambda: namespaces["asic1"].state.field("HW_MUX_CABLE_TABLE", "Ethernet4", "state") == "standby", 5)
+    assert eventually(lambda: namespaces["asic1"].state.field("HW_MUX_CABLE_TABLE", "Ethernet4", "state") == "standby",
+                      5), "the toggle in asic1 was not answered"

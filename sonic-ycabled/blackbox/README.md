@@ -45,9 +45,14 @@ where libswsscommon, python3-swsscommon and the SONiC wheels are installed for t
 unit tests already:
 
 ```sh
-sudo apt-get install -y redis-server
+sudo apt-get install -y redis-server python3-pytest-timeout
 cd sonic-ycabled && BB_ENABLE=1 pytest
 ```
+
+Every black-box test gets a time limit (`--bb-test-timeout`, 300 s by default)
+through pytest-timeout, whichever `pytest.ini` the run uses: several known issues
+are hangs. With `BB_ENABLE=1`, the suite does not start without pytest-timeout,
+unless the limit is 0.
 
 When not root, the suite uses `sudo -n` to make those directories its own and to
 point `/dev/log` at its socket.
@@ -58,6 +63,7 @@ point `/dev/log` at its socket.
 | `--bb-require-full-contract` | Fail the run if an entry of the DB contract was not exercised |
 | `--bb-workdir` | Scratch directory in the container (default `/tmp/ycabled-blackbox`) |
 | `--bb-report-dir` | Where the reports go (default: `report` in the scratch directory; `run.sh` sets it) |
+| `--bb-test-timeout` | Seconds a test may take, fixtures included (default 300; 0: no limit) |
 | `BB_ENABLE` | `1` lets the tests run here (see above); `run.sh`'s image sets it |
 | `BB_BASE_IMAGE` | Base image (default `docker-sonic-vs:latest`); pulled if it is not local |
 | `BB_IMAGE` | Name of the test image `run.sh` builds (default `ycabled-blackbox:latest`) |
@@ -107,7 +113,11 @@ Reports:
   start is "ycabled has subscribed to the tables it serves and has gone quiet".
 - **Checks on every test.** The `dut` fixture's teardown fails the test if ycabled
   exited unexpectedly, logged a crash, or wrote a table, field or value outside the DB
-  contract (`harness/contract.py`).
+  contract (`harness/contract.py`). Some values depend on the port's cable type, such
+  as `active_side`: a number for active-standby, a state for active-active.
+- **Stopping deletes nothing.** The contract allows no deletes besides the CLI's
+  command keys, and `test_stop_keeps_tables` checks that the tables survive a stop
+  ([HLD] C7). Python's `deinit()` would delete them, but never runs (3.8 issue 1).
 
 ## Writing tests
 
@@ -126,6 +136,7 @@ def test_toggle(dut):
 | `toggle`, `peer_toggle` | orchagent and linkmgrd writing `HW_MUX_CABLE_TABLE`, `HW_FORWARDING_STATE_PEER` |
 | `probe`, `fwd_probe` | linkmgrd's `MUX_CABLE_COMMAND_TABLE` and `FORWARDING_STATE_COMMAND` probes |
 | `insert`, `remove` | xcvrd's `TRANSCEIVER_INFO` |
+| `answered` | whether ycabled answered a request sent with `wait=False` |
 | `cli` | `show/config muxcable`, with the CLI's table protocol |
 | `soc`, `blackhole`, `mux_simulator` | NIC SoCs and the KVM mux simulator |
 | `hw` | the cables |
@@ -136,7 +147,13 @@ Markers:
 - `slow`: waits for one of ycabled's 60 s timers (telemetry, thread checks).
 - `known_issue(ref, reason)`: a behavior Python ycabled gets wrong ([HLD] section 3.8). The
   test asserts the correct behavior and is a strict xfail on Python ycabled, so it starts
-  failing when the issue is fixed, and it must pass on a new implementation.
+  failing when the issue is fixed, and it must pass on a new implementation. Only an
+  `AssertionError` counts as the expected failure. The harness raises
+  `harness.util.HarnessError` (a `RuntimeError`) when it cannot do what a test asked:
+  the request helpers' waits (`toggle`, `probe`, `cli`, `monitor.wait_access`, ...),
+  `start()`, the barriers. So when the issue is a missing answer, send with
+  `wait=False` and assert the answer: `assert dut.answered("toggle", port, mark)`, or
+  `assert dut.monitor.eventually(...)`, `harness.util.eventually(...)`.
 - `python_only`: checks a mechanism of Python ycabled, skipped for other implementations.
 
 ## What the suite covers
@@ -155,11 +172,11 @@ Markers:
 | DB schema (3.6) | the DB contract, checked on every test |
 
 Each known issue of [HLD] section 3.8 that a test can observe has a `known_issue` test:
-1, 2 (`test_lifecycle.py`); 3, 4 (`test_telemetry.py`); 7, 20 (`test_active_active.py`);
-13, 25 (`test_config.py`); 15, 16, 21, 22 (`test_insert_remove.py`); 17, 18, 24
-(`test_active_standby.py`); 19 (`test_cli.py`); 23 (`test_multi_asic.py`); 26 to 29
-(`test_concurrency.py`). The requirements N1 and N3 have one each in
-`test_active_active.py`.
+1, 2, 32 (`test_lifecycle.py`); 3, 4 (`test_telemetry.py`); 7, 20, 30
+(`test_active_active.py`); 13, 25 (`test_config.py`); 5, 15, 16, 21, 22
+(`test_insert_remove.py`); 17, 18, 24, 31 (`test_active_standby.py`); 19
+(`test_cli.py`); 23 (`test_multi_asic.py`); 26 to 29 (`test_concurrency.py`). The
+requirements N1 and N3 have one each in `test_active_active.py`.
 
 ## Other implementations
 

@@ -13,7 +13,7 @@ import time
 from collections import namedtuple
 
 from .redisdb import HARNESS_ADDRESS, TCP_PORT, harness_client
-from .util import DB_NAMES, SEPARATORS, WaitTimeout, wait_until
+from .util import DB_NAMES, SEPARATORS, HarnessError, eventually, wait_until
 
 _LINE_RE = re.compile(r'^(\d+\.\d+) \[(\d+) ([^\]]+)\] (.*)$', re.S)
 _ARG_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
@@ -181,11 +181,8 @@ class Monitor(object):
         token = "bb-barrier-{}".format(next(self._barriers))
         start = len(self._ops)
         self._probe.echo(token)
-        try:
-            wait_until(lambda: self._shows(token, start), timeout, 0.01)
-        except WaitTimeout:
-            # Not an AssertionError: a known-issue xfail must not take it.
-            raise RuntimeError("redis MONITOR did not show the barrier within {}s".format(timeout))
+        wait_until(lambda: self._shows(token, start), timeout, 0.01,
+                   "redis MONITOR did not show the barrier within {}s".format(timeout))
 
     def _shows(self, token, start):
         self.check()
@@ -193,7 +190,7 @@ class Monitor(object):
 
     def check(self):
         if self.error is not None:
-            raise RuntimeError("redis MONITOR stopped recording: {!r}".format(self.error)) from self.error
+            raise HarnessError("redis MONITOR stopped recording: {!r}".format(self.error)) from self.error
 
     def mark(self):
         self.check()
@@ -221,9 +218,15 @@ class Monitor(object):
         return out
 
     def wait_access(self, since, timeout=10, **match):
-        """Wait until ycabled makes an access matching `match` after `since`."""
+        """Wait until ycabled makes an access matching `match` after `since`.
+        A step of the test: raises WaitTimeout (not an AssertionError)."""
         return wait_until(lambda: self.accesses(since, **match), timeout,
                           message="ycabled made no access {} within {}s".format(match, timeout))
+
+    def eventually(self, since, timeout=10, **match):
+        """The accesses matching `match` after `since` once there are any, or
+        an empty list after `timeout`. For checks: `assert monitor.eventually(...)`."""
+        return eventually(lambda: self.accesses(since, **match), timeout) or []
 
     def wait_settled(self, quiet=0.3, timeout=10):
         """Wait until ycabled has sent no command for `quiet` seconds."""
