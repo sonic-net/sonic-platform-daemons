@@ -1,5 +1,14 @@
 from setuptools import setup, find_packages
 
+
+TEST_REQUIREMENTS = [
+    'pytest>=7',
+    'pytest-cov',
+    # This fork revision fixes protobuf imports and supports SONiC's gRPC versions.
+    'xcvr-emu @ git+https://github.com/az-pz/xcvr-emu.git@3aca04f89de6dfecf33bea29509234164d917a81',
+]
+
+
 setup(
     name='sonic-xcvrd',
     version='1.0',
@@ -24,10 +33,10 @@ setup(
     setup_requires=[
         'wheel'
     ],
-    tests_require=[
-        'pytest',
-        'pytest-cov',
-    ],
+    tests_require=TEST_REQUIREMENTS,
+    extras_require={
+        'testing': TEST_REQUIREMENTS,
+    },
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: No Input/Output (Daemon)',
