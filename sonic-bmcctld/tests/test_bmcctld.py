@@ -797,6 +797,31 @@ class TestBmcEventHandlerSystemLeak:
         item = event_handler.action_queue.get_nowait()
         assert item.action == bmcctld.ACTION_POWER_OFF
 
+    def test_test_leak_audited_not_dispatched(self, event_handler):
+        event_handler.log_notice = MagicMock()
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(system_critical_leak_action=bmcctld.ACTION_POWER_OFF)
+        )
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SystemLeakStatus.CRITICAL,
+             bmcctld.FIELD_TEST_LEAK: "Enabled"},
+        )
+        assert event_handler.action_queue.empty()
+        msg = event_handler.log_notice.call_args[0][0]
+        assert "TEST SYSTEM LEAK" in msg
+
+    def test_test_leak_does_not_block_power_on(self, critical_event_checker):
+        critical_event_checker.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(system_critical_leak_action=bmcctld.ACTION_POWER_OFF))
+        with patch.object(bmcctld.swsscommon, 'Table') as tbl:
+            tbl.return_value.get.return_value = (True, [(bmcctld.FIELD_DEVICE_LEAK_STATUS, 'CRITICAL'),
+                                                        (bmcctld.FIELD_TEST_LEAK, 'Enabled')])
+            assert not critical_event_checker.is_power_on_blocked()
+            tbl.return_value.get.return_value = (True, [(bmcctld.FIELD_DEVICE_LEAK_STATUS, 'CRITICAL'),
+                                                        (bmcctld.FIELD_TEST_LEAK, 'Disabled')])
+            assert critical_event_checker.is_power_on_blocked()
+
     def test_critical_system_leak_graceful_shutdown(self, event_handler):
         event_handler.policy_reader.get_leak_control_policy = MagicMock(
             return_value=self._make_policy(system_critical_leak_action=bmcctld.ACTION_GRACEFUL_SHUTDOWN)
