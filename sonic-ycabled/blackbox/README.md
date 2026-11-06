@@ -96,7 +96,9 @@ Reports:
   mapping. The driver and the fake `sonic_platform` (`pylib/sonic_platform`) forward
   every call to `harness/fake_hw.py` in the test process, where each cable is a
   `PortModel`. Tests change the model, script a method to return a value, raise, delay
-  or block, and read the log of calls.
+  or block, and read the log of calls. A real cable serves one call at a time, so the
+  server also records a driver call that starts while another call to the same cable
+  is still running (`hw.overlaps()`).
 - **SoCs.** `harness/soc.py` serves both gRPC services from ycabled's own proto on
   127.0.0.x:50075 or [::1]:50075, with TLS when asked. A `Blackhole` accepts TCP and
   never answers.
@@ -149,13 +151,15 @@ Markers:
 | Every CLI command family and its error paths (3.4.9, 3.6.5) | `test_cli.py` |
 | `XCVRD_LOG`, Loopback3, `grpc_secrets.json`, log compatibility, Redis connections (3.4.10, 3.5.1, C5, N5) | `test_config.py` |
 | Multi-ASIC namespaces (F1) | `test_multi_asic.py` |
+| Requests for one cable from different sources at the same time: toggles, insertion and removal, the CLI (3.8 issues 26 to 29) | `test_concurrency.py` |
 | DB schema (3.6) | the DB contract, checked on every test |
 
 Each known issue of [HLD] section 3.8 that a test can observe has a `known_issue` test:
 1, 2 (`test_lifecycle.py`); 3, 4 (`test_telemetry.py`); 7, 20 (`test_active_active.py`);
 13, 25 (`test_config.py`); 15, 16, 21, 22 (`test_insert_remove.py`); 17, 18, 24
-(`test_active_standby.py`); 19 (`test_cli.py`); 23 (`test_multi_asic.py`). The
-requirements N1 and N3 have one each in `test_active_active.py`.
+(`test_active_standby.py`); 19 (`test_cli.py`); 23 (`test_multi_asic.py`); 26 to 29
+(`test_concurrency.py`). The requirements N1 and N3 have one each in
+`test_active_active.py`.
 
 ## Other implementations
 

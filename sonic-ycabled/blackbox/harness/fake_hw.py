@@ -4,7 +4,9 @@ ycabled loads the fake vendor driver (`pylib/bbfake/y_cable_bbfake.py`) and the
 fake `sonic_platform` package like the real ones. Both forward every call to
 this server over a unix socket, so the state of each cable lives in the test
 process: tests change it, script failures or delays per method, and read the
-log of every call ycabled made.
+log of every call ycabled made. A real cable serves one driver call at a time,
+so the server also records a driver call that starts while another call to the
+same cable is still running.
 """
 
 import copy
@@ -32,6 +34,9 @@ VENDOR = "BB Vendor"
 MODEL = "BB Model"
 
 Call = namedtuple("Call", "ts port op method args")
+# A driver call that started while `running` (methods) were still running on
+# the same cable. `seq` is the call mark when it started.
+Overlap = namedtuple("Overlap", "seq ts port method running")
 
 _UNSET = object()
 
@@ -274,6 +279,8 @@ class FakeHardware(object):
         self.socket_path = socket_path
         self._ports = {}
         self._calls = []
+        self._running = {}
+        self._overlaps = []
         self._lock = threading.RLock()
         self._server = None
         self.platform_init_error = None
@@ -306,6 +313,24 @@ class FakeHardware(object):
             self._server.server_close()
 
     def _handle(self, req):
+        op, port, method = req["op"], req.get("port"), req.get("method")
+        if op != "driver":
+            return self._serve(req)
+        with self._lock:
+            running = self._running.setdefault(port, [])
+            if running:
+                self._overlaps.append(Overlap(len(self._calls), time.time(), port, method, tuple(running)))
+            running.append(method)
+        try:
+            return self._serve(req)
+        finally:
+            with self._lock:
+                running = self._running.get(port)
+                # reset() may have dropped it while a released call finished.
+                if running and method in running:
+                    running.remove(method)
+
+    def _serve(self, req):
         op, port, method, args = req["op"], req.get("port"), req.get("method"), req.get("args") or []
         with self._lock:
             self._calls.append(Call(time.time(), port, op, method, tuple(args)))
@@ -369,6 +394,8 @@ class FakeHardware(object):
                         script.gate.set()
             self._ports = {}
             self._calls = []
+            self._running = {}
+            self._overlaps = []
             self.platform_init_error = None
 
     def mark(self):
@@ -379,3 +406,9 @@ class FakeHardware(object):
             return [c for c in self._calls[since:]
                     if (port is None or c.port == port) and (method is None or c.method == method)
                     and (op is None or c.op == op)]
+
+    def overlaps(self, since=0, port=None):
+        """Driver calls that started, after call mark `since`, while another
+        call to the same cable was still running."""
+        with self._lock:
+            return [o for o in self._overlaps if o.seq >= since and (port is None or o.port == port)]
