@@ -570,7 +570,7 @@ def notify_media_setting(logical_port_name, transceiver_dict,
     asic_index = port_mapping.get_asic_id_for_logical_port(logical_port_name)
 
     port_speed, lane_count, subport_num = get_speed_lane_count_and_subport(logical_port_name, xcvr_table_helper.get_cfg_port_tbl(asic_index))
-    gearbox_lanes_dict = xcvr_table_helper.get_gearbox_line_lanes_dict()
+    gearbox_lanes_dict = xcvr_table_helper.get_gearbox_line_lanes_dict() or {}
 
     ganged_port = False
     ganged_member_num = 1
