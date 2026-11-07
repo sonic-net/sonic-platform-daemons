@@ -3,7 +3,7 @@
 #
 #   sonic-ycabled/blackbox/run.sh                      # whole suite, Python ycabled
 #   sonic-ycabled/blackbox/run.sh -m "not slow" -x     # skip the 60 s timer cases
-#   sonic-ycabled/blackbox/run.sh --bb-coverage --bb-require-full-contract
+#   sonic-ycabled/blackbox/run.sh --bb-coverage        # with Python ycabled's code coverage
 #
 # Environment:
 #   BB_BASE_IMAGE   docker-sonic-vs image to build on (default docker-sonic-vs:latest,

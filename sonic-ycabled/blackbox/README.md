@@ -31,7 +31,7 @@ user with sudo like the pipeline does; arguments go to pytest.
 sonic-ycabled/blackbox/run.sh                     # everything, about 15 minutes
 sonic-ycabled/blackbox/run.sh -m "not slow"       # skip the cases that wait for 60 s timers
 sonic-ycabled/blackbox/run.sh tests/test_cli.py -k firmware
-sonic-ycabled/blackbox/run.sh --bb-coverage --bb-require-full-contract
+sonic-ycabled/blackbox/run.sh --bb-coverage                  # with Python ycabled's code coverage
 ```
 
 ### With the unit tests
@@ -60,7 +60,7 @@ point `/dev/log` at its socket.
 | Option or variable | Meaning |
 | --- | --- |
 | `--bb-coverage` | Measure the code coverage of Python ycabled under the suite |
-| `--bb-require-full-contract` | Fail the run if an entry of the DB contract was not exercised |
+| `--bb-no-require-full-contract` | Do not fail a run of the whole suite that left an entry of the DB contract unexercised (see Reports) |
 | `--bb-workdir` | Scratch directory in the container (default `/tmp/ycabled-blackbox`) |
 | `--bb-report-dir` | Where the reports go (default: `report` in the scratch directory; `run.sh` sets it) |
 | `--bb-test-timeout` | Seconds a test may take, fixtures included (default 300; 0: no limit) |
@@ -72,7 +72,12 @@ point `/dev/log` at its socket.
 
 Reports:
 
-- `db-contract-coverage.md`: every DB access in the contract and how often the suite saw it
+- `db-contract-coverage.md`: every DB access in the contract and how often the suite saw it.
+  A run of the whole suite on Python ycabled fails if an entry was not exercised: either
+  no test reaches it any more, or ycabled stopped making that access and the entry can
+  go. A partial run (a file, a test, `-k`, `-m`) only reports it, and so does a run of
+  another implementation, which need not make every access Python makes.
+  `--bb-no-require-full-contract` turns the check off.
 - `ycabled-coverage.txt`, `ycabled-coverage-html/`: line and branch coverage of Python ycabled (`--bb-coverage`;
   without it, in a pytest-cov run, the coverage goes into pytest-cov's report)
 

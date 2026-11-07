@@ -9,6 +9,7 @@ developer machine or in a sonic-buildimage build, its tests are not collected.
 import glob
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -26,6 +27,14 @@ sys.path.insert(0, BLACKBOX_DIR)
 
 _ENV = {}
 _NOT_COLLECTED = []
+# The black-box test modules collected, and the black-box tests deselected
+# (-k, -m, --deselect, --lf): to tell a run of the whole suite.
+_COLLECTED_MODULES = set()
+_DESELECTED = []
+
+
+def _in_suite(item):
+    return str(item.path).startswith(TESTS_DIR + os.sep)
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -41,8 +50,9 @@ def pytest_addoption(parser):
     group.addoption("--bb-report-dir", default=None, help="where to write the coverage reports")
     group.addoption("--bb-coverage", action="store_true",
                     help="measure Python ycabled's code coverage under the suite")
-    group.addoption("--bb-require-full-contract", action="store_true",
-                    help="fail the run if a DB contract entry was not exercised")
+    group.addoption("--bb-no-require-full-contract", action="store_false", dest="bb_require_full_contract",
+                    help="do not fail a run of the whole suite on Python ycabled that left a DB contract entry "
+                         "unexercised (checked by default)")
     group.addoption("--bb-test-timeout", type=float, default=300,
                     help="seconds a black-box test may take, fixtures included (pytest-timeout); 0: no limit")
 
@@ -65,9 +75,10 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     # The hook sees the whole session, unit tests included.
-    items = [item for item in items if str(item.path).startswith(TESTS_DIR + os.sep)]
+    items = [item for item in items if _in_suite(item)]
     if not items:
         return
+    _COLLECTED_MODULES.update(str(item.path) for item in items)
     # A marker, not the timeout ini option: it applies whichever pytest.ini
     # the run uses, sonic-ycabled's included.
     timeout = config.getoption("--bb-test-timeout")
@@ -90,6 +101,50 @@ def pytest_collection_modifyitems(config, items):
             # a timeout must not pass as the known issue.
             item.add_marker(pytest.mark.xfail(strict=True, raises=AssertionError,
                                               reason="known issue {}: {}".format(ref, reason)))
+
+
+def pytest_deselected(items):
+    _DESELECTED.extend(item for item in items if _in_suite(item))
+
+
+def _partial_selection(config):
+    """Why this run does not select the whole suite, or None: an argument
+    names a part of it (a file, a test, a subdirectory), a module was not
+    collected (--ignore), or tests were deselected."""
+    tests = pathlib.Path(TESTS_DIR).resolve()
+    whole = False
+    for arg in config.args:
+        path, node, _ = arg.partition("::")
+        p = (config.invocation_params.dir / path).resolve()
+        if p == tests and not node:
+            whole = True
+        elif p == tests or tests in p.parents:
+            return "a part of the suite was selected ({})".format(arg)
+        elif p in tests.parents and not node:
+            whole = True
+    if not whole:
+        return "the suite's tests directory was not selected"
+    missing = sorted(os.path.basename(f) for f in glob.glob(os.path.join(TESTS_DIR, "test_*.py"))
+                     if f not in _COLLECTED_MODULES)
+    if missing:
+        return "not collected: {}".format(", ".join(missing))
+    if _DESELECTED:
+        return "{} test{} deselected".format(len(_DESELECTED), "" if len(_DESELECTED) == 1 else "s")
+    return None
+
+
+def _full_contract_not_required(session):
+    """Why this run does not have to exercise every DB contract entry, or None."""
+    from harness.ycabled import implementation
+    if not session.config.getoption("bb_require_full_contract"):
+        return "--bb-no-require-full-contract"
+    if implementation() != "python":
+        # The contract is what Python ycabled may do; another implementation
+        # need not make every access Python makes (HLD 3.8 issue 10, say).
+        return "the daemon under test is not Python ycabled"
+    if session.shouldstop or session.shouldfail:
+        return "the run stopped early"
+    return _partial_selection(session.config)
 
 
 @pytest.fixture(scope="session")
@@ -178,13 +233,17 @@ def _contract_report(session, env, report_dir, tr):
         f.write(text)
     with open(os.path.join(report_dir, "db-contract-missing.json"), "w") as f:
         json.dump([e._asdict() for e in missing], f, indent=1)
+    not_required = _full_contract_not_required(session)
     if tr is not None:
-        tr.write_line("DB contract: {} of {} entries exercised; report in {}".format(
-            len(contract.CONTRACT) - len(missing), len(contract.CONTRACT), report_dir))
-    if session.config.getoption("--bb-require-full-contract") and missing:
+        tr.write_line("DB contract: {} of {} entries exercised ({}); report in {}".format(
+            len(contract.CONTRACT) - len(missing), len(contract.CONTRACT),
+            "not all required: " + not_required if not_required else "all required", report_dir))
+    if missing and not not_required:
         if tr is not None:
             for e in missing:
                 tr.write_line("  not exercised: {} {} {} {}".format(e.db, e.table, e.kind, e.field or ""))
+            tr.write_line("  The run fails: a test should exercise each entry, or the entry is no longer needed. "
+                          "--bb-no-require-full-contract skips this check.")
         session.exitstatus = 1
 
 
