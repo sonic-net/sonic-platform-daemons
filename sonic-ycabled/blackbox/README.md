@@ -11,7 +11,7 @@ ycabled today and the Rust implementation later ([HLD] section 6.3, WI-3).
 The tests take over the environment they run in: they run redis-server for the
 SONiC databases, point `/dev/log` at their own syslog socket, and write
 `/var/run/redis*`, `/etc/sonic` and `/usr/share/sonic`. So they run only where
-`BB_ENABLE=1` says that is fine, in a throwaway container. Without it, `pytest` in
+`VS_ENABLE=1` says that is fine, in a throwaway container. Without it, `pytest` in
 `sonic-ycabled` runs the unit tests only, as on a developer machine or in a
 sonic-buildimage build.
 
@@ -37,7 +37,7 @@ sonic-ycabled/blackbox/run.sh --bb-coverage --bb-require-full-contract
 ### With the unit tests
 
 `pytest` in `sonic-ycabled` collects these tests too (`testpaths` in its
-`pytest.ini`). With `BB_ENABLE=1` they run after the unit tests, in the same
+`pytest.ini`). With `VS_ENABLE=1` they run after the unit tests, in the same
 results, and the coverage of Python ycabled under them adds to the unit tests' in
 pytest-cov's report; the run takes about 14 minutes instead of 15 seconds. The
 sonic-platform-daemons pipeline runs them this way, in its sonic-slave container,
@@ -46,12 +46,12 @@ unit tests already:
 
 ```sh
 sudo apt-get install -y redis-server python3-pytest-timeout
-cd sonic-ycabled && BB_ENABLE=1 pytest
+cd sonic-ycabled && VS_ENABLE=1 pytest
 ```
 
 Every black-box test gets a time limit (`--bb-test-timeout`, 300 s by default)
 through pytest-timeout, whichever `pytest.ini` the run uses: several known issues
-are hangs. With `BB_ENABLE=1`, the suite does not start without pytest-timeout,
+are hangs. With `VS_ENABLE=1`, the suite does not start without pytest-timeout,
 unless the limit is 0.
 
 When not root, the suite uses `sudo -n` to make those directories its own and to
@@ -64,7 +64,7 @@ point `/dev/log` at its socket.
 | `--bb-workdir` | Scratch directory in the container (default `/tmp/ycabled-blackbox`) |
 | `--bb-report-dir` | Where the reports go (default: `report` in the scratch directory; `run.sh` sets it) |
 | `--bb-test-timeout` | Seconds a test may take, fixtures included (default 300; 0: no limit) |
-| `BB_ENABLE` | `1` lets the tests run here (see above); `run.sh`'s image sets it |
+| `VS_ENABLE` | `1` lets the tests run here (see above); `run.sh`'s image and the pipeline's ycabled step set it |
 | `BB_BASE_IMAGE` | Base image (default `docker-sonic-vs:latest`); pulled if it is not local |
 | `BB_IMAGE` | Name of the test image `run.sh` builds (default `ycabled-blackbox:latest`) |
 | `BB_REPORT_DIR` | Where the reports go (default `sonic-ycabled/blackbox/report`) |

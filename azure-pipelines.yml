@@ -174,7 +174,7 @@ jobs:
             # tests. They take over /dev/log, /var/run/redis*, /etc/sonic and
             # /usr/share/sonic, which is fine in this throwaway container.
             if [ "${{ project.name }}" == "ycabled" ]; then
-                export BB_ENABLE=1
+                export VS_ENABLE=1
             fi
             pip3 install ".[testing]"
             pip3 uninstall --yes sonic-platform-daemons

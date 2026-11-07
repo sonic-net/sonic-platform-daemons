@@ -23,7 +23,7 @@ RUN pip3 install --no-cache-dir --target /opt/bb/lib \
 ENV PYTHONPATH=/opt/bb/lib
 ENV PATH=/opt/bb/lib/bin:${PATH}
 # This container is the suite's to take over (see conftest.py).
-ENV BB_ENABLE=1
+ENV VS_ENABLE=1
 
 # The suite runs as a user with sudo, as in the sonic-platform-daemons pipeline,
 # and sets up what needs root with sudo (harness/env.py).

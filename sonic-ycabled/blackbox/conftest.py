@@ -1,7 +1,7 @@
 """Fixtures of the ycabled black-box suite. See README.md.
 
 The suite takes over /dev/log, /var/run/redis*, /etc/sonic and /usr/share/sonic,
-so it runs only where BB_ENABLE=1 says that is fine: run.sh's container, or a
+so it runs only where VS_ENABLE=1 says that is fine: run.sh's container, or a
 CI container. Elsewhere, for example a `pytest` run of the unit tests on a
 developer machine or in a sonic-buildimage build, its tests are not collected.
 """
@@ -17,7 +17,7 @@ import pytest
 
 BLACKBOX_DIR = os.path.dirname(os.path.abspath(__file__))
 TESTS_DIR = os.path.join(BLACKBOX_DIR, "tests")
-ENABLED = os.environ.get("BB_ENABLE") == "1"
+ENABLED = os.environ.get("VS_ENABLE") == "1"
 # ycabled's environment. Taken now, before the unit tests of the same session
 # change os.environ.
 BASE_ENV = dict(os.environ)
@@ -56,7 +56,7 @@ def pytest_configure(config):
             problem = "pytest-timeout is not installed (pip install pytest-timeout, or the python3-pytest-timeout " \
                       "package), and --bb-test-timeout is not 0"
         if problem:
-            raise pytest.UsageError("BB_ENABLE=1, but " + problem)
+            raise pytest.UsageError("VS_ENABLE=1, but " + problem)
     config.addinivalue_line("markers", "slow: waits for one of ycabled's 60 s timers")
     config.addinivalue_line("markers", "known_issue(ref, reason): a known issue of Python ycabled; "
                                        "expected to fail on the Python implementation")
@@ -95,7 +95,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture(scope="session")
 def bb_env(request):
     if not ENABLED:
-        pytest.skip("set BB_ENABLE=1 to run the black-box tests, in a throwaway container (see README.md)")
+        pytest.skip("set VS_ENABLE=1 to run the black-box tests, in a throwaway container (see README.md)")
     from harness.env import BlackboxEnv
     # Absolute: ycabled runs from /, and /dev/log points into the workdir.
     workdir = os.path.abspath(request.config.getoption("--bb-workdir"))
@@ -152,7 +152,7 @@ def module_dut(bb_env, request):
 
 def pytest_terminal_summary(terminalreporter):
     if _NOT_COLLECTED:
-        terminalreporter.write_line("ycabled black-box tests not run: set BB_ENABLE=1 to run them, in a "
+        terminalreporter.write_line("ycabled black-box tests not run: set VS_ENABLE=1 to run them, in a "
                                     "throwaway container (see {})".format(os.path.join(BLACKBOX_DIR, "README.md")))
 
 
