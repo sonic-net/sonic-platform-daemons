@@ -13,18 +13,24 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   insertion and removal, toggles, probes, CLI commands. Ports run at the
   same time, so a slow SoC or cable delays only its own port (N1), ports
   initialize in parallel (N3), and the cross-thread races of Python ycabled
-  (issues 26 to 29 of the HLD) cannot happen.
+  (issues 26 to 29 of the HLD) cannot happen. No request is dropped: a port
+  that cannot keep up queues them, and a backlog of 256 is logged. Startup
+  waits at most 30 s for the ports to initialize before it subscribes, so a
+  driver call that never returns holds up only its own port.
 - **Telemetry** (every 60 s per port) runs in a task beside the actor, so a
-  toggle never waits for a whole pass. Calls to an active-standby cable take
-  the port's call lock, one at a time, so a toggle waits for at most one
-  telemetry call. Active-standby passes run one at a time (shared I2C
-  buses), active-active ones 16 at a time.
+  toggle never waits for a whole pass. Calls to an active-standby cable,
+  loading and unloading its driver included, take the port's call lock, one
+  at a time, so a toggle waits for at most one telemetry call.
+  Active-standby passes run one at a time (shared I2C buses), active-active
+  ones 16 at a time.
 - **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
   a row is one `HSET` of all its fields, subscriptions are swsscommon's
   `SubscriberStateTable` (keyspace notifications, then the existing rows).
-  Per namespace, one connection per database and two for the
-  subscriptions: 5, whatever the number of ports (Python: 125 with 24
-  active-standby ports, 199 with 32 active-active ports).
+  A namespace's subscriptions share one connection, and their events are
+  routed in the order redis delivered them, so a port's requests keep their
+  order across tables. Per namespace, that and one connection per database
+  make 4, whatever the number of ports (Python: 125 with 24 active-standby
+  ports, 199 with 32 active-active ports).
 - **Active-active** (`src/grpc.rs`): tonic, one lazily connected channel per
   SoC, 0.5 s deadlines, keepalive 4 s/8 s, TLS from GRPCCLIENT (rustls). A
   connector wrapper turns connection events into gRPC connectivity states,
@@ -36,7 +42,9 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   active-standby port needs it, runs a bridge module that owns the platform
   API and the driver objects; Rust calls it with plain values. Driver
   selection is Python ycabled's. A driver call still running after 5 s is
-  logged.
+  logged. Calls run on blocking threads started when needed; a port has at
+  most two in flight besides firmware downloads, so calls that never return
+  on some ports leave threads for the others.
 - **CLI** (`src/cli.rs`): the 13 `XCVRD_*_CMD` tables of `show/config
   muxcable`, answered as Python answers them. A firmware download runs in a
   task of its own, so the port keeps working meanwhile.
@@ -46,6 +54,16 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
 The known issues of Python ycabled (HLD section 3.8) that a black-box test
 reproduces are fixed; see the HLD for the list, and section 4.5 for the
 deliberate differences.
+
+Limitations (HLD section 4.8):
+
+- Active-standby ports need the platform API (`sonic_platform`). The legacy
+  `sfputil` plugin, which Python ycabled falls back to when the chassis
+  cannot be loaded, is not supported: ycabled-rs exits.
+- Like Python ycabled (`daemon_base.db_connect`), ycabled-rs reaches redis
+  over TCP, at each namespace's host and port in its DB config.
+- A Python driver call cannot be cancelled. One that holds the GIL without
+  returning stops every active-standby port, as it does in Python.
 
 ## Build
 
@@ -74,7 +92,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (127): the actors and the CLI against an in-memory
+- **Unit tests** (135): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
   in-process SoC, the bridge in the embedded interpreter with fake drivers.
@@ -114,16 +132,16 @@ explains them). They compare the daemons on the same fakes, not hardware.
 
 | Scenario | Metric | Python | Rust |
 | --- | --- | ---: | ---: |
-| 24 active-standby ports | RSS / PSS | 50.3 / 42.0 MB | 38.2 / 33.6 MB |
+| 24 active-standby ports | RSS / PSS | 50.3 / 42.0 MB | 38.3 / 33.8 MB |
 | | Threads | 5 | 3 |
-| | Redis connections | 125 | 5 |
-| | CPU over 65 s, one telemetry pass | 0.14% | 0.15% |
-| 32 active-active ports | RSS / PSS | 58.8 / 48.6 MB | 12.2 / 10.7 MB |
+| | Redis connections | 125 | 4 |
+| | CPU over 65 s, one telemetry pass | 0.14% | 0.14% |
+| 32 active-active ports | RSS / PSS | 58.8 / 48.6 MB | 12.1 / 10.6 MB |
 | | Threads | 61 | 3 |
-| | Redis connections | 199 | 5 |
-| | CPU over 65 s, one telemetry pass | 4.31% | 0.12% |
+| | Redis connections | 199 | 4 |
+| | CPU over 65 s, one telemetry pass | 4.31% | 0.14% |
 | Startup, SoCs never answer | 8 / 32 ports | 4.16 / 16.30 s | 0.51 / 0.52 s |
-| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2021 ms | 6.6 ms |
-| Active-standby probe | Median / p99 | 1.65 / 2.12 ms | 1.71 / 2.23 ms |
-| 24 active-standby ports toggled together | Toggles per second | 936 | 1169 |
+| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2021 ms | 6.9 ms |
+| Active-standby probe | Median / p99 | 1.65 / 2.12 ms | 1.88 / 2.55 ms |
+| 24 active-standby ports toggled together | Toggles per second | 936 | 1063 |
 | Telemetry pass, 32 active-active ports | SoCs hang / blackholed | 62.3 / 0.04 s | 2.0 / 2.0 s |

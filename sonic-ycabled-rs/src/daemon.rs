@@ -4,15 +4,17 @@
 //! parallel (N3): the DB configuration and namespaces, CONFIG_DB_INITIALIZED,
 //! the XCVRD_LOG level reset, the platform, the port map, Loopback3,
 //! grpc_secrets.json, the mux ports. Once every port has published its
-//! state, the subscriptions start: their first events are the rows that
-//! exist, so requests left while ycabled was down are applied after the
-//! ports' state is known.
+//! state, or after INIT_WAIT, the subscriptions start: their first events are
+//! the rows that exist, so requests left while ycabled was down are applied
+//! after the ports' state is known. A port's requests wait behind its own
+//! initialization in its mailbox.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use tokio::signal::unix::{signal, SignalKind};
@@ -21,11 +23,16 @@ use tokio::sync::{mpsc, oneshot};
 use crate::actor::{Msg, PortActor, Shared};
 use crate::bridge::{LazyPlatform, PyBridge, PyPlatform, YCablePlatform};
 use crate::config::{self, CableType};
-use crate::db::{self, Db, DbConfig, DbId, Event, FieldMap, RedisDb};
+use crate::db::{self, Db, DbConfig, DbId, Event, FieldMap, RedisDb, Subscriptions, TableEvent};
 use crate::grpc::{self, SocConnector, TonicConnector};
 use crate::ports::{self, PortMap};
 use crate::schema::*;
 use crate::{log_debug, log_error, log_info, log_notice, log_warning};
+
+/// How long startup waits for the mux ports to initialize before it
+/// subscribes anyway. A driver call that never returns then holds up only
+/// its own port, whose requests wait behind its initialization.
+pub const INIT_WAIT: Duration = Duration::from_secs(30);
 
 /// One front-end namespace: its databases and its ports' actors.
 pub struct Namespace {
@@ -33,8 +40,9 @@ pub struct Namespace {
     pub asic: usize,
     pub db: Arc<RedisDb>,
     pub shared: Arc<Shared>,
-    pub actors: Mutex<HashMap<String, mpsc::Sender<Msg>>>,
-    mux_subscribed: Mutex<bool>,
+    pub actors: Mutex<HashMap<String, mpsc::UnboundedSender<Msg>>>,
+    subscriptions: OnceLock<Subscriptions>,
+    mux_subscribed: AtomicBool,
 }
 
 pub struct Daemon {
@@ -42,9 +50,9 @@ pub struct Daemon {
     pub ports: PortMap,
 }
 
-fn send(tx: &mpsc::Sender<Msg>, port: &str, msg: Msg) {
-    if let Err(e) = tx.try_send(msg) {
-        log_warning!("Dropped a request for port {}: {}", port, e);
+fn send(tx: &mpsc::UnboundedSender<Msg>, port: &str, msg: Msg) {
+    if tx.send(msg).is_err() {
+        log_warning!("Dropped a request for port {}: its actor is gone", port);
     }
 }
 
@@ -80,7 +88,7 @@ fn exit_on_lost_subscription(ns: String) -> impl FnOnce() + Send + 'static {
 }
 
 impl Namespace {
-    fn actor(&self, port: &str) -> Option<mpsc::Sender<Msg>> {
+    fn actor(&self, port: &str) -> Option<mpsc::UnboundedSender<Msg>> {
         self.actors.lock().unwrap().get(port).cloned()
     }
 
@@ -88,7 +96,12 @@ impl Namespace {
         !self.actors.lock().unwrap().is_empty()
     }
 
-    fn add_actor(&self, port: &str, physical: Option<u32>, cable: CableType) -> mpsc::Sender<Msg> {
+    fn add_actor(
+        &self,
+        port: &str,
+        physical: Option<u32>,
+        cable: CableType,
+    ) -> mpsc::UnboundedSender<Msg> {
         let actor = PortActor::new(port, physical, Some(cable), Arc::clone(&self.shared));
         let tx = actor.spawn();
         self.actors
@@ -100,84 +113,71 @@ impl Namespace {
 }
 
 impl Daemon {
-    /// Subscribes namespace `ns` to the mux tables, once.
-    async fn subscribe_mux(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
-        {
-            let mut done = ns.mux_subscribed.lock().unwrap();
-            if *done {
-                return Ok(());
-            }
-            *done = true;
+    /// Subscribes namespace `ns` to TRANSCEIVER_INFO, and to the mux tables
+    /// if it has mux ports, on one connection. One task routes the events,
+    /// in the order redis delivered them.
+    async fn subscribe(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
+        let mut tables = vec![(DbId::State, TRANSCEIVER_INFO.to_string())];
+        if ns.has_actors() {
+            ns.mux_subscribed.store(true, Ordering::SeqCst);
+            tables.extend(mux_tables());
         }
-        let tables = mux_tables();
-        let receivers = ns
+        let (subscriptions, rx) = ns
             .db
             .subscribe(&tables, exit_on_lost_subscription(ns.name.clone()))
             .await?;
-        for ((_, table), rx) in tables.into_iter().zip(receivers) {
-            let this = Arc::clone(self);
-            let ns = Arc::clone(ns);
-            tokio::spawn(this.route(ns, table, rx));
+        let _ = ns.subscriptions.set(subscriptions);
+        tokio::spawn(Arc::clone(self).route(Arc::clone(ns), rx));
+        Ok(())
+    }
+
+    /// Subscribes namespace `ns` to the mux tables, once: its first mux port
+    /// appeared after startup. If redis refuses, ycabled-rs exits, as for a
+    /// lost subscription.
+    fn subscribe_mux(&self, ns: &Namespace) {
+        if ns.mux_subscribed.swap(true, Ordering::SeqCst) {
+            return;
         }
-        Ok(())
+        if let Some(subscriptions) = ns.subscriptions.get() {
+            subscriptions.add(mux_tables());
+        }
     }
 
-    async fn subscribe_transceivers(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
-        let tables = vec![(DbId::State, TRANSCEIVER_INFO.to_string())];
-        let mut receivers = ns
-            .db
-            .subscribe(&tables, exit_on_lost_subscription(ns.name.clone()))
-            .await?;
-        let rx = receivers.remove(0);
-        let this = Arc::clone(self);
-        let ns = Arc::clone(ns);
-        tokio::spawn(this.route(ns, TRANSCEIVER_INFO.to_string(), rx));
-        Ok(())
-    }
-
-    /// Delivers the events of one subscribed table.
-    fn route(
+    /// Delivers the events of namespace `ns`, in order.
+    async fn route(
         self: Arc<Self>,
         ns: Arc<Namespace>,
-        table: String,
-        rx: mpsc::UnboundedReceiver<Event>,
-    ) -> futures::future::BoxFuture<'static, ()> {
-        // Boxed: a TRANSCEIVER_INFO event may start the mux subscriptions,
-        // which spawn this again.
-        Box::pin(self.route_events(ns, table, rx))
-    }
-
-    async fn route_events(
-        self: Arc<Self>,
-        ns: Arc<Namespace>,
-        table: String,
-        mut rx: mpsc::UnboundedReceiver<Event>,
+        mut rx: mpsc::UnboundedReceiver<TableEvent>,
     ) {
-        while let Some(event) = rx.recv().await {
-            let port = event.key().to_string();
-            match (table.as_str(), event) {
-                (TRANSCEIVER_INFO, event) => self.transceiver_event(&ns, &port, event).await,
-                (XCVRD_LOG, Event::Set { key, fields }) => config::handle_xcvrd_log(&key, &fields),
-                (XCVRD_DOWN_FW_STATUS_CMD, _) => {}
-                (_, Event::Del { .. }) => {}
-                (t, Event::Set { fields, .. }) => {
-                    let msg = message_for(t, &port, fields);
-                    match ns.actor(&port) {
-                        Some(tx) => send(&tx, &port, msg),
-                        None => {
-                            if let Msg::Cli(cli, fields) = msg {
-                                // Not a mux port: the CLI still gets an answer.
-                                let physical = self.ports.get(&port).map(|p| p.physical);
-                                let mut actor =
-                                    PortActor::new(&port, physical, None, Arc::clone(&ns.shared));
-                                actor.handle_cli(&cli, &fields).await;
-                            } else {
-                                log_debug!(
-                                    "Ignoring a {} request for port {}, which is not a mux port",
-                                    t,
-                                    port
-                                );
-                            }
+        while let Some((table, event)) = rx.recv().await {
+            self.route_event(&ns, &table, event).await;
+        }
+    }
+
+    async fn route_event(self: &Arc<Self>, ns: &Arc<Namespace>, table: &str, event: Event) {
+        let port = event.key().to_string();
+        match (table, event) {
+            (TRANSCEIVER_INFO, event) => self.transceiver_event(ns, &port, event).await,
+            (XCVRD_LOG, Event::Set { key, fields }) => config::handle_xcvrd_log(&key, &fields),
+            (XCVRD_DOWN_FW_STATUS_CMD, _) => {}
+            (_, Event::Del { .. }) => {}
+            (t, Event::Set { fields, .. }) => {
+                let msg = message_for(t, &port, fields);
+                match ns.actor(&port) {
+                    Some(tx) => send(&tx, &port, msg),
+                    None => {
+                        if let Msg::Cli(cli, fields) = msg {
+                            // Not a mux port: the CLI still gets an answer.
+                            let physical = self.ports.get(&port).map(|p| p.physical);
+                            let mut actor =
+                                PortActor::new(&port, physical, None, Arc::clone(&ns.shared));
+                            actor.handle_cli(&cli, &fields).await;
+                        } else {
+                            log_debug!(
+                                "Ignoring a {} request for port {}, which is not a mux port",
+                                t,
+                                port
+                            );
                         }
                     }
                 }
@@ -211,9 +211,7 @@ impl Daemon {
         );
         let tx = ns.add_actor(port, Some(info.physical), cable);
         send(&tx, port, Msg::Init(None));
-        if let Err(e) = self.subscribe_mux(ns).await {
-            log_error!("Failed to subscribe to the mux tables: {:#}", e);
-        }
+        self.subscribe_mux(ns);
     }
 }
 
@@ -380,7 +378,8 @@ pub async fn run(opts: Options) -> Result<()> {
             db: d,
             shared,
             actors: Mutex::new(HashMap::new()),
-            mux_subscribed: Mutex::new(false),
+            subscriptions: OnceLock::new(),
+            mux_subscribed: AtomicBool::new(false),
         }));
     }
     let daemon = Arc::new(Daemon {
@@ -391,7 +390,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Initialize every mux port at the same time. Python initializes them one
     // by one in port order, and only the port that sets y_cable_presence
     // first writes MUX_CABLE_INFO, if it is active-standby. The actors report
-    // whether they set it, and the decision is taken here, in Python's order.
+    // whether they set it, and the decision is taken in Python's order.
     let order: HashMap<String, usize> = daemon
         .ports
         .names()
@@ -399,39 +398,30 @@ pub async fn run(opts: Options) -> Result<()> {
         .enumerate()
         .map(|(i, n)| (n, i))
         .collect();
-    let mut done = Vec::new();
+    let mut inits = Vec::new();
     for (i, ns) in daemon.namespaces.iter().enumerate() {
         for (port, cable) in &mux[i] {
             let physical = daemon.ports.get(port).map(|p| p.physical);
             let tx = ns.add_actor(port, physical, *cable);
             let (dtx, drx) = oneshot::channel();
             send(&tx, port, Msg::Init(Some(dtx)));
-            done.push((
+            inits.push((
                 order.get(port).copied().unwrap_or(usize::MAX),
-                port.clone(),
-                *cable,
-                tx,
-                drx,
+                PendingInit {
+                    port: port.clone(),
+                    cable: *cable,
+                    tx,
+                    done: drx,
+                },
             ));
         }
     }
-    done.sort_by_key(|d| d.0);
-    let mut results = Vec::new();
-    for (_, port, cable, tx, drx) in done {
-        results.push((port, cable, tx, drx.await.unwrap_or(false)));
-    }
-    let flags: Vec<(CableType, bool)> = results.iter().map(|(_, c, _, s)| (*c, *s)).collect();
-    let (first, presence) = first_info_port(&flags);
-    if let Some((port, _, tx, _)) = first.map(|i| &results[i]) {
-        send(tx, port, Msg::PostInfo);
-    }
-    ycable_presence.store(presence, Ordering::SeqCst);
+    inits.sort_by_key(|(o, _)| *o);
+    let inits = inits.into_iter().map(|(_, p)| p).collect();
+    wait_for_inits(inits, INIT_WAIT, Arc::clone(&ycable_presence)).await;
 
     for ns in &daemon.namespaces {
-        daemon.subscribe_transceivers(ns).await?;
-        if ns.has_actors() {
-            daemon.subscribe_mux(ns).await?;
-        }
+        daemon.subscribe(ns).await?;
     }
 
     if any_active {
@@ -454,6 +444,51 @@ pub fn first_info_port(ports: &[(CableType, bool)]) -> (Option<usize>, bool) {
         Some(i) => ((ports[i].0 == CableType::ActiveStandby).then_some(i), true),
         None => (None, false),
     }
+}
+
+/// One port's initialization at startup.
+pub struct PendingInit {
+    pub port: String,
+    pub cable: CableType,
+    pub tx: mpsc::UnboundedSender<Msg>,
+    /// Whether the port sets y_cable_presence (see [`Msg::Init`]).
+    pub done: oneshot::Receiver<bool>,
+}
+
+/// Waits up to `limit` for the initialization of `inits`, in Python's port
+/// order, and returns whether all of them ended. Once they have, Python's
+/// y_cable_presence is applied: the first port that sets it writes
+/// MUX_CABLE_INFO if it is active-standby, unless a port inserted meanwhile
+/// set it first.
+pub async fn wait_for_inits(
+    inits: Vec<PendingInit>,
+    limit: Duration,
+    presence: Arc<AtomicBool>,
+) -> bool {
+    let (all_done, all_done_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let mut flags = Vec::with_capacity(inits.len());
+        let mut ports = Vec::with_capacity(inits.len());
+        for p in inits {
+            flags.push((p.cable, p.done.await.unwrap_or(false)));
+            ports.push((p.port, p.tx));
+        }
+        let (first, sets) = first_info_port(&flags);
+        if sets && !presence.swap(true, Ordering::SeqCst) {
+            if let Some((port, tx)) = first.map(|i| &ports[i]) {
+                send(tx, port, Msg::PostInfo);
+            }
+        }
+        let _ = all_done.send(());
+    });
+    if tokio::time::timeout(limit, all_done_rx).await.is_ok() {
+        return true;
+    }
+    log_warning!(
+        "Mux ports are still initializing after {} s; starting the subscriptions",
+        limit.as_secs()
+    );
+    false
 }
 
 /// One GracefulRestart subscription per SoC address in MUX_CABLE, whatever

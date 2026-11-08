@@ -1126,17 +1126,14 @@ async fn mailbox_keeps_order() {
     let f = Fixture::new();
     let a = f.standby();
     let tx = a.spawn();
-    tx.send(Msg::Init(None)).await.unwrap();
-    tx.send(Msg::Toggle(fm(&[("state", "standby")])))
-        .await
-        .unwrap();
+    tx.send(Msg::Init(None)).unwrap();
+    tx.send(Msg::Toggle(fm(&[("state", "standby")]))).unwrap();
     tx.send(Msg::Transceiver(Event::Del {
         key: TEST_PORT.into(),
     }))
-    .await
     .unwrap();
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-    tx.send(Msg::Init(Some(done_tx))).await.unwrap();
+    tx.send(Msg::Init(Some(done_tx))).unwrap();
     done_rx.await.unwrap();
     let states: Vec<String> =
         f.db.ops()
@@ -1151,6 +1148,45 @@ async fn mailbox_keeps_order() {
             .collect();
     assert_eq!(states, vec!["active", "standby", "unknown", "standby"]);
     let _ = PyArg::None;
+}
+
+/// A port whose cable is slow keeps every request, in order, however many
+/// wait; a growing backlog is logged, and nothing is dropped.
+#[tokio::test(start_paused = true)]
+async fn slow_port_keeps_every_request() {
+    let f = Fixture::new();
+    f.cable(|c| {
+        for m in ["toggle_mux_to_tor_a", "toggle_mux_to_tor_b"] {
+            c.delays
+                .insert(m.into(), std::time::Duration::from_millis(100));
+        }
+    });
+    let tx = f.standby().spawn();
+    tx.send(Msg::Init(None)).unwrap();
+    for i in 0..300 {
+        let state = if i % 2 == 0 { "standby" } else { "active" };
+        tx.send(Msg::Toggle(fm(&[("state", state)]))).unwrap();
+    }
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    tx.send(Msg::Init(Some(done_tx))).unwrap();
+    done_rx.await.unwrap();
+    let toggles: Vec<String> = f
+        .platform
+        .calls(PHYSICAL)
+        .into_iter()
+        .filter(|m| m.starts_with("toggle_mux_to_tor"))
+        .collect();
+    assert_eq!(toggles.len(), 300);
+    for (i, m) in toggles.iter().enumerate() {
+        let want = if i % 2 == 0 {
+            "toggle_mux_to_tor_b"
+        } else {
+            "toggle_mux_to_tor_a"
+        };
+        assert_eq!(m, want, "toggle {i}");
+    }
+    assert_eq!(f.mux_state().0, "active");
+    assert!(!crate::logger::capture::find("requests are waiting for port Ethernet0").is_empty());
 }
 
 // --- Telemetry beside requests -------------------------------------------------------
@@ -1201,7 +1237,7 @@ async fn toggle_overtakes_telemetry() {
     );
     let tx = a.spawn();
     let (done, wait) = tokio::sync::oneshot::channel();
-    tx.send(Msg::Init(Some(done))).await.unwrap();
+    tx.send(Msg::Init(Some(done))).unwrap();
     wait.await.unwrap();
     // Init reads the eye heights too; wait for the telemetry pass's first one.
     f.platform.clear_calls();
@@ -1216,9 +1252,7 @@ async fn toggle_overtakes_telemetry() {
         .await
     );
     let t0 = std::time::Instant::now();
-    tx.send(Msg::Toggle(fm(&[("state", "standby")])))
-        .await
-        .unwrap();
+    tx.send(Msg::Toggle(fm(&[("state", "standby")]))).unwrap();
     assert!(wait_for(|| f.mux_state().0 == "standby", 3000).await);
     let took = t0.elapsed();
     // A whole pass takes 900 ms here (three eye height calls).
@@ -1246,7 +1280,7 @@ async fn telemetry_overlapping_removal_is_discarded() {
     );
     let tx = a.spawn();
     let (done, wait) = tokio::sync::oneshot::channel();
-    tx.send(Msg::Init(Some(done))).await.unwrap();
+    tx.send(Msg::Init(Some(done))).unwrap();
     wait.await.unwrap();
     f.platform.clear_calls();
     assert!(
@@ -1263,10 +1297,66 @@ async fn telemetry_overlapping_removal_is_discarded() {
     tx.send(Msg::Transceiver(Event::Del {
         key: TEST_PORT.into(),
     }))
-    .await
     .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     // The pass in progress ends without writing; later passes see the absent
     // driver (the cable is present to the platform here): nothing written.
     assert_eq!(f.db.writes(MUX_CABLE_INFO).len(), infos_before);
+}
+
+/// A cable removed and inserted again while a telemetry pass is calling it:
+/// the old driver is unloaded and the new one loaded between the pass's
+/// calls, so no two calls to the cable overlap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reinsertion_waits_for_the_telemetry_call() {
+    let _g = globals();
+    let f = Fixture::new();
+    f.cable(|c| {
+        c.delays.insert(
+            "get_eye_heights".into(),
+            std::time::Duration::from_millis(300),
+        );
+        c.delays
+            .insert("load".into(), std::time::Duration::from_millis(50));
+    });
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    let a = PortActor::new(
+        TEST_PORT,
+        Some(PHYSICAL),
+        Some(CableType::ActiveStandby),
+        fast_telemetry(&f, 200),
+    );
+    let tx = a.spawn();
+    let (done, wait) = tokio::sync::oneshot::channel();
+    tx.send(Msg::Init(Some(done))).unwrap();
+    wait.await.unwrap();
+    f.platform.clear_calls();
+    assert!(
+        wait_for(
+            || f.platform
+                .calls(PHYSICAL)
+                .iter()
+                .any(|m| m == "get_eye_heights"),
+            3000
+        )
+        .await
+    );
+    let loads = f.platform.loads().len();
+    tx.send(Msg::Transceiver(Event::Del {
+        key: TEST_PORT.into(),
+    }))
+    .unwrap();
+    tx.send(Msg::Transceiver(Event::Set {
+        key: TEST_PORT.into(),
+        fields: fm(&[("type", "QSFP28 or later")]),
+    }))
+    .unwrap();
+    assert!(
+        wait_for(
+            || f.platform.loads().len() > loads && f.mux_state().0 == "active",
+            3000
+        )
+        .await
+    );
+    assert_eq!(*f.platform.overlaps.lock().unwrap(), 0);
 }

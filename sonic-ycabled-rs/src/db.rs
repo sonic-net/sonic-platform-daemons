@@ -14,7 +14,9 @@
 //!   again and is skipped if it is gone.
 //!
 //! Per namespace that is one connection per database and one for all its
-//! subscriptions, whatever the number of ports.
+//! subscriptions, whatever the number of ports. The events of all the
+//! subscribed tables come out of one receiver, in the order redis delivered
+//! them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -301,92 +303,133 @@ impl RedisDb {
         bail!("the CONFIG_DB subscription for {} ended", KEY)
     }
 
-    /// Starts swsscommon-style subscriptions to `tables`, in this order.
-    /// Each receiver first gets the rows that exist, then the changes.
-    /// `on_lost` runs if the subscription connection is lost.
+    /// Starts swsscommon-style subscriptions to `tables`, on one connection.
+    /// Every table's rows that exist come first, in this order; then the
+    /// changes of all tables, in the order redis delivered them, so a port's
+    /// requests keep their order across tables. `on_lost` runs if the
+    /// connection is lost, or if redis refuses a table added later.
     pub async fn subscribe(
         self: &Arc<Self>,
         tables: &[(DbId, String)],
         on_lost: impl FnOnce() + Send + 'static,
-    ) -> Result<Vec<mpsc::UnboundedReceiver<Event>>> {
-        if tables.is_empty() {
-            return Ok(vec![]);
-        }
+    ) -> Result<(Subscriptions, mpsc::UnboundedReceiver<TableEvent>)> {
         // The pub/sub connection is not tied to a database: the keyspace
         // channels carry the DB id.
-        let loc0 = self.location(tables[0].0).clone();
-        let client = redis::Client::open(redis_url(&loc0))?;
-        let mut pubsub = client.get_async_pubsub().await?;
-        let mut senders = Vec::new();
-        let mut receivers = Vec::new();
-        let mut by_pattern: HashMap<String, usize> = HashMap::new();
-        for (i, (db, table)) in tables.iter().enumerate() {
-            let loc = self.location(*db);
-            let pattern = format!("__keyspace@{}__:{}{}*", loc.id, table, loc.separator);
-            pubsub.psubscribe(&pattern).await?;
-            by_pattern.insert(pattern, i);
-            let (tx, rx) = mpsc::unbounded_channel();
-            senders.push(tx);
-            receivers.push(rx);
-        }
-        // The rows that exist, once every subscription is in place.
-        for (i, (db, table)) in tables.iter().enumerate() {
-            for key in self.keys(*db, table).await {
-                if let Some(fields) = self.get(*db, table, &key).await {
-                    let _ = senders[i].send(Event::Set { key, fields });
-                }
-            }
-        }
+        let client = redis::Client::open(redis_url(self.location(DbId::Config)))?;
+        let (mut sink, mut stream) = client.get_async_pubsub().await?.split();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut patterns = HashMap::new();
+        self.start_tables(&mut sink, &mut patterns, tables, &tx)
+            .await?;
+        let (add_tx, mut add_rx) = mpsc::unbounded_channel::<Vec<(DbId, String)>>();
         let this = Arc::clone(self);
-        let tables = tables.to_vec();
-        let mut stream = pubsub.into_on_message();
+        // One task serves the connection, so replayed rows and changes are
+        // sent in the order they are read.
         tokio::spawn(async move {
-            while let Some(msg) = stream.next().await {
-                let pattern: String = match msg.get_pattern() {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-                let Some(&i) = by_pattern.get(&pattern) else {
-                    continue;
-                };
-                let (db, table) = &tables[i];
-                let channel = msg.get_channel_name();
-                let Some((_, table_entry)) = channel.split_once(':') else {
-                    continue;
-                };
-                let sep = this.location(*db).separator.clone();
-                let Some((_, key)) = table_entry.split_once(sep.as_str()) else {
-                    continue;
-                };
-                let op: String = msg.get_payload().unwrap_or_default();
-                let event = if op == "del" {
-                    Event::Del {
-                        key: key.to_string(),
-                    }
-                } else {
-                    match this.hgetall_raw(*db, table_entry).await {
-                        Ok(fields) if !fields.is_empty() => Event::Set {
-                            key: key.to_string(),
-                            fields,
-                        },
-                        Ok(_) => {
-                            log_debug!("Miss table key {}, possibly outdated", table_entry);
-                            continue;
+            let mut adding = true;
+            loop {
+                tokio::select! {
+                    tables = add_rx.recv(), if adding => match tables {
+                        Some(tables) => {
+                            if let Err(e) = this.start_tables(&mut sink, &mut patterns, &tables, &tx).await {
+                                log_error!("Failed to subscribe to more tables: {:#}", e);
+                                break;
+                            }
                         }
-                        Err(e) => {
-                            log_warning!("Failed to read {} {}: {}", db.name(), table_entry, e);
-                            continue;
+                        None => adding = false,
+                    },
+                    msg = stream.next() => match msg {
+                        Some(msg) => {
+                            if let Some(event) = this.event_of(&msg, &patterns).await {
+                                if tx.send(event).is_err() {
+                                    log_debug!("No one listens to the subscriptions of namespace '{}' any more", this.namespace);
+                                }
+                            }
                         }
-                    }
-                };
-                let _ = table;
-                if senders[i].send(event).is_err() {
-                    log_debug!("No one listens to {} {} any more", db.name(), table);
+                        None => break,
+                    },
                 }
             }
             on_lost();
         });
-        Ok(receivers)
+        Ok((Subscriptions { add: add_tx }, rx))
+    }
+
+    /// Subscribes to `tables`, then sends the rows they have.
+    async fn start_tables(
+        &self,
+        sink: &mut redis::aio::PubSubSink,
+        patterns: &mut HashMap<String, (DbId, String)>,
+        tables: &[(DbId, String)],
+        tx: &mpsc::UnboundedSender<TableEvent>,
+    ) -> Result<()> {
+        for (db, table) in tables {
+            let loc = self.location(*db);
+            let pattern = format!("__keyspace@{}__:{}{}*", loc.id, table, loc.separator);
+            sink.psubscribe(&pattern).await?;
+            patterns.insert(pattern, (*db, table.clone()));
+        }
+        // The rows that exist, once every subscription is in place.
+        for (db, table) in tables {
+            for key in self.keys(*db, table).await {
+                if let Some(fields) = self.get(*db, table, &key).await {
+                    let _ = tx.send((table.clone(), Event::Set { key, fields }));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The event of a keyspace notification: `del` deletes the row, anything
+    /// else reads it again. None if the row is gone again, or the
+    /// notification is not for a subscribed table.
+    async fn event_of(
+        &self,
+        msg: &redis::Msg,
+        patterns: &HashMap<String, (DbId, String)>,
+    ) -> Option<TableEvent> {
+        let pattern: String = msg.get_pattern().ok()?;
+        let (db, table) = patterns.get(&pattern)?;
+        let (_, table_entry) = msg.get_channel_name().split_once(':')?;
+        let (_, key) = table_entry.split_once(self.location(*db).separator.as_str())?;
+        let op: String = msg.get_payload().unwrap_or_default();
+        let event = if op == "del" {
+            Event::Del {
+                key: key.to_string(),
+            }
+        } else {
+            match self.hgetall_raw(*db, table_entry).await {
+                Ok(fields) if !fields.is_empty() => Event::Set {
+                    key: key.to_string(),
+                    fields,
+                },
+                Ok(_) => {
+                    log_debug!("Miss table key {}, possibly outdated", table_entry);
+                    return None;
+                }
+                Err(e) => {
+                    log_warning!("Failed to read {} {}: {}", db.name(), table_entry, e);
+                    return None;
+                }
+            }
+        };
+        Some((table.clone(), event))
+    }
+}
+
+/// A row change of a subscribed table: the table and the change.
+pub type TableEvent = (String, Event);
+
+/// The subscriptions of a namespace, to add tables to.
+pub struct Subscriptions {
+    add: mpsc::UnboundedSender<Vec<(DbId, String)>>,
+}
+
+impl Subscriptions {
+    /// Subscribes to more tables: their rows, then their changes, in order
+    /// with the other tables' events.
+    pub fn add(&self, tables: Vec<(DbId, String)>) {
+        let _ = self.add.send(tables);
     }
 }
 
