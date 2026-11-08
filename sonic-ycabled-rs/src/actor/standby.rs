@@ -470,14 +470,13 @@ impl PortActor {
 
     // --- MUX_CABLE_INFO ----------------------------------------------------------
 
-    pub(super) async fn telemetry_standby(&mut self) {
+    pub(super) async fn telemetry_standby(&mut self, epoch: u64) {
         if self.physical.is_none() {
             return;
         }
-        let epoch = self.current_epoch();
         let row = self.info_row_standby().await;
-        // The cable was removed or initialized again meanwhile: what the pass
-        // read may be stale.
+        // The cable was removed, initialized again or changed type since the
+        // pass started: what it read may be stale.
         if self.current_epoch() != epoch {
             return;
         }

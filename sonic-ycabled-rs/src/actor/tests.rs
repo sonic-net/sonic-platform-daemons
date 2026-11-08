@@ -1443,6 +1443,101 @@ async fn reinsertion_waits_for_the_telemetry_call() {
     assert_eq!(*f.platform.overlaps.lock().unwrap(), 0);
 }
 
+/// A telemetry call that hangs holds the bus, so the passes of the other
+/// active-standby ports wait for it, but not their requests: a pass never
+/// holds its port while it waits for the bus.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hung_telemetry_call_holds_up_no_other_request() {
+    let _g = globals();
+    let f = Fixture::new();
+    f.platform.add(2, MockCable::default());
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    f.db.put(DbId::Config, MUX_CABLE, "Ethernet4", &[("state", "auto")]);
+    let shared = fast_telemetry(&f, 200);
+    let a = PortActor::new(
+        TEST_PORT,
+        Some(PHYSICAL),
+        Some(CableType::ActiveStandby),
+        Arc::clone(&shared),
+    );
+    let b = PortActor::new("Ethernet4", Some(2), Some(CableType::ActiveStandby), shared);
+    let (a_tx, b_tx) = (a.spawn(), b.spawn());
+    for tx in [&a_tx, &b_tx] {
+        let (done, wait) = tokio::sync::oneshot::channel();
+        tx.send(Msg::Init(Some(done))).unwrap();
+        wait.await.unwrap();
+    }
+    // A's next telemetry call does not return for a long time.
+    f.cable(|c| {
+        c.delays
+            .insert("get_eye_heights".into(), std::time::Duration::from_secs(30));
+    });
+    f.platform.clear_calls();
+    assert!(
+        wait_for(
+            || f.platform
+                .calls(PHYSICAL)
+                .iter()
+                .any(|m| m == "get_eye_heights"),
+            3000
+        )
+        .await
+    );
+    // B's next pass waits for the bus meanwhile; B's toggle goes through.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    b_tx.send(Msg::Toggle(fm(&[("state", "standby")]))).unwrap();
+    let b_state = || {
+        f.db.row(DbId::State, HW_MUX_CABLE_TABLE, "Ethernet4")
+            .and_then(|r| r.get("state").cloned())
+    };
+    assert!(wait_for(|| b_state().as_deref() == Some("standby"), 3000).await);
+}
+
+/// A pass that waited for its turn while the port's cable changed is not
+/// written: it would publish the previous cable's telemetry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_active_pass_is_discarded() {
+    let _g = globals();
+    let f = Fixture::new();
+    // The rows of an active-active port, for an actor with fast telemetry.
+    drop(f.active());
+    let a = PortActor::new(
+        TEST_PORT,
+        Some(PHYSICAL),
+        Some(CableType::ActiveActive),
+        fast_telemetry(&f, 200),
+    );
+    let tx = a.spawn();
+    let (done, wait) = tokio::sync::oneshot::channel();
+    tx.send(Msg::Init(Some(done))).unwrap();
+    wait.await.unwrap();
+    // Every active-active turn is taken: the port's next pass waits.
+    let turns = Arc::clone(&f.shared.aa_telemetry)
+        .acquire_many_owned(16)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // Meanwhile the port becomes active-standby.
+    f.db.remove(DbId::Config, MUX_CABLE, TEST_PORT);
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    tx.send(Msg::Transceiver(Event::Set {
+        key: TEST_PORT.into(),
+        fields: fm(&[("type", "QSFP28 or later")]),
+    }))
+    .unwrap();
+    assert!(wait_for(|| f.platform.is_loaded(PHYSICAL), 3000).await);
+    drop(turns);
+    // The waiting pass gets its turn; the next ones are active-standby.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let active_rows = f
+        .db
+        .writes(MUX_CABLE_INFO)
+        .iter()
+        .filter(|(k, fields)| k == TEST_PORT && fields.iter().any(|(n, _)| n == "self_link_state"))
+        .count();
+    assert_eq!(active_rows, 0);
+}
+
 /// A port stuck in a request holds up only its own telemetry: the passes of
 /// the other active-standby ports, which share the bus with it, go on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

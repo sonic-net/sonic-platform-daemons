@@ -23,9 +23,10 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   port's call lock: a request holds it while it runs, a telemetry pass for
   one call at a time, so a toggle waits for at most one telemetry call.
   Active-standby telemetry calls also run one at a time across the ports
-  (shared I2C buses). A call takes the bus only once it holds its port's
-  lock, so a port stuck in a request holds up only its own pass.
-  Active-active passes run 16 at a time.
+  (shared I2C buses). A pass never waits for the bus while it holds its
+  port's lock, or for the lock while it holds the bus, so a port stuck in a
+  request holds up only its own pass, and a call that hangs on the bus only
+  the other ports' telemetry. Active-active passes run 16 at a time.
 - **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
   a row is one `HSET` of all its fields, subscriptions are swsscommon's
   `SubscriberStateTable` (keyspace notifications, then the existing rows).
@@ -98,7 +99,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (139): the actors and the CLI against an in-memory
+- **Unit tests** (142): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
   in-process SoC, the bridge in the embedded interpreter with fake drivers.
