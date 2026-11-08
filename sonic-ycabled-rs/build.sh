@@ -32,7 +32,7 @@ fi
 # it over first.
 if ! docker volume inspect "$volume" >/dev/null 2>&1; then
     docker volume create "$volume" >/dev/null
-    docker run --rm -v "$volume:/cargo" "$image" chown "$(id -u):$(id -g)" /cargo
+    docker run --rm --user root -v "$volume:/cargo" "$image" chown "$(id -u):$(id -g)" /cargo
 fi
 docker run --rm "${tty[@]}" --user "$(id -u):$(id -g)" \
     -e CARGO_HOME=/cargo -e HOME=/tmp \
