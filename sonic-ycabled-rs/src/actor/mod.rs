@@ -24,7 +24,9 @@ use crate::grpc::{SocApi, SocConnector};
 use crate::schema::*;
 use crate::{fields, log_debug, log_info, log_warning};
 
-pub const MAILBOX_SIZE: usize = 256;
+/// A port's backlog worth a warning. Nothing is dropped: a port whose cable
+/// or SoC does not answer keeps its requests waiting, in order.
+pub const BACKLOG_WARNING: usize = 256;
 pub const TELEMETRY_PERIOD: Duration = Duration::from_secs(60);
 
 /// What a port actor is asked to do.
@@ -224,20 +226,30 @@ impl PortActor {
     }
 
     /// Spawns the actor and returns its mailbox.
-    pub fn spawn(self) -> mpsc::Sender<Msg> {
-        let (tx, rx) = mpsc::channel(MAILBOX_SIZE);
+    pub fn spawn(self) -> mpsc::UnboundedSender<Msg> {
+        let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(self.run(rx));
         tx
     }
 
-    pub async fn run(mut self, mut rx: mpsc::Receiver<Msg>) {
+    pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
         let period = self.shared.telemetry_period;
         let mut tick = tokio::time::interval_at(Instant::now() + period, period);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut warn_at = BACKLOG_WARNING;
         loop {
             tokio::select! {
                 msg = rx.recv() => match msg {
-                    Some(m) => self.handle(m).await,
+                    Some(m) => {
+                        let backlog = rx.len();
+                        if backlog >= warn_at {
+                            log_warning!("{} requests are waiting for port {}", backlog, self.port);
+                            warn_at = backlog * 2;
+                        } else if backlog == 0 {
+                            warn_at = BACKLOG_WARNING;
+                        }
+                        self.handle(m).await
+                    }
                     None => break,
                 },
                 _ = tick.tick() => self.start_telemetry(),
@@ -358,6 +370,8 @@ impl PortActor {
         if self.cable == Some(CableType::ActiveStandby) {
             self.initialized = false;
             if let Some(p) = self.physical {
+                // After the telemetry pass's current call, if one is running.
+                let _call = self.call_lock.lock().await;
                 self.shared.platform.unload(p).await;
             }
         }

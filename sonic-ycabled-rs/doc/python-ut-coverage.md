@@ -16,14 +16,14 @@ Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md]
 | Area | Python tests | Rust tests |
 | --- | ---: | ---: |
 | [Driver selection and presence](#driver-selection-and-presence) | 46 | 15 |
-| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 10 |
-| [Active-standby toggle](#active-standby-toggle) | 16 | 9 |
+| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 14 |
+| [Active-standby toggle](#active-standby-toggle) | 16 | 10 |
 | [Active-standby probe](#active-standby-probe) | 11 | 4 |
 | [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 22 |
 | [Active-active: requests and replies](#active-active-requests-and-replies) | 25 | 9 |
 | [Telemetry](#telemetry) | 22 | 17 |
 | [CLI commands](#cli-commands) | 105 | 27 |
-| [Daemon, threads, DB and logging](#daemon-threads-db-and-logging) | 11 | 15 |
+| [Daemon, threads, DB and logging](#daemon-threads-db-and-logging) | 11 | 18 |
 
 The Rust counts are lower mostly because one table-driven Rust test covers a family of Python tests. For example, `config_prbs_modes` covers all seven `test_handle_config_prbs_cmd_arg_tbl_notification_with_instance_*` tests. A few Rust tests appear in more than one area.
 
@@ -45,8 +45,9 @@ Python: `test_change_ports_status_for_y_cable_change_event*` (5), `test_check_id
 
 Rust:
 
-- `actor::tests::standby_removal_keeps_read_side`, `standby_insertion_after_removal_loads_driver_again`, `removal_without_row_writes_nothing`, `active_removal_and_reinsertion`, `standby_uninitialized_driver_is_loaded_again`, `telemetry_overlapping_removal_is_discarded`.
-- `tests::daemon::first_initialized_port_writes_mux_cable_info`: Python's `y_cable_presence` at startup.
+- `actor::tests::standby_removal_keeps_read_side`, `standby_insertion_after_removal_loads_driver_again`, `removal_without_row_writes_nothing`, `active_removal_and_reinsertion`, `standby_uninitialized_driver_is_loaded_again`, `telemetry_overlapping_removal_is_discarded`, `reinsertion_waits_for_the_telemetry_call`.
+- `tests::daemon::first_initialized_port_writes_mux_cable_info`, `startup_waits_for_initialization`, `presence_set_meanwhile_posts_no_info`: Python's `y_cable_presence` at startup.
+- `tests::daemon::startup_does_not_wait_for_a_hung_port`: a port whose initialization never ends does not hold up the others.
 - `tests::daemon::rows_become_actor_messages`, `config::tests::read_side_mapping`, `tests::redis::subscription_replays_rows_then_follows_changes`.
 
 Not ported:
@@ -58,7 +59,7 @@ Not ported:
 
 Python: `test_update_tor_active_side*` (8), `test_y_cable_toggle_mux_tor*` (6), `test_ycable_helper_table_worker`, `test_ycable_helper_table_worker_toggle`.
 
-Rust: `actor::tests::standby_toggle_matrix`, `standby_toggle_failure_writes_unknown`, `standby_toggle_reads_side_again`, `standby_toggle_read_side_still_unreadable`, `standby_toggle_cable_gone`, `standby_toggle_without_driver`, `standby_toggle_ignores_other_requests`, `mailbox_keeps_order`, `toggle_overtakes_telemetry`.
+Rust: `actor::tests::standby_toggle_matrix`, `standby_toggle_failure_writes_unknown`, `standby_toggle_reads_side_again`, `standby_toggle_read_side_still_unreadable`, `standby_toggle_cable_gone`, `standby_toggle_without_driver`, `standby_toggle_ignores_other_requests`, `mailbox_keeps_order`, `slow_port_keeps_every_request`, `toggle_overtakes_telemetry`.
 
 Not ported: `test_update_tor_active_side_multiple_mappings` (breakout, see above).
 
@@ -123,7 +124,7 @@ Python: `test_DaemonYcable_init_deinit` and `_full`, `test_ycable_helper_class_r
 
 Rust:
 
-- `tests::daemon::subscribes_to_what_python_subscribes_to`; `tests::redis::waits_for_config_db_initialized`, `subscription_replays_rows_then_follows_changes`, `rows_use_sonic_keys_and_separators`.
+- `tests::daemon::subscribes_to_what_python_subscribes_to`; `tests::redis::waits_for_config_db_initialized`, `subscription_replays_rows_then_follows_changes`, `events_keep_their_order_across_tables`, `added_tables_replay_rows_then_follow_changes`, `losing_the_connection_runs_on_lost`, `rows_use_sonic_keys_and_separators`.
 - `db::tests::locations_from_config`, `global_config_includes_namespaces`, `ipv6_redis_host`, `memdb_merges_rows_and_records_writes`; `ports::tests::asic_conf`, `port_config_paths`.
 - `logger::tests::line_has_glibc_layout`, `levels_order_by_severity`, `sends_to_the_socket`; `tests::bridge::slow_calls_are_logged`.
 - `cli::tests::int_arguments_as_python_reads_them`: the CLI's arguments, as `gather_arg_from_db_and_check_for_type` and `int()` read them.

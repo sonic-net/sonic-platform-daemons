@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::time::timeout;
 
-use crate::db::{Db, DbConfig, DbId, Event, RedisDb};
+use crate::db::{Db, DbConfig, DbId, Event, RedisDb, TableEvent};
 
 /// A redis-server on a free port, with keyspace notifications, killed on drop.
 pub struct TestRedis {
@@ -80,11 +80,20 @@ impl Drop for TestRedis {
     }
 }
 
-async fn next(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) -> Event {
+async fn next(rx: &mut tokio::sync::mpsc::UnboundedReceiver<TableEvent>) -> TableEvent {
     timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("event")
         .expect("open")
+}
+
+fn hset(c: &mut redis::Connection, key: &str, field: &str, value: &str) {
+    let _: () = redis::cmd("HSET")
+        .arg(key)
+        .arg(field)
+        .arg(value)
+        .query(c)
+        .unwrap();
 }
 
 #[tokio::test]
@@ -170,7 +179,7 @@ async fn subscription_replays_rows_then_follows_changes() {
         &[("state", "standby".into())],
     )
     .await;
-    let mut rx = db
+    let (_subscriptions, mut rx) = db
         .subscribe(
             &[
                 (DbId::Appl, "HW_MUX_CABLE_TABLE".into()),
@@ -180,15 +189,11 @@ async fn subscription_replays_rows_then_follows_changes() {
         )
         .await
         .unwrap();
-    let (mut mux, mut xcvr) = {
-        let x = rx.pop().unwrap();
-        (rx.pop().unwrap(), x)
-    };
     // The existing row first.
-    match next(&mut mux).await {
-        Event::Set { key, fields } => assert_eq!(
-            (key.as_str(), fields["state"].as_str()),
-            ("Ethernet0", "standby")
+    match next(&mut rx).await {
+        (t, Event::Set { key, fields }) => assert_eq!(
+            (t.as_str(), key.as_str(), fields["state"].as_str()),
+            ("HW_MUX_CABLE_TABLE", "Ethernet0", "standby")
         ),
         e => panic!("{e:?}"),
     }
@@ -202,30 +207,33 @@ async fn subscription_replays_rows_then_follows_changes() {
         .arg("1")
         .query(&mut c0)
         .unwrap();
-    match next(&mut mux).await {
-        Event::Set { key, fields } => {
-            assert_eq!(key, "Ethernet4");
+    match next(&mut rx).await {
+        (t, Event::Set { key, fields }) => {
+            assert_eq!(
+                (t.as_str(), key.as_str()),
+                ("HW_MUX_CABLE_TABLE", "Ethernet4")
+            );
             assert_eq!(fields.len(), 2);
         }
         e => panic!("{e:?}"),
     }
     let mut c6 = r.client(6);
-    let _: () = redis::cmd("HSET")
-        .arg("TRANSCEIVER_INFO|Ethernet8")
-        .arg("type")
-        .arg("QSFP")
-        .query(&mut c6)
-        .unwrap();
-    assert!(matches!(next(&mut xcvr).await, Event::Set { key, .. } if key == "Ethernet8"));
+    hset(&mut c6, "TRANSCEIVER_INFO|Ethernet8", "type", "QSFP");
+    assert!(
+        matches!(next(&mut rx).await, (t, Event::Set { key, .. }) if t == "TRANSCEIVER_INFO" && key == "Ethernet8")
+    );
     let _: () = redis::cmd("DEL")
         .arg("TRANSCEIVER_INFO|Ethernet8")
         .query(&mut c6)
         .unwrap();
     assert_eq!(
-        next(&mut xcvr).await,
-        Event::Del {
-            key: "Ethernet8".into()
-        }
+        next(&mut rx).await,
+        (
+            "TRANSCEIVER_INFO".into(),
+            Event::Del {
+                key: "Ethernet8".into()
+            }
+        )
     );
     // Written and deleted before it is read: the update is skipped, the deletion delivered.
     let _: () = redis::pipe()
@@ -239,21 +247,123 @@ async fn subscription_replays_rows_then_follows_changes() {
         .query(&mut c6)
         .unwrap();
     assert_eq!(
-        next(&mut xcvr).await,
-        Event::Del {
-            key: "Ethernet12".into()
-        }
+        next(&mut rx).await,
+        (
+            "TRANSCEIVER_INFO".into(),
+            Event::Del {
+                key: "Ethernet12".into()
+            }
+        )
     );
     // Other tables and other keys of the same prefix are not delivered.
-    let _: () = redis::cmd("HSET")
-        .arg("HW_MUX_CABLE_TABLE_PEER|Ethernet0")
-        .arg("state")
-        .arg("x")
-        .query(&mut c6)
-        .unwrap();
-    assert!(timeout(Duration::from_millis(300), xcvr.recv())
+    hset(&mut c6, "HW_MUX_CABLE_TABLE_PEER|Ethernet0", "state", "x");
+    assert!(timeout(Duration::from_millis(300), rx.recv())
         .await
         .is_err());
+}
+
+/// The events of all tables come out in the order redis delivered them, so
+/// a port's requests keep their order across tables (HLD 4.3.3).
+#[tokio::test]
+async fn events_keep_their_order_across_tables() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    let tables = [
+        "TRANSCEIVER_INFO",
+        "HW_MUX_CABLE_TABLE",
+        "MUX_CABLE_COMMAND_TABLE",
+    ];
+    let (_subscriptions, mut rx) = db
+        .subscribe(
+            &[
+                (DbId::State, tables[0].into()),
+                (DbId::Appl, tables[1].into()),
+                (DbId::Appl, tables[2].into()),
+            ],
+            || {},
+        )
+        .await
+        .unwrap();
+    let mut c0 = r.client(0);
+    let mut c6 = r.client(6);
+    for i in 0..20 {
+        let v = i.to_string();
+        hset(&mut c6, "TRANSCEIVER_INFO|Ethernet0", "type", &v);
+        hset(&mut c0, "HW_MUX_CABLE_TABLE:Ethernet0", "state", &v);
+        hset(&mut c0, "MUX_CABLE_COMMAND_TABLE:Ethernet0", "command", &v);
+    }
+    let mut got = Vec::new();
+    for _ in 0..60 {
+        got.push(next(&mut rx).await.0);
+    }
+    let want: Vec<String> = (0..20)
+        .flat_map(|_| tables.iter().map(|t| t.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// A table added later: its rows, then its changes, in order with the other
+/// tables' events, on the same connection.
+#[tokio::test]
+async fn added_tables_replay_rows_then_follow_changes() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    db.set(
+        DbId::Appl,
+        "HW_MUX_CABLE_TABLE",
+        "Ethernet4",
+        &[("state", "active".into())],
+    )
+    .await;
+    let (subscriptions, mut rx) = db
+        .subscribe(&[(DbId::State, "TRANSCEIVER_INFO".into())], || {})
+        .await
+        .unwrap();
+    assert!(timeout(Duration::from_millis(300), rx.recv())
+        .await
+        .is_err());
+    subscriptions.add(vec![(DbId::Appl, "HW_MUX_CABLE_TABLE".into())]);
+    match next(&mut rx).await {
+        (t, Event::Set { key, .. }) => assert_eq!(
+            (t.as_str(), key.as_str()),
+            ("HW_MUX_CABLE_TABLE", "Ethernet4")
+        ),
+        e => panic!("{e:?}"),
+    }
+    let mut c0 = r.client(0);
+    let mut c6 = r.client(6);
+    hset(&mut c0, "HW_MUX_CABLE_TABLE:Ethernet8", "state", "standby");
+    hset(&mut c6, "TRANSCEIVER_INFO|Ethernet8", "type", "QSFP");
+    assert_eq!(next(&mut rx).await.0, "HW_MUX_CABLE_TABLE");
+    assert_eq!(next(&mut rx).await.0, "TRANSCEIVER_INFO");
+    // One subscriber connection, with both patterns.
+    let clients: String = redis::cmd("CLIENT").arg("LIST").query(&mut c0).unwrap();
+    let subscribers: Vec<&str> = clients
+        .lines()
+        .filter(|l| !l.contains(" psub=0 "))
+        .collect();
+    assert_eq!(subscribers.len(), 1, "{clients}");
+    assert!(subscribers[0].contains(" psub=2 "), "{clients}");
+}
+
+/// Losing the subscription connection runs `on_lost`, which makes ycabled-rs
+/// exit for supervisord to start it again.
+#[tokio::test]
+async fn losing_the_connection_runs_on_lost() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    let (lost_tx, lost_rx) = tokio::sync::oneshot::channel();
+    let (_subscriptions, _rx) = db
+        .subscribe(&[(DbId::State, "TRANSCEIVER_INFO".into())], move || {
+            let _ = lost_tx.send(());
+        })
+        .await
+        .unwrap();
+    drop(r);
+    timeout(Duration::from_secs(10), lost_rx)
+        .await
+        .expect("on_lost")
+        .unwrap();
 }
 
 #[tokio::test]

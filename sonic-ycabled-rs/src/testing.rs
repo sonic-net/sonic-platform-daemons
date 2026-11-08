@@ -213,23 +213,32 @@ impl YCablePlatform for MockPlatform {
 
     async fn load(&self, _port: &str, physical: u32) -> Option<bool> {
         self.loads.lock().unwrap().push(physical);
+        // The driver's constructor and get_vendor() talk to the cable.
+        self.enter(physical);
+        if let Some(d) = self.delay(physical, "load") {
+            tokio::time::sleep(d).await;
+        }
         let load = self
             .cables
             .lock()
             .unwrap()
             .get(&physical)
             .and_then(|c| c.load);
-        let mut loaded = self.loaded.lock().unwrap();
-        match load {
-            Some(i) => {
-                loaded.insert(physical);
-                Some(i)
+        let result = {
+            let mut loaded = self.loaded.lock().unwrap();
+            match load {
+                Some(i) => {
+                    loaded.insert(physical);
+                    Some(i)
+                }
+                None => {
+                    loaded.remove(&physical);
+                    None
+                }
             }
-            None => {
-                loaded.remove(&physical);
-                None
-            }
-        }
+        };
+        self.leave(physical);
+        result
     }
 
     async fn unload(&self, physical: u32) {
@@ -253,25 +262,12 @@ impl YCablePlatform for MockPlatform {
             .lock()
             .unwrap()
             .push((physical, method.to_string(), args.clone()));
-        {
-            let mut f = self.in_flight.lock().unwrap();
-            let n = f.entry(physical).or_insert(0);
-            *n += 1;
-            if *n > 1 {
-                *self.overlaps.lock().unwrap() += 1;
-            }
-        }
-        let delay = self
-            .cables
-            .lock()
-            .unwrap()
-            .get(&physical)
-            .and_then(|c| c.delays.get(method).copied());
-        if let Some(d) = delay {
+        self.enter(physical);
+        if let Some(d) = self.delay(physical, method) {
             tokio::time::sleep(d).await;
         }
         let result = self.reply(physical, method, &args);
-        *self.in_flight.lock().unwrap().entry(physical).or_insert(1) -= 1;
+        self.leave(physical);
         result
     }
 
@@ -288,6 +284,29 @@ impl YCablePlatform for MockPlatform {
 }
 
 impl MockPlatform {
+    /// A call to the cable starts; it overlaps if another one is running.
+    fn enter(&self, physical: u32) {
+        let mut f = self.in_flight.lock().unwrap();
+        let n = f.entry(physical).or_insert(0);
+        *n += 1;
+        if *n > 1 {
+            *self.overlaps.lock().unwrap() += 1;
+        }
+    }
+
+    fn leave(&self, physical: u32) {
+        *self.in_flight.lock().unwrap().entry(physical).or_insert(1) -= 1;
+    }
+
+    /// How long `method` ("load" for loading the driver) takes on `physical`.
+    fn delay(&self, physical: u32, method: &str) -> Option<Duration> {
+        self.cables
+            .lock()
+            .unwrap()
+            .get(&physical)
+            .and_then(|c| c.delays.get(method).copied())
+    }
+
     fn reply(&self, physical: u32, method: &str, args: &[PyArg]) -> Result<PyVal, CallError> {
         let mut cables = self.cables.lock().unwrap();
         let cable = cables.entry(physical).or_default();

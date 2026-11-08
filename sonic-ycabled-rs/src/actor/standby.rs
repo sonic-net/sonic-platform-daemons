@@ -99,19 +99,32 @@ impl PortActor {
             return false;
         }
         self.present = true;
-        match self.shared.platform.load(&self.port, physical).await {
+        // Under the call lock: a telemetry pass may still be calling the
+        // cable through its previous driver, and the new driver's constructor
+        // and get_vendor() talk to the same cable.
+        let loaded = {
+            let _call = self.call_lock.lock().await;
+            match self.shared.platform.load(&self.port, physical).await {
+                None => None,
+                Some(initialized) => {
+                    let eeprom_error =
+                        match self.shared.platform.attr(physical, "EEPROM_ERROR").await {
+                            Ok(v) => v.as_int().unwrap_or(-1),
+                            Err(_) => -1,
+                        };
+                    Some((initialized, eeprom_error))
+                }
+            }
+        };
+        match loaded {
             None => {
                 self.initialized = false;
                 self.insert_unknown_entries().await;
                 false
             }
-            Some(initialized) => {
+            Some((initialized, eeprom_error)) => {
                 self.initialized = initialized;
-                self.eeprom_error = match self.shared.platform.attr(physical, "EEPROM_ERROR").await
-                {
-                    Ok(v) => v.as_int().unwrap_or(-1),
-                    Err(_) => -1,
-                };
+                self.eeprom_error = eeprom_error;
                 self.read_cable_and_update_state().await;
                 if !defer && !self.shared.ycable_presence.swap(true, Ordering::SeqCst) {
                     self.post_info_standby().await;
