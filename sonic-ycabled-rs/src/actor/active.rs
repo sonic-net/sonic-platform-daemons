@@ -68,7 +68,7 @@ impl PortActor {
         if !defer {
             self.shared.ycable_presence.store(true, Ordering::SeqCst);
         }
-        let read_side = self.read_side_now().await;
+        let read_side = self.shared.read_side_now().await;
         if self.physical.is_none() {
             log_warning!(
                 "DAC cable logical to physical port mapping returned more than one physical ports while Channel setup Port {}",
@@ -361,10 +361,11 @@ impl PortActor {
 
     /// MUX_CABLE_INFO of an active-active port: link, operation and
     /// forwarding states, the server version and the channel state.
-    pub(super) async fn telemetry_active(&mut self) {
-        let epoch = self.current_epoch();
+    pub(super) async fn telemetry_active(&mut self, epoch: u64) {
         if !self.transceiver_present().await {
-            self.write_placeholder_info().await;
+            if self.current_epoch() == epoch {
+                self.write_placeholder_info().await;
+            }
             return;
         }
         let time_post = timestamp();

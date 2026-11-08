@@ -3,6 +3,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,12 +11,17 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{Request, Response, Status};
 
+use crate::actor::Shared;
+use crate::bridge::YCablePlatform;
+use crate::daemon;
 use crate::db::{Db, DbId, MemDb};
 use crate::grpc::{self, RpcError, SocConnector, TonicConnector};
+use crate::ports::PortMap;
 use crate::proto::dual_to_r_active_server::{DualToRActive, DualToRActiveServer};
 use crate::proto::graceful_restart_server::{GracefulRestart, GracefulRestartServer};
 use crate::proto::*;
-use crate::schema::{FORWARDING_STATE_RESPONSE, GRPC_PORT};
+use crate::schema::{FORWARDING_STATE_RESPONSE, GRPC_PORT, LOOPBACK_INTERFACE, MUX_CABLE};
+use crate::testing::{MockConnector, MockPlatform};
 
 #[derive(Default)]
 struct SocState {
@@ -357,6 +363,49 @@ async fn graceful_restart_subscribes_again_after_period() {
         gap >= Duration::from_millis(800) && gap < Duration::from_secs(3),
         "{gap:?}"
     );
+}
+
+/// The subscriptions start once the ports are initialized, with the read
+/// side known then: Loopback3 is looked up again if it was unknown at
+/// startup, as Python does. Here it makes this ToR the upper one.
+#[tokio::test]
+async fn graceful_restart_uses_the_current_read_side() {
+    let soc = TestSoc::default();
+    let _stop = serve("127.0.0.28", soc.clone()).await;
+    let db = MemDb::new();
+    db.put(
+        DbId::Config,
+        MUX_CABLE,
+        "Ethernet0",
+        &[
+            ("state", "auto"),
+            ("cable_type", "active-active"),
+            ("soc_ipv4", "127.0.0.28/32"),
+        ],
+    );
+    let shared = Shared::new(
+        db.clone() as Arc<dyn Db>,
+        MockPlatform::new() as Arc<dyn YCablePlatform>,
+        MockConnector::new(None) as Arc<dyn SocConnector>,
+        false,
+        -1,
+        Arc::new(AtomicBool::new(false)),
+    );
+    db.put(
+        DbId::Config,
+        LOOPBACK_INTERFACE,
+        "Loopback3|10.1.0.39/32",
+        &[("NULL", "NULL")],
+    );
+    let mut ports = PortMap::default();
+    ports.insert("Ethernet0", 1, 0);
+    daemon::start_graceful_restart(&shared, 0, &ports).await;
+    assert!(eventually(|| !soc.0.lock().unwrap().gr_requests.is_empty(), 5).await);
+    assert_eq!(
+        soc.0.lock().unwrap().gr_requests[0].1,
+        ToRSide::UpperTor as i32
+    );
+    assert_eq!(shared.read_side.load(Ordering::SeqCst), 0);
 }
 
 /// The lower ToR subscribes as LOWER_TOR.

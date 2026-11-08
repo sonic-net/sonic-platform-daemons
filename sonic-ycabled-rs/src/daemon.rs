@@ -425,8 +425,8 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     if any_active {
-        for (i, ns) in daemon.namespaces.iter().enumerate() {
-            start_graceful_restart(ns, &daemon.ports, read_sides[i]).await;
+        for ns in &daemon.namespaces {
+            start_graceful_restart(&ns.shared, ns.asic, &daemon.ports).await;
         }
     }
 
@@ -492,13 +492,16 @@ pub async fn wait_for_inits(
 }
 
 /// One GracefulRestart subscription per SoC address in MUX_CABLE, whatever
-/// the port's cable type, as Python does.
-async fn start_graceful_restart(ns: &Arc<Namespace>, ports: &PortMap, read_side: i32) {
+/// the port's cable type, as Python does. They start once the ports are
+/// initialized, which may have found the read side, and like Python they
+/// look Loopback3 up again if it is still unknown.
+pub async fn start_graceful_restart(shared: &Shared, asic: usize, ports: &PortMap) {
+    let read_side = shared.read_side_now().await;
     for name in ports.names() {
-        if ports.get(&name).map(|p| p.asic) != Some(ns.asic) {
+        if ports.get(&name).map(|p| p.asic) != Some(asic) {
             continue;
         }
-        let Some(row) = ns.db.get(DbId::Config, MUX_CABLE, &name).await else {
+        let Some(row) = shared.db.get(DbId::Config, MUX_CABLE, &name).await else {
             continue;
         };
         if !row.contains_key("state") {
@@ -507,12 +510,11 @@ async fn start_graceful_restart(ns: &Arc<Namespace>, ports: &PortMap, read_side:
         let Ok(Some(ip)) = config::soc_ip(&row) else {
             continue;
         };
-        let db: Arc<dyn Db> = ns.db.clone();
         tokio::spawn(grpc::graceful_restart_loop(
             name.clone(),
             ip as IpAddr,
             read_side,
-            db,
+            Arc::clone(&shared.db),
         ));
     }
 }

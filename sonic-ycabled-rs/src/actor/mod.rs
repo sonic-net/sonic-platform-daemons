@@ -102,6 +102,22 @@ impl Shared {
             ycable_presence,
         })
     }
+
+    /// This ToR's read side. While it is unknown, Loopback3 is looked up
+    /// again, as Python does on a cable event and when it starts its
+    /// GracefulRestart subscriptions.
+    pub async fn read_side_now(&self) -> i32 {
+        let read_side = self.read_side.load(Ordering::SeqCst);
+        if read_side != -1 {
+            return read_side;
+        }
+        let read_side = config::read_side(self.db.as_ref()).await;
+        if read_side != -1 {
+            log_notice!("Read side {} from Loopback3, which was unknown", read_side);
+            self.read_side.store(read_side, Ordering::SeqCst);
+        }
+        read_side
+    }
 }
 
 /// Counts of SoC queries, written in MUX_CABLE_INFO (Python's
@@ -216,22 +232,38 @@ impl PortActor {
 
     /// The locks for one call to the cable: the port's call lock, unless a
     /// request holds it already for all of its calls, and for a telemetry
-    /// pass of an active-standby port the shared bus too. The bus comes
-    /// second, so a port stuck in a request holds up only its own pass.
+    /// pass of an active-standby port the shared bus too. The pass never
+    /// waits for one of the two while it holds the other, so a port stuck
+    /// in a request holds up only its own pass, and a call that hangs on
+    /// the bus only the other ports' telemetry, not their requests.
     pub async fn lock_for_call(&self) -> Option<CallGuard<'_>> {
         if self.in_request {
             return None;
         }
-        let port = self.call_lock.lock().await;
-        let bus = if self.in_telemetry && self.cable == Some(CableType::ActiveStandby) {
-            self.shared.bus.acquire().await.ok()
-        } else {
-            None
-        };
-        Some(CallGuard {
-            _port: port,
-            _bus: bus,
-        })
+        if !self.in_telemetry || self.cable != Some(CableType::ActiveStandby) {
+            return Some(CallGuard {
+                _port: self.call_lock.lock().await,
+                _bus: None,
+            });
+        }
+        loop {
+            let port = self.call_lock.lock().await;
+            if let Ok(bus) = self.shared.bus.try_acquire() {
+                return Some(CallGuard {
+                    _port: port,
+                    _bus: Some(bus),
+                });
+            }
+            drop(port);
+            // The bus is never closed.
+            let bus = self.shared.bus.acquire().await.ok();
+            if let Ok(port) = self.call_lock.try_lock() {
+                return Some(CallGuard {
+                    _port: port,
+                    _bus: bus,
+                });
+            }
+        }
     }
 
     pub fn bump_epoch(&self) {
@@ -251,9 +283,10 @@ impl PortActor {
         if self.telemetry_busy.swap(true, Ordering::SeqCst) {
             return;
         }
+        let epoch = self.current_epoch();
         let mut view = self.telemetry_view();
         tokio::spawn(async move {
-            view.telemetry().await;
+            view.telemetry(epoch).await;
             view.telemetry_busy.store(false, Ordering::SeqCst);
         });
     }
@@ -298,7 +331,7 @@ impl PortActor {
         if let Msg::Telemetry = msg {
             // A pass, as the periodic one: it locks for each call.
             if !config::telemetry_disabled() {
-                self.telemetry().await
+                self.telemetry(self.current_epoch()).await
             }
             return;
         }
@@ -457,17 +490,22 @@ impl PortActor {
         }
     }
 
-    async fn telemetry(&mut self) {
+    /// One pass. `epoch` is the cable's when the pass started: a pass that
+    /// overlapped an initialization, a removal or a change of cable type,
+    /// while it waited for its turn or while it ran, is not written.
+    async fn telemetry(&mut self, epoch: u64) {
         match self.cable {
             Some(CableType::ActiveStandby) => {
                 self.in_telemetry = true;
-                self.telemetry_standby().await;
+                self.telemetry_standby(epoch).await;
                 self.in_telemetry = false;
             }
             Some(CableType::ActiveActive) => {
                 let limit = Arc::clone(&self.shared.aa_telemetry);
                 let _permit = limit.acquire().await;
-                self.telemetry_active().await
+                if self.current_epoch() == epoch {
+                    self.telemetry_active(epoch).await
+                }
             }
             None => {}
         }
@@ -549,21 +587,6 @@ impl PortActor {
             }
             None => false,
         }
-    }
-
-    /// This ToR's read side. While it is unknown, Loopback3 is looked up
-    /// again, as Python does on a cable event.
-    pub async fn read_side_now(&self) -> i32 {
-        let read_side = self.shared.read_side.load(Ordering::SeqCst);
-        if read_side != -1 {
-            return read_side;
-        }
-        let read_side = config::read_side(self.db()).await;
-        if read_side != -1 {
-            log_notice!("Read side {} from Loopback3, which was unknown", read_side);
-            self.shared.read_side.store(read_side, Ordering::SeqCst);
-        }
-        read_side
     }
 
     /// The MUX_CABLE row of this port, read again (it may have changed).

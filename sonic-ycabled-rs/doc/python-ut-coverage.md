@@ -19,9 +19,9 @@ Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md]
 | [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 16 |
 | [Active-standby toggle](#active-standby-toggle) | 16 | 10 |
 | [Active-standby probe](#active-standby-probe) | 11 | 4 |
-| [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 22 |
+| [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 23 |
 | [Active-active: requests and replies](#active-active-requests-and-replies) | 25 | 9 |
-| [Telemetry](#telemetry) | 22 | 19 |
+| [Telemetry](#telemetry) | 22 | 21 |
 | [CLI commands](#cli-commands) | 105 | 27 |
 | [Daemon, threads, DB and logging](#daemon-threads-db-and-logging) | 11 | 18 |
 
@@ -78,7 +78,7 @@ Python: `test_check_identifier_presence_and_setup_channel*` (4), `test_setup_grp
 Rust:
 
 - `actor::tests::active_init_from_soc`, `active_init_failures`, `active_init_absent_cable`, `active_init_without_soc_address`, `active_init_ipv6_soc`, `active_init_sets_presence`, `active_toggle_retries_channel`, `active_on_vs_is_present`.
-- `tests::grpc::rpcs_reach_the_soc`, `rpcs_end_at_the_deadline`, `refused_connection_writes_failure`, `lost_connection_writes_failure_and_reconnects`, `ipv6_soc`, `secure_config_without_certs_gives_no_channel`, `graceful_restart_subscribes_again_after_period`, `graceful_restart_lower_tor`.
+- `tests::grpc::rpcs_reach_the_soc`, `rpcs_end_at_the_deadline`, `refused_connection_writes_failure`, `lost_connection_writes_failure_and_reconnects`, `ipv6_soc`, `secure_config_without_certs_gives_no_channel`, `graceful_restart_subscribes_again_after_period`, `graceful_restart_lower_tor`, `graceful_restart_uses_the_current_read_side`.
 - `grpc::tests::targets`, `states_from_events`, `tor_sides`; `config::tests::channel_config_variants`, `secrets_fill_missing_fields_only`, `soc_addresses`.
 
 Not ported: `test_connect_channel` and `test_setup_grpc_channels`. Nothing calls those functions; the call to `connect_channel` is commented out.
@@ -95,7 +95,7 @@ Python: `test_get_muxcable_info*` (9), `test_get_muxcable_static_info*` (3), `te
 
 Rust:
 
-- `actor::tests::standby_telemetry_full_info`, `standby_telemetry_driver_failures`, `standby_telemetry_during_download`, `standby_telemetry_absent_cable_placeholder`, `standby_telemetry_without_driver_writes_nothing`, `standby_static_info_failures`, `telemetry_disabled_writes_nothing`, `active_telemetry`, `active_telemetry_without_channel`, `active_telemetry_without_row`, `toggle_overtakes_telemetry`, `telemetry_overlapping_removal_is_discarded`, `stuck_port_holds_up_only_its_own_telemetry`.
+- `actor::tests::standby_telemetry_full_info`, `standby_telemetry_driver_failures`, `standby_telemetry_during_download`, `standby_telemetry_absent_cable_placeholder`, `standby_telemetry_without_driver_writes_nothing`, `standby_static_info_failures`, `telemetry_disabled_writes_nothing`, `active_telemetry`, `active_telemetry_without_channel`, `active_telemetry_without_row`, `toggle_overtakes_telemetry`, `telemetry_overlapping_removal_is_discarded`, `queued_active_pass_is_discarded`, `stuck_port_holds_up_only_its_own_telemetry`, `hung_telemetry_call_holds_up_no_other_request`.
 - `config::tests::xcvrd_log_only_y_cable`, `schema::tests::timestamp_format`, `pyval::tests::float_str_matches_python`, `pyval::tests::str_of_containers`, `pyval::tests::int_comparisons_are_exact`, `tests::redis::rows_use_sonic_keys_and_separators`.
 
 ### CLI commands
