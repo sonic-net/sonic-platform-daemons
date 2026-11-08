@@ -128,19 +128,31 @@ impl PyVal {
         }
     }
 
-    /// `x == n` for an int `n`, with Python's numeric equality.
+    /// `x == n` for an int `n`, compared exactly, as Python compares numbers.
     pub fn eq_int(&self, n: i64) -> bool {
         match self {
             PyVal::Int(i) => *i == n,
             PyVal::Bool(b) => *b as i64 == n,
-            PyVal::Float(f, _) => *f == n as f64,
+            PyVal::Float(f, _) => f.fract() == 0.0 && float_floor(*f) == Ok(n),
             _ => false,
         }
     }
 
-    /// `x < n`. Python raises for a string; ycabled-rs treats that as false.
+    /// `x < n`, compared exactly, as Python compares numbers. Python raises
+    /// for a string; ycabled-rs treats that as false.
     pub fn lt_int(&self, n: i64) -> bool {
-        self.as_number().map(|v| v < n as f64).unwrap_or(false)
+        match self {
+            PyVal::Int(i) => *i < n,
+            PyVal::Bool(b) => (*b as i64) < n,
+            // For an int n, x < n exactly when floor(x) < n.
+            PyVal::Float(f, _) => match float_floor(*f) {
+                Ok(i) => i < n,
+                Err(below) => below,
+            },
+            // Out of the i64 range: below every i64 if negative.
+            PyVal::BigInt(s) => s.starts_with('-'),
+            _ => false,
+        }
     }
 
     pub fn as_str(&self) -> Option<&str> {
@@ -333,6 +345,23 @@ pub fn py_float_str(v: f64) -> String {
     }
 }
 
+/// floor(f) as an i64, or, out of the i64 range, whether f is below it
+/// (false for NaN, which is not below anything).
+fn float_floor(f: f64) -> Result<i64, bool> {
+    // -2**63 and 2**63, exact as floats.
+    const MIN: f64 = -9_223_372_036_854_775_808.0;
+    const END: f64 = 9_223_372_036_854_775_808.0;
+    if f.is_nan() {
+        Err(false)
+    } else if f < MIN {
+        Err(true)
+    } else if f >= END {
+        Err(false)
+    } else {
+        Ok(f.floor() as i64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +414,32 @@ mod tests {
             (PyVal::Int(1), PyVal::str_("it's")),
         ]);
         assert_eq!(d.py_str(), "{'k': 2, 1: \"it's\"}");
+    }
+
+    #[test]
+    fn int_comparisons_are_exact() {
+        // -(2**70) and 2**70: beyond i64, ordered by their sign.
+        let big_neg = PyVal::BigInt("-1180591620717411303424".into());
+        let big_pos = PyVal::BigInt("1180591620717411303424".into());
+        assert!(big_neg.lt_int(0) && big_neg.lt_int(i64::MIN));
+        assert!(!big_pos.lt_int(0) && !big_pos.lt_int(i64::MAX));
+        assert!(!big_neg.eq_int(0));
+        // Ints compare as ints: no rounding through f64.
+        assert!(PyVal::Int(i64::MAX - 1).lt_int(i64::MAX));
+        assert!(!PyVal::Int(i64::MAX).lt_int(i64::MAX));
+        assert!(PyVal::Bool(false).lt_int(1));
+        assert!(PyVal::float(-0.5).lt_int(0));
+        assert!(!PyVal::str_("-1").lt_int(0));
+        // Floats against ints beyond 2**53, NaN and the infinities.
+        let two_53 = PyVal::float(9007199254740992.0);
+        assert!(two_53.lt_int(9007199254740993) && !two_53.eq_int(9007199254740993));
+        assert!(two_53.eq_int(9007199254740992) && !two_53.lt_int(9007199254740992));
+        assert!(PyVal::float(-1.0).eq_int(-1) && !PyVal::float(-1.5).eq_int(-1));
+        assert!(PyVal::float(-1.5).lt_int(-1) && !PyVal::float(-0.5).lt_int(-1));
+        assert!(!PyVal::float(f64::NAN).lt_int(0) && !PyVal::float(f64::NAN).eq_int(0));
+        assert!(PyVal::float(f64::NEG_INFINITY).lt_int(i64::MIN));
+        assert!(!PyVal::float(f64::INFINITY).lt_int(i64::MAX));
+        assert!(!PyVal::float(9.3e18).eq_int(i64::MAX) && !PyVal::float(9.3e18).lt_int(i64::MAX));
     }
 
     #[test]

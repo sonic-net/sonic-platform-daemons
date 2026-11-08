@@ -16,12 +16,12 @@ Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md]
 | Area | Python tests | Rust tests |
 | --- | ---: | ---: |
 | [Driver selection and presence](#driver-selection-and-presence) | 46 | 15 |
-| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 14 |
+| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 16 |
 | [Active-standby toggle](#active-standby-toggle) | 16 | 10 |
 | [Active-standby probe](#active-standby-probe) | 11 | 4 |
 | [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 22 |
 | [Active-active: requests and replies](#active-active-requests-and-replies) | 25 | 9 |
-| [Telemetry](#telemetry) | 22 | 17 |
+| [Telemetry](#telemetry) | 22 | 19 |
 | [CLI commands](#cli-commands) | 105 | 27 |
 | [Daemon, threads, DB and logging](#daemon-threads-db-and-logging) | 11 | 18 |
 
@@ -45,7 +45,7 @@ Python: `test_change_ports_status_for_y_cable_change_event*` (5), `test_check_id
 
 Rust:
 
-- `actor::tests::standby_removal_keeps_read_side`, `standby_insertion_after_removal_loads_driver_again`, `removal_without_row_writes_nothing`, `active_removal_and_reinsertion`, `standby_uninitialized_driver_is_loaded_again`, `telemetry_overlapping_removal_is_discarded`, `reinsertion_waits_for_the_telemetry_call`.
+- `actor::tests::standby_removal_keeps_read_side`, `standby_insertion_after_removal_loads_driver_again`, `removal_without_row_writes_nothing`, `active_removal_and_reinsertion`, `standby_uninitialized_driver_is_loaded_again`, `telemetry_overlapping_removal_is_discarded`, `reinsertion_waits_for_the_telemetry_call`, `cable_type_read_again_on_insertion`, `active_read_side_looked_up_again`.
 - `tests::daemon::first_initialized_port_writes_mux_cable_info`, `startup_waits_for_initialization`, `presence_set_meanwhile_posts_no_info`: Python's `y_cable_presence` at startup.
 - `tests::daemon::startup_does_not_wait_for_a_hung_port`: a port whose initialization never ends does not hold up the others.
 - `tests::daemon::rows_become_actor_messages`, `config::tests::read_side_mapping`, `tests::redis::subscription_replays_rows_then_follows_changes`.
@@ -95,8 +95,8 @@ Python: `test_get_muxcable_info*` (9), `test_get_muxcable_static_info*` (3), `te
 
 Rust:
 
-- `actor::tests::standby_telemetry_full_info`, `standby_telemetry_driver_failures`, `standby_telemetry_during_download`, `standby_telemetry_absent_cable_placeholder`, `standby_telemetry_without_driver_writes_nothing`, `standby_static_info_failures`, `telemetry_disabled_writes_nothing`, `active_telemetry`, `active_telemetry_without_channel`, `active_telemetry_without_row`, `toggle_overtakes_telemetry`, `telemetry_overlapping_removal_is_discarded`.
-- `config::tests::xcvrd_log_only_y_cable`, `schema::tests::timestamp_format`, `pyval::tests::float_str_matches_python`, `pyval::tests::str_of_containers`, `tests::redis::rows_use_sonic_keys_and_separators`.
+- `actor::tests::standby_telemetry_full_info`, `standby_telemetry_driver_failures`, `standby_telemetry_during_download`, `standby_telemetry_absent_cable_placeholder`, `standby_telemetry_without_driver_writes_nothing`, `standby_static_info_failures`, `telemetry_disabled_writes_nothing`, `active_telemetry`, `active_telemetry_without_channel`, `active_telemetry_without_row`, `toggle_overtakes_telemetry`, `telemetry_overlapping_removal_is_discarded`, `stuck_port_holds_up_only_its_own_telemetry`.
+- `config::tests::xcvrd_log_only_y_cable`, `schema::tests::timestamp_format`, `pyval::tests::float_str_matches_python`, `pyval::tests::str_of_containers`, `pyval::tests::int_comparisons_are_exact`, `tests::redis::rows_use_sonic_keys_and_separators`.
 
 ### CLI commands
 

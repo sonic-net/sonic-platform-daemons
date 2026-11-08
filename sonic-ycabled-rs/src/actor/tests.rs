@@ -1108,6 +1108,88 @@ async fn active_removal_and_reinsertion() {
     assert_eq!(f.soc.requests("QueryAdminForwardingPortState").len(), 2);
 }
 
+/// test_change_ports_status_for_y_cable_change_event with read side -1: a
+/// read side unknown at startup is looked up again in Loopback3 when an
+/// active-active cable is initialized.
+#[tokio::test]
+async fn active_read_side_looked_up_again() {
+    let f = Fixture::with(false, -1);
+    let mut a = f.active();
+    a.handle(Msg::Init(None)).await;
+    assert_eq!(f.mux_state().1, "-1");
+    // Loopback3 is configured later; the cable is plugged in again.
+    f.db.put(
+        DbId::Config,
+        LOOPBACK_INTERFACE,
+        "Loopback3|10.212.64.1/32",
+        &[("NULL", "NULL")],
+    );
+    a.handle(Msg::Transceiver(Event::Del {
+        key: TEST_PORT.into(),
+    }))
+    .await;
+    a.handle(Msg::Transceiver(Event::Set {
+        key: TEST_PORT.into(),
+        fields: fm(&[("type", "QSFP28 or later")]),
+    }))
+    .await;
+    assert_eq!(f.mux_state().1, "1");
+    assert_eq!(f.shared.read_side.load(Ordering::SeqCst), 1);
+}
+
+/// test_change_ports_status_for_y_cable_change_event: the cable type is read
+/// again on each insertion. A port now active-active drops its driver and
+/// sets up a channel; back to active-standby, it loads a driver again.
+#[tokio::test]
+async fn cable_type_read_again_on_insertion() {
+    let f = Fixture::new();
+    let mut a = f.standby();
+    a.handle(Msg::Init(None)).await;
+    assert!(f.platform.is_loaded(PHYSICAL));
+    let remove = || {
+        Msg::Transceiver(Event::Del {
+            key: TEST_PORT.into(),
+        })
+    };
+    let insert = || {
+        Msg::Transceiver(Event::Set {
+            key: TEST_PORT.into(),
+            fields: fm(&[("type", "QSFP28 or later")]),
+        })
+    };
+    a.handle(remove()).await;
+    f.db.put(
+        DbId::Config,
+        MUX_CABLE,
+        TEST_PORT,
+        &[
+            ("cable_type", "active-active"),
+            ("soc_ipv4", "192.168.0.7/32"),
+        ],
+    );
+    f.db.put(
+        DbId::State,
+        TRANSCEIVER_INFO,
+        TEST_PORT,
+        &[("type", "QSFP28 or later")],
+    );
+    a.handle(insert()).await;
+    assert_eq!(a.cable, Some(CableType::ActiveActive));
+    assert!(!f.platform.is_loaded(PHYSICAL));
+    assert!(a.soc.is_some());
+    assert_eq!(f.connector.connects(), 1);
+
+    a.handle(remove()).await;
+    f.db.remove(DbId::Config, MUX_CABLE, TEST_PORT);
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    a.handle(insert()).await;
+    assert_eq!(a.cable, Some(CableType::ActiveStandby));
+    assert!(a.soc.is_none());
+    assert!(f.platform.is_loaded(PHYSICAL));
+    assert!(a.initialized);
+    assert_eq!(f.mux_state().0, "active");
+}
+
 /// VS: active-active cables are always present (test_y_cable_wrapper_get_presence on VS).
 #[tokio::test]
 async fn active_on_vs_is_present() {
@@ -1197,7 +1279,7 @@ fn fast_telemetry(f: &Fixture, period_ms: u64) -> Arc<super::Shared> {
         platform: f.shared.platform.clone(),
         soc: f.shared.soc.clone(),
         is_vs: false,
-        read_side: 0,
+        read_side: std::sync::atomic::AtomicI32::new(0),
         telemetry_period: std::time::Duration::from_millis(period_ms),
         bus: f.shared.bus.clone(),
         aa_telemetry: f.shared.aa_telemetry.clone(),
@@ -1359,4 +1441,72 @@ async fn reinsertion_waits_for_the_telemetry_call() {
         .await
     );
     assert_eq!(*f.platform.overlaps.lock().unwrap(), 0);
+}
+
+/// A port stuck in a request holds up only its own telemetry: the passes of
+/// the other active-standby ports, which share the bus with it, go on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stuck_port_holds_up_only_its_own_telemetry() {
+    let _g = globals();
+    let f = Fixture::new();
+    f.platform.add(2, MockCable::default());
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    f.db.put(DbId::Config, MUX_CABLE, "Ethernet4", &[("state", "auto")]);
+    let shared = fast_telemetry(&f, 200);
+    let a = PortActor::new(
+        TEST_PORT,
+        Some(PHYSICAL),
+        Some(CableType::ActiveStandby),
+        Arc::clone(&shared),
+    );
+    let b = PortActor::new("Ethernet4", Some(2), Some(CableType::ActiveStandby), shared);
+    let (a_tx, b_tx) = (a.spawn(), b.spawn());
+    for tx in [&a_tx, &b_tx] {
+        let (done, wait) = tokio::sync::oneshot::channel();
+        tx.send(Msg::Init(Some(done))).unwrap();
+        wait.await.unwrap();
+    }
+    // Catch A's pass in a call to the cable, then give the call lock to a
+    // toggle that does not return for a long time.
+    f.cable(|c| {
+        c.delays.insert(
+            "get_eye_heights".into(),
+            std::time::Duration::from_millis(300),
+        );
+        c.delays.insert(
+            "toggle_mux_to_tor_b".into(),
+            std::time::Duration::from_secs(30),
+        );
+    });
+    f.platform.clear_calls();
+    assert!(
+        wait_for(
+            || f.platform
+                .calls(PHYSICAL)
+                .iter()
+                .any(|m| m == "get_eye_heights"),
+            3000
+        )
+        .await
+    );
+    a_tx.send(Msg::Toggle(fm(&[("state", "standby")]))).unwrap();
+    assert!(
+        wait_for(
+            || f.platform
+                .calls(PHYSICAL)
+                .iter()
+                .any(|m| m == "toggle_mux_to_tor_b"),
+            3000
+        )
+        .await
+    );
+    // A's pass waits for A; B's passes keep writing MUX_CABLE_INFO.
+    let b_writes = || {
+        f.db.writes(MUX_CABLE_INFO)
+            .iter()
+            .filter(|(k, _)| k == "Ethernet4")
+            .count()
+    };
+    let before = b_writes();
+    assert!(wait_for(|| b_writes() >= before + 2, 3000).await);
 }
