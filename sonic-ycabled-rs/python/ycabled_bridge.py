@@ -136,6 +136,8 @@ def load(port, physical_port):
         _log(WARNING, "Error: Unable to find module name from model for Y-Cable initiation {}".format(port))
         return (False, None)
     try:
+        # The module name comes from sonic_y_cable's own vendor mapping.
+        # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         cls = getattr(import_module('sonic_y_cable.' + module), 'YCable')
     except Exception as e:
         _log(WARNING, "Failed to load the attr due to {}".format(repr(e)))

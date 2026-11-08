@@ -25,5 +25,7 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile mini
         --default-toolchain "${RUST_VERSION}" --component clippy,rustfmt,llvm-tools-preview \
     && chmod -R a+w "${RUSTUP_HOME}" "${CARGO_HOME}"
 
+# build.sh runs the build as the calling user (docker run --user).
+USER nobody
 ENTRYPOINT []
 CMD ["bash"]
