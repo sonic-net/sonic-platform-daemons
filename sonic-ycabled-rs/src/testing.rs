@@ -203,12 +203,21 @@ impl MockPlatform {
 #[async_trait]
 impl YCablePlatform for MockPlatform {
     async fn presence(&self, physical: u32) -> bool {
-        self.cables
+        // Counted as a call to the cable: some platforms read it over the
+        // cable's bus.
+        self.enter(physical);
+        if let Some(d) = self.delay(physical, "presence") {
+            tokio::time::sleep(d).await;
+        }
+        let present = self
+            .cables
             .lock()
             .unwrap()
             .get(&physical)
             .map(|c| c.present)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        self.leave(physical);
+        present
     }
 
     async fn load(&self, _port: &str, physical: u32) -> Option<bool> {

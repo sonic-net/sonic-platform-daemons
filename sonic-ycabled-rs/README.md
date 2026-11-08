@@ -19,10 +19,13 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   driver call that never returns holds up only its own port.
 - **Telemetry** (every 60 s per port) runs in a task beside the actor, so a
   toggle never waits for a whole pass. Calls to an active-standby cable,
-  loading and unloading its driver included, take the port's call lock, one
-  at a time, so a toggle waits for at most one telemetry call.
-  Active-standby passes run one at a time (shared I2C buses), active-active
-  ones 16 at a time.
+  presence checks and loading and unloading its driver included, take the
+  port's call lock: a request holds it while it runs, a telemetry pass for
+  one call at a time, so a toggle waits for at most one telemetry call.
+  Active-standby telemetry calls also run one at a time across the ports
+  (shared I2C buses). A call takes the bus only once it holds its port's
+  lock, so a port stuck in a request holds up only its own pass.
+  Active-active passes run 16 at a time.
 - **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
   a row is one `HSET` of all its fields, subscriptions are swsscommon's
   `SubscriberStateTable` (keyspace notifications, then the existing rows).
@@ -79,7 +82,10 @@ YCABLED_RS_BASE_IMAGE=docker-sonic-vs:latest YCABLED_RS_BUILD_IMAGE=ycabled-rs-b
 ```
 
 `build.sh <command>` runs any command in the crate directory in the build
-image (cargo registry in the `ycabled-rs-cargo` volume). The binary is
+image, as the calling user. The image is rebuilt from
+`YCABLED_RS_BASE_IMAGE` each time (from docker's cache unless the base
+changed), and the cargo registry persists in the `ycabled-rs-cargo-<uid>`
+volume (`YCABLED_RS_CARGO_VOLUME`). The binary is
 `target/release/ycabled-rs`.
 
 ## Run
@@ -92,7 +98,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (135): the actors and the CLI against an in-memory
+- **Unit tests** (139): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
   in-process SoC, the bridge in the embedded interpreter with fake drivers.

@@ -68,7 +68,7 @@ impl PortActor {
         if !defer {
             self.shared.ycable_presence.store(true, Ordering::SeqCst);
         }
-        let read_side = self.shared.read_side;
+        let read_side = self.read_side_now().await;
         if self.physical.is_none() {
             log_warning!(
                 "DAC cable logical to physical port mapping returned more than one physical ports while Channel setup Port {}",

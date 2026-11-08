@@ -23,7 +23,7 @@ impl PortActor {
         let Some(p) = self.physical else {
             return Err(CallError::NoDriver);
         };
-        let _call = self.call_lock.lock().await;
+        let _call = self.lock_for_call().await;
         self.shared.platform.call(p, method, args).await
     }
 
@@ -70,7 +70,7 @@ impl PortActor {
 
     pub async fn download_in_progress_status(&self) -> Option<i64> {
         let p = self.physical?;
-        let _call = self.call_lock.lock().await;
+        let _call = self.lock_for_call().await;
         self.shared
             .platform
             .attr(p, "download_firmware_status")
@@ -103,7 +103,7 @@ impl PortActor {
         // cable through its previous driver, and the new driver's constructor
         // and get_vendor() talk to the same cable.
         let loaded = {
-            let _call = self.call_lock.lock().await;
+            let _call = self.lock_for_call().await;
             match self.shared.platform.load(&self.port, physical).await {
                 None => None,
                 Some(initialized) => {

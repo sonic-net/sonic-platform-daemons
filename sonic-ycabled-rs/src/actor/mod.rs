@@ -10,7 +10,7 @@ pub(crate) use standby::{TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B};
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use crate::config::{self, CableType};
 use crate::db::{Db, DbId, Event, FieldMap};
 use crate::grpc::{SocApi, SocConnector};
 use crate::schema::*;
-use crate::{fields, log_debug, log_info, log_warning};
+use crate::{fields, log_debug, log_info, log_notice, log_warning};
 
 /// A port's backlog worth a warning. Nothing is dropped: a port whose cable
 /// or SoC does not answer keeps its requests waiting, in order.
@@ -64,11 +64,13 @@ pub struct Shared {
     pub platform: Arc<dyn YCablePlatform>,
     pub soc: Arc<dyn SocConnector>,
     pub is_vs: bool,
-    /// This ToR's index in the SoCs' port lists, from Loopback3.
-    pub read_side: i32,
+    /// This ToR's index in the SoCs' port lists, from Loopback3; -1 while
+    /// unknown, and looked up again when an active-active port initializes.
+    pub read_side: AtomicI32,
     pub telemetry_period: Duration,
-    /// Active-standby telemetry passes, one at a time, as in Python's serial
-    /// pass: cables may share an I2C bus.
+    /// Active-standby telemetry calls, one at a time across the ports, as
+    /// Python's single telemetry thread makes them: cables may share an I2C
+    /// bus.
     pub bus: Arc<Semaphore>,
     /// Active-active telemetry, at most 16 ports at a time.
     pub aa_telemetry: Arc<Semaphore>,
@@ -93,7 +95,7 @@ impl Shared {
             platform,
             soc,
             is_vs,
-            read_side,
+            read_side: AtomicI32::new(read_side),
             telemetry_period: TELEMETRY_PERIOD,
             bus: Arc::new(Semaphore::new(1)),
             aa_telemetry: Arc::new(Semaphore::new(16)),
@@ -143,14 +145,25 @@ pub struct PortActor {
     pub counts: ProbeCounts,
     /// The driver's EEPROM_ERROR, read when it is loaded.
     pub eeprom_error: i64,
-    /// Held for each call to the cable: the actor and its telemetry task
-    /// never call it at the same time, and a request waits for at most one
+    /// Serializes the calls to an active-standby cable: a request holds it
+    /// while it runs, the telemetry task for each of its calls. So two calls
+    /// to the cable never overlap, and a request waits for at most one
     /// telemetry call (the lock is fair).
     pub call_lock: Arc<tokio::sync::Mutex<()>>,
     /// Changes when the cable is initialized or removed: a telemetry pass
     /// that overlapped either is not written.
     pub epoch: Arc<AtomicU64>,
     telemetry_busy: Arc<AtomicBool>,
+    /// A request is running and holds the call lock.
+    in_request: bool,
+    /// A telemetry pass is running: each of its calls also takes the bus.
+    in_telemetry: bool,
+}
+
+/// The locks one call to the cable holds.
+pub struct CallGuard<'a> {
+    _port: tokio::sync::MutexGuard<'a, ()>,
+    _bus: Option<tokio::sync::SemaphorePermit<'a>>,
 }
 
 impl PortActor {
@@ -174,6 +187,8 @@ impl PortActor {
             call_lock: Arc::new(tokio::sync::Mutex::new(())),
             epoch: Arc::new(AtomicU64::new(0)),
             telemetry_busy: Arc::new(AtomicBool::new(false)),
+            in_request: false,
+            in_telemetry: false,
         }
     }
 
@@ -194,7 +209,29 @@ impl PortActor {
             call_lock: Arc::clone(&self.call_lock),
             epoch: Arc::clone(&self.epoch),
             telemetry_busy: Arc::clone(&self.telemetry_busy),
+            in_request: false,
+            in_telemetry: false,
         }
+    }
+
+    /// The locks for one call to the cable: the port's call lock, unless a
+    /// request holds it already for all of its calls, and for a telemetry
+    /// pass of an active-standby port the shared bus too. The bus comes
+    /// second, so a port stuck in a request holds up only its own pass.
+    pub async fn lock_for_call(&self) -> Option<CallGuard<'_>> {
+        if self.in_request {
+            return None;
+        }
+        let port = self.call_lock.lock().await;
+        let bus = if self.in_telemetry && self.cable == Some(CableType::ActiveStandby) {
+            self.shared.bus.acquire().await.ok()
+        } else {
+            None
+        };
+        Some(CallGuard {
+            _port: port,
+            _bus: bus,
+        })
     }
 
     pub fn bump_epoch(&self) {
@@ -258,6 +295,23 @@ impl PortActor {
     }
 
     pub async fn handle(&mut self, msg: Msg) {
+        if let Msg::Telemetry = msg {
+            // A pass, as the periodic one: it locks for each call.
+            if !config::telemetry_disabled() {
+                self.telemetry().await
+            }
+            return;
+        }
+        // A request holds the call lock throughout: the telemetry task's
+        // calls wait for it, and it waits for at most one of theirs.
+        let lock = Arc::clone(&self.call_lock);
+        let _request = lock.lock_owned().await;
+        self.in_request = true;
+        self.handle_request(msg).await;
+        self.in_request = false;
+    }
+
+    async fn handle_request(&mut self, msg: Msg) {
         match msg {
             Msg::Init(done) => {
                 let claims = self.init(done.is_some()).await;
@@ -299,11 +353,7 @@ impl PortActor {
                 }
             }
             Msg::Cli(table, f) => self.handle_cli(&table, &f).await,
-            Msg::Telemetry => {
-                if !config::telemetry_disabled() {
-                    self.telemetry().await
-                }
-            }
+            Msg::Telemetry => {}
         }
     }
 
@@ -318,8 +368,14 @@ impl PortActor {
         }
     }
 
-    /// TRANSCEIVER_INFO SET: a cable is plugged in, or its row changed.
+    /// TRANSCEIVER_INFO SET: a cable is plugged in, or its row changed. As
+    /// Python does, the port's cable type is read again from MUX_CABLE.
     async fn insertion(&mut self) {
+        let row = self.mux_cable_row().await;
+        let cable = config::cable_type(&self.port, row.as_ref());
+        if cable != self.cable {
+            self.change_cable(cable).await;
+        }
         match self.cable {
             Some(CableType::ActiveStandby) => {
                 if self.initialized {
@@ -347,6 +403,30 @@ impl PortActor {
         }
     }
 
+    /// The port's cable type in MUX_CABLE changed: the previous cable's
+    /// driver or channel goes, and the next initialization takes the new
+    /// type's path. None: the port is no longer a mux port.
+    async fn change_cable(&mut self, cable: Option<CableType>) {
+        log_notice!(
+            "The cable type of port {} changed from {} to {}",
+            self.port,
+            self.cable.map(|c| c.as_str()).unwrap_or("none"),
+            cable.map(|c| c.as_str()).unwrap_or("none")
+        );
+        self.bump_epoch();
+        if self.cable == Some(CableType::ActiveStandby) {
+            if let Some(p) = self.physical {
+                let _call = self.lock_for_call().await;
+                self.shared.platform.unload(p).await;
+            }
+        }
+        self.initialized = false;
+        self.present = false;
+        self.soc = None;
+        self.soc_ip = None;
+        self.cable = cable;
+    }
+
     /// TRANSCEIVER_INFO DEL: the cable is gone. The state is unknown; the read
     /// side, MUX_CABLE_INFO and MUX_CABLE_STATIC_INFO stay. A port without a
     /// HW_MUX_CABLE_TABLE row gets none.
@@ -371,7 +451,7 @@ impl PortActor {
             self.initialized = false;
             if let Some(p) = self.physical {
                 // After the telemetry pass's current call, if one is running.
-                let _call = self.call_lock.lock().await;
+                let _call = self.lock_for_call().await;
                 self.shared.platform.unload(p).await;
             }
         }
@@ -380,9 +460,9 @@ impl PortActor {
     async fn telemetry(&mut self) {
         match self.cable {
             Some(CableType::ActiveStandby) => {
-                let bus = Arc::clone(&self.shared.bus);
-                let _permit = bus.acquire().await;
-                self.telemetry_standby().await
+                self.in_telemetry = true;
+                self.telemetry_standby().await;
+                self.in_telemetry = false;
             }
             Some(CableType::ActiveActive) => {
                 let limit = Arc::clone(&self.shared.aa_telemetry);
@@ -459,12 +539,31 @@ impl PortActor {
             .await
     }
 
-    /// Presence of an active-standby cable: the platform API.
+    /// The cable's presence from the platform API, under the call lock: it
+    /// may reach the cable over the same bus as the driver.
     pub async fn cable_present(&self) -> bool {
         match self.physical {
-            Some(p) => self.shared.platform.presence(p).await,
+            Some(p) => {
+                let _call = self.lock_for_call().await;
+                self.shared.platform.presence(p).await
+            }
             None => false,
         }
+    }
+
+    /// This ToR's read side. While it is unknown, Loopback3 is looked up
+    /// again, as Python does on a cable event.
+    pub async fn read_side_now(&self) -> i32 {
+        let read_side = self.shared.read_side.load(Ordering::SeqCst);
+        if read_side != -1 {
+            return read_side;
+        }
+        let read_side = config::read_side(self.db()).await;
+        if read_side != -1 {
+            log_notice!("Read side {} from Loopback3, which was unknown", read_side);
+            self.shared.read_side.store(read_side, Ordering::SeqCst);
+        }
+        read_side
     }
 
     /// The MUX_CABLE row of this port, read again (it may have changed).
