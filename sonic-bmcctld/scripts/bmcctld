@@ -11,44 +11,51 @@
       - System leak detection from thermalctld  (STATE_DB: SYSTEM_LEAK_STATUS)
       - Rack Manager alerts / commands          (STATE_DB: RACK_MANAGER_ALERT /
                                                            RACK_MANAGER_COMMAND)
-      - Operator admin up/down                  (STATE_DB: CHASSIS_MODULE)
+      - Operator admin up/down                  (CONFIG_DB: CHASSIS_MODULE)
+
+    Execution model:
+      - The event thread ("bmcctld-events") turns Redis rows into ActionItems
+        on a three-lane FIFO queue served in order: power_off, graceful_shutdown,
+        everything else.
+      - The main thread runs one item at a time: every platform power call and
+        every HOST_STATE write happens here. A graceful request
+        puts only its gNOI handshake on a short-lived helper thread
+        ("bmcctld-graceful") and never waits for it beyond a bound.
+      - A running operation's waits end when the daemon stops or a queued
+        request outranks its phase: a power_off outranks every wait of another
+        operation, a graceful_shutdown outranks the waits of a power raise
+        (see _OpCancel).
 
     Classes:
       EventLogger            Syslog logger that optionally tees to a file
                              (/host/bmc/event.log for critical events).
-                             All daemon classes inherit from this.
-      ActionItem             Data class carrying a pending power action from the
-                             event thread to the main thread via action_queue.
+      ActionItem             One request from the event thread to the main thread.
+      ActionQueue            Three-lane FIFO with a condition variable.
+      Operation              Mutable state of one running operation.
       SwitchHostController   Issues power_on/off/cycle via the platform API and
-                             keeps STATE_DB:HOST_STATE current.  Writes
-                             transitional states (POWERING_ON/OFF/CYCLING)
-                             before each call; rolls back on exception.
-      PolicyReader           Reads admin_status, power_on_delay, and
-                             graceful_shutdown_timeout from CHASSIS_MODULE|SWITCH-HOST in CONFIG_DB.
-      CriticalEventChecker   Checks STATE_DB for active critical system leaks or
-                             Rack Manager alerts; gates power-on decisions.
-      GracefulShutdownHandler  Sends gNOI System.Reboot(COLD), waits for OFFLINE,
-                             then always issues power_off() to ensure power is
-                             removed.  Falls back to immediate power_off if gNOI
-                             fails or graceful_shutdown_timeout is 0.
-      BmcEventHandler        Runs on the "bmcctld-events" thread.  Subscribes to
-                             STATE_DB and enqueues ActionItems for the main thread.
-      BmcctldDaemon          Main daemon.  Starts the event thread, runs the
-                             boot-delay sequence (liquid-cooled) or immediate
-                             power-on (non-liquid-cooled), then processes the
-                             action queue with idempotency enforcement.
+                             keeps STATE_DB:HOST_STATE current.
+      PolicyReader           Reads bmcctld configuration from CONFIG_DB.
+      CriticalEventChecker   Power-on gate: active leaks and Rack Manager alerts.
+      GracefulShutdownHandler  Tagged gNOI HALT, RebootStatus evaluation, power
+                             removal; the restart adds a pause and a raise.
+      BmcEventHandler        Event thread: subscriptions and admission.
+      BmcctldDaemon          Main thread: startup, dispatch, records, stop.
 """
 
 try:
+    import collections
     import json
     import logging
     import os
-    import queue
+    import re
     import signal
     import sys
     import threading
     import time
+    import traceback
+    import uuid
     from datetime import datetime
+    from enum import Enum
 
     from sonic_py_common import daemon_base, logger
     from sonic_platform_base.chassis_base import ChassisBase
@@ -60,6 +67,10 @@ try:
         from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
+
+import grpc
+from sonic_grpc.gnoi.client import GnoiClient
+from sonic_grpc.gnoi import system_pb2
 
 
 CRITICAL_EVENT_LOG_FILE = "/host/bmc/event.log"
@@ -131,16 +142,41 @@ class EventLogger(logger.Logger):
 class ActionItem:
     """
     Carries a power action from the BmcEventHandler thread to the
-    BmcctldDaemon main thread action loop.
+    BmcctldDaemon main thread.
 
-    on_complete(success: bool) is called by the main thread after the
+    on_complete(success: bool, detail: str) is called by the main thread after the
     action finishes — used by Rack Manager command handlers to write the
     final CMD_STATUS_DONE / CMD_STATUS_FAILED back to STATE_DB.
+    startup marks the automatic power-on.
     """
-    def __init__(self, action, event_desc, on_complete=None):
+    def __init__(self, action, event_desc, on_complete=None, startup=False):
         self.action = action
         self.event_desc = event_desc
         self.on_complete = on_complete
+        self.startup = startup
+
+
+class Operation:
+    """Mutable state of one running power operation."""
+
+    def __init__(self, item, request_id, cancel):
+        self.item = item
+        self.request_id = request_id
+        self.cancel = cancel        # the daemon stop flag for a power-off, else an _OpCancel view of this operation
+        # A restart is removing until its power is off, then raising (execute_restart switches it).
+        self.phase = PHASE_RAISING if item.action in (ACTION_POWER_ON, ACTION_POWER_CYCLE) else PHASE_REMOVING
+        self.leg_reason = None      # "-" after a graceful leg, else the forced leg's reason
+        self.leg_failed = False     # bmcctld's own exception ended the graceful leg
+        self.leg = None             # (graceful, reason) from the handshake thread
+        self.abandoned = False      # the main thread stopped waiting for the handshake thread
+        self.requester = None
+
+
+class PowerCallResult(Enum):
+    CONFIRMED = "confirmed"
+    NOT_CONFIRMED = "not_confirmed"
+    CANCELLED = "cancelled"
+    REFUSED_LEAK = "refused_leak"
 
 
 # ============================================================
@@ -189,6 +225,10 @@ FIELD_DEVICE_LEAK_STATUS = "device_leak_status"
 FIELD_SEVERITY = "severity"
 FIELD_LEAK = "leak"
 FIELD_ADMIN_STATUS = "admin_status"
+FIELD_OP_RESULT = "op_result"
+FIELD_OP_REASON = "op_reason"
+FIELD_OP_TRIGGER = "op_trigger"
+FIELD_OP_REQUEST_ID = "op_request_id"
 
 # FIELD_DEVICE_POWER_STATE: Power state values - What POWER action taken on device
 # Stable (final) states — written after the platform call completes
@@ -212,6 +252,7 @@ SWITCH_HOST_OFFLINE = "OFFLINE"
 CMD_POWER_ON = "POWER_ON"
 CMD_POWER_OFF = "POWER_OFF"
 CMD_GRACEFUL_SHUT = "GRACEFUL_SHUT"
+CMD_GRACEFUL_RESTART = "GRACEFUL_RESTART"
 CMD_POWER_CYCLE = "POWER_CYCLE"
 
 # Command execution status
@@ -234,11 +275,21 @@ LEAK_SEVERITIES_HIGH_TO_LOW = (ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_MAJOR, AL
 # Dispatch action values (LEAK_CONTROL_POLICY and queue items)
 ACTION_SYSLOG_ONLY = "syslog_only"
 ACTION_GRACEFUL_SHUTDOWN = "graceful_shutdown"
+ACTION_GRACEFUL_RESTART = "graceful_restart"
 ACTION_POWER_OFF = "power_off"
 ACTION_POWER_ON = "power_on"
 ACTION_POWER_CYCLE = "power_cycle"
 # Actions that take the Switch-Host down; these block a power-on while the event is active
 POWER_DOWN_ACTIONS = (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF)
+# A running operation's phase decides which queued request ends its waits (see _OpCancel).
+PHASE_REMOVING = "removing"
+PHASE_RAISING = "raising"
+
+# Labels that already describe a settled host on each side of the power state.
+SETTLED_LABELS = {
+    POWER_STATE_ON: (POWER_STATE_ON, POWER_STATE_CYCLE),
+    POWER_STATE_OFF: (POWER_STATE_OFF,),
+}
 
 # Default policy values (LEAK_CONTROL_POLICY)
 DEFAULT_SYSTEM_LEAK_POLICY = "enabled"
@@ -255,8 +306,30 @@ DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_POWER_ON_DELAY_SECS = 300   # liquid-cooled: allow Rack Manager time to verify liquid flow
                                     # before bmcctld auto-powers Switch-Host. Unused on air-cooled
                                     # (startup path skips _initial_power_on_sequence).
-DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
-                                    # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
+DEFAULT_SHUTDOWN_DELAY_SECS = 120
+
+# Terminal operation results
+OP_RESULT_SUCCESS_GRACEFUL = "SUCCESS_GRACEFUL"
+OP_RESULT_SUCCESS_FORCED = "SUCCESS_FORCED"
+OP_RESULT_SUCCESS = "SUCCESS"
+OP_RESULT_POWER_OFF_FAILED = "POWER_OFF_FAILED"
+OP_RESULT_POWER_ON_FAILED = "POWER_ON_FAILED"
+OP_RESULT_OFF_LEAK_BLOCKED = "OFF_LEAK_BLOCKED"
+OP_RESULT_PREEMPTED = "PREEMPTED"
+OP_RESULT_ABANDONED = "ABANDONED"
+
+# Graceful-operation reason codes
+OP_REASON_NOT_QUALIFIED = "not_qualified"
+OP_REASON_TIMEOUT_ZERO = "timeout_zero"
+OP_REASON_ALREADY_OFF = "already_off"
+OP_REASON_PREEMPTED = "preempted"
+OP_REASON_RPC_FAILURE = "rpc_failure"
+OP_REASON_BACKEND_ANSWERED = "backend_answered"
+OP_REASON_CHECK_FAILED = "check_failed"
+OP_REASON_DEADLINE = "deadline"
+OP_REASON_UNCLASSIFIED = "unclassified"
+# OP_DONE detail of a request the guard completed without a power call
+GUARD_SKIP_DETAIL = "guard_skip"
 
 # Switch-Host module name key in CHASSIS_MODULE table
 SWITCH_HOST_MODULE_KEY = "SWITCH-HOST"
@@ -275,16 +348,34 @@ BMC_JSON_PATHS = [
     "/etc/sonic/bmc.json",
 ]
 DEFAULT_SWITCH_HOST_ADDR = "169.254.100.2"
+DEFAULT_SWITCH_HOST_GNMI_PORT = 8080
+GNOI_SERVER_NAME = "switch-host.bmc-link.sonic"
+GNMI_CLIENT_TABLE = "GNMI_CLIENT"
+DEFAULT_GNOI_CERT_PATHS = {
+    "ca_crt": "/etc/sonic/credential/gnmi_root.cer",
+    "client_crt": "/etc/sonic/credential/gnmi_client.cer",
+    "client_key": "/etc/sonic/credential/gnmi_client.key",
+}
+TAG_RE = r"\[bmc-req:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]"
 
 SELECT_TIMEOUT_MSECS = 1000
 GNOI_REQUEST_TIMEOUT_SECS = 30
-SHUTDOWN_POLL_INTERVAL_SECS = 5
+GNOI_STATUS_RPC_TIMEOUT_SECS = 10
+GNOI_STATUS_POLL_INTERVAL_SECS = 1
+# The restart keeps the host off this long between its power-off and its power-on.
+RESTART_PAUSE_SECS = 10
 
 # Polling constants for verifying oper_status after power* API calls
 # We can make it a configurable parameter by letting platform decide how much time each platform
 # takes to bootup in pmon_daemon_control.json and pass as a parameter to bmcctld daemon
 POWER_VERIFY_TIMEOUT_SECS = 60   # max seconds to wait for oper_status to settle
 POWER_VERIFY_POLL_INTERVAL_SECS = 5
+
+# Main-thread timing
+GRACEFUL_JOIN_SLICE_SECS = 1.0      # how often the main thread looks at the handshake thread
+STOP_JOIN_SECS = 5                  # daemon stop: wait for the event thread
+EVENT_LOOP_FAILURE_LIMIT = 30       # failing iterations in a row before the daemon exits for a restart
+HANDSHAKE_JOIN_SECS = 1             # after a cancellation or the deadline, how long to wait for the handshake thread
 
 NOT_AVAILABLE = "N/A"
 
@@ -328,6 +419,272 @@ def fvs_to_dict(fvs):
     return dict(fvs)
 
 
+class _ThreadDatabase:
+    """Cache each connector and table only in its owning OS thread."""
+
+    def __init__(self):
+        self._local = threading.local()
+
+    def _connections(self):
+        if not hasattr(self._local, "connections"):
+            self._local.connections = {}
+        return self._local.connections
+
+    def _tables(self):
+        if not hasattr(self._local, "tables"):
+            self._local.tables = {}
+        return self._local.tables
+
+    def connection(self, db_name):
+        connections = self._connections()
+        if db_name not in connections:
+            connections[db_name] = daemon_base.db_connect(db_name)
+        return connections[db_name]
+
+    def table(self, db_name, table_name):
+        key = (db_name, table_name)
+        tables = self._tables()
+        if key not in tables:
+            tables[key] = swsscommon.Table(
+                self.connection(db_name), table_name)
+        return tables[key]
+
+
+class ActionQueue:
+    """Three FIFO lanes under one lock, served in order: power_off, graceful_shutdown,
+    everything else. put() wakes every waiter."""
+
+    LANE_POWER_OFF, LANE_SHUTDOWN, LANE_NORMAL = 0, 1, 2
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._lanes = (collections.deque(), collections.deque(), collections.deque())
+
+    @classmethod
+    def lane_of(cls, action):
+        if action == ACTION_POWER_OFF:
+            return cls.LANE_POWER_OFF
+        if action == ACTION_GRACEFUL_SHUTDOWN:
+            return cls.LANE_SHUTDOWN
+        return cls.LANE_NORMAL
+
+    def put(self, item):
+        with self._cond:
+            self._lanes[self.lane_of(item.action)].append(item)
+            self._cond.notify_all()
+            return item
+
+    def get(self, timeout):
+        """Return the next item, or None when nothing arrived within timeout."""
+        with self._cond:
+            if not any(self._lanes):
+                self._cond.wait(timeout)
+            for lane in self._lanes:
+                if lane:
+                    return lane.popleft()
+            return None
+
+    def _pending_through_locked(self, lane):
+        return any(self._lanes[i] for i in range(lane + 1))
+
+    def pending_through(self, lane):
+        """True when a request is queued in `lane` or a lane served before it."""
+        with self._lock:
+            return self._pending_through_locked(lane)
+
+    def wait_pending_through(self, lane, timeout):
+        """Like pending_through(), but waits up to timeout for a put() first; the check and
+        the wait share one lock acquisition, so a put() in between is never missed."""
+        with self._cond:
+            if self._pending_through_locked(lane):
+                return True
+            self._cond.wait(timeout)
+            return self._pending_through_locked(lane)
+
+    def empty(self):
+        with self._lock:
+            return not any(self._lanes)
+
+    def notify_all(self):
+        with self._cond:
+            self._cond.notify_all()
+
+    def drain(self):
+        with self._lock:
+            items = [item for lane in self._lanes for item in lane]
+            for lane in self._lanes:
+                lane.clear()
+        return items
+
+
+class _StopFlag:
+    """The daemon's stop request. It takes no lock, so the signal handler can set it
+    whatever the main thread holds; every wait polls it."""
+
+    POLL_SECS = 0.2
+
+    def __init__(self):
+        self._set = False
+
+    def set(self):
+        self._set = True
+
+    def is_set(self):
+        return self._set
+
+    def wait(self, timeout):
+        """Return True as soon as the flag is set, False when timeout elapses first."""
+        slept = 0.0
+        while not self._set:
+            if slept >= timeout:
+                return False
+            step = min(self.POLL_SECS, timeout - slept)
+            time.sleep(step)
+            slept += step
+        return True
+
+
+class _OpCancel:
+    """Cancel view of one running operation: set while the daemon stops or a queued
+    request outranks the operation's phase. A power_off outranks every wait; a
+    graceful_shutdown outranks the waits of a raise (phase raising) only, so a
+    handshake in progress is never cancelled for another graceful request.
+    A power-off's own verification consults the stop flag alone instead.
+    """
+
+    def __init__(self, daemon, operation):
+        self._daemon = daemon
+        self._operation = operation
+
+    def _outranking_lane(self):
+        if self._operation.phase == PHASE_RAISING:
+            return ActionQueue.LANE_SHUTDOWN
+        return ActionQueue.LANE_POWER_OFF
+
+    def is_set(self):
+        return self._daemon.stop_event.is_set() or \
+            self._daemon.action_queue.pending_through(self._outranking_lane())
+
+    def wait(self, timeout):
+        """Return True as soon as is_set() holds, False when timeout elapses first."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._daemon.stop_event.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self.is_set()
+            if self._daemon.action_queue.wait_pending_through(
+                    self._outranking_lane(), min(remaining, 1.0)):
+                return True
+
+
+def classify_report(resp, our_id):
+    """Classify one gNOI RebootStatus report for the current operation."""
+    if re.findall(TAG_RE, resp.reason) != [our_id] or resp.active:
+        return "keep_waiting", None
+    if resp.status.message:
+        return "forced", OP_REASON_BACKEND_ANSWERED
+    if resp.method == system_pb2.HALT and \
+            resp.status.status == system_pb2.RebootStatus.STATUS_SUCCESS:
+        return "graceful", None
+    return "forced", OP_REASON_CHECK_FAILED
+
+
+def _leg_success(graceful, reason):
+    """The outcome of a graceful operation whose power steps all succeeded."""
+    return (OP_RESULT_SUCCESS_GRACEFUL if graceful else OP_RESULT_SUCCESS_FORCED), reason, True
+
+
+class GnoiRpcError(Exception):
+    """Normalized gNOI transport failure exposed to operation code."""
+
+
+class GnoiCredentialError(GnoiRpcError):
+    """The client credentials could not be loaded; no request was sent."""
+
+
+class GnoiRequester:
+    """mTLS wrapper around the in-process gNOI client for one operation.
+
+    close() may run on the main thread while the handshake thread is inside an
+    RPC; that RPC then fails at once. grpc tolerates a double close, so no lock.
+    """
+
+    def __init__(self, target_addr, target_port, cert_paths, server_name):
+        self.target_addr = target_addr
+        self.target_port = target_port
+        self.cert_paths = cert_paths
+        self.server_name = server_name
+        self._client = None
+
+    def _read_credential(self, field):
+        """Read one PEM file; any problem with it is a credential error, not a transport failure."""
+        path = self.cert_paths[field]
+        if not isinstance(path, str) or not os.path.isabs(path):
+            raise GnoiCredentialError("{}: invalid path {!r}".format(field, path))
+        try:
+            with open(path, "rb") as stream:
+                data = stream.read()
+        except OSError as e:
+            raise GnoiCredentialError("{}: {}".format(field, e)) from e
+        if not data:
+            raise GnoiCredentialError("{}: empty file {}".format(field, path))
+        return data
+
+    def open(self):
+        ca_cert = self._read_credential("ca_crt")
+        client_key = self._read_credential("client_key")
+        client_cert = self._read_credential("client_crt")
+        try:
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=ca_cert,
+                private_key=client_key,
+                certificate_chain=client_cert,
+            )
+            client = GnoiClient(
+                "{}:{}".format(self.target_addr, self.target_port),
+                options=(("grpc.ssl_target_name_override", self.server_name),),
+                credentials=credentials,
+            )
+            client.__enter__()
+        except (ValueError, grpc.RpcError) as e:
+            raise GnoiRpcError(str(e)) from e
+        self._client = client
+
+    def close(self):
+        client = self._client
+        self._client = None
+        if client is None:
+            return
+        try:
+            client.__exit__(None, None, None)
+        except Exception as e:
+            raise GnoiRpcError(str(e)) from e
+
+    def _live_client(self):
+        client = self._client
+        if client is None:
+            raise GnoiRpcError("channel closed")
+        return client
+
+    def send_halt(self, message, timeout_secs):
+        request = system_pb2.RebootRequest(method=system_pb2.HALT, message=message)
+        try:
+            return self._live_client().system.Reboot(request, timeout=timeout_secs)
+        except (grpc.RpcError, RuntimeError, ValueError) as e:
+            # RuntimeError: the client was closed under us (a cancellation); ValueError: grpc's own
+            raise GnoiRpcError(str(e)) from e
+
+    def poll_status(self, timeout_secs):
+        request = system_pb2.RebootStatusRequest()
+        try:
+            return self._live_client().system.RebootStatus(request, timeout=timeout_secs)
+        except (grpc.RpcError, RuntimeError, ValueError) as e:
+            raise GnoiRpcError(str(e)) from e
+
+
 # ============================================================
 # SwitchHostController
 # ============================================================
@@ -335,18 +692,29 @@ def fvs_to_dict(fvs):
 class SwitchHostController(EventLogger):
     """
     Wraps platform Module API to power ON/OFF/cycle the Switch-Host and
-    tracks its state in the HOST_STATE STATE_DB table.
+    tracks its state in the HOST_STATE STATE_DB table. Only the main thread
+    issues platform power calls.
     """
 
-    def __init__(self, chassis):
+    def __init__(self, chassis, thread_database=None, critical_event_checker=None):
         super(SwitchHostController, self).__init__(SYSLOG_IDENTIFIER, CRITICAL_EVENT_LOG_FILE)
         self.chassis = chassis
         self._switch_host_module = None
-        self.state_db = daemon_base.db_connect("STATE_DB")
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
-        self.host_state_table = swsscommon.Table(self.state_db, HOST_STATE_TABLE)
-        self.chassis_module_info_table = swsscommon.Table(self.state_db, CHASSIS_MODULE_INFO_TABLE)
-        self.chassis_module_config_table = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
+        self._thread_database = thread_database or _ThreadDatabase()
+        self.critical_event_checker = critical_event_checker
+
+    @property
+    def host_state_table(self):
+        return self._thread_database.table("STATE_DB", HOST_STATE_TABLE)
+
+    @property
+    def chassis_module_info_table(self):
+        return self._thread_database.table(
+            "STATE_DB", CHASSIS_MODULE_INFO_TABLE)
+
+    @property
+    def chassis_module_config_table(self):
+        return self._thread_database.table("CONFIG_DB", CHASSIS_MODULE_TABLE)
 
     def _get_switch_host_module(self):
         """Return the Switch-Host Module object from the chassis module list."""
@@ -376,111 +744,160 @@ class SwitchHostController(EventLogger):
         # Normalise to uppercase to match HOST_STATE DB schema (ONLINE / OFFLINE)
         return str(raw).upper() if raw != NOT_AVAILABLE else raw
 
-    def _verify_oper_status(self, expected_status, timeout_secs, context):
-        """
-        Poll get_oper_status() until it matches expected_status or timeout_secs elapses.
-        Returns True when confirmed, False on timeout.
-        """
+    def _verify_oper_status(self, expected_status, timeout_secs, context, cancel):
+        """Poll oper status until it equals expected_status, timeout_secs elapse or cancel is set."""
         deadline = time.monotonic() + timeout_secs
-        while time.monotonic() < deadline:
+        while True:
+            if cancel.is_set():
+                return PowerCallResult.CANCELLED
             if self.get_oper_status() == expected_status:
                 self.log_info("{}: oper_status confirmed {}".format(context, expected_status))
-                return True
-            time.sleep(POWER_VERIFY_POLL_INTERVAL_SECS)
+                return PowerCallResult.CONFIRMED
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if cancel.wait(min(POWER_VERIFY_POLL_INTERVAL_SECS, remaining)):
+                return PowerCallResult.CANCELLED
         self.log_error("{}: oper_status did not reach {} within {}s (current: {})".format(
             context, expected_status, timeout_secs, self.get_oper_status()))
-        return False
+        return PowerCallResult.NOT_CONFIRMED
 
-    def _apply_admin_state(self, admin_up, transitional_power_state, final_power_state, expected_oper, op_name):
+    def _write_label(self, power_state, device_status=None, what="transition"):
+        """Best-effort HOST_STATE write; a record failure never stops a power action."""
+        try:
+            self._update_host_state(power_state, device_status)
+        except Exception as e:
+            self.log_error("Failed to record Switch-Host {} {}: {}".format(
+                what, power_state, repr(e)))
+
+    def _rollback_label(self, prior_power_state, prior_status):
+        """Put the prior label back after a request that issued nothing.
+
+        A prior that could not be read is left alone. The live status is not
+        consulted: OFFLINE alone must not settle the label to POWERED_OFF, which
+        the guard reads as removed power.
         """
-        Common implementation for power_on and power_off.
-        Snapshots prior STATE_DB values, writes the transitional power state,
-        issues set_admin_state, verifies the result, then writes the final power state.
-        device_status is always written from module->get_oper_status() (ONLINE|OFFLINE).
-        Rolls back to the prior STATE_DB snapshot on exception.
+        if not prior_power_state or prior_power_state == NOT_AVAILABLE:
+            return
+        self._write_label(prior_power_state, prior_status, "rollback")
+
+    def _issue_power_call(self, cancel, raising, platform_call,
+                          transitional_power_state, final_power_state, expected_oper,
+                          op_name, verify_timeout=POWER_VERIFY_TIMEOUT_SECS):
+        """Issue and verify one platform power call.
+
+        Before the call: cancel, gate (raises only), cancel again. A
+        cancel before the call rolls the label back. A raise fails closed when
+        its labels cannot be read or written (the guard trusts them); a removal
+        goes on to the platform regardless.
         """
+        issued = False
         module = self._get_switch_host_module()
         if module is None:
             self.log_error("Cannot {} Switch-Host: module not found".format(op_name))
-            return False
-        prior_power_state = self.get_db_power_state()
-        prior_status = self.get_db_device_status()
+            return PowerCallResult.NOT_CONFIRMED
+        if cancel.is_set():
+            return PowerCallResult.CANCELLED
+
         try:
-            # Write transitional power state (e.g. POWERING_ON/OFF) before platform call
-            self._update_host_state(transitional_power_state)
-            module.set_admin_state(admin_up)
+            prior_power_state = self.get_db_power_state()
+            prior_status = self.get_db_device_status()
+        except Exception as e:
+            if raising:
+                raise
+            self.log_error("Failed to read Switch-Host state before {}: {}".format(
+                op_name, repr(e)))
+            prior_power_state = prior_status = NOT_AVAILABLE
+
+        try:
+            try:
+                self._update_host_state(transitional_power_state)
+            except Exception as e:
+                if raising:
+                    raise
+                self.log_error("Failed to record Switch-Host {} transition: {}".format(
+                    op_name, repr(e)))
+            if cancel.is_set():
+                self._rollback_label(prior_power_state, prior_status)
+                return PowerCallResult.CANCELLED
+            if raising and self.critical_event_checker is not None and \
+                    self.critical_event_checker.is_power_on_blocked():
+                self.log_warning("{}: refusing Switch-Host {}".format(
+                    POWER_ON_BLOCK_REASON, op_name))
+                self._rollback_label(prior_power_state, prior_status)
+                return PowerCallResult.REFUSED_LEAK
+            if cancel.is_set():
+                self._rollback_label(prior_power_state, prior_status)
+                return PowerCallResult.CANCELLED
+
+            issued = True
+            try:
+                ok = platform_call(module)
+            except NotImplementedError:
+                self.log_error("Switch-Host {}: not implemented by the platform".format(op_name))
+                self._rollback_label(prior_power_state, prior_status)
+                return PowerCallResult.NOT_CONFIRMED
+            if ok is False:
+                # the call may still have taken effect; the verification decides
+                self.log_warning("Switch-Host {}: platform call returned False".format(op_name))
+
             self.log_notice("Switch-Host {} issued; verifying oper_status...".format(op_name))
-            verified = self._verify_oper_status(expected_oper, POWER_VERIFY_TIMEOUT_SECS, op_name)
-            if not verified:
+            verified = self._verify_oper_status(expected_oper, verify_timeout, op_name, cancel)
+            if verified == PowerCallResult.CONFIRMED:
+                self._write_label(final_power_state, what="final label")
+            elif verified == PowerCallResult.CANCELLED:
+                return verified
+            else:
                 self.log_error("Switch-Host {}: oper_status did not confirm {}".format(
                     op_name, expected_oper))
-            # Write final stable power state (e.g. POWER_ON/OFF); device_status from live oper_status
-            self._update_host_state(final_power_state)
+                # unconfirmed: keep the transitional label, refresh the live status
+                self._write_label(transitional_power_state)
             return verified
         except Exception as e:
             self.log_error("Failed to {} Switch-Host: {}".format(op_name, repr(e)))
-            self._update_host_state(prior_power_state, prior_status)
-            return False
+            if not issued:
+                self._rollback_label(prior_power_state, prior_status)
+            if cancel.is_set():
+                return PowerCallResult.CANCELLED
+            # an issued call may still take effect: its transitional label stays
+            return PowerCallResult.NOT_CONFIRMED
 
-    def power_on(self):
-        """Power ON the Switch-Host via module->set_admin_state(True).
+    def power_on(self, cancel):
+        """Power ON via module->set_admin_state(True): POWERING_ON, then POWERED_ON."""
+        return self._issue_power_call(
+            cancel, True, lambda module: module.set_admin_state(True),
+            SWITCH_HOST_POWERING_ON, POWER_STATE_ON, SWITCH_HOST_ONLINE, "power_on")
 
-        device_power_state: POWERING_ON (transitional) -> POWER_ON (final)
-        device_status:      ONLINE | OFFLINE from module->get_oper_status()
-        """
-        return self._apply_admin_state(
-            True, SWITCH_HOST_POWERING_ON, POWER_STATE_ON, SWITCH_HOST_ONLINE, "power_on")
+    def power_off(self, cancel):
+        """Power OFF via module->set_admin_state(False): POWERING_OFF, then POWERED_OFF."""
+        return self._issue_power_call(
+            cancel, False, lambda module: module.set_admin_state(False),
+            SWITCH_HOST_POWERING_OFF, POWER_STATE_OFF, SWITCH_HOST_OFFLINE, "power_off")
 
-    def power_off(self):
-        """Power OFF the Switch-Host via module->set_admin_state(False).
-
-        device_power_state: POWERING_OFF (transitional) -> POWER_OFF (final)
-        device_status:      ONLINE | OFFLINE from module->get_oper_status()
-        """
-        return self._apply_admin_state(
-            False, SWITCH_HOST_POWERING_OFF, POWER_STATE_OFF, SWITCH_HOST_OFFLINE, "power_off")
-
-    def power_cycle(self):
-        """Power cycle the Switch-Host via module->do_power_cycle().
-
-        device_power_state: POWER_CYCLING (transitional) -> POWER_CYCLE (final)
-        device_status:      ONLINE | OFFLINE from module->get_oper_status()
-        """
-        module = self._get_switch_host_module()
-        if module is None:
-            self.log_error("Cannot power cycle Switch-Host: module not found")
-            return False
-        prior_power_state = self.get_db_power_state()
-        prior_status = self.get_db_device_status()
-        try:
-            # Write transitional power state (POWER_CYCLING) before platform call
-            self._update_host_state(SWITCH_HOST_POWER_CYCLING)
-            try_get(module.do_power_cycle, default=False)
-            self.log_notice("Switch-Host power cycle issued; verifying oper_status...")
-            # Use 2x timeout: host must go offline then come back online
-            verified = self._verify_oper_status(
-                SWITCH_HOST_ONLINE, POWER_VERIFY_TIMEOUT_SECS * 2, "power_cycle")
-            if not verified:
-                self.log_error("Switch-Host power cycle: oper_status did not confirm ONLINE")
-            # Write final stable power state; device_status from live oper_status
-            self._update_host_state(POWER_STATE_CYCLE)
-            return verified
-        except Exception as e:
-            self.log_error("Failed to power cycle Switch-Host: {}".format(repr(e)))
-            self._update_host_state(prior_power_state, prior_status)
-            return False
+    def power_cycle(self, cancel):
+        """Power cycle via module->do_power_cycle(): POWER_CYCLING, then POWER_CYCLE."""
+        return self._issue_power_call(
+            cancel, True, lambda module: module.do_power_cycle(),
+            SWITCH_HOST_POWER_CYCLING, POWER_STATE_CYCLE, SWITCH_HOST_ONLINE, "power_cycle",
+            verify_timeout=POWER_VERIFY_TIMEOUT_SECS * 2)
 
     def _update_host_state(self, power_state, device_status=None):
         """Write device_power_state and device_status to HOST_STATE STATE_DB.
 
         power_state   : device_power_state field value.
-                        Transitional: POWERING_ON | POWERING_OFF | POWER_CYCLING
-                        Final/stable: POWER_ON | POWER_OFF | POWER_CYCLE | GRACEFUL_SHUT
-        device_status : device_status field value — always ONLINE | OFFLINE.
+                        Transitional: POWERING_ON | POWERING_OFF | GRACEFUL_SHUTTING_DOWN | POWER_CYCLING
+                        Settled: POWERED_ON | POWERED_OFF | POWER_CYCLE
+        device_status : device_status field value, the platform's reading (ONLINE or OFFLINE).
                         When None, fetched live from module->get_oper_status().
+                        A failed reading (N/A) is not written; the previous
+                        value is kept.
         """
         if device_status is None:
             device_status = self.get_oper_status()
+        if device_status == NOT_AVAILABLE:
+            previous = self.get_db_device_status()
+            self.log_warning("Switch-Host oper_status unavailable; keeping device_status={}".format(previous))
+            device_status = previous
         fvs = swsscommon.FieldValuePairs([
             (FIELD_DEVICE_POWER_STATE, power_state),
             (FIELD_DEVICE_STATUS, str(device_status)),
@@ -503,22 +920,65 @@ class SwitchHostController(EventLogger):
             return fvs_to_dict(result[1]).get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
         return NOT_AVAILABLE
 
-    def init_host_state(self):
-        """Set device_power_state from live oper_status (ONLINE -> POWERED_ON, OFFLINE -> POWERED_OFF).
+    def write_operation_start(self, request_id, trigger):
+        self.host_state_table.set(HOST_STATE_KEY, swsscommon.FieldValuePairs([
+            (FIELD_OP_REQUEST_ID, request_id),
+            (FIELD_OP_TRIGGER, trigger),
+            (FIELD_OP_RESULT, "-"),
+            (FIELD_OP_REASON, "-"),
+        ]))
 
-        Called only at daemon startup. Any persisted transitional state from a prior
-        interrupted run is overwritten with the stable value derived from live oper_status.
+    def write_operation_terminal(self, request_id, trigger, op_result, op_reason):
+        """One write for the whole record, so a failed start write cannot misattribute it."""
+        self.host_state_table.set(HOST_STATE_KEY, swsscommon.FieldValuePairs([
+            (FIELD_OP_REQUEST_ID, request_id),
+            (FIELD_OP_TRIGGER, trigger),
+            (FIELD_OP_RESULT, op_result),
+            (FIELD_OP_REASON, op_reason),
+        ]))
+
+    def init_host_state(self):
+        """Refresh device_power_state at daemon startup.
+
+        ONLINE -> POWERED_ON. OFFLINE -> POWERED_OFF only when a power-off or
+        nothing was recorded: a label written before a platform call is no
+        evidence that power was removed, and the guard trusts POWERED_OFF, so any
+        other label is kept. A reading that is neither keeps the label too. An
+        operation record left open by the previous run is closed as abandoned first.
         """
+        stale_state = NOT_AVAILABLE
+        result = self.host_state_table.get(HOST_STATE_KEY)
+        if result and result[0]:
+            entry = fvs_to_dict(result[1])
+            stale_state = entry.get(FIELD_DEVICE_POWER_STATE, NOT_AVAILABLE)
+            request_id = entry.get(FIELD_OP_REQUEST_ID, "-")
+            if request_id not in ("-", "") and entry.get(FIELD_OP_RESULT) in (None, "-"):
+                self.write_operation_terminal(
+                    request_id, entry.get(FIELD_OP_TRIGGER, "-"), OP_RESULT_ABANDONED, "-")
+                hint = ""
+                if stale_state in (SWITCH_HOST_POWERING_OFF, SWITCH_HOST_GRACEFUL_SHUTTING_DOWN):
+                    hint = "; the host may still be powered: a power-off must precede the next power-on"
+                self.log_warning(
+                    "OP_ABANDONED request_id={} stale_state={}{}".format(
+                        request_id, stale_state, hint))
+
         oper_status = self.get_oper_status()
-        power_state = POWER_STATE_ON if str(oper_status).upper() == SWITCH_HOST_ONLINE else POWER_STATE_OFF
+        if oper_status == SWITCH_HOST_ONLINE:
+            power_state = POWER_STATE_ON
+        elif oper_status == SWITCH_HOST_OFFLINE:
+            power_state = POWER_STATE_OFF if stale_state in (NOT_AVAILABLE, POWER_STATE_OFF) else stale_state
+        else:
+            self.log_warning("STARTUP: Switch-Host oper_status={}; keeping recorded power state {}".format(
+                oper_status, stale_state))
+            power_state = stale_state
         self._update_host_state(power_state, oper_status)
 
     def initialize_chassis_module(self, admin_status):
         """Populate CHASSIS_MODULE|SWITCH-HOST in both CONFIG_DB and STATE_DB at daemon startup.
 
         CONFIG_DB|CHASSIS_MODULE|SWITCH-HOST is seeded with the supplied admin_status
-        and default timings (power_on_delay=0, graceful_shutdown_timeout=0) only when
-        no entry exists, so any operator override persisted from a prior boot is preserved.
+        and default timings only when no entry exists, so any operator override
+        persisted from a prior boot is preserved.
         STATE_DB|CHASSIS_MODULE_TABLE|SWITCH-HOST is always (re)populated with module
         identity, current oper_status, and the supplied admin_status.
         """
@@ -577,15 +1037,15 @@ class SwitchHostController(EventLogger):
 # ============================================================
 
 class PolicyReader(EventLogger):
-    """Reads bmcctld timing and leak policy configuration from CONFIG_DB."""
+    """Reads bmcctld configuration from CONFIG_DB."""
 
-    def __init__(self):
+    def __init__(self, thread_database=None):
         super(PolicyReader, self).__init__(SYSLOG_IDENTIFIER)
-        self.config_db = daemon_base.db_connect("CONFIG_DB")
+        self._thread_database = thread_database or _ThreadDatabase()
 
     def _get_chassis_module_entry(self):
         """Return the CHASSIS_MODULE|SWITCH-HOST entry as a dict (empty dict if missing)."""
-        tbl = swsscommon.Table(self.config_db, CHASSIS_MODULE_TABLE)
+        tbl = self._thread_database.table("CONFIG_DB", CHASSIS_MODULE_TABLE)
         result = tbl.get(SWITCH_HOST_MODULE_KEY)
         if result and result[0]:
             return fvs_to_dict(result[1])
@@ -601,7 +1061,7 @@ class PolicyReader(EventLogger):
         return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, default)
 
     def get_power_on_delay(self):
-        """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
+        """Return the configured power_on_delay in seconds, or the default delay."""
         raw = self._get_chassis_module_entry().get(FIELD_POWER_ON_DELAY)
         if raw is not None:
             try:
@@ -611,18 +1071,28 @@ class PolicyReader(EventLogger):
         return DEFAULT_POWER_ON_DELAY_SECS
 
     def get_graceful_shutdown_timeout(self):
-        """Return graceful_shutdown_timeout in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
+        """Return the configured graceful shutdown timeout, or 120 seconds."""
         raw = self._get_chassis_module_entry().get(FIELD_GRACEFUL_SHUTDOWN_TIMEOUT)
-        if raw is not None:
-            try:
-                return int(raw)
-            except (ValueError, TypeError):
-                pass
-        return DEFAULT_SHUTDOWN_DELAY_SECS
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            return DEFAULT_SHUTDOWN_DELAY_SECS
+        return value if value >= 0 else DEFAULT_SHUTDOWN_DELAY_SECS
 
-    def get_leak_control_policy(self):
-        """Return LEAK_CONTROL_POLICY as a dict with action defaults filled in."""
-        policy = {
+    def get_gnoi_cert_paths(self):
+        """Client credential paths: CONFIG_DB GNMI_CLIENT|certs, else the /etc/sonic/credential defaults.
+
+        Nothing else is consulted, so a BMC without link credentials is not_qualified.
+        """
+        table = self._thread_database.table("CONFIG_DB", GNMI_CLIENT_TABLE)
+        result = table.get("certs")
+        entry = fvs_to_dict(result[1]) if result and result[0] else {}
+        return {field: entry.get(field, default)
+                for field, default in DEFAULT_GNOI_CERT_PATHS.items()}
+
+    @staticmethod
+    def default_leak_control_policy():
+        return {
             "system_leak_policy": DEFAULT_SYSTEM_LEAK_POLICY,
             "system_critical_leak_action": DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION,
             "system_major_leak_action": DEFAULT_SYSTEM_MAJOR_LEAK_ACTION,
@@ -632,7 +1102,12 @@ class PolicyReader(EventLogger):
             "rack_mgr_major_alert_action": DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION,
             "rack_mgr_minor_alert_action": DEFAULT_RACK_MGR_MINOR_ALERT_ACTION,
         }
-        tbl = swsscommon.Table(self.config_db, LEAK_CONTROL_POLICY_TABLE)
+
+    def get_leak_control_policy(self):
+        """Return LEAK_CONTROL_POLICY as a dict with action defaults filled in."""
+        policy = self.default_leak_control_policy()
+        tbl = self._thread_database.table(
+            "CONFIG_DB", LEAK_CONTROL_POLICY_TABLE)
         # LEAK_CONTROL_POLICY is a single-row table; CLI writes key "policy", legacy variants also tried
         for key in ("policy", LEAK_CONTROL_POLICY_TABLE, ""):
             result = tbl.get(key)
@@ -657,14 +1132,15 @@ class CriticalEventChecker(logger.Logger):
         "Rack_level_leak",
     ]
 
-    def __init__(self, policy_reader):
+    def __init__(self, policy_reader, thread_database=None):
         super(CriticalEventChecker, self).__init__(SYSLOG_IDENTIFIER)
-        self.state_db = daemon_base.db_connect("STATE_DB")
+        self._thread_database = thread_database or _ThreadDatabase()
         self.policy_reader = policy_reader
 
     def has_critical_system_leak(self):
         """Return True if SYSTEM_LEAK_STATUS|system shows CRITICAL_SYSTEM_LEAK."""
-        tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
+        tbl = self._thread_database.table(
+            "STATE_DB", SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
             if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SystemLeakStatus.CRITICAL:
@@ -673,7 +1149,8 @@ class CriticalEventChecker(logger.Logger):
 
     def has_critical_rack_mgr_alert(self):
         """Return True if any RACK_MANAGER_ALERT entry has CRITICAL severity."""
-        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        tbl = self._thread_database.table(
+            "STATE_DB", RACK_MANAGER_ALERT_TABLE)
         for alert_key in self.ALERT_KEYS:
             result = tbl.get(alert_key)
             if result and result[0]:
@@ -686,7 +1163,8 @@ class CriticalEventChecker(logger.Logger):
 
     def get_highest_rack_mgr_alert_severity(self):
         """Return the highest active RACK_MANAGER_ALERT severity (CRITICAL > MAJOR > MINOR), or None."""
-        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        tbl = self._thread_database.table(
+            "STATE_DB", RACK_MANAGER_ALERT_TABLE)
         active = set()
         for alert_key in self.ALERT_KEYS:
             result = tbl.get(alert_key)
@@ -742,7 +1220,8 @@ class CriticalEventChecker(logger.Logger):
 
     def get_system_leak_status(self):
         """Return device_leak_status string from SYSTEM_LEAK_STATUS table."""
-        tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
+        tbl = self._thread_database.table(
+            "STATE_DB", SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
             return fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS, "")
@@ -755,112 +1234,297 @@ class CriticalEventChecker(logger.Logger):
 
 class GracefulShutdownHandler(EventLogger):
     """
-    Issues a GNOI soft shutdown to Switch-Host and waits graceful_shutdown_timeout
-    seconds for it to go OFFLINE.  Call platform power_off after the graceful_shutdown_timeout
-    irrespective of GNOI request succeeded or not.
+    Sends a tagged gNOI HALT, waits for its attributed terminal report within
+    one deadline, then removes Switch-Host power; the restart pauses and raises it.
+
+    Runs on the main thread. Only the handshake runs on a helper thread
+    ("bmcctld-graceful") that touches neither the platform nor Redis; the main
+    thread cancels it when a POWER_OFF is queued or the daemon stops and never
+    waits for it beyond a bound. Terminal records are written by the daemon.
     """
 
-    def __init__(self, controller, policy_reader):
+    def __init__(self, controller, policy_reader, stop_event):
         super(GracefulShutdownHandler, self).__init__(SYSLOG_IDENTIFIER)
         self._event_log = _event_logger  # for critical leak / alert events only
         self.controller = controller
         self.policy_reader = policy_reader
+        self.stop_event = stop_event
+        self._handshake_thread = None
 
-    def execute(self):
-        """
-        Perform graceful shutdown of Switch-Host.
-        Sends gNOI System.Reboot(COLD) and waits for the host to go OFFLINE,
-        then always issues power_off() to ensure power is removed.
-        Returns True on success, False on failure.
-        """
-        graceful_shutdown_timeout = self.policy_reader.get_graceful_shutdown_timeout()
-        self.log_notice("Initiating graceful shutdown of Switch-Host (timeout={}s)".format(graceful_shutdown_timeout))
+    def _rpc_failure_reason(self, operation, what, exc):
+        """preempted after a cancel; not_qualified when the credentials are unusable; else rpc_failure."""
+        if self._leg_cancelled(operation):
+            return OP_REASON_PREEMPTED
+        if isinstance(exc, GnoiCredentialError):
+            self.log_warning("BMC gNOI client credentials not usable: {}".format(str(exc)))
+            return OP_REASON_NOT_QUALIFIED
+        self.log_warning("GNOI {} RPC failed: {}".format(what, str(exc)))
+        return OP_REASON_RPC_FAILURE
 
-        prior_power_state = self.controller.get_db_power_state()
-        prior_status = self.controller.get_db_device_status()
+    @staticmethod
+    def _leg_cancelled(operation):
+        """The handshake thread's cancel: the operation's, or the main thread having given up on it."""
+        return operation.abandoned or operation.cancel.is_set()
 
-        # Write transitional power state (GRACEFUL_SHUTTING_DOWN) before issuing shutdown
-        self.controller._update_host_state(SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
-
-        # graceful_shutdown_timeout == 0 means skip GNOI and force power-off immediately
-        if graceful_shutdown_timeout == 0:
-            self.log_notice("graceful_shutdown_timeout is 0: forcing immediate power OFF")
-        else:
+    def _close_requester(self, operation):
+        """Close the channel the handshake thread published, so a blocked RPC fails at once."""
+        requester = operation.requester
+        if requester is not None:
             try:
-                gnoi_ok = self._issue_gnoi_shutdown()
+                requester.close()
             except Exception as e:
-                self.log_error("Unexpected error during GNOI shutdown: {}".format(repr(e)))
-                self.controller._update_host_state(prior_power_state, prior_status)
-                return False
+                self.log_warning("GNOI channel close on cancellation failed: {}".format(str(e)))
 
-            if not gnoi_ok:
-                self.log_warning("GNOI shutdown request failed; proceeding with power OFF")
-            else:
-                # Wait up to graceful_shutdown_timeout for Switch-Host to go OFFLINE gracefully
-                self.log_info("Waiting up to {}s for Switch-Host to go OFFLINE...".format(graceful_shutdown_timeout))
-                went_offline = self.controller._verify_oper_status(
-                    SWITCH_HOST_OFFLINE, graceful_shutdown_timeout, "graceful_shutdown")
-                if went_offline:
-                    self.log_notice("Switch-Host went OFFLINE gracefully; issuing power OFF")
-                else:
-                    self.log_warning("Graceful shutdown timed out after {}s; issuing power OFF".format(
-                        graceful_shutdown_timeout))
+    def _run_shutdown_leg(self, operation, requester_factory):
+        """Run the handshake; returns (graceful, reason), reason being "-" after a graceful leg.
 
-        success = self.controller.power_off()
-        self._event_log.log_notice("GRACEFUL_SHUTDOWN done: success={} (timeout={}s)".format(
-            success, graceful_shutdown_timeout))
-        return success
-
-    def _issue_gnoi_shutdown(self):
-        # TODO: This approach of calling gnoi_client to be replaced by idea in this PR
-        # https://github.com/sonic-net/sonic-host-services/pull/361
+        Whatever ends the handshake, bmcctld's own exception included, the leg is
+        graceful or forced and the caller's power-off follows.
         """
-        Send a GNOI System.Reboot (COLD/graceful) request to the Switch-Host.
-        Returns True if the request was accepted, False otherwise.
-        Reference: https://github.com/sonic-net/SONiC/blob/master/doc/mgmt/gnmi/gnoi_system_hld.md
-        switch_host_addr = self._get_switch_host_addr()
-        self.log_info("Sending GNOI shutdown to Switch-Host at {}".format(switch_host_addr))
         try:
-            result = subprocess.run(
-                [
-                    "gnoi_client",
-                    "-target", switch_host_addr,
-                    "-rpc", "System.Reboot",
-                    "-jsonin", '{"method": 1}',  # method 1 = COLD (graceful reboot/shutdown)
-                ],
-                timeout=GNOI_REQUEST_TIMEOUT_SECS,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                self.log_notice("GNOI shutdown request accepted by Switch-Host")
-                return True
-            self.log_warning("GNOI shutdown failed (rc={}): {}".format(result.returncode, result.stderr))
-            return False
-        except subprocess.TimeoutExpired:
-            self.log_warning("GNOI shutdown request timed out after {}s".format(GNOI_REQUEST_TIMEOUT_SECS))
-            return False
-        except FileNotFoundError:
-            self.log_warning("gnoi_client not found; cannot issue graceful shutdown")
-            return False
+            if operation.cancel.is_set():
+                graceful, reason = False, OP_REASON_PREEMPTED   # no label, no thread, no HALT
+            else:
+                timeout = self.policy_reader.get_graceful_shutdown_timeout()
+                cert_paths = self.policy_reader.get_gnoi_cert_paths()
+                self.log_notice(
+                    "Initiating graceful shutdown of Switch-Host (timeout={}s)".format(timeout))
+                self.controller._write_label(SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
+                if timeout == 0:
+                    graceful, reason = False, OP_REASON_TIMEOUT_ZERO
+                elif self._handshake_thread is not None and self._handshake_thread.is_alive():
+                    # an abandoned thread is still winding down; it sends nothing, so force rather than fail
+                    self.log_error("Previous graceful handshake thread still alive; forcing request_id={}".format(
+                        operation.request_id))
+                    graceful, reason = False, OP_REASON_UNCLASSIFIED
+                else:
+                    graceful, reason = self._handshake_on_thread(
+                        operation, requester_factory, cert_paths, time.monotonic() + timeout)
         except Exception as e:
-            self.log_warning("GNOI shutdown exception: {}".format(repr(e)))
-            return False
-        """
-        return True
+            self.log_error("Graceful leg failed request_id={}: {}\n{}".format(
+                operation.request_id, repr(e), traceback.format_exc()))
+            operation.leg_failed = True
+            graceful = False
+            reason = OP_REASON_PREEMPTED if operation.cancel.is_set() else OP_REASON_UNCLASSIFIED
+        operation.leg_reason = "-" if graceful else (reason or OP_REASON_UNCLASSIFIED)
+        return graceful, operation.leg_reason
 
-    def _get_switch_host_addr(self):
-        """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
+    def _handshake_on_thread(self, operation, requester_factory, cert_paths, deadline):
+        """Run the handshake on the helper thread and wait for it, but not for ever.
+
+        A cancellation closes the channel, so the thread normally returns within a
+        second. One still alive HANDSHAKE_JOIN_SECS after the cancellation, or at
+        the handshake's hard limit, is abandoned and sends no HALT once it wakes.
+        """
+        thread = threading.Thread(
+            target=self._handshake,
+            args=(operation, requester_factory, cert_paths, deadline),
+            daemon=True,
+            name="bmcctld-graceful",
+        )
+        try:
+            thread.start()
+        except Exception as e:
+            self.log_error("Cannot start the graceful handshake thread request_id={}: {}".format(
+                operation.request_id, repr(e)))
+            operation.leg_failed = True
+            return False, OP_REASON_UNCLASSIFIED
+        self._handshake_thread = thread
+        # The helper's RPC timeouts are bounded by the remaining time, so it returns at
+        # the deadline on its own; the allowance covers its unwinding only.
+        hard_limit = deadline + HANDSHAKE_JOIN_SECS
+        cancelled_at = None
+        while thread.is_alive():
+            thread.join(GRACEFUL_JOIN_SLICE_SECS)
+            if not thread.is_alive():
+                break
+            now = time.monotonic()
+            if cancelled_at is None and operation.cancel.is_set():
+                cancelled_at = now
+                self._event_log.log_notice(
+                    "Graceful handshake cancelled request_id={} cause={}".format(
+                        operation.request_id,
+                        "stop" if self.stop_event.is_set() else "power_off"))
+                self._close_requester(operation)
+            waited_out = cancelled_at is not None and now - cancelled_at >= HANDSHAKE_JOIN_SECS
+            if waited_out or now >= hard_limit:
+                operation.abandoned = True
+                self._close_requester(operation)
+                self.log_error("Graceful handshake abandoned after {:.0f}s request_id={}".format(
+                    now - (cancelled_at if waited_out else deadline), operation.request_id))
+                if operation.cancel.is_set():
+                    # The queued power_off (or the stop) owns the power domain now.
+                    return False, OP_REASON_PREEMPTED
+                operation.leg_failed = True   # own handshake wedged: remove power, never raise
+                return False, OP_REASON_UNCLASSIFIED
+        return operation.leg or (False, OP_REASON_UNCLASSIFIED)
+
+    def _handshake(self, operation, requester_factory, cert_paths, deadline):
+        """The helper thread: open the channel, send the tagged HALT, wait for its
+        attributed report and leave (graceful, reason) in operation.leg.
+
+        The requester is published on the operation so the main thread can close a
+        channel blocked in an RPC; it is closed here whatever happened.
+        """
+        try:
+            requester = requester_factory(
+                self._get_switch_host_addr(),
+                self._get_switch_host_gnoi_port(),
+                cert_paths,
+                GNOI_SERVER_NAME,
+            )
+            operation.requester = requester
+            try:
+                operation.leg = self._halt_and_poll(operation, requester, deadline)
+            finally:
+                operation.requester = None
+                try:
+                    requester.close()
+                except GnoiRpcError as e:
+                    self.log_warning("GNOI channel close failed: {}".format(str(e)))
+        except Exception as e:
+            self.log_error("Graceful leg failed request_id={}: {}\n{}".format(
+                operation.request_id, repr(e), traceback.format_exc()))
+            operation.leg_failed = True
+            operation.leg = (False, OP_REASON_PREEMPTED if self._leg_cancelled(operation)
+                             else OP_REASON_UNCLASSIFIED)
+
+    def _halt_and_poll(self, operation, requester, deadline):
+        """The handshake proper; every wait and RPC boundary consults the cancel."""
+        if self._leg_cancelled(operation):
+            return False, OP_REASON_PREEMPTED
+        try:
+            requester.open()
+        except GnoiRpcError as e:
+            return False, self._rpc_failure_reason(operation, "shutdown", e)
+        if self._leg_cancelled(operation):
+            return False, OP_REASON_PREEMPTED
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, OP_REASON_DEADLINE
+        self.log_notice("Sending tagged GNOI HALT request_id={}".format(operation.request_id))
+        try:
+            requester.send_halt(
+                "BMC pre-shutdown request [bmc-req:{}]".format(operation.request_id),
+                timeout_secs=min(GNOI_REQUEST_TIMEOUT_SECS, remaining),
+            )
+        except GnoiRpcError as e:
+            return False, self._rpc_failure_reason(operation, "shutdown", e)
+
+        while True:
+            if self._leg_cancelled(operation):
+                return False, OP_REASON_PREEMPTED
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False, OP_REASON_DEADLINE
+            try:
+                response = requester.poll_status(
+                    timeout_secs=min(GNOI_STATUS_RPC_TIMEOUT_SECS, remaining))
+            except GnoiRpcError as e:
+                return False, self._rpc_failure_reason(operation, "status", e)
+            if self._leg_cancelled(operation):
+                return False, OP_REASON_PREEMPTED
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False, OP_REASON_DEADLINE
+            classification, report_reason = classify_report(response, operation.request_id)
+            if classification == "graceful":
+                self.log_notice(
+                    "Tagged graceful completion received request_id={}".format(
+                        operation.request_id))
+                return True, None
+            if classification == "forced":
+                self.log_notice(
+                    "Tagged terminal failure received request_id={} reason={}".format(
+                        operation.request_id, report_reason))
+                return False, report_reason
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False, OP_REASON_DEADLINE
+            operation.cancel.wait(min(GNOI_STATUS_POLL_INTERVAL_SECS, remaining))
+
+    def _power_off(self, operation, reason):
+        """Remove power after the handshake; return a failure outcome or None."""
+        if reason == OP_REASON_PREEMPTED:
+            return OP_RESULT_PREEMPTED, OP_REASON_PREEMPTED, False
+
+        # The platform call is made whatever the host reads now: OFFLINE alone
+        # proves nothing (a booting host, a halted but powered one). Only the
+        # daemon stop cuts a power-off short; a queued power_off waits for it.
+        power_result = self.controller.power_off(self.stop_event)
+        if power_result == PowerCallResult.CANCELLED:
+            return OP_RESULT_PREEMPTED, reason, False
+        if power_result != PowerCallResult.CONFIRMED:
+            self._event_log.log_error(
+                "POWER_OFF_FAILED request_id={}".format(operation.request_id))
+            return OP_RESULT_POWER_OFF_FAILED, reason, False
+        return None
+
+    def execute(self, operation, requester_factory):
+        """Run one tagged graceful-shutdown leg, then remove host power."""
+        graceful, reason = self._run_shutdown_leg(operation, requester_factory)
+        failure = self._power_off(operation, reason)
+        if failure is not None:
+            return failure
+        return _leg_success(graceful, reason)
+
+    def execute_restart(self, operation, requester_factory):
+        """Run the shutdown leg, pause while off, then raise host power.
+
+        Once its power is off the restart is a raise: a queued POWER_OFF or
+        GRACEFUL_SHUT, or the daemon stop, ends the pause and the raise.
+        """
+        graceful, reason = self._run_shutdown_leg(operation, requester_factory)
+        failure = self._power_off(operation, reason)
+        if failure is not None:
+            return failure
+        if operation.leg_failed:
+            # own code failed: power is removed but not raised
+            return OP_RESULT_POWER_ON_FAILED, reason, False
+
+        # from here on a preemption keeps the shutdown leg's reason
+        operation.phase = PHASE_RAISING
+        if operation.cancel.wait(RESTART_PAUSE_SECS):
+            return OP_RESULT_PREEMPTED, reason, False
+        power_result = self.controller.power_on(operation.cancel)
+        if power_result == PowerCallResult.REFUSED_LEAK:
+            return OP_RESULT_OFF_LEAK_BLOCKED, reason, False
+        if power_result == PowerCallResult.CANCELLED:
+            return OP_RESULT_PREEMPTED, reason, False
+        if power_result != PowerCallResult.CONFIRMED:
+            self._event_log.log_error(
+                "POWER_ON_FAILED request_id={}".format(operation.request_id))
+            return OP_RESULT_POWER_ON_FAILED, reason, False
+        return _leg_success(graceful, reason)
+
+    def _read_bmc_link_data(self):
+        """Read available bmc.json files in precedence order."""
         for path in BMC_JSON_PATHS:
             try:
                 with open(path) as f:
                     data = json.load(f)
-                    addr = data.get("bmc_if_addr")
-                    if addr:
-                        return addr
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError):
                 continue
+            if not isinstance(data, dict):
+                self.log_warning("Ignoring {}: not a JSON object".format(path))
+                continue
+            yield data
+
+    def _get_switch_host_addr(self):
+        """Read Switch-Host address from bmc.json; fall back to hardcoded default."""
+        for data in self._read_bmc_link_data():
+            addr = data.get("bmc_if_addr")
+            if addr:
+                return addr
         return DEFAULT_SWITCH_HOST_ADDR
+
+    def _get_switch_host_gnoi_port(self):
+        """Read the Switch-Host gNMI port from bmc.json."""
+        for data in self._read_bmc_link_data():
+            port = data.get("switch_host_gnmi_port")
+            if port is not None:
+                return port
+        return DEFAULT_SWITCH_HOST_GNMI_PORT
 
 
 # ============================================================
@@ -870,15 +1534,18 @@ class GracefulShutdownHandler(EventLogger):
 class BmcEventHandler(EventLogger):
     """
     Runs in a dedicated daemon thread.  Subscribes to RACK_MANAGER_COMMAND,
-    CHASSIS_MODULE, RACK_MANAGER_ALERT, and SYSTEM_LEAK_STATUS tables.
+    CHASSIS_MODULE, RACK_MANAGER_ALERT, RACK_MANAGER_DATA, and
+    SYSTEM_LEAK_STATUS tables.
 
     On each event it decides what action is needed and puts an ActionItem on
-    action_queue.  All blocking power operations are executed by the main
-    daemon thread — this class never blocks.
+    the action queue.  All power operations run on the main thread. The event
+    thread writes Rack Manager rows only at admission; the result is written by
+    the completion callback it attaches to the request.
     """
 
-    def __init__(self, action_queue, policy_reader, critical_event_checker, stop_event,
-                 controller):
+    def __init__(self, action_queue, policy_reader,
+                 critical_event_checker, stop_event, controller,
+                 thread_database=None):
         super(BmcEventHandler, self).__init__(SYSLOG_IDENTIFIER)
         self._event_log = _event_logger  # for critical leak / alert events only
         self.action_queue = action_queue
@@ -886,7 +1553,9 @@ class BmcEventHandler(EventLogger):
         self.critical_event_checker = critical_event_checker
         self.stop_event = stop_event
         self.controller = controller
+        self._thread_database = thread_database or _ThreadDatabase()
 
+        # Connectors for the subscribers below; used only by the event thread.
         self.state_db = daemon_base.db_connect("STATE_DB")
         self.config_db = daemon_base.db_connect("CONFIG_DB")
 
@@ -949,30 +1618,46 @@ class BmcEventHandler(EventLogger):
     # ---- public ----
 
     def run_event_loop(self):
-        """Block in select loop until stop_event is set."""
+        """Block in the select loop until stop_event is set.
+
+        A failing iteration is logged and skipped; a loop that keeps failing stops
+        the daemon, so that supervisord restarts it instead of leaving it deaf.
+        """
         self.log_info("Entering event subscription loop")
+        failures = 0
         while not self.stop_event.is_set():
-            state, selectable = self.sel.select(SELECT_TIMEOUT_MSECS)
-            if state == swsscommon.Select.TIMEOUT:
-                continue
-            if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() returned unexpected state: {}".format(state))
-                continue
-            fd = selectable.getFd()
-            entry = self._subscribers.get(fd)
-            if entry is None:
-                self.log_warning("sel.select() returned unknown fd={}".format(fd))
-                continue
-            table, handler = entry
-            key, op, fvs = table.pop()
-            if op != "SET":
-                continue
-            handler(key, fvs_to_dict(fvs))
+            try:
+                state, selectable = self.sel.select(SELECT_TIMEOUT_MSECS)
+                if state == swsscommon.Select.TIMEOUT:
+                    failures = 0
+                    continue
+                if state != swsscommon.Select.OBJECT:
+                    raise RuntimeError("sel.select() returned unexpected state: {}".format(state))
+                failures = 0
+                fd = selectable.getFd()
+                entry = self._subscribers.get(fd)
+                if entry is None:
+                    self.log_warning("sel.select() returned unknown fd={}".format(fd))
+                    continue
+                table, handler = entry
+                key, op, fvs = table.pop()
+                if op != "SET":
+                    continue
+                handler(key, fvs_to_dict(fvs))
+            except Exception as e:
+                failures += 1
+                self.log_error("Event loop iteration failed: {}\n{}".format(
+                    repr(e), traceback.format_exc()))
+                if failures >= EVENT_LOOP_FAILURE_LIMIT:
+                    self.log_error("Event loop failed {} times in a row; stopping for a restart".format(failures))
+                    self.stop_event.set()
+                    return
+                time.sleep(1)   # a select() that keeps failing must not spin
 
     # ---- internal event handlers ----
 
     def _handle_rack_mgr_command(self, key, fvs):
-        """Process a RACK_MANAGER_COMMAND entry (POWER_ON / POWER_OFF / POWER_CYCLE)."""
+        """Process one supported RACK_MANAGER_COMMAND entry."""
         command = fvs.get(FIELD_COMMAND, "")
         cmd_status = fvs.get(FIELD_STATUS, "")
 
@@ -981,9 +1666,38 @@ class BmcEventHandler(EventLogger):
             return
 
         self.log_notice("Rack Manager command: key={} command={}".format(key, command))
-        self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
+        try:
+            self._set_cmd_status(key, CMD_STATUS_IN_PROGRESS)
+        except Exception as e:
+            # the command is not lost for a bookkeeping write; its result write will say what happened
+            self.log_error("Rack Manager command key={}: IN_PROGRESS not recorded ({}); admitting it".format(
+                key, repr(e)))
+        try:
+            self._admit_rack_mgr_command(key, command)
+        except Exception as e:
+            # nothing was queued: close the row, or the Rack Manager waits for ever
+            self.log_error("Rack Manager command key={} command={} failed at admission: {}".format(
+                key, command, repr(e)))
+            self._set_cmd_status(key, CMD_STATUS_FAILED, "ERROR")
 
-        if command == CMD_POWER_ON:
+    def _admit_rack_mgr_command(self, key, command):
+        """Map one command to its request and queue it; a refusal closes the row."""
+        action_map = {
+            CMD_POWER_OFF:    ACTION_POWER_OFF,
+            CMD_GRACEFUL_SHUT: ACTION_GRACEFUL_SHUTDOWN,
+            CMD_GRACEFUL_RESTART: ACTION_GRACEFUL_RESTART,
+            CMD_POWER_ON:    ACTION_POWER_ON,
+            CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
+        }
+        if command not in action_map:
+            self._event_log.log_warning(
+                "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
+            self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
+            return
+
+        # A restart is refused like a power-on while a blocking event stands:
+        # taking the host down only to refuse its raise would leave it off by surprise.
+        if command in (CMD_POWER_ON, CMD_POWER_CYCLE, CMD_GRACEFUL_RESTART):
             if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
                     "RACK_MGR_CMD FAILED: key={} command={} reason={} "
@@ -991,62 +1705,71 @@ class BmcEventHandler(EventLogger):
                 self._set_cmd_status(key, CMD_STATUS_FAILED, POWER_ON_BLOCK_REASON)
                 return
 
-        elif command not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT, CMD_POWER_CYCLE):
-            self._event_log.log_warning(
-                "RACK_MGR_CMD FAILED: key={} command={} reason=UNKNOWN_COMMAND".format(key, command))
-            self._set_cmd_status(key, CMD_STATUS_FAILED, "UNKNOWN_COMMAND")
-            return
-
-        action_map = {
-            CMD_POWER_OFF:    ACTION_POWER_OFF,
-            CMD_GRACEFUL_SHUT: ACTION_GRACEFUL_SHUTDOWN,
-            CMD_POWER_ON:    ACTION_POWER_ON,
-            CMD_POWER_CYCLE: ACTION_POWER_CYCLE,
-        }
-
-        def on_complete(success, cmd_key=key, cmd=command):
+        def on_complete(success, detail="", cmd_key=key):
             self._set_cmd_status(cmd_key,
                                  CMD_STATUS_DONE if success else CMD_STATUS_FAILED,
-                                 "SUCCESS" if success else "ERROR")
+                                 "SUCCESS" if success else (detail or "ERROR"))
 
-        self.action_queue.put(ActionItem(action_map[command],
-                                         "RACK_MGR_CMD:{}".format(command),
-                                         on_complete))
+        action = action_map[command]
+        self._enqueue(ActionItem(
+            action,
+            "RACK_MGR_CMD:{}".format(command),
+            on_complete=on_complete,
+        ))
 
     def _handle_chassis_module(self, key, fvs):
-        """Process CHASSIS_MODULE admin_status change (admin up/down from CLI)."""
+        """Process CHASSIS_MODULE admin_status change (admin up/down from CLI).
+
+        The latch records the last observed value, so a republished row is not a
+        transition. An admin-up is queued whenever the gate allows it; the guard
+        skips it if the host is already on when its turn comes.
+        """
         admin_status = fvs.get(FIELD_ADMIN_STATUS, "")
         if not admin_status:
             return
         if self._last_chassis_module_admin_status.get(key) == admin_status:
             return
-        self._last_chassis_module_admin_status[key] = admin_status
 
         self.log_notice("CHASSIS_MODULE change: key={} admin_status={}".format(key, admin_status))
 
-        # Mirror admin_status to CHASSIS_MODULE_INFO_TABLE immediately on config change
-        self.controller.update_chassis_module_admin_status(admin_status)
+        # mirror admin_status to CHASSIS_MODULE_INFO_TABLE; a failed mirror never costs the request
+        try:
+            self.controller.update_chassis_module_admin_status(admin_status)
+        except Exception as e:
+            self.log_error("Failed to mirror CHASSIS_MODULE admin_status={}: {}".format(
+                admin_status, repr(e)))
 
         if admin_status == ADMIN_DOWN:
-            if self.controller.get_db_device_status() != SWITCH_HOST_ONLINE:
-                self._event_log.log_notice(
-                    "CHASSIS_MODULE admin_down: key={} NOOP (Switch-Host already OFFLINE)".format(key))
-                return
-            self.log_notice("CHASSIS_MODULE admin_down: initiating graceful shutdown of Switch-Host")
-            self.action_queue.put(ActionItem(ACTION_GRACEFUL_SHUTDOWN, "CHASSIS_MODULE:ADMIN_DOWN"))
+            self.log_notice(
+                "CHASSIS_MODULE admin_down: enqueueing graceful shutdown request")
+            self._enqueue(ActionItem(
+                ACTION_GRACEFUL_SHUTDOWN,
+                "CHASSIS_MODULE:ADMIN_DOWN",
+            ))
 
         elif admin_status == ADMIN_UP:
-            if self.controller.get_db_device_status() == SWITCH_HOST_ONLINE:
-                self._event_log.log_notice(
-                    "CHASSIS_MODULE admin_up: key={} NOOP (Switch-Host already ONLINE)".format(key))
-                return
             if self.critical_event_checker.is_power_on_blocked():
                 self._event_log.log_warning(
                     "CHASSIS_MODULE admin_up: key={} BLOCKED "
                     "({}: active alert blocks power-on)".format(key, POWER_ON_BLOCK_REASON))
-                return
-            self.log_notice("CHASSIS_MODULE admin_up: powering ON Switch-Host")
-            self.action_queue.put(ActionItem(ACTION_POWER_ON, "CHASSIS_MODULE:ADMIN_UP"))
+            else:
+                self.log_notice("CHASSIS_MODULE admin_up: enqueueing power on request")
+                self._enqueue(ActionItem(
+                    ACTION_POWER_ON,
+                    "CHASSIS_MODULE:ADMIN_UP",
+                ))
+
+        # Latch only once the request was queued or refused, so a failure before
+        # this point leaves the next identical publication free to retry.
+        self._last_chassis_module_admin_status[key] = admin_status
+
+    def _leak_policy(self):
+        """The leak policy, or the defaults when CONFIG_DB cannot be read: an event is never dropped."""
+        try:
+            return self.policy_reader.get_leak_control_policy()
+        except Exception as e:
+            self.log_error("LEAK_CONTROL_POLICY unreadable, using the defaults: {}".format(repr(e)))
+            return self.policy_reader.default_leak_control_policy()
 
     def _handle_system_leak(self, key, fvs):
         """Process SYSTEM_LEAK_STATUS change from thermalctld."""
@@ -1054,7 +1777,7 @@ class BmcEventHandler(EventLogger):
             return
 
         leak_status = fvs.get(FIELD_DEVICE_LEAK_STATUS, "")
-        policy = self.policy_reader.get_leak_control_policy()
+        policy = self._leak_policy()
 
         if policy.get("system_leak_policy") == "disabled":
             self._event_log.log_notice(
@@ -1066,7 +1789,8 @@ class BmcEventHandler(EventLogger):
             action = policy.get("system_critical_leak_action", DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION)
             self._event_log.log_notice("CRITICAL SYSTEM LEAK detected (status={}); "
                                        "action={}".format(leak_status, action))
-            self._dispatch_action(action, "CRITICAL_SYSTEM_LEAK")
+            self._dispatch_action(
+                action, "CRITICAL_SYSTEM_LEAK", is_critical_trigger=True)
 
         elif leak_status == SystemLeakStatus.MAJOR:
             action = policy.get("system_major_leak_action", DEFAULT_SYSTEM_MAJOR_LEAK_ACTION)
@@ -1086,7 +1810,7 @@ class BmcEventHandler(EventLogger):
     def _handle_rack_mgr_alert(self, key, fvs):
         """Process RACK_MANAGER_ALERT change from Rack Manager (via redfish docker)."""
         severity = fvs.get(FIELD_SEVERITY) or fvs.get(FIELD_LEAK, ALERT_SEVERITY_NORMAL)
-        policy = self.policy_reader.get_leak_control_policy()
+        policy = self._leak_policy()
 
         if policy.get("rack_mgr_leak_policy") == "disabled":
             # Log only on transition; do NOT update dedup state so that a later
@@ -1105,17 +1829,21 @@ class BmcEventHandler(EventLogger):
             action = policy.get("rack_mgr_critical_alert_action", DEFAULT_RACK_MGR_CRITICAL_ALERT_ACTION)
             self._event_log.log_notice("CRITICAL RACK MGR ALERT (severity={} key={}); "
                                        "action={}".format(severity, key, action))
-            self._dispatch_action(action, "RACK_MGR_CRITICAL_EVENT key={}".format(key))
+            self._dispatch_action(
+                action,
+                "RACK_MGR_CRITICAL_EVENT:{}".format(key),
+                is_critical_trigger=True,
+            )
 
         elif severity == ALERT_SEVERITY_MAJOR:
             action = policy.get("rack_mgr_major_alert_action", DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION)
             self._event_log.log_notice("MAJOR RACK MGR ALERT (severity={} key={}); "
                                        "action={}".format(severity, key, action))
-            self._dispatch_action(action, "RACK_MGR_MAJOR_EVENT key={}".format(key))
+            self._dispatch_action(action, "RACK_MGR_MAJOR_EVENT:{}".format(key))
 
         elif severity == ALERT_SEVERITY_MINOR:
             action = policy.get("rack_mgr_minor_alert_action", DEFAULT_RACK_MGR_MINOR_ALERT_ACTION)
-            self._dispatch_action(action, "RACK_MGR_MINOR_EVENT key={}".format(key))
+            self._dispatch_action(action, "RACK_MGR_MINOR_EVENT:{}".format(key))
 
         else:
             self._event_log.log_notice(
@@ -1149,7 +1877,7 @@ class BmcEventHandler(EventLogger):
             return
 
         # NORMAL telemetry: clear the matching alert if one is currently active.
-        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_ALERT_TABLE)
+        tbl = self._thread_database.table("STATE_DB", RACK_MANAGER_ALERT_TABLE)
         result = tbl.get(key)
         if not (result and result[0]):
             # No active alert for this key; nothing to clear (avoids per-cycle noise).
@@ -1162,23 +1890,46 @@ class BmcEventHandler(EventLogger):
 
     # ---- dispatch helpers ----
 
-    def _dispatch_action(self, action, event_desc):
+    def _enqueue(self, item):
+        """Admit one request. After daemon stop nothing is admitted; the row is closed instead."""
+        if self.stop_event.is_set():
+            self._event_log.log_notice(
+                "Request dropped at daemon stop: action={} trigger={}".format(
+                    item.action, item.event_desc))
+            if item.on_complete is not None:
+                try:
+                    item.on_complete(False, OP_RESULT_ABANDONED)
+                except Exception:
+                    self.log_error("CALLBACK_FAILED trigger={}".format(item.event_desc))
+            return None
+        return self.action_queue.put(item)
+
+    def _dispatch_action(self, action, event_desc, is_critical_trigger=False):
         """
         Enqueue a power action for the main thread.
-        syslog_only is handled inline; all other actions go on action_queue.
+        syslog_only is handled inline; all other actions go on the action queue.
         """
         self.log_notice("Event '{}' -> action '{}'".format(event_desc, action))
         if action == ACTION_SYSLOG_ONLY:
             return
+        if is_critical_trigger and action == ACTION_GRACEFUL_SHUTDOWN:
+            # A critical trigger must reach the power domain within the platform's
+            # leak bound, so its graceful_shutdown is dispatched as a direct power-off.
+            self._event_log.log_notice(
+                "Event '{}' is critical: configured action '{}' is "
+                "dispatched as '{}'".format(
+                    event_desc, action, ACTION_POWER_OFF))
+            action = ACTION_POWER_OFF
         if action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF, ACTION_POWER_ON):
-            self.action_queue.put(ActionItem(action, event_desc))
+            self._enqueue(ActionItem(action, event_desc))
         else:
             self.log_warning("Unknown action '{}' for event '{}'; defaulting to syslog_only".format(
                 action, event_desc))
 
     def _set_cmd_status(self, cmd_id, status, result="SUCCESS"):
         """Update RACK_MANAGER_COMMAND entry with execution status."""
-        tbl = swsscommon.Table(self.state_db, RACK_MANAGER_COMMAND_TABLE)
+        tbl = self._thread_database.table(
+            "STATE_DB", RACK_MANAGER_COMMAND_TABLE)
         fvs = swsscommon.FieldValuePairs([
             (FIELD_STATUS, status),
             (FIELD_RESULT, result),
@@ -1194,7 +1945,7 @@ class BmcEventHandler(EventLogger):
 class BmcctldDaemon(daemon_base.DaemonBase):
     """
     Main daemon class.  Performs the initial Switch-Host power-on sequence
-    and then enters a blocking DB event loop.
+    and then dispatches queued requests one at a time.
     """
 
     FATAL_SIGNALS = [signal.SIGINT, signal.SIGTERM]
@@ -1207,7 +1958,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         # Global event logger available to the daemon for critical log entries
         self._event_log = _event_logger
 
-        self.stop_event = threading.Event()
+        self.stop_event = _StopFlag()
 
         # Load platform chassis (Switch-Host + BMC modules exposed here)
         try:
@@ -1217,17 +1968,23 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.log_error("Failed to load platform chassis: {}".format(repr(e)))
             sys.exit(CHASSIS_LOAD_ERROR)
 
-        self.controller = SwitchHostController(self.chassis)
-        self.policy_reader = PolicyReader()
-        self.critical_event_checker = CriticalEventChecker(self.policy_reader)
-        self.graceful_shutdown = GracefulShutdownHandler(self.controller, self.policy_reader)
-        self.action_queue = queue.Queue()
+        self._thread_database = _ThreadDatabase()
+        self.policy_reader = PolicyReader(self._thread_database)
+        self.critical_event_checker = CriticalEventChecker(
+            self.policy_reader, self._thread_database)
+        self.controller = SwitchHostController(
+            self.chassis, self._thread_database, self.critical_event_checker)
+        self.graceful_shutdown = GracefulShutdownHandler(
+            self.controller, self.policy_reader, self.stop_event)
+        self.gnoi_requester_factory = GnoiRequester
+        self.action_queue = ActionQueue()
         self.event_handler = BmcEventHandler(
             self.action_queue,
             self.policy_reader,
             self.critical_event_checker,
             self.stop_event,
             self.controller,
+            self._thread_database,
         )
 
         # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status.
@@ -1251,6 +2008,8 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             exit_code = 128 + sig
             self.log_info("Caught signal '{}' ({}); exiting...".format(
                 SIGNALS_TO_NAMES_DICT.get(sig, sig), exit_code))
+            # Only the flag, which takes no lock: this runs on the main thread,
+            # inside whatever it was doing. Every wait re-reads it within a second.
             self.stop_event.set()
         elif sig in self.NONFATAL_SIGNALS:
             self.log_info("Caught signal '{}'; ignoring".format(SIGNALS_TO_NAMES_DICT.get(sig, sig)))
@@ -1258,41 +2017,271 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.log_warning("Caught unhandled signal '{}'; ignoring".format(
                 SIGNALS_TO_NAMES_DICT.get(sig, sig)))
 
-    def _rack_mgr_power_cmd_executed(self):
+    # ---- records (main thread only) ----
+
+    def _new_request_id(self):
+        return str(uuid.uuid4())
+
+    def _record_start(self, request_id, item):
+        try:
+            self.controller.write_operation_start(request_id, item.event_desc)
+        except Exception as e:
+            self.log_error("Failed to record operation start request_id={}: {}".format(
+                request_id, repr(e)))
+
+    def _record_terminal(self, item, request_id, op_result, op_reason, detail):
+        try:
+            self.controller.write_operation_terminal(
+                request_id, item.event_desc, op_result, op_reason)
+        except Exception as e:
+            self.log_error("Failed to record operation result request_id={}: {}".format(
+                request_id, repr(e)))
+        self._event_log.log_notice(
+            "OP_DONE action={} result={} reason={} request_id={} trigger={} detail={}".format(
+                item.action, op_result, op_reason, request_id,
+                item.event_desc, detail))
+
+    def _fire(self, callback, request_id, success, detail=""):
+        if callback is None:
+            return
+        try:
+            callback(success, detail)
+        except Exception:
+            self.log_error("CALLBACK_FAILED request_id={}".format(request_id or "-"))
+
+    def _finish(self, item, request_id, outcome):
+        op_result, op_reason, success = outcome
+        # the Rack Manager row's word for a raise refused under a blocking event
+        detail = POWER_ON_BLOCK_REASON if op_result == OP_RESULT_OFF_LEAK_BLOCKED else op_result
+        self._record_terminal(item, request_id, op_result, op_reason, detail)
+        self._fire(item.on_complete, request_id, success, detail)
+
+    # ---- guard ----
+
+    def _guard_should_skip(self, item):
+        """The live status when the request's postcondition already holds, else None.
+
+        A removal is redundant when the host reads OFFLINE under a POWERED_OFF
+        label; a power-on when it reads ONLINE. An unknown reading never skips.
         """
-        Return True if any RACK_MANAGER_COMMAND entry for POWER_ON or POWER_OFF
-        has status IN_PROGRESS or DONE — indicating the Rack Manager issued an
-        explicit power directive during the boot delay.
+        try:
+            current_status = self.controller.get_oper_status()
+            if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
+                if current_status == SWITCH_HOST_OFFLINE and \
+                        self.controller.get_db_power_state() == POWER_STATE_OFF:
+                    return current_status
+            elif item.action == ACTION_POWER_ON and current_status == SWITCH_HOST_ONLINE:
+                return current_status
+            return None
+        except Exception as e:
+            # without evidence the request runs
+            self.log_error("Guard read failed for {}; running the request: {}".format(
+                item.action, repr(e)))
+            return None
+
+    def _complete_guarded(self, item, live_status):
+        """Finish a request the guard found already satisfied, under the guard's own reading."""
+        request_id = self._start_operation(item)
+        if item.action == ACTION_GRACEFUL_SHUTDOWN:
+            op_result, op_reason = OP_RESULT_SUCCESS_FORCED, OP_REASON_ALREADY_OFF
+        elif item.action == ACTION_POWER_OFF:
+            op_result, op_reason = OP_RESULT_SUCCESS, OP_REASON_ALREADY_OFF
+        else:
+            op_result, op_reason = OP_RESULT_SUCCESS, "-"
+        stable_state = POWER_STATE_ON if item.action == ACTION_POWER_ON else POWER_STATE_OFF
+        # Settle the label under the guard's own reading: a stale transitional
+        # label becomes the settled one; a settled label (POWER_CYCLE included) is kept.
+        try:
+            db_power_state = self.controller.get_db_power_state()
+            label = (db_power_state if db_power_state in SETTLED_LABELS[stable_state]
+                     else stable_state)
+            self.controller._write_label(label, live_status, "settled record")
+        except Exception as e:
+            self.log_error("Failed to settle the Switch-Host record after a guard skip: {}".format(
+                repr(e)))
+        self._record_terminal(
+            item, request_id, op_result, op_reason, GUARD_SKIP_DETAIL)
+        self._fire(item.on_complete, request_id, True, GUARD_SKIP_DETAIL)
+
+    # ---- outcomes ----
+
+    def _plain_outcome(self, action, result):
+        if result == PowerCallResult.CONFIRMED:
+            return OP_RESULT_SUCCESS, "-", True
+        if result == PowerCallResult.CANCELLED:
+            return OP_RESULT_PREEMPTED, OP_REASON_PREEMPTED, False
+        if result == PowerCallResult.REFUSED_LEAK:
+            return OP_RESULT_OFF_LEAK_BLOCKED, "-", False
+        if action == ACTION_POWER_OFF:
+            return OP_RESULT_POWER_OFF_FAILED, "-", False
+        return OP_RESULT_POWER_ON_FAILED, "-", False
+
+    def _failure_outcome(self, operation):
+        """Record of an operation whose own code raised; no power call is repeated.
+
+        A daemon stop abandons, a cancellation is a preemption, otherwise the
+        phase that was running failed.
         """
-        tbl = swsscommon.Table(self.event_handler.state_db, RACK_MANAGER_COMMAND_TABLE)
+        if self.stop_event.is_set():
+            return OP_RESULT_ABANDONED, "-", False
+        if operation.cancel.is_set():
+            return OP_RESULT_PREEMPTED, operation.leg_reason or OP_REASON_PREEMPTED, False
+        failed = (OP_RESULT_POWER_ON_FAILED if operation.phase == PHASE_RAISING
+                  else OP_RESULT_POWER_OFF_FAILED)
+        if operation.item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_GRACEFUL_RESTART):
+            return failed, operation.leg_reason or OP_REASON_UNCLASSIFIED, False
+        return failed, "-", False
+
+    # ---- dispatch ----
+
+    def _make_operation(self, item, request_id):
+        operation = Operation(item, request_id, None)
+        # a power-off yields to nothing but the stop; everything else to what outranks its phase
+        operation.cancel = self.stop_event if item.action == ACTION_POWER_OFF else _OpCancel(self, operation)
+        return operation
+
+    def _start_operation(self, item):
+        """Give a dequeued request its id and open its records."""
+        request_id = self._new_request_id()
+        self._record_start(request_id, item)
+        self._event_log.log_notice(
+            "OP_START action={} request_id={} trigger={}".format(
+                item.action, request_id, item.event_desc))
+        return request_id
+
+    def _dispatch(self, item):
+        """Common entry for every dequeued request."""
+        if item.startup:
+            try:
+                admin_status = self.policy_reader.get_switch_host_admin_status()
+                removal_first = self._rm_removal_recorded()
+            except Exception as e:
+                # An automatic raise whose preconditions cannot be read is not taken.
+                self._event_log.log_notice(
+                    "STARTUP power_on dropped: its preconditions could not be read ({})".format(
+                        repr(e)))
+                return
+            if admin_status != ADMIN_UP:
+                self._event_log.log_notice(
+                    "STARTUP power_on dropped: admin_status='{}'".format(admin_status))
+                return
+            if removal_first:
+                self._event_log.log_notice(
+                    "STARTUP power_on dropped: a Rack Manager power removal is recorded")
+                return
+
+        live_status = self._guard_should_skip(item)
+        if live_status is not None:
+            self._complete_guarded(item, live_status)
+            return
+        self._run_operation(item)
+
+    def _dispatch_safely(self, item):
+        """A failure outside the operation never ends the daemon; the requester is told."""
+        try:
+            self._dispatch(item)
+        except Exception as e:
+            self.log_error("Dispatch failed action={} trigger={}: {}\n{}".format(
+                item.action, item.event_desc, repr(e), traceback.format_exc()))
+            self._fire(item.on_complete, "-", False, "ERROR")
+
+    def _run_operation(self, item):
+        """Run one dequeued request on the main thread and write its records."""
+        request_id = self._start_operation(item)
+        operation = self._make_operation(item, request_id)
+        try:
+            if item.action == ACTION_POWER_OFF:
+                result = self.controller.power_off(operation.cancel)
+                outcome = self._plain_outcome(item.action, result)
+            elif item.action == ACTION_POWER_ON:
+                result = self.controller.power_on(operation.cancel)
+                outcome = self._plain_outcome(item.action, result)
+            elif item.action == ACTION_POWER_CYCLE:
+                result = self.controller.power_cycle(operation.cancel)
+                outcome = self._plain_outcome(item.action, result)
+            elif item.action == ACTION_GRACEFUL_SHUTDOWN:
+                outcome = self.graceful_shutdown.execute(operation, self.gnoi_requester_factory)
+            else:
+                outcome = self.graceful_shutdown.execute_restart(
+                    operation, self.gnoi_requester_factory)
+        except Exception as e:
+            self.log_error(
+                "Operation failed action={} request_id={} phase={}: {}\n{}".format(
+                    item.action, request_id, operation.phase, repr(e),
+                    traceback.format_exc()))
+            outcome = self._failure_outcome(operation)
+        if outcome[0] == OP_RESULT_PREEMPTED and self.stop_event.is_set():
+            outcome = (OP_RESULT_ABANDONED, "-", False)
+        self._finish(item, request_id, outcome)
+
+    # ---- startup ----
+
+    def _rm_rows(self):
+        """(key, fields) for every Rack Manager command row."""
+        tbl = self._thread_database.table(
+            "STATE_DB", RACK_MANAGER_COMMAND_TABLE)
         for key in tbl.getKeys():
             result = tbl.get(key)
-            if not (result and result[0]):
+            if result and result[0]:
+                yield key, fvs_to_dict(result[1])
+
+    def _rm_removal_recorded(self):
+        """True when a Rack Manager power-off or graceful shutdown row is recorded.
+
+        DONE or abandoned keeps the automatic power-on off across BMC restarts;
+        PENDING, no status or IN_PROGRESS means that removal is about to run. A removal
+        that failed otherwise does not count.
+        """
+        for key, entry in self._rm_rows():
+            if entry.get(FIELD_COMMAND, "") not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT):
                 continue
-            entry = fvs_to_dict(result[1])
-            command = entry.get(FIELD_COMMAND, "")
             status = entry.get(FIELD_STATUS, "")
-            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
-               status in (CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
+            if status in (CMD_STATUS_PENDING, "", CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
+                return True
+            if status == CMD_STATUS_FAILED and entry.get(FIELD_RESULT, "") == OP_RESULT_ABANDONED:
                 return True
         return False
 
+    def _sweep_stale_rm_rows(self):
+        """Close Rack Manager rows left IN_PROGRESS by a previous run (before the event thread starts)."""
+        for key, entry in self._rm_rows():
+            if entry.get(FIELD_STATUS, "") != CMD_STATUS_IN_PROGRESS:
+                continue
+            self._event_log.log_warning(
+                "STARTUP: Rack Manager command {} ({}) left IN_PROGRESS by a previous run; "
+                "marking FAILED/{}".format(key, entry.get(FIELD_COMMAND, "-"), OP_RESULT_ABANDONED))
+            self.event_handler._set_cmd_status(key, CMD_STATUS_FAILED, OP_RESULT_ABANDONED)
+
+    def _enqueue_startup_power_on(self):
+        """Queue the automatic power-on; its dispatch re-checks admin_status, removals and the gate."""
+        oper_status = self.controller.get_oper_status()
+        self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
+        if oper_status == SWITCH_HOST_ONLINE:
+            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
+            self.controller.init_host_state()
+            return
+        # The daemon admits its own request through the same gate as any other.
+        if self.critical_event_checker.is_power_on_blocked():
+            self._event_log.log_warning(
+                "STARTUP: Switch-Host power_on BLOCKED ({}: active alert blocks power-on)".format(
+                    POWER_ON_BLOCK_REASON))
+            return
+        self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
+        self.action_queue.put(ActionItem(ACTION_POWER_ON, "STARTUP", startup=True))
+
     def _initial_power_on_sequence(self):
         """
-        BMC startup flow
+        BMC startup flow (liquid-cooled)
           1. Check CHASSIS_MODULE admin_status for SWITCH-HOST. If 'down' (the default),
              Switch-Host stays powered off — exit immediately. The operator must run
              'config chassis modules startup SWITCH-HOST' to bring it up.
-          2. Sleep SWITCH_HOST_POWER_ON_DELAY seconds to allow Rack Manager to come
-             up and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
-             While sleeping, keep draining the action_queue so Rack Manager commands
-             (e.g. POWER_OFF) arriving during the delay are acted on immediately.
-          3. After the delay, check if Rack Manager issued an explicit POWER_ON,
-             POWER_OFF, or GRACEFUL_SHUT command (CMD_STATUS_IN_PROGRESS or DONE in
-             RACK_MANAGER_COMMAND table). If so, skip automatic power-on.
-          4. Check for CRITICAL leaks/alerts.
-          5. If none found and Switch-Host is OFFLINE, power it ON.
-          6. Update HOST_STATE.
+          2. On a cold boot, wait for the configured power-on delay minus system
+             uptime, allowing Rack Manager to start and verify liquid flow.
+             While waiting, keep dispatching the action queue so Rack Manager and
+             operator requests arriving during the delay are acted on immediately.
+          3. After the delay, queue the automatic power-on. Its dispatch drops it
+             when admin_status is no longer up or a Rack Manager power removal is recorded;
+          the gate and the guard apply as for any request.
         """
         admin_status = self.policy_reader.get_switch_host_admin_status()
         if admin_status != ADMIN_UP:
@@ -1334,121 +2323,53 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         else:
             self.log_notice("Skipping SWITCH_HOST_POWER_ON_DELAY (reboot_cause={}, not a full power loss)".format(reboot_cause))
 
-        # Drain the action queue while we wait so Rack Manager / admin commands
+        # Dispatch the action queue while we wait so Rack Manager / admin commands
         # received during the boot delay are processed in real time. Use a
         # monotonic clock so an NTP step during boot can't extend the wait.
         deadline = time.monotonic() + boot_delay
-        while time.monotonic() < deadline:
-            if self.stop_event.is_set():
-                return
-            try:
-                item = self.action_queue.get(timeout=1.0)
-                self._execute_action_item(item)
-            except queue.Empty:
-                continue
-
-        # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
-        # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
-        # table for any entry whose command is POWER_ON/POWER_OFF and whose status
-        # is IN_PROGRESS or DONE (set by the event handler and on_complete callback).
-        if self._rack_mgr_power_cmd_executed():
-            self.log_notice("STARTUP: Rack Manager POWER_ON/POWER_OFF command executed "
-                                       "during boot delay; skipping automatic power-on")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or self.stop_event.is_set():
+                break
+            item = self.action_queue.get(timeout=min(1.0, remaining))
+            if item is not None:
+                self._dispatch_safely(item)
+        if self.stop_event.is_set():
             return
 
-        if self.critical_event_checker.is_power_on_blocked():
-            self._event_log.log_warning(
-                "STARTUP: {}: active leak or Rack Manager alert; NOT powering on Switch-Host".format(
-                    POWER_ON_BLOCK_REASON))
-            return
-
-        oper_status = self.controller.get_oper_status()
-        self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
-
-        if str(oper_status).upper() != SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
-            self.controller.power_on()
-        else:
-            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
-            self.controller.init_host_state()
-
-    def _execute_action_item(self, item):
-        """
-        Execute a single ActionItem on the main thread.
-        Calls item.on_complete(success) when finished if a callback was provided.
-        """
-        self._event_log.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
-
-        current_status = self.controller.get_oper_status()
-        db_power_state = self.controller.get_db_power_state()
-        if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
-            if current_status == SWITCH_HOST_OFFLINE or db_power_state in (
-                    SWITCH_HOST_POWERING_OFF, SWITCH_HOST_GRACEFUL_SHUTTING_DOWN):
-                self._event_log.log_notice(
-                    "ACTION SKIPPED: '{}' trigger='{}' — "
-                    "host already OFFLINE or shutting down (db_power_state={})".format(
-                        item.action, item.event_desc, db_power_state))
-                if item.on_complete:
-                    item.on_complete(True)
-                return
-        elif item.action == ACTION_POWER_ON:
-            if current_status == SWITCH_HOST_ONLINE or db_power_state == SWITCH_HOST_POWERING_ON:
-                self._event_log.log_notice(
-                    "ACTION SKIPPED: '{}' trigger='{}' — "
-                    "host already ONLINE or POWERING_ON (db_power_state={})".format(
-                        item.action, item.event_desc, db_power_state))
-                if item.on_complete:
-                    item.on_complete(True)
-                return
-
-        success = False
-        if item.action == ACTION_GRACEFUL_SHUTDOWN:
-            success = self.graceful_shutdown.execute()
-        elif item.action == ACTION_POWER_OFF:
-            success = self.controller.power_off()
-        elif item.action == ACTION_POWER_ON:
-            success = self.controller.power_on()
-        elif item.action == ACTION_POWER_CYCLE:
-            success = self.controller.power_cycle()
-        else:
-            self.log_warning("Unknown action '{}' in queue; skipping".format(item.action))
-            return
-        self._event_log.log_notice("ACTION DONE: action='{}' trigger='{}' "
-                                   "success={}".format(item.action, item.event_desc, success))
-        if item.on_complete:
-            item.on_complete(success)
+        self._enqueue_startup_power_on()
 
     def _run_action_loop(self):
         """
-        Main thread action processor.  Dequeues and executes ActionItems
-        sequentially until stop_event is set.  Actions are serialised naturally
-        by this single consumer — no extra locking needed.
+        Main-thread dispatch loop: one request at a time until stop_event is set.
         """
         self.log_info("Entering action processing loop")
         while not self.stop_event.is_set():
-            try:
-                item = self.action_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            self._execute_action_item(item)
+            item = self.action_queue.get(timeout=1.0)
+            if item is not None:
+                self._dispatch_safely(item)
+
+    def _drain_on_stop(self):
+        """Close every request still queued at stop; none of them started."""
+        for item in self.action_queue.drain():
+            self._event_log.log_notice(
+                "Request abandoned at daemon stop: action={} trigger={} (not started)".format(
+                    item.action, item.event_desc))
+            self._fire(item.on_complete, "-", False, OP_RESULT_ABANDONED)
 
     def run(self):
         """
         Called once by the main loop.  Startup flow:
 
-          1. Sync HOST_STATE from live oper_status and seed CONFIG dedup state.
-          2. Start the BmcEventHandler thread (CLI admin up/down, Rack Manager, leaks).
+          1. Sync HOST_STATE from live oper_status, seed CONFIG dedup state,
+             and close Rack Manager rows a previous run left IN_PROGRESS.
+          2. Start the BmcEventHandler thread. A Rack Manager removal already
+             in the table, replayed or not, drops the automatic power-on when
+             that power-on is dispatched.
           3. If Switch-Host is already ONLINE: skip boot power-on sequence.
-          4. Non-liquid-cooled + OFFLINE + admin_status=up: power on immediately.
+          4. Non-liquid-cooled + OFFLINE + admin_status=up: queue the power-on.
           5. Liquid-cooled + OFFLINE: run _initial_power_on_sequence (boot delay).
           6. Enter the action processing loop.
-
-        HOST_STATE sync and CONFIG dedup (step 1) run before the event thread so
-        SubscriberStateTable replays are treated as already handled and do not
-        enqueue ACTION_POWER_ON ahead of action-loop readiness. The BmcEventHandler
-        thread (step 2) is started before the boot sequence so CLI admin commands
-        and other CONFIG/STATE events are captured regardless of the startup path.
-        startup power-on or the action loop.
 
         Returns False to terminate the outer while-loop.
         """
@@ -1458,6 +2379,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         # replays can enqueue ACTION_POWER_ON before the action loop is ready.
         self.controller.init_host_state()
         self.event_handler.seed_chassis_module_admin_status()
+        self._sweep_stale_rm_rows()
 
         # Start the event thread — it handles CLI admin up/down commands
         # (CHASSIS_MODULE admin_status) regardless of cooling type.
@@ -1467,39 +2389,43 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             name="bmcctld-events",
         )
         event_thread.start()
-
-        # If Switch-Host is already ONLINE (daemon restart), skip the boot
-        # sequence entirely and go straight to the action loop.
-        if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
-                                       "skipping boot sequence")
-        elif not self.chassis.is_liquid_cooled():
-            admin_status = self.policy_reader.get_switch_host_admin_status()
-            if admin_status != ADMIN_UP:
-                self._event_log.log_notice(
-                    "STARTUP: SWITCH-HOST admin_status='{}'; "
-                    "Switch-Host will remain powered off. "
-                    "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
-                        admin_status))
+        try:
+            # If Switch-Host is already ONLINE (daemon restart), skip the boot
+            # sequence entirely and go straight to the action loop.
+            if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
+                self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
+                                           "skipping boot sequence")
+            elif not self.chassis.is_liquid_cooled():
+                admin_status = self.policy_reader.get_switch_host_admin_status()
+                if admin_status != ADMIN_UP:
+                    self._event_log.log_notice(
+                        "STARTUP: SWITCH-HOST admin_status='{}'; "
+                        "Switch-Host will remain powered off. "
+                        "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
+                            admin_status))
+                else:
+                    self._event_log.log_notice("STARTUP: non-liquid-cooled system — queueing power_on")
+                    self._enqueue_startup_power_on()
             else:
-                self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
-                                           "immediate power_on, no additional checks")
-                self.controller.power_on()
-        else:
-            # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
-            # leaks/alerts, then power on if safe.
-            self._initial_power_on_sequence()
-            if self.stop_event.is_set():
-                event_thread.join(timeout=5)
-                return False
+                # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
+                # leaks/alerts, then power on if safe.
+                self._initial_power_on_sequence()
+                if self.stop_event.is_set():
+                    return False
 
-        self._run_action_loop()
-        event_thread.join(timeout=5)
-        return False
+            self._run_action_loop()
+            return False
+        finally:
+            try:
+                self.deinit()
+            finally:
+                event_thread.join(timeout=STOP_JOIN_SECS)
+                self._drain_on_stop()
 
     def deinit(self):
         self.log_notice("bmcctld shutting down")
         self.stop_event.set()
+        self.action_queue.notify_all()
 
 
 # ============================================================
@@ -1514,7 +2440,6 @@ def main():
         pass
 
     daemon.log_info("Shutting down with exit code {}...".format(exit_code))
-    daemon.deinit()
     return exit_code
 
 

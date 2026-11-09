@@ -22,5 +22,5 @@ from swsscommon.swsscommon import (  # noqa: F401, E402
     RedisPipeline,
     STATE_DB,
     CONFIG_DB,
+    reset_mock_db,
 )
-
