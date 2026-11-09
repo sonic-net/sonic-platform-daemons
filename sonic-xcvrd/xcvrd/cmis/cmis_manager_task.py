@@ -1075,8 +1075,9 @@ class CmisManagerTask(threading.Thread):
                     self.port_dict[lport]['laser_freq'] = 0
 
         # Module precoding is module-wide and may be lost on module reset, so
-        # re-initialize when it differs from the configured value (not during warm restart)
-        if not need_update and not self.is_warm_restart_for_lport(lport) and \
+        # re-initialize when it differs from the configured value (not during warm/fast reboot)
+        if not need_update and \
+                not (self.is_warm_restart_for_lport(lport) or self.is_fast_reboot_enabled_for_lport(lport)) and \
                 self.is_module_precoding_update_required(lport):
             need_update = True
 

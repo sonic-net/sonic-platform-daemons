@@ -3967,13 +3967,14 @@ class TestXcvrdScript(object):
             assert not task.is_module_precoding_update_required('Ethernet0')
         task.log_error.assert_not_called()
 
-    @pytest.mark.parametrize("warm_restart, precoding_update_required, expected_state", [
-        (False, False, CMIS_STATE_READY),
-        (False, True, CMIS_STATE_DP_DEINIT),
-        (True, True, CMIS_STATE_READY),
+    @pytest.mark.parametrize("warm_restart, fast_reboot, precoding_update_required, expected_state", [
+        (False, False, False, CMIS_STATE_READY),
+        (False, False, True, CMIS_STATE_DP_DEINIT),
+        (True, False, True, CMIS_STATE_READY),
+        (False, True, True, CMIS_STATE_READY),
     ])
-    def test_CmisManagerTask_dp_pre_init_check_module_precoding(self, warm_restart, precoding_update_required,
-                                                                expected_state):
+    def test_CmisManagerTask_dp_pre_init_check_module_precoding(self, warm_restart, fast_reboot,
+                                                                precoding_update_required, expected_state):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.is_coherent_module = MagicMock(return_value=False)
         port_mapping = PortMapping()
@@ -3983,13 +3984,14 @@ class TestXcvrdScript(object):
                                        'appl': 1, 'host_lanes_mask': 0xff}
         task.is_cmis_application_update_required = MagicMock(return_value=False)
         task.is_warm_restart_for_lport = MagicMock(return_value=warm_restart)
+        task.is_fast_reboot_enabled_for_lport = MagicMock(return_value=fast_reboot)
         task.is_module_precoding_update_required = MagicMock(return_value=precoding_update_required)
         task.post_port_active_apsel_to_db = MagicMock()
         task.update_port_transceiver_status_table_sw_cmis_state = MagicMock()
 
         assert task.handle_cmis_dp_pre_init_check_state('Ethernet0') == (expected_state == CMIS_STATE_DP_DEINIT)
         task.update_port_transceiver_status_table_sw_cmis_state.assert_called_once_with('Ethernet0', expected_state)
-        if warm_restart:
+        if warm_restart or fast_reboot:
             task.is_module_precoding_update_required.assert_not_called()
 
     @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic1'))
