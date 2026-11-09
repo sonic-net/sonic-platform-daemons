@@ -424,9 +424,8 @@ class SffManagerTask(threading.Thread):
         # PortConfigDone events, as xcvrd main thread waits on them before
         # spawrning this thread.
         while not self.task_stopping_event.is_set():
-            # Re-publish SI notifications cleared under a still-running xcvrd (cold swss/syncd
-            # restart). Runs every cycle (throttled) since the event loop below short-circuits
-            # when there is no port update.
+            # Re-arm SI notifications cleared under a still-running xcvrd (cold swss/syncd
+            # restart); the consumer below then publishes them (throttled).
             self.reconcile_si_notifications()
 
             # Internally, handle_port_update_event will block for up to
@@ -435,8 +434,12 @@ class SffManagerTask(threading.Thread):
             # operation in the DB tables. Upon process restart, messages will be
             # replayed for all fields, no need to explictly query the DB tables
             # here.
-            if not port_change_observer.handle_port_update_event():
-                # In the case of no real update, go back to the beginning of the loop
+            had_port_update = port_change_observer.handle_port_update_event()
+            # Still run the consumer when a notify is pending but no event arrived, else an
+            # idle worker never publishes it and orchagent's admin gate is never released.
+            si_notify_pending = any(data.get('notify_si_settings')
+                                    for data in self.port_dict.values())
+            if not had_port_update and not si_notify_pending:
                 continue
 
             for lport in self.port_dict:

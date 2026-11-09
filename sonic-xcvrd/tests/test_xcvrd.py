@@ -3282,6 +3282,50 @@ class TestXcvrdScript(object):
                                                   'STATE_DB', 'PORT_TABLE'))
         assert task.port_dict['Ethernet0']['notify_si_settings'] is True
 
+    @patch('xcvrd.xcvrd.helper_logger')
+    @patch('xcvrd.xcvrd.platform_chassis')
+    @patch('xcvrd.sff_mgr.PortChangeObserver')
+    @patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting')
+    def test_SffManagerTask_idle_publishes_pending_notify(self, mock_notify, mock_observer,
+                                                          mock_chassis, mock_logger):
+        """A pending notify_si_settings is published even when no DB event arrives this cycle.
+        Without the fall-through, an idle task_worker short-circuits before the consumer and
+        leaves orchagent's admin gate waiting forever (daemons PR 799, longhuan)."""
+        mock_observer_instance = MagicMock()
+        # No DB event this cycle: only the pending notify should drive the consumer.
+        mock_observer_instance.handle_port_update_event = MagicMock(return_value=False)
+        mock_observer.return_value = mock_observer_instance
+
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.is_copper = MagicMock(return_value=True)  # skip tx machinery after publish
+        mock_sfp = MagicMock()
+        mock_sfp.get_presence = MagicMock(return_value=True)
+        mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
+        mock_sfp.get_transceiver_info = MagicMock(return_value={'type': 'QSFP28'})
+        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+
+        task = SffManagerTask(DEFAULT_NAMESPACE, MagicMock(), threading.Event(),
+                              mock_chassis, mock_logger)
+        task.xcvr_table_helper = MagicMock()
+        task.xcvr_table_helper.is_si_settings_synced = MagicMock(return_value=False)
+        task.xcvr_table_helper.get_outstanding_si_notification_number = MagicMock(return_value=None)
+        task._si_retained_from_pre_pr_warmboot = MagicMock(return_value=False)
+
+        # Port already settled (identical in the prev snapshot) so no insertion / host_tx_ready /
+        # admin_status diff drives it; the pending notify is the only thing that can.
+        port = {'index': '1', 'type': 'QSFP28', 'subport': '0', 'lanes': ['1', '2', '3', '4'],
+                'host_tx_ready': 'true', 'admin_status': 'up', 'asic_id': 0,
+                'notify_si_settings': True}
+        task.port_dict['Ethernet0'] = dict(port)
+        task.port_dict_prev['Ethernet0'] = dict(port)
+
+        task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+        task.task_worker()
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args[0][0] == 'Ethernet0'
+        assert task.port_dict['Ethernet0']['notify_si_settings'] is False
+
     def test_SffManagerTask_get_active_lanes_for_lport(self):
         sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                  MagicMock(),
