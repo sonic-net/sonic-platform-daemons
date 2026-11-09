@@ -108,7 +108,9 @@ helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=Tru
 def _wrapper_get_transceiver_info(physical_port):
     if platform_chassis is not None:
         try:
-            return platform_chassis.get_sfp(physical_port).get_transceiver_info()
+            device = common.get_port_device(physical_port)
+            if device is not None:
+                return device.get_transceiver_info()
         except NotImplementedError:
             pass
         except Exception as e:
