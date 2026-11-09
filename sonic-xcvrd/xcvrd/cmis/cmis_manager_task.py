@@ -6,6 +6,7 @@
 """
 
 try:
+    import copy
     import threading
     import time
     import datetime
@@ -16,9 +17,9 @@ try:
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities.common import (
         CMIS_STATE_UNKNOWN, CMIS_STATE_INSERTED, CMIS_STATE_DP_PRE_INIT_CHECK,
-        CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_DP_ACTIVATE,
-        CMIS_STATE_DP_INIT, CMIS_STATE_DP_TXON, CMIS_STATE_READY,
-        CMIS_STATE_REMOVED, CMIS_STATE_FAILED, CMIS_TERMINAL_STATES
+        CMIS_STATE_DP_DEINIT, CMIS_STATE_AP_CONF, CMIS_STATE_SI_SETTINGS_WAIT,
+        CMIS_STATE_DP_ACTIVATE, CMIS_STATE_DP_INIT, CMIS_STATE_DP_TXON,
+        CMIS_STATE_READY, CMIS_STATE_REMOVED, CMIS_STATE_FAILED, CMIS_TERMINAL_STATES
     )
     from ..xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from ..xcvrd_utilities import port_event_helper
@@ -42,9 +43,10 @@ class CmisManagerTask(threading.Thread):
 
     CMIS_MAX_RETRIES     = 3
     CMIS_DEF_EXPIRED     = 60 # seconds, default expiration time
-    CMIS_MODULE_TYPES    = ['QSFP-DD', 'QSFP_DD', 'OSFP', 'OSFP-8X', 'QSFP+C', 'CPO']
+    CMIS_SI_SETTINGS_WAIT_TIMEOUT = 10 # seconds, timeout for waiting SI settings to be applied on ASIC
     CMIS_MAX_HOST_LANES    = 8
     CMIS_EXPIRATION_BUFFER_MS = 2
+    SI_RECONCILE_INTERVAL = 60 # seconds, how often to reconcile SI notifications against APPL_DB
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, skip_cmis_mgr=False):
         threading.Thread.__init__(self)
@@ -52,6 +54,7 @@ class CmisManagerTask(threading.Thread):
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
+        self.port_mapping = copy.deepcopy(port_mapping)
         self.port_dict = {}
         for lport, asic_id in port_mapping.logical_to_asic.items():
             entry = {"asic_id": asic_id}
@@ -66,6 +69,10 @@ class CmisManagerTask(threading.Thread):
         self.namespaces = namespaces
         self.port_obj_dict = port_obj_dict
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
+        # Throttle the SI-notification reconcile (re-publish when OA's si_settings_notification was
+        # cleared under a still-running xcvrd, e.g. a cold swss/syncd restart). Start from "now"
+        # so the first periodic reconcile is one interval out, not on the very first worker loop.
+        self.last_si_reconcile_time = time.time()
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
         self.fast_reboot_status = self.initialize_fast_reboot_status()
@@ -139,6 +146,13 @@ class CmisManagerTask(threading.Thread):
                                          "forced_tx_disabled": False}
             if pport >= 0:
                 self.port_dict[lport]['index'] = pport
+            # Keep our port_mapping current so SI publication can resolve the ASIC / physical
+            # port for a port added by dynamic port breakout (notify_media_setting looks it up
+            # here; a stale snapshot would return asic=None and raise in get_cfg_port_tbl).
+            if pport >= 0 and not self.port_mapping.is_logical_port(lport):
+                self.port_mapping.handle_port_change_event(port_event_helper.PortChangeEvent(
+                    lport, pport, port_change_event.asic_id,
+                    port_event_helper.PortChangeEvent.PORT_ADD))
             if 'speed' in port_change_event.port_dict and port_change_event.port_dict['speed'] != 'N/A':
                 self.port_dict[lport]['speed'] = port_change_event.port_dict['speed']
             if 'lanes' in port_change_event.port_dict:
@@ -154,6 +168,18 @@ class CmisManagerTask(threading.Thread):
             if 'subport' in port_change_event.port_dict:
                 self.port_dict[lport]['subport'] = int(port_change_event.port_dict['subport'])
 
+            # (Re)arm the SI notify only on a genuine transceiver insertion. A TRANSCEIVER_INFO
+            # SET event is NOT a reliable insertion signal: xcvrd itself rewrites
+            # TRANSCEIVER_INFO_TABLE (active_apsel / lane counts) during datapath (re)init, and
+            # those self-writes come back as TRANSCEIVER_INFO SET events. Re-arming notify on them
+            # (and re-syncing SI) drives an endless re-notify / SI re-program / MAC-bounce loop.
+            # So arm only when SI is not yet synced for the current module AND no notification is
+            # already outstanding. The synced flag and the cached number are cleared on genuine
+            # removal (below), so a real new module still re-syncs exactly once.
+            if port_change_event.table_name == 'TRANSCEIVER_INFO' \
+                    and not self.port_dict[lport].get('si_settings_synced', False) \
+                    and self.port_dict[lport].get('si_notification_number') is None:
+                self.port_dict[lport]['notify_si_settings'] = True
             self.force_cmis_reinit(lport, 0)
 
         elif port_change_event.event_type == port_change_event.PORT_DEL:
@@ -191,10 +217,33 @@ class CmisManagerTask(threading.Thread):
             # remove the lport from port_dict.
             if lport in self.port_dict:
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_REMOVED)
+                # Module removed / port reconfigured: require a fresh SI sync (and a new
+                # notification) on the next insertion. This is the only place the synced flag is
+                # cleared - NOT on TRANSCEIVER_INFO self-writes.
+                self.port_dict[lport]['si_settings_synced'] = False
+                self.port_dict[lport].pop('si_notification_number', None)
+                # A STATE_DB PORT_TABLE DEL with the port still configured (no CONFIG_DB removal)
+                # is the cold swss/syncd restart signal: APPL_DB/STATE_DB PORT_TABLE were cleared
+                # under a still-running xcvrd, so OA lost our notification. Poke the reconcile to
+                # re-publish this iteration instead of waiting out its interval, so the gate
+                # releases promptly.
+                if port_change_event.db_name == 'STATE_DB' and port_change_event.table_name == 'PORT_TABLE':
+                    self.last_si_reconcile_time = 0
 
             if port_change_event.db_name == 'CONFIG_DB' and port_change_event.table_name == 'PORT':
                 self.clear_decomm_pending(lport)
                 self.port_dict.pop(lport)
+                # Drop the breakout-removed port from our port_mapping so a later breakout that
+                # reuses the logical name re-registers with fresh ASIC / physical port.
+                # Read the physical index from our own port_mapping (not owner_pport, which comes
+                # from the event/port_dict): PortMapping._handle_port_remove() indexes by it and
+                # raises if it does not match what was registered at PORT_ADD, killing this task.
+                if self.port_mapping.is_logical_port(lport):
+                    phys_list = self.port_mapping.get_logical_to_physical(lport)
+                    phys = phys_list[0] if phys_list else owner_pport
+                    self.port_mapping.handle_port_change_event(port_event_helper.PortChangeEvent(
+                        lport, phys, port_change_event.asic_id,
+                        port_event_helper.PortChangeEvent.PORT_REMOVE))
 
     def get_cmis_dp_init_duration_secs(self, api):
         return api.get_datapath_init_duration()/1000
@@ -726,11 +775,85 @@ class CmisManagerTask(threading.Thread):
         found, host_tx_ready = state_port_tbl.hget(lport, 'host_tx_ready')
         return host_tx_ready if found else 'false'
 
+    def _si_retained_from_pre_pr_warmboot(self, lport, asic_id):
+        """True when this port's state looks like a pre-SI-sync image carried across a WARM
+        reboot: the MAC is already up (host_tx_ready retained) during a warm start, and APPL_DB
+        has no si_settings_notification field. In that case re-notifying would make OA reprogram
+        serdes on an up MAC (a flap), so the caller publishes a gate-releasing UNAVAIL instead.
+
+        Warm reboot only, deliberately NOT fast reboot: fast reboot re-initializes the ASIC, so
+        the MAC is actually down even though backup_database() keeps host_tx_ready=true in
+        STATE_DB. Suppressing the notify there would strand OA's gate; fast reboot must fall
+        through to a real NOTIFIED publish (which, with the MAC down, causes no flap).
+        """
+        if self.get_host_tx_status(lport) != 'true':
+            return False
+        namespace = common.get_namespace_from_asic_id(asic_id)
+        if not common.is_syncd_warm_restore_complete(namespace):
+            return False
+        return not self.xcvr_table_helper.has_si_settings_notification(lport, asic_id)
+
     def get_port_admin_status(self, lport):
         cfg_port_tbl = self.xcvr_table_helper.get_cfg_port_tbl(self.get_asic_id(lport))
 
         found, admin_status = cfg_port_tbl.hget(lport, 'admin_status')
         return admin_status if found else 'down'
+
+    def check_si_settings_ack_status(self, lport):
+        """
+        Return orchagent's SI settings ack by reading si_settings_ack from STATE_DB PORT_TABLE.
+
+        Args:
+            lport:
+                Logical port name
+
+        Returns:
+            String, the current si_settings_ack value from STATE_DB, or None if not found
+        """
+        state_port_tbl = self.xcvr_table_helper.get_state_port_tbl(self.get_asic_id(lport))
+
+        found, si_settings_ack = state_port_tbl.hget(lport, 'si_settings_ack')
+        return si_settings_ack if found else None
+
+    def check_si_sync_done_match(self, lport, si_settings_status, expected_number):
+        """
+        Check if SI_SYNC_DONE status from STATE_DB matches expected notification number
+
+        Args:
+            lport: Logical port name
+            si_settings_status: String value from STATE_DB, format "SI_SYNC_DONE:<number>"
+            expected_number: Expected notification number to match
+
+        Returns:
+            True if match, False otherwise
+        """
+        if not si_settings_status or not si_settings_status.startswith("SI_SYNC_DONE"):
+            return False
+
+        try:
+            parts = si_settings_status.split(':')
+            if len(parts) == 2:
+                completed_number = int(parts[1])
+                if expected_number is not None and completed_number == expected_number:
+                    return True
+                elif expected_number is None:
+                    # No notification is outstanding for this port (e.g. nothing was notified this
+                    # session), so there is nothing to match - not an error.
+                    self.log_debug("{}: no expected SI notification number to match".format(lport))
+                    return False
+                else:
+                    # Number mismatch, keep waiting (might be from previous notification)
+                    self.log_debug("{}: SI_SYNC_DONE number mismatch (got: {}, expected: {})".format(
+                        lport, completed_number, expected_number))
+                    return False
+            else:
+                self.log_error("{}: Invalid SI_SYNC_DONE format: {}".format(
+                    lport, si_settings_status))
+                return False
+        except (ValueError, IndexError) as e:
+            self.log_error("{}: Failed to parse SI_SYNC_DONE number from {}: {}".format(
+                lport, si_settings_status, e))
+            return False
 
     def configure_tx_output_power(self, api, lport, tx_power):
         min_p, max_p = api.get_supported_power_config()
@@ -922,6 +1045,55 @@ class CmisManagerTask(threading.Thread):
         media_lanes_mask = self.port_dict[lport]['media_lanes_mask']
         self.log_notice("{}: Setting media_lanemask=0x{:x}".format(lport, media_lanes_mask))
 
+        # If orchagent already applied SI for the number we last notified, treat SI as synced
+        # for this insertion. A host_tx_ready-driven reinit (orchagent brings the MAC up after
+        # applying SI) bounces the SM back to INSERTED; without this check we would re-notify
+        # and force an unnecessary re-program.
+        last_si_number = port_info.get('si_notification_number')
+        asic_id = self.get_asic_id(lport)
+        if last_si_number is None:
+            # Restart / warm reboot: in-memory tracking is gone. Recover it from the retained
+            # DB so we neither re-notify an already-synced module nor race past an outstanding
+            # (un-acked) notification that orchagent still needs to apply.
+            if self.xcvr_table_helper.is_si_settings_synced(lport, asic_id):
+                self.port_dict[lport]['si_settings_synced'] = True
+                self.port_dict[lport]['notify_si_settings'] = False
+            else:
+                outstanding = self.xcvr_table_helper.get_outstanding_si_notification_number(lport, asic_id)
+                if outstanding is not None:
+                    # OA hasn't yet acked our last notification; adopt its number and wait for
+                    # the ack instead of publishing a fresh one.
+                    self.port_dict[lport]['si_notification_number'] = outstanding
+                    self.port_dict[lport]['notify_si_settings'] = False
+                elif self._si_retained_from_pre_pr_warmboot(lport, asic_id):
+                    # Pre-SI-sync image upgraded via WARM reboot: the old image already programmed
+                    # serdes and OA brought the MAC up (host_tx_ready retained), and there is no SI
+                    # notification field. A NOTIFIED here would make OA reprogram serdes on an up
+                    # MAC (a flap). Publish counterless UNAVAIL instead: it releases OA's gate
+                    # without a MAC-down, gives OA a terminal value it records (so a later
+                    # shutdown/startup does not strand the port), and is idempotent across an
+                    # xcvrd restart (field present -> no re-notify).
+                    media_settings_parser.notify_si_settings_unavailable(
+                        lport, self.xcvr_table_helper, self.port_mapping)
+                    self.port_dict[lport]['si_settings_synced'] = True
+                    self.port_dict[lport]['notify_si_settings'] = False
+        elif self.check_si_sync_done_match(lport, self.check_si_settings_ack_status(lport), last_si_number):
+            self.port_dict[lport]['si_settings_synced'] = True
+            self.port_dict[lport]['notify_si_settings'] = False
+
+        if port_info.get('notify_si_settings') and not self.port_dict[lport].get('si_settings_synced', False):
+            self.port_dict[lport]['notify_si_settings'] = False
+            pport = port_info.get('pport')
+            if pport is not None:
+                xcvr_info = api.get_transceiver_info()
+                if xcvr_info is not None:
+                    notification_number = media_settings_parser.notify_media_setting(
+                        lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+                    if notification_number is not None:
+                        self.port_dict[lport]['si_notification_number'] = notification_number
+                else:
+                    self.log_error("{}: failed to read transceiver info for SI settings notify".format(lport))
+
         if self.is_decommission_required(api, lport):
             self.set_decomm_pending(lport)
 
@@ -1080,6 +1252,145 @@ class CmisManagerTask(threading.Thread):
         self.update_cmis_state_expiration_time(lport, max(modulePwrUpDuration, dpDeinitDuration))
         return True
 
+    def handle_cmis_ap_conf_state(self, lport):
+        """
+        Handle the CMIS_STATE_AP_CONF state for a logical port.
+
+        Args:
+            lport: Logical port name
+
+        Returns:
+            Boolean: True if state machine should continue to next state,
+                     False if processing should stop (return from caller)
+        """
+        port_info = self.port_dict[lport]
+        api = port_info.get('api')
+        host_lanes_mask = port_info.get('host_lanes_mask', 0)
+        pport = port_info.get('pport')
+        sfp = port_info.get('sfp')
+        speed = port_info.get('speed')
+        host_lane_count = port_info.get('host_lane_count')
+        appl = port_info.get('appl', 0)
+        retries = port_info.get('cmis_retries', 0)
+        expired = port_info.get('cmis_expired')
+
+        # Explicit control bit to apply custom Host SI settings.
+        # It will be set to 1 and applied via set_application if
+        # custom SI settings is applicable
+        ec = 0
+
+        # TODO: Use fine grained time when the CMIS memory map is available
+        if not self.check_module_state(api, ['ModuleReady']):
+            if self.is_timer_expired(expired):
+                self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
+                self.force_cmis_reinit(lport, retries + 1)
+            return False
+
+        if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
+            if self.is_timer_expired(expired):
+                self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
+                self.force_cmis_reinit(lport, retries + 1)
+            return False
+
+        # Skip rest if it's in decommission state machine
+        if not self.is_decomm_pending(lport):
+            if api.is_coherent_module():
+                # For ZR module, configure the laser frequency when Datapath is in Deactivated state
+                freq = self.port_dict[lport]['laser_freq']
+                if 0 != freq:
+                    if 1 != self.configure_laser_frequency(api, lport, freq):
+                        self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
+                    else:
+                        self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
+
+            # Stage custom SI settings
+            if optics_si_parser.optics_si_present():
+                optics_si_dict = {}
+                # Apply module SI settings if applicable
+                lane_speed = int(speed/1000)//host_lane_count
+                optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
+
+                self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
+                for key, sub_dict in optics_si_dict.items():
+                    self.log_debug("{}".format(key))
+                    for sub_key, value in sub_dict.items():
+                        self.log_debug("{}: {}".format(sub_key, str(value)))
+
+                if optics_si_dict:
+                    self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
+                                    format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
+                    if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
+                        self.log_notice("{}: unable to stage custom SI settings ".format(lport))
+                        self.force_cmis_reinit(lport, retries + 1)
+                        return False
+
+                    # Set Explicit control bit to apply Custom Host SI settings
+                    ec = 1
+
+        # D.1.3 Software Configuration and Initialization
+        api.set_application(host_lanes_mask, appl, ec)
+        if not api.scs_apply_datapath_init(host_lanes_mask):
+            self.log_notice("{}: unable to set application and stage DP init".format(lport))
+            self.force_cmis_reinit(lport, retries + 1)
+            return False
+
+        # Check if SI settings notification number was cached during INSERTED state
+        notification_number = self.port_dict[lport].get('si_notification_number')
+
+        if notification_number is not None and not self.port_dict[lport].get('si_settings_synced', False):
+            self.log_notice("{}: SI settings notified to OA with number {}, waiting for ASIC to apply".format(
+                lport, notification_number))
+            self.update_cmis_state_expiration_time(lport, self.CMIS_SI_SETTINGS_WAIT_TIMEOUT)
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_SI_SETTINGS_WAIT)
+        else:
+            self.log_debug("{}: SI settings not notified to OA or already synced, skipping SI wait".format(lport))
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+        return True
+
+    def handle_cmis_si_settings_wait_state(self, lport):
+        """
+        Handle the CMIS_STATE_SI_SETTINGS_WAIT state for a logical port.
+
+        Args:
+            lport: Logical port name
+
+        Returns:
+            Boolean: True if state machine should continue to next state,
+                     False if processing should stop (return from caller)
+        """
+        port_info = self.port_dict[lport]
+        retries = port_info.get('cmis_retries', 0)
+        expired = port_info.get('cmis_expired')
+
+        si_settings_status = self.check_si_settings_ack_status(lport)
+        expected_notification_number = self.port_dict[lport].get('si_notification_number')
+
+        # SI settings are considered applied when the status is "SI_SYNC_DONE:<number>"
+        # where <number> must match the notification number we sent
+        # This status is set by portsorch after successfully applying serdes settings to the ASIC
+        if self.check_si_sync_done_match(lport, si_settings_status, expected_notification_number):
+            self.log_notice("{}: SI settings applied on ASIC (status: {}, expected: {}), proceeding to DP_INIT".format(
+                lport, si_settings_status, expected_notification_number))
+            # Mark SI synced for this insertion so a later host_tx_ready-driven reinit does not
+            # re-notify / re-enter SI_SETTINGS_WAIT.
+            self.port_dict[lport]['si_settings_synced'] = True
+            self.port_dict[lport].pop('si_notification_number', None)
+            self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
+            return True
+        elif self.is_timer_expired(expired):
+            self.log_notice("{}: timeout waiting for SI settings to be applied (status: {}, expected: {})".format(
+                lport, si_settings_status, expected_notification_number))
+            # Per HLD: reset APPL_DB to SI_SETTINGS_DEFAULT:<N+1> so OA reverts, then re-notify
+            # and reinit (consumes a retry).
+            self.xcvr_table_helper.reset_si_settings_notification_to_default(lport, self.get_asic_id(lport))
+            self.port_dict[lport].pop('si_notification_number', None)
+            self.port_dict[lport]['notify_si_settings'] = True
+            self.force_cmis_reinit(lport, retries + 1)
+            return False
+        else:
+            # Still waiting for SI settings to be applied
+            return False
+
     def process_cmis_state_machine(self, lport):
         port_info = self.port_dict[lport]
         state = common.get_cmis_state_from_state_db(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport)))
@@ -1128,67 +1439,11 @@ class CmisManagerTask(threading.Thread):
                 if not self.handle_cmis_dp_deinit_state(lport):
                     return
             elif state == CMIS_STATE_AP_CONF:
-                # Explicit control bit to apply custom Host SI settings.
-                # It will be set to 1 and applied via set_application if
-                # custom SI settings is applicable
-                ec = 0
-
-                # TODO: Use fine grained time when the CMIS memory map is available
-                if not self.check_module_state(api, ['ModuleReady']):
-                    if self.is_timer_expired(expired):
-                        self.log_notice("{}: timeout for 'ModuleReady'".format(lport))
-                        self.force_cmis_reinit(lport, retries + 1)
+                if not self.handle_cmis_ap_conf_state(lport):
                     return
-
-                if not self.check_datapath_state(api, host_lanes_mask, ['DataPathDeactivated']):
-                    if self.is_timer_expired(expired):
-                        self.log_notice("{}: timeout for 'DataPathDeactivated state'".format(lport))
-                        self.force_cmis_reinit(lport, retries + 1)
+            elif state == CMIS_STATE_SI_SETTINGS_WAIT:
+                if not self.handle_cmis_si_settings_wait_state(lport):
                     return
-
-                # Skip rest if it's in decommission state machine
-                if not self.is_decomm_pending(lport):
-                    if api.is_coherent_module():
-                        # For ZR module, configure the laser frequency when Datapath is in Deactivated state
-                        freq = self.port_dict[lport]['laser_freq']
-                        if 0 != freq:
-                            if 1 != self.configure_laser_frequency(api, lport, freq):
-                                self.log_error("{} failed to configure laser frequency {} GHz".format(lport, freq))
-                            else:
-                                self.log_notice("{} configured laser frequency {} GHz".format(lport, freq))
-
-                    # Stage custom SI settings
-                    if optics_si_parser.optics_si_present():
-                        optics_si_dict = {}
-                        # Apply module SI settings if applicable
-                        lane_speed = int(speed/1000)//host_lane_count
-                        optics_si_dict = optics_si_parser.fetch_optics_si_setting(pport, lane_speed, sfp)
-
-                        self.log_debug("Read SI parameters for port {} from optics_si_settings.json vendor file:".format(lport))
-                        for key, sub_dict in optics_si_dict.items():
-                            self.log_debug("{}".format(key))
-                            for sub_key, value in sub_dict.items():
-                                self.log_debug("{}: {}".format(sub_key, str(value)))
-
-                        if optics_si_dict:
-                            self.log_notice("{}: Apply Optics SI found for Vendor: {}  PN: {} lane speed: {}G".
-                                            format(lport, api.get_manufacturer(), api.get_model(), lane_speed))
-                            if not api.stage_custom_si_settings(host_lanes_mask, optics_si_dict):
-                                self.log_notice("{}: unable to stage custom SI settings ".format(lport))
-                                self.force_cmis_reinit(lport, retries + 1)
-                                return
-
-                            # Set Explicit control bit to apply Custom Host SI settings
-                            ec = 1
-
-                # D.1.3 Software Configuration and Initialization
-                api.set_application(host_lanes_mask, appl, ec)
-                if not api.scs_apply_datapath_init(host_lanes_mask):
-                    self.log_notice("{}: unable to set application and stage DP init".format(lport))
-                    self.force_cmis_reinit(lport, retries + 1)
-                    return
-
-                self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_DP_INIT)
             elif state == CMIS_STATE_DP_INIT:
                 if not self.check_config_error(api, host_lanes_mask, ['ConfigSuccess']):
                     if self.is_timer_expired(expired):
@@ -1320,7 +1575,7 @@ class CmisManagerTask(threading.Thread):
 
             # Skip if it's not a CMIS module
             type = api.get_module_type_abbreviation()
-            if (type is None) or (type not in self.CMIS_MODULE_TYPES):
+            if (type is None) or (type not in common.CMIS_MODULE_TYPES):
                 self.log_notice("{}: skipping CMIS state machine for non-CMIS module with type {}".format(lport, type))
                 self.update_port_transceiver_status_table_sw_cmis_state(lport, CMIS_STATE_READY)
                 return
@@ -1350,6 +1605,53 @@ class CmisManagerTask(threading.Thread):
 
         self.process_cmis_state_machine(lport)
 
+    def reconcile_si_notifications(self):
+        """Re-publish SI notifications for CMIS-owned ports whose APPL_DB si_settings_notification
+        went missing while this xcvrd kept running - e.g. a cold swss/syncd restart cleared
+        APPL_DB/STATE_DB PORT_TABLE but did not restart xcvrd. The optics stay READY, so re-emit
+        the notification WITHOUT a datapath reinit: only OA's ASIC-side serdes needs reprogramming,
+        and a force_cmis_reinit would needlessly bounce the optical line. A warm-retained-up port
+        gets a gate-releasing UNAVAIL instead of a NOTIFIED (which would flap an up MAC).
+
+        In steady state every owned port already has the field, so this is a few cheap APPL_DB
+        reads per interval; the EEPROM read happens only for a port that is actually missing one.
+        """
+        now = time.time()
+        if now - self.last_si_reconcile_time < self.SI_RECONCILE_INTERVAL:
+            return
+        self.last_si_reconcile_time = now
+        for lport, info in self.port_dict.items():
+            asic_id = info.get('asic_id', -1)
+            if asic_id is None or asic_id < 0:
+                continue
+            if self.xcvr_table_helper.has_si_settings_notification(lport, asic_id):
+                continue
+            # api / pport are cached by process_single_lport once the module reached the state
+            # machine; without them we cannot re-emit, so wait for the normal path.
+            api = info.get('api')
+            pport = info.get('pport')
+            if api is None or pport is None:
+                continue
+            if self._si_retained_from_pre_pr_warmboot(lport, asic_id):
+                media_settings_parser.notify_si_settings_unavailable(
+                    lport, self.xcvr_table_helper, self.port_mapping)
+                info['si_settings_synced'] = True
+                info['notify_si_settings'] = False
+                continue
+            try:
+                xcvr_info = api.get_transceiver_info()
+            except (NotImplementedError, AttributeError):
+                xcvr_info = None
+            if xcvr_info is None:
+                # Transient read failure (or module gone): leave it for the next reconcile.
+                continue
+            notification_number = media_settings_parser.notify_media_setting(
+                lport, {pport: xcvr_info}, self.xcvr_table_helper, self.port_mapping)
+            if notification_number is not None:
+                info['si_notification_number'] = notification_number
+            # Wait for OA's fresh ack before treating it synced again.
+            info['si_settings_synced'] = False
+
     def task_worker(self):
         # APPL_DB for CONFIG updates, and STATE_DB for insertion/removal
         port_change_observer = PortChangeObserver(self.namespaces, helper_logger,
@@ -1371,6 +1673,10 @@ class CmisManagerTask(threading.Thread):
                     continue
 
                 self.process_single_lport(lport, info)
+
+            # Re-publish SI notifications cleared under a still-running xcvrd (cold swss/syncd
+            # restart). Runs every cycle regardless of events, throttled internally.
+            self.reconcile_si_notifications()
 
         self.log_notice("Stopped")
 
