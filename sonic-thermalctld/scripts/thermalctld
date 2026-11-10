@@ -687,6 +687,10 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             fields = self._row_to_dict(self.sensor_table.get(sensor_name))
             if not fields or fields.get('leaking') != 'Yes':
                 continue
+            # A test leak must not seed the escalation clock or the CRITICAL latch, or a
+            # real leak on the same sensor would inherit them after the restart.
+            if fields.get('test_leak') == 'Enabled':
+                continue
             # Resume the escalation countdown from the recorded leak timestamp.
             try:
                 leak_start = datetime.strptime(fields.get('timestamp', ''), '%Y%m%d %H:%M:%S')

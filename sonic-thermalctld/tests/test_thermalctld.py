@@ -609,6 +609,23 @@ class TestLiquidCoolingUpdater(object):
         # Dedup cache seeded so the unchanged row is not rewritten on first refresh.
         assert 'leakage1' in updater.last_sensor_fvs
 
+    def test_restore_state_ignores_persisted_test_leak(self):
+        """A persisted test leak must not seed the CRITICAL latch or the escalation clock."""
+        updater = thermalctld.LiquidCoolingUpdater(MockChassis(), 0.5)
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_severity', 'CRITICAL'),
+            ('test_leak', 'Enabled'), ('timestamp', '20250101 00:05:00'),
+        ]))
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+
+        updater._restore_state_from_db()
+
+        assert 'leakage1' not in updater.leaking_sensors
+        assert 'leakage1' not in updater.critical_sensors
+        assert 'leakage1' not in updater.latched_critical_sensors
+
     @mock.patch('thermalctld.try_get')
     def test_restart_latches_critical_even_if_platform_reads_minor(self, mock_try_get):
         """A restored CRITICAL stays CRITICAL after restart even if the platform reads MINOR."""

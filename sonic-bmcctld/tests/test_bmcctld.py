@@ -810,6 +810,7 @@ class TestBmcEventHandlerSystemLeak:
         assert event_handler.action_queue.empty()
         msg = event_handler.log_notice.call_args[0][0]
         assert "TEST SYSTEM LEAK" in msg
+        assert "action={}".format(bmcctld.ACTION_POWER_OFF) in msg
 
     def test_test_leak_does_not_block_power_on(self, critical_event_checker):
         critical_event_checker.policy_reader.get_leak_control_policy = MagicMock(
