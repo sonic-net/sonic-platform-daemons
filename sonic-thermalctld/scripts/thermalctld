@@ -624,7 +624,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.latched_critical_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
-        self.last_test_leak = False
+        # None forces the first refresh to publish test_leak, even after a restart
+        # that restored a stale value from STATE_DB.
+        self.last_test_leak = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
 
         state_db = daemon_base.db_connect("STATE_DB")

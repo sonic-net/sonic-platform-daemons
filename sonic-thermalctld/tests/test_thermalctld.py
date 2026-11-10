@@ -1389,6 +1389,20 @@ class TestLiquidCoolingUpdater(object):
         assert sys_fvs['test_leak'] == 'Disabled'
 
     @mock.patch('thermalctld.try_get')
+    def test_refresh_status_stale_test_leak_republished(self, mock_try_get):
+        """The first refresh publishes test_leak even if the status matches a restored one."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        updater.last_leak_status = thermalctld.SystemLeakStatus.CRITICAL
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['test_leak'] == 'Disabled'
+
+    @mock.patch('thermalctld.try_get')
     def test_refresh_status_critical_precedence_over_major(self, mock_try_get):
         """CRITICAL wins over the MAJOR aggregate: a CRITICAL sensor alongside a
         minor leak that has escalated past MAX-T stays CRITICAL, and no MAJOR
